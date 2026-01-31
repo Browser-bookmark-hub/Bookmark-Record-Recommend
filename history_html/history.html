@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <link rel="stylesheet" href="history.css?v=2.1">
+    <link rel="stylesheet" href="search/search.css">
+    <link rel="stylesheet" href="bookmark_calendar.css">
+    <link rel="stylesheet" href="../font-awesome.min.css">
+    <script src="history_bootstrap.js" defer></script>
+    <script src="vendor/marked.min.js"></script>
+    <script src="vendor/obsidian-markdown.js"></script>
+    <script src="shortcuts_helpers.js" defer></script>
+    <script src="bookmark_calendar.js" defer></script>
+    <script src="browsing_history_calendar.js" defer></script>
+    <!-- 浏览历史辅助工具（通用工具函数） -->
+    <script src="database/utils.js" defer></script>
+    <script src="history.js" defer></script>
+    <!-- 搜索模块 -->
+    <script src="search/search.js" defer></script>
+</head>
+
+<body>
+    <!-- 头部导航 -->
+    <header class="history-header">
+        <div class="header-left">
+            <h1 id="pageTitle">书签记录 &amp; 推荐</h1>
+            <span class="header-subtitle" id="pageSubtitle"></span>
+        </div>
+        <div class="header-right">
+            <!-- 搜索框 -->
+            <div class="search-container">
+                <button id="searchModeTrigger" class="search-mode-trigger" aria-label="切换搜索模式" title="切换搜索模式">
+                    <i class="fas fa-search"></i>
+                </button>
+                <div id="searchModeMenu" class="search-mode-menu" hidden>
+                    <!-- 模式菜单项动态生成 -->
+                </div>
+                <div class="search-input-wrapper">
+                    <!-- Chip 将插入在这里 -->
+                    <input type="text" id="searchInput" />
+                </div>
+                <!-- 搜索结果面板 -->
+                <div id="searchResultsPanel" class="search-results-panel" role="listbox" aria-label="Search results">
+                </div>
+            </div>
+
+            <!-- 工具按钮组 -->
+            <div class="tool-buttons">
+
+                <!-- 主题切换按钮 - 独立设置，主UI优先 -->
+                <button id="themeToggle" class="tool-btn">
+                    <i class="fas fa-moon"></i>
+                    <span class="btn-tooltip" id="themeTooltip"></span>
+                </button>
+                <!-- 语言切换按钮 - 独立设置，主UI优先 -->
+                <button id="langToggle" class="tool-btn">
+                    <span class="lang-text">EN</span>
+                    <span class="btn-tooltip" id="langTooltip"></span>
+                </button>
+                <!-- 说明按钮：快捷键 & 开源信息 -->
+                <button id="helpToggle" class="tool-btn">
+                    <i class="fab fa-github"></i>
+                    <span class="btn-tooltip" id="helpTooltip"></span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <div class="main-container">
+        <!-- 左侧导航栏 -->
+        <aside class="sidebar" id="sidebar">
+            <!-- 侧边栏收起按钮 -->
+            <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开侧边栏">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+
+            <nav class="nav-tabs">
+                <div class="nav-group">
+                    <div class="nav-group-title" id="bookmarkToolboxTitle"></div>
+                    <button class="nav-tab" data-view="additions">
+                        <i class="fas fa-plus-circle"></i>
+                        <span id="navAdditionsText">书签温故</span>
+                    </button>
+                    <button class="nav-tab" data-view="recommend">
+                        <i class="fas fa-lightbulb"></i>
+                        <span id="navRecommendText">书签推荐</span>
+                    </button>
+                </div>
+            </nav>
+
+            <!-- 时间捕捉小组件 -->
+            <div class="time-tracking-widget" id="timeTrackingWidget">
+                <div class="time-tracking-widget-header">
+                    <i class="fas fa-stopwatch"></i>
+                    <span id="timeTrackingWidgetTitle">时间捕捉</span>
+                    <button id="timeTrackingToggleViewBtn" class="widget-header-action-btn" title="切换视图">
+                        <i class="fas fa-exchange-alt"></i>
+                    </button>
+                </div>
+                <div class="time-tracking-widget-list" id="timeTrackingWidgetList">
+                    <div class="time-tracking-widget-empty" id="timeTrackingWidgetEmpty">
+                        <span id="timeTrackingWidgetEmptyText">暂无追踪中的书签</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 右侧内容区域 -->
+        <main class="content-area">
+            <!-- 快捷键与开源信息弹窗 -->
+            <div id="shortcutsModal" class="modal">
+                <div class="modal-content shortcuts-modal">
+                    <div class="shortcuts-header">
+                        <h2 id="shortcutsModalTitle"></h2>
+                        <button id="closeShortcutsModal" class="modal-close" aria-label="Close">×</button>
+                    </div>
+                    <div id="openSourceInfo" class="shortcuts-section open-source-section">
+                        <div class="shortcuts-card">
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <div>
+                                    <p id="openSourceGithubLabel"
+                                        style="font-size: 14px; color: var(--text-secondary); margin: 0 0 4px 0;">GitHub
+                                        仓库:</p>
+                                    <a id="openSourceGithubLink"
+                                        href="https://github.com/kwenxu/Bookmark-Backup?tab=readme-ov-file#readme"
+                                        target="_blank"
+                                        style="display: block; padding: 8px 12px; background-color: var(--bg-tertiary); border-radius: 6px; color: var(--link-color); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <i class="fab fa-github" style="margin-right: 5px;"></i>
+                                        https://github.com/kwenxu/Bookmark-Backup
+                                    </a>
+                                </div>
+
+                                <div>
+                                    <p id="openSourceIssueLabel"
+                                        style="font-size: 14px; color: var(--text-secondary); margin: 0 0 4px 0;">问题反馈:
+                                    </p>
+                                    <a id="openSourceIssueLink" href="https://github.com/kwenxu/Bookmark-Backup/issues"
+                                        target="_blank"
+                                        style="display: block; padding: 8px 12px; background-color: var(--bg-tertiary); border-radius: 6px; color: var(--link-color); text-decoration: none;">
+                                        <i class="fas fa-exclamation-circle" style="margin-right: 5px;"></i>
+                                        <span id="openSourceIssueText">提交问题</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <hr class="shortcuts-divider" />
+                    <div id="shortcutsContent" class="shortcuts-section"></div>
+                </div>
+            </div>
+
+            <!-- 时间捕捉状态说明弹窗 -->
+            <div id="trackingStateModal" class="modal">
+                <div class="modal-content tracking-state-modal">
+                    <div class="modal-header">
+                        <h2 id="trackingStateModalTitle">时间捕捉状态说明</h2>
+                        <button id="closeTrackingStateModal" class="modal-close" aria-label="Close">×</button>
+                    </div>
+                    <div class="tracking-state-content">
+                        <table class="tracking-state-table">
+                            <thead>
+                                <tr>
+                                    <th id="stateTableHeaderIcon">图标</th>
+                                    <th id="stateTableHeaderState">状态</th>
+                                    <th id="stateTableHeaderCondition">条件</th>
+                                    <th id="stateTableHeaderRate">计时倍率</th>
+                                    <th id="stateTableHeaderExample">例子</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="state-icon-cell">🟢</td>
+                                    <td id="stateActiveLabel">活跃</td>
+                                    <td id="stateActiveCondition">当前标签 + 窗口焦点 + 用户活跃</td>
+                                    <td class="state-rate-cell">×1.0</td>
+                                    <td id="stateActiveExample">正在阅读、滚动页面、打字</td>
+                                </tr>
+                                <tr>
+                                    <td class="state-icon-cell">🟡</td>
+                                    <td id="stateIdleLabel">前台静止</td>
+                                    <td id="stateIdleCondition">当前标签 + 窗口焦点 + 用户空闲</td>
+                                    <td class="state-rate-cell">×0.8</td>
+                                    <td id="stateIdleExample">静止观看视频、思考内容</td>
+                                </tr>
+                                <tr>
+                                    <td class="state-icon-cell">🔵</td>
+                                    <td id="stateVisibleLabel">可见参考</td>
+                                    <td id="stateVisibleCondition">当前标签 + 窗口无焦点 + 用户活跃</td>
+                                    <td class="state-rate-cell">×0.5</td>
+                                    <td id="stateVisibleExample">分屏参考文档、对照代码</td>
+                                </tr>
+                                <tr>
+                                    <td class="state-icon-cell">⚪</td>
+                                    <td id="stateBackgroundLabel">后台</td>
+                                    <td id="stateBackgroundCondition">非当前标签 + 用户活跃</td>
+                                    <td class="state-rate-cell">×0.1</td>
+                                    <td id="stateBackgroundExample">挂机、后台播放音乐</td>
+                                </tr>
+                                <tr>
+                                    <td class="state-icon-cell">💤</td>
+                                    <td id="stateSleepLabel">睡眠</td>
+                                    <td id="stateSleepCondition">用户空闲（任何标签）</td>
+                                    <td class="state-rate-cell">×0</td>
+                                    <td id="stateSleepExample">离开电脑、锁屏、页面自动睡眠</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div class="tracking-state-formula">
+                            <code id="trackingStateFormula">综合时间 = 活跃×1.0 + 前台静止×0.8 + 可见参考×0.5 + 后台×0.1</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 权重公式说明弹窗 -->
+            <div id="formulaHelpModal" class="modal content-center">
+                <div class="modal-content formula-help-modal">
+                    <div class="modal-header">
+                        <h2 id="formulaHelpModalTitle">权重公式说明</h2>
+                        <button id="closeFormulaHelpModal" class="modal-close" aria-label="Close">×</button>
+                    </div>
+                    <div class="formula-help-content">
+                        <div class="formula-help-section">
+                            <h3 id="formulaHelpGeneralTitle">通用公式</h3>
+                            <div class="formula-help-code">
+                                <code>因子值 = 1 / (1 + (实际值 / 阈值)^0.7)</code>
+                            </div>
+                        </div>
+
+                        <div class="formula-help-section">
+                            <h3 id="formulaHelpFeaturesTitle">公式特点</h3>
+                            <ul class="formula-help-list">
+                                <li id="formulaHelpFeature1"><strong>阈值处 = 0.5</strong>：当实际值等于阈值时，因子值正好是0.5</li>
+                                <li id="formulaHelpFeature2"><strong>平滑衰减</strong>：使用幂函数(^0.7)使衰减更平缓，避免硬截断</li>
+                                <li id="formulaHelpFeature3"><strong>永不归零</strong>：即使数值很大，仍保留微小区分度</li>
+                                <li id="formulaHelpFeature4"><strong>大数值友好</strong>：1000次点击仍有0.02的区分度</li>
+                            </ul>
+                        </div>
+
+                        <div class="formula-help-section">
+                            <h3 id="formulaHelpNotesTitle">注意事项</h3>
+                            <ul class="formula-help-list">
+                                <li id="formulaHelpNote1"><strong>F、C、T</strong> 使用 inverse 模式：值越大，因子越小（如点击越多，冷门度越低）
+                                </li>
+                                <li id="formulaHelpNote2"><strong>D</strong> 使用正向模式：未访问天数越多，遗忘度越高</li>
+                                <li id="formulaHelpNote3"><strong>L</strong> 是布尔值：手动添加=1，否则=0</li>
+                            </ul>
+                        </div>
+
+                        <div class="formula-help-section">
+                            <h3 id="formulaHelpExampleTitle">效果示例</h3>
+                            <table class="formula-help-table">
+                                <thead>
+                                    <tr>
+                                        <th id="formulaHelpTableValue">实际值/阈值</th>
+                                        <th id="formulaHelpTableResult">因子值</th>
+                                        <th id="formulaHelpTableMeaning">含义</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>0</td>
+                                        <td>1.00</td>
+                                        <td id="formulaHelpMeaning1">最高优先</td>
+                                    </tr>
+                                    <tr>
+                                        <td>0.5×</td>
+                                        <td>0.75</td>
+                                        <td id="formulaHelpMeaning2">较高</td>
+                                    </tr>
+                                    <tr>
+                                        <td id="formulaHelpThreshold">1×(阈值)</td>
+                                        <td>0.50</td>
+                                        <td id="formulaHelpMeaning3">中等</td>
+                                    </tr>
+                                    <tr>
+                                        <td>3×</td>
+                                        <td>0.22</td>
+                                        <td id="formulaHelpMeaning4">较低</td>
+                                    </tr>
+                                    <tr>
+                                        <td>10×</td>
+                                        <td>0.10</td>
+                                        <td id="formulaHelpMeaning5">很低</td>
+                                    </tr>
+                                    <tr>
+                                        <td>100×</td>
+                                        <td>0.02</td>
+                                        <td id="formulaHelpMeaning6">极低但仍有区分</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 书签记录视图 -->
+            <div id="additionsView" class="view">
+
+
+                <!-- 书签记录子视图标签 -->
+                <div class="additions-tabs">
+                    <button id="additionsTabReview" class="additions-tab active" data-tab="review">书签添加记录</button>
+                    <button id="additionsTabBrowsing" class="additions-tab" data-tab="browsing">书签浏览记录</button>
+                    <button id="additionsTabTracking" class="additions-tab" data-tab="tracking">时间捕捉</button>
+                </div>
+
+                <!-- 子视图 1：书签添加记录（日历视图） -->
+                <div id="additionsReviewPanel" class="additions-subview active">
+                    <!-- 面包屑导航 -->
+                    <div class="calendar-breadcrumb-nav">
+                        <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                            <div class="breadcrumb-item-wrapper">
+                                <button class="breadcrumb-btn active" id="breadcrumbYear">
+                                    <i class="fas fa-calendar"></i>
+                                    <span id="breadcrumbYearText">2024年</span>
+                                </button>
+                                <div class="breadcrumb-dropdown-trigger" data-target="breadcrumbYear">
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                                <div class="breadcrumb-dropdown-menu" id="breadcrumbYear-menu">
+                                    <!-- 年份候选项将在这里动态生成 -->
+                                </div>
+                            </div>
+                            <span class="breadcrumb-separator" id="separator1" style="display:none;">/</span>
+                            <div class="breadcrumb-item-wrapper">
+                                <button class="breadcrumb-btn" id="breadcrumbMonth" style="display:none;">
+                                    <span id="breadcrumbMonthText">11月</span>
+                                </button>
+                                <div class="breadcrumb-dropdown-trigger" data-target="breadcrumbMonth">
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                                <div class="breadcrumb-dropdown-menu" id="breadcrumbMonth-menu">
+                                    <!-- 月份候选项将在这里动态生成 -->
+                                </div>
+                            </div>
+                            <span class="breadcrumb-separator" id="separator2" style="display:none;">/</span>
+                            <div class="breadcrumb-item-wrapper">
+                                <button class="breadcrumb-btn" id="breadcrumbWeek" style="display:none;">
+                                    <span id="breadcrumbWeekText">第45周</span>
+                                </button>
+                                <div class="breadcrumb-dropdown-trigger" data-target="breadcrumbWeek">
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                                <div class="breadcrumb-dropdown-menu" id="breadcrumbWeek-menu">
+                                    <!-- 周候选项将在这里动态生成 -->
+                                </div>
+                            </div>
+                            <span class="breadcrumb-separator" id="separator3" style="display:none;">/</span>
+                            <div class="breadcrumb-item-wrapper">
+                                <button class="breadcrumb-btn" id="breadcrumbDay" style="display:none;">
+                                    <span id="breadcrumbDayText">11月20日</span>
+                                </button>
+                                <div class="breadcrumb-dropdown-trigger" data-target="breadcrumbDay">
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                                <div class="breadcrumb-dropdown-menu" id="breadcrumbDay-menu">
+                                    <!-- 日期候选项将在这里动态生成 -->
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <button class="calendar-action-btn" id="calendarExportBtn">
+                                <i class="fas fa-file-export"></i>
+                                <span class="btn-tooltip" id="calendarExportTooltip">导出记录</span>
+                            </button>
+                            <button class="calendar-action-btn" id="calendarSelectModeBtn">
+                                <i class="fas fa-check-square"></i>
+                                <span class="btn-tooltip" id="calendarSelectModeText">勾选</span>
+                            </button>
+                            <button class="calendar-action-btn" id="calendarLocateTodayBtn">
+                                <i class="fas fa-crosshairs"></i>
+                                <span class="btn-tooltip" id="calendarLocateTodayText">定位至今天</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 日历容器 -->
+                    <div id="bookmarkCalendarView" class="bookmark-calendar-view">
+                        <div style="padding: 40px; text-align: center; color: var(--text-secondary);">
+                            <i class="fas fa-calendar-alt"
+                                style="font-size: 48px; opacity: 0.3; margin-bottom: 16px;"></i>
+                            <p id="calendarLoadingText">正在加载日历...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 子视图 2：书签浏览记录 -->
+                <div id="additionsBrowsingPanel" class="additions-subview">
+                    <!-- 浏览记录子视图标签 -->
+                    <div class="browsing-sub-tabs">
+                        <button id="browsingTabHistory" class="browsing-sub-tab active"
+                            data-sub-tab="history">点击记录</button>
+                        <button id="browsingTabRanking" class="browsing-sub-tab" data-sub-tab="ranking">点击排行</button>
+                        <button id="browsingTabRelated" class="browsing-sub-tab" data-sub-tab="related">关联记录</button>
+                    </div>
+
+                    <!-- 子视图 2.1：点击记录（日历视图） -->
+                    <div id="browsingHistoryPanel" class="browsing-sub-panel active">
+                        <!-- 面包屑导航 -->
+                        <div class="calendar-breadcrumb-nav">
+                            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                                <div class="breadcrumb-item-wrapper">
+                                    <button class="breadcrumb-btn active" id="browsingBreadcrumbYear">
+                                        <i class="fas fa-calendar"></i>
+                                        <span id="browsingBreadcrumbYearText">2024年</span>
+                                    </button>
+                                    <div class="breadcrumb-dropdown-trigger" data-target="browsingBreadcrumbYear">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                    <div class="breadcrumb-dropdown-menu" id="browsingBreadcrumbYear-menu">
+                                        <!-- 年份候选项将在这里动态生成 -->
+                                    </div>
+                                </div>
+                                <span class="breadcrumb-separator" id="browsingSeparator1"
+                                    style="display:none;">/</span>
+                                <div class="breadcrumb-item-wrapper">
+                                    <button class="breadcrumb-btn" id="browsingBreadcrumbMonth" style="display:none;">
+                                        <span id="browsingBreadcrumbMonthText">11月</span>
+                                    </button>
+                                    <div class="breadcrumb-dropdown-trigger" data-target="browsingBreadcrumbMonth">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                    <div class="breadcrumb-dropdown-menu" id="browsingBreadcrumbMonth-menu">
+                                        <!-- 月份候选项将在这里动态生成 -->
+                                    </div>
+                                </div>
+                                <span class="breadcrumb-separator" id="browsingSeparator2"
+                                    style="display:none;">/</span>
+                                <div class="breadcrumb-item-wrapper">
+                                    <button class="breadcrumb-btn" id="browsingBreadcrumbWeek" style="display:none;">
+                                        <span id="browsingBreadcrumbWeekText">第45周</span>
+                                    </button>
+                                    <div class="breadcrumb-dropdown-trigger" data-target="browsingBreadcrumbWeek">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                    <div class="breadcrumb-dropdown-menu" id="browsingBreadcrumbWeek-menu">
+                                        <!-- 周候选项将在这里动态生成 -->
+                                    </div>
+                                </div>
+                                <span class="breadcrumb-separator" id="browsingSeparator3"
+                                    style="display:none;">/</span>
+                                <div class="breadcrumb-item-wrapper">
+                                    <button class="breadcrumb-btn" id="browsingBreadcrumbDay" style="display:none;">
+                                        <span id="browsingBreadcrumbDayText">11月20日</span>
+                                    </button>
+                                    <div class="breadcrumb-dropdown-trigger" data-target="browsingBreadcrumbDay">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                    <div class="breadcrumb-dropdown-menu" id="browsingBreadcrumbDay-menu">
+                                        <!-- 日期候选项将在这里动态生成 -->
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button class="calendar-action-btn" id="browsingCalendarExportBtn">
+                                    <i class="fas fa-file-export"></i>
+                                    <span class="btn-tooltip" id="browsingCalendarExportTooltip">导出记录</span>
+                                </button>
+                                <button class="calendar-action-btn" id="browsingCalendarSelectModeBtn">
+                                    <i class="fas fa-check-square"></i>
+                                    <span class="btn-tooltip" id="browsingCalendarSelectModeText">勾选</span>
+                                </button>
+                                <button class="calendar-action-btn" id="browsingCalendarLocateTodayBtn">
+                                    <i class="fas fa-crosshairs"></i>
+                                    <span class="btn-tooltip" id="browsingCalendarLocateTodayText">定位至今天</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 日历容器 -->
+                        <div id="browsingCalendarView" class="bookmark-calendar-view">
+                            <div style="padding: 40px; text-align: center; color: var(--text-secondary);">
+                                <i class="fas fa-calendar-alt"
+                                    style="font-size: 48px; opacity: 0.3; margin-bottom: 16px;"></i>
+                                <p id="browsingCalendarLoadingText">正在加载日历...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 子视图 2.2：点击排行 -->
+                    <div id="browsingRankingPanel" class="browsing-sub-panel">
+                        <div class="browsing-ranking-header">
+                            <div class="browsing-ranking-title-block">
+                                <div id="browsingRankingTitle" class="ranking-title">点击排行</div>
+                                <div id="browsingRankingDescription" class="ranking-description">
+                                    基于浏览器历史记录，按点击次数统计当前书签的热门程度。
+                                </div>
+                            </div>
+                            <div class="browsing-ranking-filters">
+                                <button id="browsingRankingFilterDay" class="ranking-time-filter-btn"
+                                    data-range="day">当天</button>
+                                <button id="browsingRankingFilterWeek" class="ranking-time-filter-btn"
+                                    data-range="week">当周</button>
+                                <button id="browsingRankingFilterMonth" class="ranking-time-filter-btn active"
+                                    data-range="month">当月</button>
+                                <button id="browsingRankingFilterYear" class="ranking-time-filter-btn"
+                                    data-range="year">当年</button>
+                                <button id="browsingRankingFilterAll" class="ranking-time-filter-btn"
+                                    data-range="all">全部</button>
+                            </div>
+                        </div>
+                        <!-- 时间段菜单容器（在筛选按钮下方） -->
+                        <div id="browsingRankingTimeMenu" class="browsing-time-menu" style="display: none;"></div>
+                        <div id="browsingRankingList" class="ranking-list">
+                            <div class="empty-state">
+                                <div class="empty-state-icon"><i class="fas fa-chart-bar"></i></div>
+                                <div class="empty-state-title" id="browsingRankingLoadingText">正在读取历史记录...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 子视图 2.3：书签关联记录 -->
+                    <div id="browsingRelatedPanel" class="browsing-sub-panel">
+                        <div class="browsing-ranking-header">
+                            <div class="browsing-ranking-title-block">
+                                <div id="browsingRelatedTitle" class="ranking-title">关联记录</div>
+                                <div id="browsingRelatedDescription" class="ranking-description">
+                                    显示浏览器历史记录，并用绿色边框凸显书签相关的记录。
+                                </div>
+                            </div>
+                            <div class="browsing-ranking-filters">
+                                <button id="browsingRelatedFilterDay" class="ranking-time-filter-btn active"
+                                    data-range="day">当天</button>
+                                <button id="browsingRelatedFilterWeek" class="ranking-time-filter-btn"
+                                    data-range="week">当周</button>
+                                <button id="browsingRelatedFilterMonth" class="ranking-time-filter-btn"
+                                    data-range="month">当月</button>
+                                <button id="browsingRelatedFilterYear" class="ranking-time-filter-btn"
+                                    data-range="year">当年</button>
+                                <button id="browsingRelatedFilterAll" class="ranking-time-filter-btn"
+                                    data-range="all">全部</button>
+                                <button id="browsingRelatedSortBtn" class="ranking-sort-btn">
+                                    <i class="fas fa-sort-amount-down"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- 时间段菜单容器（在筛选按钮下方） -->
+                        <div id="browsingRelatedTimeMenu" class="browsing-time-menu" style="display: none;"></div>
+                        <div id="browsingRelatedList" class="related-history-list">
+                            <div class="empty-state">
+                                <div class="empty-state-icon"><i class="fas fa-history"></i></div>
+                                <div class="empty-state-title" id="browsingRelatedLoadingText">正在读取历史记录...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 子视图 3：时间捕捉 -->
+                <div id="additionsTrackingPanel" class="additions-subview">
+                    <div class="tracking-panel-header">
+                        <div class="tracking-panel-title">
+                            <span id="trackingPanelDesc">追踪书签页面的活跃浏览时间</span>
+                        </div>
+                        <div class="tracking-panel-actions">
+                            <button id="clearTrackingBtn" class="tracking-action-btn" title="清除记录">
+                                <i class="fas fa-trash-alt"></i>
+                                <span id="clearTrackingText">清除</span>
+                            </button>
+                            <button id="trackingBlockBtn" class="tracking-action-btn" title="屏蔽管理">
+                                <i class="fas fa-ban"></i>
+                                <span id="trackingBlockText">屏蔽</span>
+                            </button>
+                            <button id="trackingToggleBtn" class="tracking-toggle-btn active">
+                                <span class="tracking-indicator"></span>
+                                <span id="trackingToggleText">开启</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 正在追踪的书签 -->
+                    <div class="tracking-section">
+                        <div class="tracking-section-header">
+                            <span class="tracking-section-title">
+                                <i class="fas fa-broadcast-tower"></i>
+                                <span id="trackingCurrentTitle">正在追踪</span>
+                                <span class="tracking-count">(<span id="trackingCurrentCount">0</span>)</span>
+                            </span>
+                        </div>
+                        <div class="tracking-table-wrapper">
+                            <table class="tracking-table" id="trackingCurrentTable">
+                                <thead>
+                                    <tr>
+                                        <th id="trackingHeaderState"><span class="tracking-header-text">状态</span><i
+                                                class="fas fa-question-circle tracking-state-help"
+                                                id="trackingStateHelpBtn" title="状态说明"></i></th>
+                                        <th id="trackingHeaderTitle">书签</th>
+                                        <th id="trackingHeaderTime">综合时间（当前）</th>
+                                        <th id="trackingHeaderWakes">唤醒</th>
+                                        <th id="trackingHeaderRatio">活跃</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="trackingCurrentList">
+                                    <tr class="tracking-empty-row">
+                                        <td colspan="5">
+                                            <span id="trackingNoActiveText">暂无正在追踪的书签</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 综合排行 -->
+                    <div class="tracking-section">
+                        <div class="tracking-section-header">
+                            <span class="tracking-section-title">
+                                <i class="fas fa-chart-bar"></i>
+                                <span id="trackingRankingTitle">综合排行</span>
+                            </span>
+                            <div class="tracking-ranking-controls">
+                                <select id="trackingRankingType" class="tracking-range-select">
+                                    <option value="composite" id="trackingRankingTypeComposite">综合时间</option>
+                                    <option value="wakes" id="trackingRankingTypeWakes">唤醒次数</option>
+                                </select>
+                                <select id="trackingRankingRange" class="tracking-range-select">
+                                    <option value="today" id="trackingRangeToday">今天</option>
+                                    <option value="week" selected id="trackingRangeWeek">本周</option>
+                                    <option value="month" id="trackingRangeMonth">本月</option>
+                                    <option value="year" id="trackingRangeYear">当年</option>
+                                    <option value="all" id="trackingRangeAll">全部</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="tracking-list" id="trackingRankingList">
+                            <div class="empty-state-small">
+                                <span id="trackingNoDataText">暂无活跃时间数据</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 书签推荐视图（独立视图） -->
+            <div id="recommendView" class="view">
+
+
+                <!-- B区：推荐卡片（三卡并排） -->
+                <div class="recommend-card-section">
+                    <div class="cards-row" id="cardsRow">
+                        <div class="recommend-card" data-index="0">
+                            <img class="card-favicon" src="" alt="">
+                            <div class="card-title">--</div>
+                            <div class="card-footer">
+                                <span class="card-priority">S = --</span>
+                                <div class="card-actions">
+                                    <button class="card-btn card-btn-block" title="屏蔽"><i
+                                            class="fas fa-ban"></i></button>
+                                    <button class="card-btn card-btn-later" title="待复习"><i
+                                            class="fas fa-clock"></i></button>
+                                    <button class="card-btn card-btn-skip" title="跳过"><i
+                                            class="fas fa-forward"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="recommend-card" data-index="1">
+                            <img class="card-favicon" src="" alt="">
+                            <div class="card-title">--</div>
+                            <div class="card-footer">
+                                <span class="card-priority">S = --</span>
+                                <div class="card-actions">
+                                    <button class="card-btn card-btn-block" title="屏蔽"><i
+                                            class="fas fa-ban"></i></button>
+                                    <button class="card-btn card-btn-later" title="待复习"><i
+                                            class="fas fa-clock"></i></button>
+                                    <button class="card-btn card-btn-skip" title="跳过"><i
+                                            class="fas fa-forward"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="recommend-card" data-index="2">
+                            <img class="card-favicon" src="" alt="">
+                            <div class="card-title">--</div>
+                            <div class="card-footer">
+                                <span class="card-priority">S = --</span>
+                                <div class="card-actions">
+                                    <button class="card-btn card-btn-block" title="屏蔽"><i
+                                            class="fas fa-ban"></i></button>
+                                    <button class="card-btn card-btn-later" title="待复习"><i
+                                            class="fas fa-clock"></i></button>
+                                    <button class="card-btn card-btn-skip" title="跳过"><i
+                                            class="fas fa-forward"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-navigation">
+                        <button id="refreshSettingsBtn" class="card-nav-btn compact" title="自动刷新设置"><i
+                                class="fas fa-cog"></i></button>
+                        <button id="cardRefreshBtn" class="card-nav-btn primary"><i class="fas fa-sync-alt"></i> <span
+                                id="cardRefreshText">刷新推荐</span></button>
+                    </div>
+                </div>
+
+                <!-- 可拖拽折叠区域容器 -->
+                <div class="recommend-sections-container" id="recommendSectionsContainer">
+                    <!-- 待复习队列（数量为0时默认折叠） -->
+                    <div class="recommend-postponed-section collapsible draggable-section" data-section-id="postponed">
+                        <div class="section-header">
+                            <span class="section-title"><i class="fas fa-clock"></i> <span
+                                    id="postponedTitle">待复习</span> (<span id="postponedCount">0</span>) <span
+                                    id="postponedPriorityBadge" class="priority-mode-badge"
+                                    style="display:none;">⚡优先</span></span>
+                            <div class="section-header-actions">
+                                <button class="section-action-btn" id="postponedAddBtn" title="添加书签到待复习"><i
+                                        class="fas fa-plus"></i></button>
+                                <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                            </div>
+                        </div>
+                        <div class="section-content">
+                            <div class="postponed-list" id="postponedList">
+                                <div class="empty-state-inline" id="postponedEmpty">
+                                    <span id="postponedEmptyText">暂无待复习的书签</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 屏蔽管理（默认折叠） -->
+                    <div class="recommend-block-section collapsible collapsed draggable-section"
+                        data-section-id="block">
+                        <div class="section-header">
+                            <span class="section-title"><i class="fas fa-ban"></i> <span
+                                    id="blockManageTitle">屏蔽管理</span></span>
+                            <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                        </div>
+                        <div class="section-content">
+                            <!-- 已屏蔽书签 -->
+                            <div class="block-subsection">
+                                <div class="block-subsection-header">
+                                    <span><i class="fas fa-bookmark"></i> <span id="blockedBookmarksTitle">已屏蔽书签</span>
+                                        (<span id="blockedBookmarksCount">0</span>)</span>
+                                </div>
+                                <div class="block-list" id="blockedBookmarksList">
+                                    <div class="empty-state-inline" id="blockedBookmarksEmpty">
+                                        <span id="blockedBookmarksEmptyText">暂无已屏蔽书签</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 已屏蔽文件夹 -->
+                            <div class="block-subsection">
+                                <div class="block-subsection-header">
+                                    <span><i class="fas fa-folder"></i> <span id="blockedFoldersTitle">已屏蔽文件夹</span>
+                                        (<span id="blockedFoldersCount">0</span>)</span>
+                                    <button class="block-add-btn" id="addBlockFolderBtn"><i
+                                            class="fas fa-plus"></i></button>
+                                </div>
+                                <div class="block-list" id="blockedFoldersList">
+                                    <div class="empty-state-inline" id="blockedFoldersEmpty">
+                                        <span id="blockedFoldersEmptyText">暂无已屏蔽文件夹</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 已屏蔽域名 -->
+                            <div class="block-subsection">
+                                <div class="block-subsection-header">
+                                    <span><i class="fas fa-globe"></i> <span id="blockedDomainsTitle">已屏蔽域名</span>
+                                        (<span id="blockedDomainsCount">0</span>)</span>
+                                    <button class="block-add-btn" id="addBlockDomainBtn"><i
+                                            class="fas fa-plus"></i></button>
+                                </div>
+                                <div class="block-list" id="blockedDomainsList">
+                                    <div class="empty-state-inline" id="blockedDomainsEmpty">
+                                        <span id="blockedDomainsEmptyText">暂无已屏蔽域名</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 权重公式（默认折叠） -->
+                    <div class="recommend-formula-section collapsible collapsed draggable-section"
+                        data-section-id="formula">
+                        <div class="section-header" id="formulaHeader">
+                            <i class="fas fa-superscript formula-icon"></i>
+                            <div class="formula-main">
+                                <span class="formula-label">S</span>
+                                <span class="formula-equals">=</span>
+                                <span class="formula-bracket">(</span>
+                                <span class="formula-term">
+                                    <input type="text" class="formula-weight" id="weightFreshness" value="0.15"
+                                        readonly>
+                                    <span class="formula-multiply">×</span>
+                                    <span class="formula-factor">F</span>
+                                </span>
+                                <span class="formula-plus">+</span>
+                                <span class="formula-term">
+                                    <input type="text" class="formula-weight" id="weightColdness" value="0.20" readonly>
+                                    <span class="formula-multiply">×</span>
+                                    <span class="formula-factor">C</span>
+                                </span>
+                                <span class="formula-plus">+</span>
+                                <span class="formula-term" id="termTimeDegree">
+                                    <input type="text" class="formula-weight" id="weightTimeDegree" value="0.30"
+                                        readonly>
+                                    <span class="formula-multiply">×</span>
+                                    <span class="formula-factor">T</span>
+                                </span>
+                                <span class="formula-plus">+</span>
+                                <span class="formula-term">
+                                    <input type="text" class="formula-weight" id="weightForgetting" value="0.20"
+                                        readonly>
+                                    <span class="formula-multiply">×</span>
+                                    <span class="formula-factor">D</span>
+                                </span>
+                                <span class="formula-plus">+</span>
+                                <span class="formula-term" id="termLaterReview">
+                                    <input type="text" class="formula-weight" id="weightLaterReview" value="0.20"
+                                        readonly>
+                                    <span class="formula-multiply">×</span>
+                                    <span class="formula-factor">L</span>
+                                </span>
+                                <span class="formula-bracket">)</span>
+                                <span class="formula-multiply">×</span>
+                                <span class="formula-factor formula-factor-r">R</span>
+                            </div>
+                            <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                        </div>
+                        <div class="section-content" id="formulaContent">
+                            <div class="formula-display">
+                                <div class="formula-legend">
+                                    <span class="legend-item legend-score"><span class="legend-factor">S</span><span
+                                            id="legendScore">推荐分数</span></span>
+                                    <span class="legend-item"><span class="legend-factor">F</span><span
+                                            id="legendFreshness">新鲜度</span></span>
+                                    <span class="legend-item"><span class="legend-factor">C</span><span
+                                            id="legendColdness">冷门度</span></span>
+                                    <span class="legend-item"><span class="legend-factor">T</span><span
+                                            id="legendTimeDegree">时间度</span></span>
+                                    <span class="legend-item"><span class="legend-factor">D</span><span
+                                            id="legendForgetting">遗忘度</span></span>
+                                    <span class="legend-item"><span class="legend-factor">L</span><span
+                                            id="legendLaterReview">待复习</span></span>
+                                    <span class="legend-item legend-recall"><span class="legend-factor">R</span><span
+                                            id="legendRecall">记忆度</span></span>
+                                </div>
+                                <div class="formula-thresholds-wrapper">
+                                    <div class="formula-thresholds">
+                                        <span class="threshold-item">F = 1/(1+(添加天数/<input type="text"
+                                                class="threshold-value" id="thresholdFreshness" value="30">)⁰·⁷)</span>
+                                        <span class="threshold-item">C = 1/(1+(点击数/<input type="text"
+                                                class="threshold-value" id="thresholdColdness" value="10">)⁰·⁷)</span>
+                                        <span class="threshold-item">T = 1/(1+(综合时间/<input type="text"
+                                                class="threshold-value" id="thresholdTimeDegree"
+                                                value="5">分钟)⁰·⁷)</span>
+                                        <span class="threshold-item">D = 1-1/(1+(未访问/<input type="text"
+                                                class="threshold-value" id="thresholdForgetting"
+                                                value="14">天)⁰·⁷)</span>
+                                        <span class="threshold-item" id="thresholdLaterReviewItem">L = <span
+                                                id="laterReviewStatus">0</span><span
+                                                id="laterReviewDesc">（手动添加后=1）</span></span>
+                                        <span class="threshold-item" id="thresholdRecallItem">R =
+                                            1-0.9<sup>t/S</sup><span id="recallDesc">（FSRS遗忘曲线：复习后锐减，逐渐恢复）</span></span>
+                                    </div>
+                                    <button class="formula-help-btn" id="formulaHelpBtn" title="公式说明">
+                                        <i class="fas fa-question-circle"></i>
+                                    </button>
+                                </div>
+                                <div class="formula-footer">
+                                    <div class="preset-modes">
+                                        <button class="preset-btn active" data-mode="default" title="均衡推荐">
+                                            <i class="fas fa-balance-scale"></i> <span>默认模式</span>
+                                        </button>
+                                        <button class="preset-btn" data-mode="archaeology" title="挖掘尘封已久的书签">
+                                            <i class="fas fa-hourglass-end"></i> <span>考古模式</span>
+                                        </button>
+                                        <button class="preset-btn" data-mode="consolidate" title="温习近期重要内容">
+                                            <i class="fas fa-fire-alt"></i> <span>巩固模式</span>
+                                        </button>
+                                        <button class="preset-btn" data-mode="wander" title="随机探索发现">
+                                            <i class="fas fa-dice"></i> <span>漫游模式</span>
+                                        </button>
+                                        <button class="preset-btn priority-mode" data-mode="priority"
+                                            id="priorityModeBtn" style="display:none;" title="优先复习手动添加的书签">
+                                            <i class="fas fa-bolt"></i> <span id="priorityModeText">优先巩固</span>
+                                        </button>
+                                    </div>
+                                    <div class="formula-actions">
+                                        <button id="resetFormulaBtn" class="formula-btn"><i class="fas fa-undo"></i>
+                                            <span id="resetFormulaText">恢复默认</span></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 热力图 -->
+                    <div class="recommend-heatmap-section collapsible draggable-section" data-section-id="heatmap">
+                        <div class="section-header" id="heatmapHeader">
+                            <span class="section-title"><i class="fas fa-fire"></i> <span
+                                    id="heatmapTitle">复习热力图</span></span>
+                            <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                        </div>
+                        <div class="section-content" id="heatmapContent">
+                            <div class="heatmap-container" id="heatmapContainer">
+                                <div class="empty-state">
+                                    <div class="empty-state-icon"><i class="fas fa-fire"></i></div>
+                                    <div id="heatmapLoadingText" class="empty-state-title">热力图数据加载中...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 导出配置弹窗 (书签添加记录) -->
+            <div id="exportModal" class="modal">
+                <div class="modal-content" style="max-width: 500px;">
+                    <div class="modal-header">
+                        <h3 id="exportModalTitle">导出书签记录</h3>
+                        <button class="modal-close" id="closeExportModal">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出范围</h4>
+                            <p id="exportScopeText" style="font-weight: 500; font-size: 15px;">当前视图</p>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出模式</h4>
+                            <div class="radio-group" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="exportMode" value="records" checked>
+                                    <span>仅导出添加记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                </label>
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="exportMode" value="context">
+                                    <span>现记录关联导出 <small style="color: var(--text-tertiary);">(包含同文件夹下的其他书签)</small></span>
+                                </label>
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="exportMode" value="collection">
+                                    <span>集合导出到日期文件夹 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出格式</h4>
+                            <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="exportFormat" value="html" checked>
+                                    <span>HTML (浏览器可导入)</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="exportFormat" value="json">
+                                    <span>JSON</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="exportFormat" value="copy">
+                                    <span>复制到剪贴板</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-actions"
+                            style="text-align: right; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                            <button id="doExportBtn" class="view-action-btn" style="display: inline-flex; width: auto;">
+                                <i class="fas fa-file-export"></i> 开始导出
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 导出配置弹窗 (点击记录) -->
+            <div id="browsingExportModal" class="modal">
+                <div class="modal-content" style="max-width: 500px;">
+                    <div class="modal-header">
+                        <h3 id="browsingExportModalTitle">导出点击记录</h3>
+                        <button class="modal-close" id="closeBrowsingExportModal">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出范围</h4>
+                            <p id="browsingExportScopeText" style="font-weight: 500; font-size: 15px;">当前视图</p>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出模式</h4>
+                            <div class="radio-group" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="browsingExportMode" value="records" checked>
+                                    <span>仅导出点击记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                </label>
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="browsingExportMode" value="collection">
+                                    <span>集合导出到日期文件夹 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出格式</h4>
+                            <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="browsingExportFormat" value="html" checked>
+                                    <span>HTML (浏览器可导入)</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="browsingExportFormat" value="json">
+                                    <span>JSON</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="browsingExportFormat" value="copy">
+                                    <span>复制到剪贴板</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-actions"
+                            style="text-align: right; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                            <button id="doBrowsingExportBtn" class="view-action-btn" style="display: inline-flex; width: auto;">
+                                <i class="fas fa-file-export"></i> 开始导出
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 自动刷新设置弹窗 -->
+    <div id="refreshSettingsModal" class="modal content-center">
+        <div class="modal-content refresh-settings-modal">
+            <div class="modal-header compact">
+                <h3 id="refreshSettingsTitle">自动刷新设置</h3>
+                <button class="modal-close" id="refreshSettingsClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="refresh-settings-section">
+                    <label class="refresh-setting-item">
+                        <input type="checkbox" id="refreshEveryNOpensEnabled" checked>
+                        <span id="refreshEveryNOpensLabel">每打开</span>
+                        <input type="number" id="refreshEveryNOpensValue" value="3" min="1" max="100"
+                            style="width: 50px; margin: 0 6px;">
+                        <span id="refreshEveryNOpensUnit">次刷新</span>
+                    </label>
+                    <label class="refresh-setting-item">
+                        <input type="checkbox" id="refreshAfterHoursEnabled">
+                        <span id="refreshAfterHoursLabel">距上次刷新超过</span>
+                        <input type="number" id="refreshAfterHoursValue" value="1" min="1" max="24"
+                            style="width: 50px; margin: 0 6px;">
+                        <span id="refreshAfterHoursUnit">小时</span>
+                    </label>
+                    <label class="refresh-setting-item">
+                        <input type="checkbox" id="refreshAfterDaysEnabled">
+                        <span id="refreshAfterDaysLabel">距上次刷新超过</span>
+                        <input type="number" id="refreshAfterDaysValue" value="1" min="1" max="30"
+                            style="width: 50px; margin: 0 6px;">
+                        <span id="refreshAfterDaysUnit">天</span>
+                    </label>
+                </div>
+                <div class="refresh-settings-status" id="refreshSettingsStatus"
+                    style="margin-top: 12px; padding: 8px 10px; background: var(--bg-tertiary); border-radius: 6px; font-size: 13px; color: var(--text-secondary);">
+                    <!-- 动态显示状态 -->
+                </div>
+                <div class="refresh-settings-actions" style="margin-top: 12px; text-align: right;">
+                    <button id="refreshSettingsSaveBtn" class="view-action-btn"
+                        style="display: inline-flex; width: auto;">
+                        <i class="fas fa-check"></i> <span id="refreshSettingsSaveText">保存</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加到待复习弹窗 -->
+    <div id="addToPostponedModal" class="modal content-center">
+        <div class="modal-content add-postponed-modal">
+            <div class="modal-header">
+                <h3 id="addPostponedModalTitle">添加到待复习</h3>
+                <button class="modal-close" id="addPostponedModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- 添加方式选项卡 -->
+                <div class="add-postponed-tabs">
+                    <button class="add-postponed-tab active" data-tab="folder">
+                        <i class="fas fa-folder"></i> <span id="addTabFolder">从文件夹</span>
+                    </button>
+                    <button class="add-postponed-tab" data-tab="search">
+                        <i class="fas fa-search"></i> <span id="addTabSearch">搜索书签</span>
+                    </button>
+                    <button class="add-postponed-tab" data-tab="domain">
+                        <i class="fas fa-globe"></i> <span id="addTabDomain">按域名</span>
+                    </button>
+                </div>
+
+                <!-- 从文件夹添加面板 -->
+                <div class="add-postponed-panel active" data-panel="folder">
+                    <div class="add-panel-row">
+                        <label id="addFolderLabel">选择文件夹：</label>
+                        <button class="add-folder-select-btn" id="addFolderSelectBtn">
+                            <i class="fas fa-folder"></i> <span id="addFolderSelectedName">点击选择文件夹</span>
+                        </button>
+                    </div>
+                    <div class="add-panel-row">
+                        <label id="addCountLabel">抽取数量：</label>
+                        <div class="add-count-wrapper">
+                            <input type="number" id="addFolderCount" value="5" min="1" max="100"
+                                class="add-count-input">
+                            <label class="add-checkbox-inline">
+                                <input type="checkbox" id="addFolderSelectAll">
+                                <span id="addSelectAllLabel">全部</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="add-panel-row" id="addModeRow">
+                        <label id="addModeLabel">抽取方式：</label>
+                        <div class="add-mode-options">
+                            <label class="add-mode-option">
+                                <input type="radio" name="addFolderMode" value="random" checked> <span
+                                    id="addModeRandom">随机</span>
+                            </label>
+                            <label class="add-mode-option">
+                                <input type="radio" name="addFolderMode" value="sequential"> <span
+                                    id="addModeSequential">顺序</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="add-panel-row">
+                        <label class="add-checkbox-label">
+                            <input type="checkbox" id="addFolderIncludeSubfolders" checked>
+                            <span id="addIncludeSubfolders">包含子文件夹</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 搜索书签面板 -->
+                <div class="add-postponed-panel" data-panel="search">
+                    <div class="add-search-container">
+                        <input type="text" id="addSearchInput" class="add-search-input" placeholder="搜索书签标题或URL...">
+                        <i class="fas fa-search add-search-icon"></i>
+                    </div>
+                    <div class="add-results-list" id="addSearchResults">
+                        <div class="add-results-empty" id="addSearchEmpty">输入关键词搜索书签</div>
+                    </div>
+                    <div class="add-selected-count">
+                        <span id="addSearchSelectedText">已选择</span>: <span id="addSearchSelectedCount">0</span>
+                    </div>
+                </div>
+
+                <!-- 按域名添加面板 -->
+                <div class="add-postponed-panel" data-panel="domain">
+                    <div class="add-search-container">
+                        <input type="text" id="addDomainSearchInput" class="add-search-input" placeholder="搜索域名...">
+                        <i class="fas fa-search add-search-icon"></i>
+                    </div>
+                    <div class="add-domain-list" id="addDomainList">
+                        <div class="add-results-empty" id="addDomainLoading">加载域名列表中...</div>
+                    </div>
+                    <div class="add-selected-count">
+                        <span id="addDomainSelectedText">已选择</span>: <span id="addDomainSelectedCount">0</span> <span
+                            id="addDomainSelectedLabel">个域名</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn" id="addPostponedCancelBtn">取消</button>
+                <button class="modal-btn primary" id="addPostponedConfirmBtn">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 稍后复习弹窗 -->
+    <div id="laterModal" class="modal content-center">
+        <div class="modal-content later-modal">
+            <button class="later-modal-close" id="laterModalClose">
+                <i class="fas fa-times"></i>
+            </button>
+            <!-- P值推荐区域 -->
+            <div class="later-recommend" id="laterRecommendSection">
+                <div class="later-recommend-label" id="laterRecommendLabel">根据浏览习惯推荐</div>
+                <button class="later-recommend-btn" id="laterRecommendBtn">
+                    <i class="fas fa-magic"></i>
+                    <span id="laterRecommendDays">3 天后</span>
+                </button>
+            </div>
+            <div class="later-divider">
+                <span id="laterOrText">或自定义</span>
+            </div>
+            <div class="later-options">
+                <button class="later-option" data-delay="3600000">
+                    <i class="fas fa-clock"></i>
+                    <span data-i18n="laterIn1Hour">1小时后</span>
+                </button>
+                <button class="later-option" data-delay="86400000">
+                    <i class="fas fa-sun"></i>
+                    <span data-i18n="laterTomorrow">明天</span>
+                </button>
+                <button class="later-option" data-delay="259200000">
+                    <i class="fas fa-calendar-day"></i>
+                    <span data-i18n="laterIn3Days">3天后</span>
+                </button>
+                <button class="later-option" data-delay="604800000">
+                    <i class="fas fa-calendar-week"></i>
+                    <span data-i18n="laterIn1Week">1周后</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间追踪屏蔽管理弹窗 -->
+    <div id="trackingBlockModal" class="modal content-center">
+        <div class="modal-content" style="max-width: 600px; max-height: 80vh;">
+            <div class="modal-header compact">
+                <h3 id="trackingBlockModalTitle">时间追踪屏蔽管理</h3>
+                <button class="modal-close" id="trackingBlockModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="max-height: 60vh; overflow-y: auto; padding: 16px 20px;">
+                <!-- 已屏蔽书签 -->
+                <div class="block-subsection">
+                    <div class="block-subsection-header">
+                        <span><i class="fas fa-bookmark"></i> <span id="trackingBlockedBookmarksTitle">已屏蔽书签</span>
+                            (<span id="trackingBlockedBookmarksCount">0</span>)</span>
+                        <button class="block-add-btn" id="addTrackingBlockBookmarkBtn"><i
+                                class="fas fa-plus"></i></button>
+                    </div>
+                    <div class="block-list" id="trackingBlockedBookmarksList">
+                        <div class="empty-state-inline" id="trackingBlockedBookmarksEmpty">
+                            <span id="trackingBlockedBookmarksEmptyText">暂无已屏蔽书签</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- 已屏蔽文件夹 -->
+                <div class="block-subsection">
+                    <div class="block-subsection-header">
+                        <span><i class="fas fa-folder"></i> <span id="trackingBlockedFoldersTitle">已屏蔽文件夹</span>
+                            (<span id="trackingBlockedFoldersCount">0</span>)</span>
+                        <button class="block-add-btn" id="addTrackingBlockFolderBtn"><i
+                                class="fas fa-plus"></i></button>
+                    </div>
+                    <div class="block-list" id="trackingBlockedFoldersList">
+                        <div class="empty-state-inline" id="trackingBlockedFoldersEmpty">
+                            <span id="trackingBlockedFoldersEmptyText">暂无已屏蔽文件夹</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- 已屏蔽域名 -->
+                <div class="block-subsection">
+                    <div class="block-subsection-header">
+                        <span><i class="fas fa-globe"></i> <span id="trackingBlockedDomainsTitle">已屏蔽域名</span>
+                            (<span id="trackingBlockedDomainsCount">0</span>)</span>
+                        <button class="block-add-btn" id="addTrackingBlockDomainBtn"><i
+                                class="fas fa-plus"></i></button>
+                    </div>
+                    <div class="block-list" id="trackingBlockedDomainsList">
+                        <div class="empty-state-inline" id="trackingBlockedDomainsEmpty">
+                            <span id="trackingBlockedDomainsEmptyText">暂无已屏蔽域名</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间追踪添加域名屏蔽弹窗 -->
+    <div id="addTrackingBlockDomainModal" class="modal content-center">
+        <div class="modal-content add-postponed-modal" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="addTrackingBlockDomainModalTitle">添加屏蔽域名（时间追踪）</h3>
+                <button class="modal-close" id="addTrackingBlockDomainModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="add-search-container">
+                    <input type="text" id="addTrackingBlockDomainSearchInput" class="add-search-input"
+                        placeholder="搜索或输入域名...">
+                    <i class="fas fa-search add-search-icon"></i>
+                </div>
+                <div class="add-domain-list" id="addTrackingBlockDomainList" style="height: 300px; margin-top: 10px;">
+                    <div class="add-results-empty" id="addTrackingBlockDomainLoading">加载域名列表中...</div>
+                </div>
+                <!-- 底部操作栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+                    <div class="add-selected-count">
+                        <span id="addTrackingBlockDomainSelectedText">已选择</span>: <span
+                            id="addTrackingBlockDomainSelectedCount">0</span>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="addTrackingBlockDomainCancelBtn" class="modal-btn">取消</button>
+                        <button id="addTrackingBlockDomainConfirmBtn" class="modal-btn primary">添加屏蔽</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间追踪选择文件夹屏蔽弹窗 -->
+    <div id="selectTrackingBlockFolderModal" class="modal content-center">
+        <div class="modal-content" style="max-width: 500px; max-height: 70vh;">
+            <div class="modal-header compact">
+                <h3 id="selectTrackingBlockFolderModalTitle">选择要屏蔽的文件夹（时间追踪）</h3>
+                <button class="modal-close" id="selectTrackingBlockFolderModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="max-height: 50vh; overflow-y: auto;">
+                <div id="trackingBlockFolderTreeContainer" class="folder-tree-container">
+                    <!-- 文件夹树将动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间追踪添加屏蔽书签弹窗 -->
+    <div id="addTrackingBlockBookmarkModal" class="modal content-center">
+        <div class="modal-content add-postponed-modal" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 id="addTrackingBlockBookmarkModalTitle">添加屏蔽书签（时间追踪）</h3>
+                <button class="modal-close" id="addTrackingBlockBookmarkModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- 标签页 -->
+                <div class="add-postponed-tabs">
+                    <button class="add-postponed-tab active" data-tab="tracking" id="trackingBlockBookmarkTabTracking">
+                        <i class="fas fa-broadcast-tower"></i> 正在追踪
+                    </button>
+                    <button class="add-postponed-tab" data-tab="ranking" id="trackingBlockBookmarkTabRanking">
+                        <i class="fas fa-chart-bar"></i> 综合排行
+                    </button>
+                    <button class="add-postponed-tab" data-tab="tree" id="trackingBlockBookmarkTabTree">
+                        <i class="fas fa-search"></i> 搜索
+                    </button>
+                </div>
+
+                <!-- 正在追踪面板 -->
+                <div class="add-postponed-panel active" data-panel="tracking">
+                    <div class="add-bookmark-list" id="addTrackingBlockBookmarkTrackingList" style="height: 300px;">
+                        <div class="add-results-empty">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 综合排行面板 -->
+                <div class="add-postponed-panel" data-panel="ranking">
+                    <div class="add-bookmark-list" id="addTrackingBlockBookmarkRankingList" style="height: 300px;">
+                        <div class="add-results-empty">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 书签树面板 -->
+                <div class="add-postponed-panel" data-panel="tree">
+                    <div class="add-search-container">
+                        <input type="text" id="addTrackingBlockBookmarkSearchInput" class="add-search-input"
+                            placeholder="搜索书签...">
+                        <i class="fas fa-search add-search-icon"></i>
+                    </div>
+                    <div class="add-bookmark-list" id="addTrackingBlockBookmarkTreeList"
+                        style="height: 260px; margin-top: 10px;">
+                        <div class="add-results-empty">输入关键词搜索书签</div>
+                    </div>
+                </div>
+
+                <!-- 底部操作栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+                    <div class="add-selected-count">
+                        <span id="addTrackingBlockBookmarkSelectedText">已选择</span>: <span
+                            id="addTrackingBlockBookmarkSelectedCount">0</span>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="addTrackingBlockBookmarkCancelBtn" class="modal-btn">取消</button>
+                        <button id="addTrackingBlockBookmarkConfirmBtn" class="modal-btn primary">添加屏蔽</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加域名屏蔽弹窗 -->
+    <div id="addDomainModal" class="modal content-center">
+        <div class="modal-content add-postponed-modal" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="addDomainModalTitle">添加屏蔽域名</h3>
+                <button class="modal-close" id="addDomainModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="add-search-container">
+                    <input type="text" id="addBlockDomainSearchInput" class="add-search-input" placeholder="搜索或输入域名...">
+                    <i class="fas fa-search add-search-icon"></i>
+                </div>
+                <div class="add-domain-list" id="addBlockDomainList" style="height: 300px; margin-top: 10px;">
+                    <div class="add-results-empty" id="addBlockDomainLoading">加载域名列表中...</div>
+                </div>
+                <!-- 底部操作栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+                    <div class="add-selected-count">
+                        <span id="addBlockDomainSelectedText">已选择</span>: <span
+                            id="addBlockDomainSelectedCount">0</span>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="addDomainCancelBtn" class="modal-btn">取消</button>
+                        <button id="addDomainConfirmBtn" class="modal-btn primary">添加屏蔽</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 选择文件夹屏蔽弹窗 -->
+    <div id="selectFolderModal" class="modal content-center">
+        <div class="modal-content" style="max-width: 500px; max-height: 70vh;">
+            <div class="modal-header compact">
+                <h3 id="selectFolderModalTitle">选择要屏蔽的文件夹</h3>
+                <button class="modal-close" id="selectFolderModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="max-height: 50vh; overflow-y: auto;">
+                <div id="folderTreeContainer" class="folder-tree-container">
+                    <!-- 文件夹树将动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑书签/文件夹弹窗 -->
+    <div id="editBookmarkModal" class="modal content-center">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header compact">
+                <h3 id="editBookmarkModalTitle">编辑书签</h3>
+                <button class="modal-close" id="editBookmarkModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="edit-bookmark-form">
+                    <div class="edit-bookmark-field">
+                        <label for="editBookmarkTitle" id="editBookmarkTitleLabel">名称</label>
+                        <input type="text" id="editBookmarkTitle" class="edit-bookmark-input" placeholder="输入名称...">
+                    </div>
+                    <div class="edit-bookmark-field" id="editBookmarkUrlField">
+                        <label for="editBookmarkUrl" id="editBookmarkUrlLabel">地址</label>
+                        <input type="text" id="editBookmarkUrl" class="edit-bookmark-input" placeholder="https://...">
+                    </div>
+                </div>
+                <div class="edit-bookmark-actions">
+                    <button id="editBookmarkCancelBtn" class="modal-btn">取消</button>
+                    <button id="editBookmarkSaveBtn" class="modal-btn primary">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

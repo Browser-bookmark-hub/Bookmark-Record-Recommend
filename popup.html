@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bookmark Records & Recommend</title>
+  <link rel="stylesheet" href="font-awesome.min.css" />
+  <script src="theme.js"></script>
+  <style>
+    :root {
+      --theme-bg-primary: #f6f7fb;
+      --theme-bg-secondary: #ffffff;
+      --theme-bg-tertiary: #f1f2f6;
+      --theme-text-primary: #1f2430;
+      --theme-text-secondary: #6b7280;
+      --theme-accent-color: #2563eb;
+      --theme-border-primary: #e5e7eb;
+      --theme-success-color: #10b981;
+      --theme-error-color: #ef4444;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 380px;
+      background: var(--theme-bg-primary);
+      color: var(--theme-text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .popup-root { padding: 12px; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .header-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .header-actions button {
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+    .header-actions button:hover { background: var(--theme-bg-tertiary); }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .popup-recommend-card {
+      background: var(--theme-bg-secondary);
+      border: 1px solid var(--theme-border-primary);
+      border-radius: 8px;
+      padding: 8px;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      cursor: pointer;
+      position: relative;
+    }
+    .popup-recommend-card.empty { cursor: default; opacity: 0.6; }
+    .popup-recommend-card-top { display: flex; gap: 6px; align-items: center; }
+    .popup-recommend-favicon { width: 16px; height: 16px; border-radius: 4px; }
+    .popup-recommend-title {
+      font-size: 12px;
+      line-height: 1.3;
+      max-height: 2.6em;
+      overflow: hidden;
+    }
+    .popup-recommend-footer {
+      margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--theme-text-secondary);
+    }
+    .popup-recommend-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .popup-card-btn {
+      border: none;
+      background: var(--theme-bg-tertiary);
+      border-radius: 4px;
+      padding: 2px 4px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .popup-card-btn:hover { background: #e5e7eb; }
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--theme-text-secondary);
+    }
+    .popup-recommend-later-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .popup-recommend-later-overlay.show { display: flex; }
+    .popup-recommend-later-modal {
+      background: var(--theme-bg-secondary);
+      border-radius: 10px;
+      padding: 12px;
+      width: 280px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    }
+    .popup-recommend-later-modal h4 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+    }
+    .popup-recommend-later-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .popup-later-btn {
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-tertiary);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .popup-later-btn:hover { background: #e5e7eb; }
+    .popup-recommend-later-close {
+      border: none;
+      background: transparent;
+      font-size: 16px;
+      position: absolute;
+      right: 12px;
+      top: 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="popup-root">
+    <div class="header">
+      <div class="header-title"><i class="fas fa-star"></i><span id="recommendTitle">Bookmark Recommend</span></div>
+      <div class="header-actions">
+        <button id="openRecordsBtn" title="打开书签记录">记录</button>
+        <button id="openRecommendBtn" title="打开推荐页面">推荐</button>
+        <button id="refreshBtn" title="刷新推荐"><i class="fas fa-sync"></i></button>
+      </div>
+    </div>
+    <div id="bookmarkRecommendCards" class="cards">
+      <div class="popup-recommend-card empty" data-index="0">
+        <div class="popup-recommend-card-top">
+          <img class="popup-recommend-favicon" src="" alt="">
+          <div class="popup-recommend-title">--</div>
+        </div>
+        <div class="popup-recommend-footer">
+          <span class="popup-recommend-priority">S = --</span>
+          <div class="popup-recommend-actions">
+            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
+            <button class="popup-card-btn popup-card-btn-later">稍后</button>
+            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+          </div>
+        </div>
+      </div>
+      <div class="popup-recommend-card empty" data-index="1">
+        <div class="popup-recommend-card-top">
+          <img class="popup-recommend-favicon" src="" alt="">
+          <div class="popup-recommend-title">--</div>
+        </div>
+        <div class="popup-recommend-footer">
+          <span class="popup-recommend-priority">S = --</span>
+          <div class="popup-recommend-actions">
+            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
+            <button class="popup-card-btn popup-card-btn-later">稍后</button>
+            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+          </div>
+        </div>
+      </div>
+      <div class="popup-recommend-card empty" data-index="2">
+        <div class="popup-recommend-card-top">
+          <img class="popup-recommend-favicon" src="" alt="">
+          <div class="popup-recommend-title">--</div>
+        </div>
+        <div class="popup-recommend-footer">
+          <span class="popup-recommend-priority">S = --</span>
+          <div class="popup-recommend-actions">
+            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
+            <button class="popup-card-btn popup-card-btn-later">稍后</button>
+            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="status" id="statusText"></div>
+  </div>
+  <div id="popupRecommendLaterOverlay" class="popup-recommend-later-overlay" aria-hidden="true">
+    <div class="popup-recommend-later-modal">
+      <button class="popup-recommend-later-close" id="popupRecommendLaterClose" aria-label="关闭">×</button>
+      <h4 id="popupRecommendLaterTitle">稍后提醒</h4>
+      <div class="popup-recommend-later-options">
+        <button class="popup-later-btn" data-delay="3600000">1小时后</button>
+        <button class="popup-later-btn" data-delay="86400000">明天</button>
+        <button class="popup-later-btn" data-delay="259200000">3天后</button>
+        <button class="popup-later-btn" data-delay="604800000">1周后</button>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

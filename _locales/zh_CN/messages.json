@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "书签记录 & 推荐",
+    "description": "插件名称"
+  },
+  "extensionDescription": {
+    "message": "书签记录与推荐：浏览记录、排行与关联、时间捕捉、推荐列表。",
+    "description": "插件描述"
+  },
+  "actionTitle": {
+    "message": "书签记录 & 推荐",
+    "description": "工具栏悬浮标题"
+  }
+}

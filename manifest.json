@@ -1,0 +1,69 @@
+{
+  "manifest_version": 3,
+  "default_locale": "en",
+  "name": "__MSG_extensionName__",
+  "version": "1.0.0",
+  "description": "__MSG_extensionDescription__",
+  "author": "kk1",
+  "icons": {
+    "100": "icons/icon200.png"
+  },
+  "action": {
+    "default_icon": {
+      "200": "icons/icon200.png"
+    },
+    "default_title": "__MSG_actionTitle__",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "commands": {
+    "open_additions_view": {
+      "suggested_key": {
+        "default": "Alt+4",
+        "mac": "Alt+4",
+        "windows": "Alt+4",
+        "linux": "Alt+4"
+      },
+      "description": "Open 'Bookmark Records' view"
+    },
+    "open_recommend_view": {
+      "suggested_key": {
+        "default": "Alt+5",
+        "mac": "Alt+5",
+        "windows": "Alt+5",
+        "linux": "Alt+5"
+      },
+      "description": "Open 'Bookmark Recommend' view"
+    }
+  },
+  "permissions": [
+    "bookmarks",
+    "history",
+    "storage",
+    "idle",
+    "downloads",
+    "tabs",
+    "tabGroups",
+    "windows",
+    "webNavigation",
+    "commands"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "popup.html",
+        "icons/icon200.png",
+        "history_html/*"
+      ]
+    }
+  ]
+}
