@@ -8,6 +8,41 @@ const popupRecommendLaterOptionLabels = {
   '259200000': { zh_CN: '3天后', en: 'In 3 days' },
   '604800000': { zh_CN: '1周后', en: 'In 1 week' }
 };
+const popupRecommendTextMap = {
+  pageTitle: { zh_CN: '书签记录 & 推荐', en: 'Bookmark Records & Recommend' },
+  recommendTitle: { zh_CN: '书签推荐', en: 'Bookmark Recommend' },
+  openRecordsBtn: { zh_CN: '记录', en: 'Records' },
+  openRecommendBtn: { zh_CN: '推荐', en: 'Recommend' },
+  openRecordsTooltip: { zh_CN: '打开书签记录', en: 'Open records' },
+  openRecommendTooltip: { zh_CN: '打开推荐页面', en: 'Open recommend' },
+  recordsTitle: { zh_CN: '书签记录', en: 'Bookmark Records' },
+  refreshSettingsTooltip: { zh_CN: '自动刷新设置', en: 'Refresh settings' },
+  refreshText: { zh_CN: '刷新推荐', en: 'Refresh' },
+  refreshTooltip: { zh_CN: '刷新推荐', en: 'Refresh' },
+  laterTitle: { zh_CN: '稍后提醒', en: 'Remind later' },
+  openSourceInfo: { zh_CN: '开源信息', en: 'Open source' },
+  openSourceTitle: { zh_CN: '开源信息', en: 'Open source' },
+  openSourceGithubLabel: { zh_CN: 'GitHub 仓库:', en: 'GitHub repo:' },
+  openSourceIssueLabel: { zh_CN: '问题反馈:', en: 'Issue tracker:' },
+  openSourceIssueText: { zh_CN: '提交问题', en: 'Report issue' },
+  trackingTitle: { zh_CN: '时间追踪', en: 'Time Tracking' },
+  trackingEmpty: { zh_CN: '暂无追踪中的书签', en: 'No active tracking sessions' },
+  rankingTitle: { zh_CN: '点击排行', en: 'Click Ranking' },
+  rankingEmpty: { zh_CN: '暂无排行数据', en: 'No ranking data' },
+  widgetLoading: { zh_CN: '加载中...', en: 'Loading...' },
+  rankingRangeHint: {
+    zh_CN: { day: '当日', week: '当周', month: '当月', year: '当年', all: '全部' },
+    en: { day: 'Today', week: 'This Week', month: 'This Month', year: 'This Year', all: 'All Time' }
+  },
+  shortcutsTitle: { zh_CN: '快捷键', en: 'Shortcuts' },
+  shortcutsRecords: { zh_CN: '打开记录', en: 'Open records' },
+  shortcutsRecommend: { zh_CN: '打开推荐', en: 'Open recommend' },
+  shortcutsSettings: { zh_CN: '在浏览器中管理快捷键', en: 'Manage shortcuts in browser' },
+  shortcutHint: {
+    zh_CN: (recordsKey, recommendKey) => `快捷键：记录 ${recordsKey} / 推荐 ${recommendKey}`,
+    en: (recordsKey, recommendKey) => `Shortcuts: Records ${recordsKey} / Recommend ${recommendKey}`
+  }
+};
 
 let popupRecommendLang = 'zh_CN';
 let popupRecommendCards = [];
@@ -17,6 +52,10 @@ let popupOpenCountRecorded = false;
 let popupLastSaveTime = 0;
 let popupCurrentLaterBookmark = null;
 const popupFaviconRequestCache = new Map();
+let popupShortcuts = { records: 'Alt+4', recommend: 'Alt+5' };
+let popupTrackingIntervalId = null;
+let popupRankingIntervalId = null;
+let popupBookmarkMapCache = { loadedAt: 0, map: new Map() };
 
 async function incrementPopupOpenCount() {
   if (popupOpenCountRecorded) return false;
@@ -86,6 +125,406 @@ async function safeCreateTab({ url }) {
   window.open(url, '_blank');
 }
 
+function getPopupText(key, lang) {
+  const entry = popupRecommendTextMap[key];
+  if (!entry) return '';
+  if (typeof entry === 'function') return entry(lang);
+  return entry[lang] || entry.zh_CN || '';
+}
+
+function setPreferredLang(lang) {
+  popupRecommendLang = lang;
+  try {
+    localStorage.setItem('preferredLang', lang);
+  } catch (_) {}
+  if (browserAPI?.storage?.local) {
+    browserAPI.storage.local.set({ preferredLang: lang }, () => {});
+  }
+}
+
+function loadPreferredLang() {
+  return new Promise((resolve) => {
+    if (!browserAPI?.storage?.local) {
+      resolve('zh_CN');
+      return;
+    }
+    browserAPI.storage.local.get(['preferredLang'], (data) => {
+      resolve(data.preferredLang || 'zh_CN');
+    });
+  });
+}
+
+function formatActiveTime(ms) {
+  if (!ms || ms <= 0) return '0s';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function getRankingRangeLabel(lang, range) {
+  const map = popupRecommendTextMap.rankingRangeHint?.[lang] || popupRecommendTextMap.rankingRangeHint.zh_CN;
+  return map[range] || map.day;
+}
+
+function getRankingRangeConfig(range) {
+  const now = new Date();
+  const endTime = now.getTime();
+  let startTime = 0;
+  if (range === 'day') {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    startTime = d.getTime();
+  } else if (range === 'week') {
+    startTime = endTime - 7 * 24 * 3600 * 1000;
+  } else if (range === 'month') {
+    const d = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    startTime = d.getTime();
+  } else if (range === 'year') {
+    const d = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    startTime = d.getTime();
+  } else {
+    startTime = 0;
+  }
+  return { startTime, endTime };
+}
+
+async function loadBookmarkUrlMap() {
+  const now = Date.now();
+  if (popupBookmarkMapCache.loadedAt && (now - popupBookmarkMapCache.loadedAt) < 60 * 1000) {
+    return popupBookmarkMapCache.map;
+  }
+  const map = new Map();
+  if (!browserAPI?.bookmarks?.getTree) {
+    popupBookmarkMapCache = { loadedAt: now, map };
+    return map;
+  }
+  const tree = await new Promise((resolve) => browserAPI.bookmarks.getTree(resolve));
+  const walk = (nodes) => {
+    nodes.forEach((node) => {
+      if (node.url) {
+        map.set(node.url, node.title || node.url);
+      }
+      if (node.children) walk(node.children);
+    });
+  };
+  if (Array.isArray(tree)) walk(tree);
+  popupBookmarkMapCache = { loadedAt: now, map };
+  return map;
+}
+
+function renderShortcutHint(lang) {
+  const hint = document.getElementById('shortcutHint');
+  if (!hint) return;
+  const formatter = popupRecommendTextMap.shortcutHint?.[lang] || popupRecommendTextMap.shortcutHint.zh_CN;
+  hint.textContent = formatter(popupShortcuts.records, popupShortcuts.recommend);
+}
+
+function renderShortcutsList(lang) {
+  const list = document.getElementById('shortcutsList');
+  const title = document.getElementById('shortcutsTitle');
+  const settingsBtn = document.getElementById('openShortcutsSettingsBtn');
+  if (title) title.textContent = getPopupText('shortcutsTitle', lang);
+  if (settingsBtn) settingsBtn.textContent = getPopupText('shortcutsSettings', lang);
+  if (!list) return;
+  list.innerHTML = '';
+
+  const rowRecords = document.createElement('div');
+  rowRecords.className = 'shortcuts-row';
+  const labelRecords = document.createElement('span');
+  labelRecords.textContent = getPopupText('shortcutsRecords', lang);
+  const keyRecords = document.createElement('kbd');
+  keyRecords.textContent = popupShortcuts.records;
+  rowRecords.appendChild(labelRecords);
+  rowRecords.appendChild(keyRecords);
+
+  const rowRecommend = document.createElement('div');
+  rowRecommend.className = 'shortcuts-row';
+  const labelRecommend = document.createElement('span');
+  labelRecommend.textContent = getPopupText('shortcutsRecommend', lang);
+  const keyRecommend = document.createElement('kbd');
+  keyRecommend.textContent = popupShortcuts.recommend;
+  rowRecommend.appendChild(labelRecommend);
+  rowRecommend.appendChild(keyRecommend);
+
+  list.appendChild(rowRecords);
+  list.appendChild(rowRecommend);
+}
+
+function updateOpenSourceText(lang) {
+  const openSourceTooltip = document.getElementById('openSourceTooltip');
+  if (openSourceTooltip) openSourceTooltip.textContent = getPopupText('openSourceInfo', lang);
+  const openSourceTitle = document.getElementById('openSourceInfoTitle');
+  if (openSourceTitle) openSourceTitle.textContent = getPopupText('openSourceTitle', lang);
+  const openSourceGithubLabel = document.getElementById('openSourceGithubLabel');
+  if (openSourceGithubLabel) openSourceGithubLabel.textContent = getPopupText('openSourceGithubLabel', lang);
+  const openSourceIssueLabel = document.getElementById('openSourceIssueLabel');
+  if (openSourceIssueLabel) openSourceIssueLabel.textContent = getPopupText('openSourceIssueLabel', lang);
+  const openSourceIssueText = document.getElementById('openSourceIssueText');
+  if (openSourceIssueText) openSourceIssueText.textContent = getPopupText('openSourceIssueText', lang);
+}
+
+async function updateTrackingWidget() {
+  const list = document.getElementById('popupTrackingList');
+  const emptyText = document.getElementById('popupTrackingEmptyText');
+  if (!list || !browserAPI?.runtime?.sendMessage) return;
+  if (emptyText) emptyText.textContent = getPopupText('trackingEmpty', popupRecommendLang);
+  list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('trackingEmpty', popupRecommendLang)}</span></div>`;
+
+  try {
+    const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
+    if (!response?.success || !Array.isArray(response.sessions) || response.sessions.length === 0) {
+      list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('trackingEmpty', popupRecommendLang)}</span></div>`;
+      return;
+    }
+
+    const sessions = response.sessions;
+    const grouped = new Map();
+    sessions.forEach((session) => {
+      const key = session.title || session.url;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(session);
+    });
+
+    const displayItems = [];
+    grouped.forEach((groupSessions) => {
+      const totalMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
+      const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
+      const bestState = groupSessions.reduce((best, s) => {
+        const bestIdx = stateOrder.indexOf(best);
+        const currIdx = stateOrder.indexOf(s.state);
+        return currIdx < bestIdx ? s.state : best;
+      }, 'sleeping');
+      displayItems.push({
+        title: groupSessions[0].title,
+        url: groupSessions[0].url,
+        state: bestState,
+        compositeMs: totalMs,
+        count: groupSessions.length
+      });
+    });
+
+    list.innerHTML = '';
+    const maxShow = 5;
+    const showItems = displayItems.slice(0, maxShow);
+    const remaining = displayItems.length - maxShow;
+
+    showItems.forEach((item) => {
+      const el = document.createElement('div');
+      el.className = 'time-tracking-widget-item';
+
+      const stateIcon = document.createElement('span');
+      stateIcon.className = 'item-state';
+      stateIcon.textContent = item.state === 'active' ? '🟢'
+        : (item.state === 'sleeping' ? '💤'
+          : (item.state === 'background' ? '⚪'
+            : (item.state === 'visible' ? '🔵' : '🟡')));
+
+      const title = document.createElement('span');
+      title.className = 'item-title';
+      let titleText = item.title || item.url;
+      if (item.count > 1) titleText += ` (${item.count})`;
+      title.textContent = titleText;
+      title.title = item.title || item.url;
+
+      const time = document.createElement('span');
+      time.className = 'item-time';
+      time.textContent = formatActiveTime(item.compositeMs);
+
+      el.appendChild(stateIcon);
+      el.appendChild(title);
+      el.appendChild(time);
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (item.url) safeCreateTab({ url: item.url });
+      });
+      list.appendChild(el);
+    });
+
+    if (remaining > 0) {
+      const moreEl = document.createElement('div');
+      moreEl.className = 'time-tracking-widget-more';
+      const moreText = popupRecommendLang === 'en'
+        ? `+${remaining} more`
+        : `还有 ${remaining} 个`;
+      moreEl.textContent = moreText;
+      list.appendChild(moreEl);
+    }
+  } catch (_) {
+    list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('trackingEmpty', popupRecommendLang)}</span></div>`;
+  }
+}
+
+async function updateRankingWidget() {
+  const list = document.getElementById('popupRankingList');
+  const hint = document.getElementById('popupRankingHint');
+  if (!list || !browserAPI?.history?.search) return;
+
+  const range = localStorage.getItem('popupRankingRange') || 'day';
+  const label = getRankingRangeLabel(popupRecommendLang, range);
+  if (hint) hint.textContent = `${label} >`;
+
+  const { startTime, endTime } = getRankingRangeConfig(range);
+  const maxResults = range === 'all' ? 500 : 200;
+
+  list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('widgetLoading', popupRecommendLang)}</span></div>`;
+  const bookmarkMap = await loadBookmarkUrlMap();
+  if (!bookmarkMap.size) {
+    list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('rankingEmpty', popupRecommendLang)}</span></div>`;
+    return;
+  }
+
+  const historyItems = await new Promise((resolve) => {
+    browserAPI.history.search({ text: '', startTime, endTime, maxResults }, resolve);
+  });
+
+  const candidates = (historyItems || [])
+    .filter(item => item.url && bookmarkMap.has(item.url))
+    .slice(0, 60);
+
+  let ranked = [];
+  if (range === 'all') {
+    ranked = candidates.map(item => ({
+      url: item.url,
+      title: bookmarkMap.get(item.url) || item.title || item.url,
+      count: item.visitCount || 0
+    }));
+  } else {
+    const limited = candidates.slice(0, 30);
+    const counts = await Promise.all(limited.map(item => new Promise((resolve) => {
+      browserAPI.history.getVisits({ url: item.url }, (visits) => {
+        const count = (visits || []).filter(v => v.visitTime >= startTime && v.visitTime <= endTime).length;
+        resolve({ url: item.url, title: bookmarkMap.get(item.url) || item.title || item.url, count });
+      });
+    })));
+    ranked = counts;
+  }
+
+  ranked = ranked.filter(item => item.count > 0).sort((a, b) => b.count - a.count);
+  const top = ranked.slice(0, 5);
+
+  list.innerHTML = '';
+  if (!top.length) {
+    list.innerHTML = `<div class="time-tracking-widget-empty"><span>${getPopupText('rankingEmpty', popupRecommendLang)}</span></div>`;
+    return;
+  }
+
+  top.forEach((item, index) => {
+    const el = document.createElement('div');
+    el.className = 'time-tracking-widget-item ranking-item';
+
+    const rankNum = document.createElement('span');
+    rankNum.className = 'item-rank';
+    rankNum.textContent = `${index + 1}`;
+
+    const title = document.createElement('span');
+    title.className = 'item-title';
+    title.textContent = item.title || item.url;
+    title.title = item.title || item.url;
+
+    const count = document.createElement('span');
+    count.className = 'item-time';
+    count.textContent = popupRecommendLang === 'en' ? `${item.count}x` : `${item.count}次`;
+
+    el.appendChild(rankNum);
+    el.appendChild(title);
+    el.appendChild(count);
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (item.url) safeCreateTab({ url: item.url });
+    });
+
+    list.appendChild(el);
+  });
+}
+
+function loadPopupShortcuts() {
+  const fallback = { records: 'Alt+4', recommend: 'Alt+5' };
+  if (!browserAPI?.commands?.getAll) {
+    popupShortcuts = fallback;
+    return Promise.resolve(popupShortcuts);
+  }
+  return new Promise((resolve) => {
+    try {
+      browserAPI.commands.getAll((commands) => {
+        const nextShortcuts = { ...fallback };
+        if (Array.isArray(commands)) {
+          const recordsCmd = commands.find(c => c.name === 'open_additions_view');
+          const recommendCmd = commands.find(c => c.name === 'open_recommend_view');
+          if (recordsCmd?.shortcut) nextShortcuts.records = recordsCmd.shortcut;
+          if (recommendCmd?.shortcut) nextShortcuts.recommend = recommendCmd.shortcut;
+        }
+        popupShortcuts = nextShortcuts;
+        resolve(nextShortcuts);
+      });
+    } catch (_) {
+      popupShortcuts = fallback;
+      resolve(fallback);
+    }
+  });
+}
+
+function setupOpenSourceDialog() {
+  const openSourceInfoBtn = document.getElementById('openSourceInfoBtn');
+  const openSourceInfoDialog = document.getElementById('openSourceInfoDialog');
+  const closeOpenSourceDialog = document.getElementById('closeOpenSourceDialog');
+  const openSourceTooltip = document.getElementById('openSourceTooltip');
+  if (!openSourceInfoBtn || !openSourceInfoDialog || !closeOpenSourceDialog) return;
+
+  openSourceInfoBtn.addEventListener('click', () => {
+    openSourceInfoDialog.style.display = 'block';
+    openSourceInfoDialog.setAttribute('aria-hidden', 'false');
+  });
+
+  closeOpenSourceDialog.addEventListener('click', () => {
+    openSourceInfoDialog.style.display = 'none';
+    openSourceInfoDialog.setAttribute('aria-hidden', 'true');
+  });
+
+  openSourceInfoDialog.addEventListener('click', (e) => {
+    if (e.target === openSourceInfoDialog) {
+      openSourceInfoDialog.style.display = 'none';
+      openSourceInfoDialog.setAttribute('aria-hidden', 'true');
+    }
+  });
+
+  if (openSourceTooltip) {
+    openSourceInfoBtn.addEventListener('mouseenter', () => {
+      openSourceTooltip.style.visibility = 'visible';
+      openSourceTooltip.style.opacity = '1';
+    });
+    openSourceInfoBtn.addEventListener('mouseleave', () => {
+      openSourceTooltip.style.visibility = 'hidden';
+      openSourceTooltip.style.opacity = '0';
+    });
+  }
+}
+
+function setupShortcutsSettingsButton() {
+  const btn = document.getElementById('openShortcutsSettingsBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    try {
+      const ua = navigator.userAgent || '';
+      const url = ua.includes('Edg/') ? 'edge://extensions/shortcuts' : 'chrome://extensions/shortcuts';
+      safeCreateTab({ url });
+    } catch (_) {}
+  });
+}
+
+function setupLanguageToggle() {
+  const langToggleButton = document.getElementById('lang-toggle-btn');
+  if (!langToggleButton) return;
+  langToggleButton.addEventListener('click', () => {
+    const nextLang = popupRecommendLang === 'zh_CN' ? 'en' : 'zh_CN';
+    setPreferredLang(nextLang);
+    updatePopupLanguage(nextLang);
+  });
+}
+
 function getRecentFaviconFallback() {
   return 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E';
 }
@@ -142,15 +581,6 @@ function loadFaviconForRecent(imgElement, url) {
 }
 
 function getInternalFaviconUrl(url) {
-  try {
-    const ua = navigator.userAgent || '';
-    if (ua.includes('Edg/')) {
-      return `edge://favicon/size/32@2x/${url}`;
-    }
-    if (ua.includes('Chrome/')) {
-      return `chrome://favicon/size/32@2x/${url}`;
-    }
-  } catch (_) {}
   return null;
 }
 
@@ -189,16 +619,7 @@ function requestPopupFavicon(imgElement, url) {
       if (imgElement.isConnected) imgElement.src = dataUrl;
       return dataUrl;
     }
-    const internalUrl = getInternalFaviconUrl(url);
-    if (internalUrl) {
-      imgElement.onerror = () => {
-        imgElement.onerror = null;
-        loadFaviconForRecent(imgElement, url);
-      };
-      imgElement.src = internalUrl;
-    } else {
-      loadFaviconForRecent(imgElement, url);
-    }
+    loadFaviconForRecent(imgElement, url);
     return null;
   }).catch(() => {
     loadFaviconForRecent(imgElement, url);
@@ -869,45 +1290,155 @@ async function refreshPopupRecommendCards(force = false) {
 
 function updatePopupLanguage(lang) {
   popupRecommendLang = lang || 'zh_CN';
+  const pageTitleElement = document.getElementById('pageTitleElement');
+  if (pageTitleElement) pageTitleElement.textContent = getPopupText('pageTitle', popupRecommendLang);
+
   const title = document.getElementById('recommendTitle');
-  if (title) title.textContent = popupRecommendLang === 'en' ? 'Bookmark Recommend' : '书签推荐';
+  if (title) title.textContent = getPopupText('recommendTitle', popupRecommendLang);
+
+  const recordsTitle = document.getElementById('recordsTitle');
+  if (recordsTitle) recordsTitle.textContent = getPopupText('recordsTitle', popupRecommendLang);
 
   const openRecordsBtn = document.getElementById('openRecordsBtn');
-  if (openRecordsBtn) openRecordsBtn.textContent = popupRecommendLang === 'en' ? 'Records' : '记录';
+  if (openRecordsBtn) {
+    openRecordsBtn.title = getPopupText('openRecordsTooltip', popupRecommendLang);
+  }
 
   const openRecommendBtn = document.getElementById('openRecommendBtn');
-  if (openRecommendBtn) openRecommendBtn.textContent = popupRecommendLang === 'en' ? 'Recommend' : '推荐';
+  if (openRecommendBtn) {
+    openRecommendBtn.title = getPopupText('openRecommendTooltip', popupRecommendLang);
+  }
+
+  const refreshBtn = document.getElementById('refreshBtn');
+  if (refreshBtn) refreshBtn.title = getPopupText('refreshTooltip', popupRecommendLang);
+
+  const refreshSettingsBtn = document.getElementById('popupRefreshSettingsBtn');
+  if (refreshSettingsBtn) refreshSettingsBtn.title = getPopupText('refreshSettingsTooltip', popupRecommendLang);
+
+  const refreshText = document.getElementById('popupRefreshText');
+  if (refreshText) refreshText.textContent = getPopupText('refreshText', popupRecommendLang);
 
   const laterTitle = document.getElementById('popupRecommendLaterTitle');
-  if (laterTitle) laterTitle.textContent = popupRecommendLang === 'en' ? 'Remind later' : '稍后提醒';
+  if (laterTitle) laterTitle.textContent = getPopupText('laterTitle', popupRecommendLang);
 
   document.querySelectorAll('.popup-later-btn').forEach(btn => {
     const delay = btn.getAttribute('data-delay');
     const text = popupRecommendLaterOptionLabels[delay]?.[popupRecommendLang] || btn.textContent;
     btn.textContent = text;
   });
+
+  updateOpenSourceText(popupRecommendLang);
+  renderShortcutsList(popupRecommendLang);
+
+  const trackingTitle = document.getElementById('popupTrackingTitle');
+  if (trackingTitle) trackingTitle.textContent = getPopupText('trackingTitle', popupRecommendLang);
+  const trackingEmpty = document.getElementById('popupTrackingEmptyText');
+  if (trackingEmpty) trackingEmpty.textContent = getPopupText('trackingEmpty', popupRecommendLang);
+  const rankingTitle = document.getElementById('popupRankingTitle');
+  if (rankingTitle) rankingTitle.textContent = getPopupText('rankingTitle', popupRecommendLang);
+  const rankingEmpty = document.getElementById('popupRankingEmptyText');
+  if (rankingEmpty) rankingEmpty.textContent = getPopupText('rankingEmpty', popupRecommendLang);
+  const rankingHint = document.getElementById('popupRankingHint');
+  if (rankingHint) {
+    const range = localStorage.getItem('popupRankingRange') || 'day';
+    rankingHint.textContent = `${getRankingRangeLabel(popupRecommendLang, range)} >`;
+  }
 }
 
 function setupPopupControls() {
-  const openRecordsBtn = document.getElementById('openRecordsBtn');
-  if (openRecordsBtn) {
-    openRecordsBtn.addEventListener('click', async () => {
+  const openRecordsView = async (target = 'ranking', range = null) => {
+    const view = 'additions';
+    try {
+      localStorage.setItem('lastActiveView', view);
+      localStorage.setItem('additionsActiveTab', 'browsing');
+      localStorage.setItem('browsingActiveSubTab', target === 'ranking' ? 'ranking' : 'history');
+      if (target === 'ranking' && range) {
+        localStorage.setItem('browsingRankingActiveRange', range);
+      }
+    } catch (_) {}
+    try {
+      await new Promise((resolve) => {
+        browserAPI.storage.local.set({
+          historyRequestedView: { view, time: Date.now() }
+        }, resolve);
+      });
+    } catch (_) {}
+    const baseUrl = browserAPI.runtime.getURL('history_html/history.html');
+    const url = `${baseUrl}?view=${view}`;
+    await safeCreateTab({ url });
+  };
+
+  const rankingWidget = document.getElementById('popupRankingWidget');
+  if (rankingWidget) {
+    rankingWidget.addEventListener('click', (e) => {
+      if (e.target.closest('.widget-header-action-btn') || e.target.closest('.time-tracking-widget-item')) return;
+      const range = localStorage.getItem('popupRankingRange') || 'day';
+      openRecordsView('ranking', range);
+    });
+  }
+
+  const trackingWidget = document.getElementById('popupTrackingWidget');
+  if (trackingWidget) {
+    trackingWidget.addEventListener('click', (e) => {
+      if (e.target.closest('.time-tracking-widget-item')) return;
       const view = 'additions';
       try {
         localStorage.setItem('lastActiveView', view);
+        localStorage.setItem('additionsActiveTab', 'tracking');
+      } catch (_) {}
+      try {
+        browserAPI.storage.local.set({ historyRequestedView: { view, time: Date.now() } }, () => {});
+      } catch (_) {}
+      const baseUrl = browserAPI.runtime.getURL('history_html/history.html');
+      const url = `${baseUrl}?view=${view}`;
+      safeCreateTab({ url });
+    });
+  }
+
+  const openRecordsBtn = document.getElementById('openRecordsBtn');
+  if (openRecordsBtn) {
+    openRecordsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRecordsView('ranking');
+    });
+  }
+
+  const refreshSettingsBtn = document.getElementById('popupRefreshSettingsBtn');
+  if (refreshSettingsBtn) {
+    refreshSettingsBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        localStorage.setItem('lastActiveView', 'recommend');
       } catch (_) {}
       try {
         await new Promise((resolve) => {
           browserAPI.storage.local.set({
-            historyRequestedView: { view, time: Date.now() }
+            historyRequestedView: { view: 'recommend', time: Date.now() },
+            openRecommendRefreshSettings: true
           }, resolve);
         });
       } catch (_) {}
       const baseUrl = browserAPI.runtime.getURL('history_html/history.html');
-      const url = `${baseUrl}?view=${view}`;
+      const url = `${baseUrl}?view=recommend`;
       await safeCreateTab({ url });
     });
   }
+
+  const rankingHint = document.getElementById('popupRankingHint');
+  const cycleRange = () => {
+    const ranges = ['day', 'week', 'month', 'year', 'all'];
+    const current = localStorage.getItem('popupRankingRange') || 'day';
+    let idx = ranges.indexOf(current);
+    if (idx < 0) idx = 0;
+    const next = ranges[(idx + 1) % ranges.length];
+    localStorage.setItem('popupRankingRange', next);
+    if (rankingHint) rankingHint.textContent = `${getRankingRangeLabel(popupRecommendLang, next)} >`;
+    updateRankingWidget();
+  };
+  if (rankingHint) rankingHint.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cycleRange();
+  });
 
   const openRecommendBtn = document.getElementById('openRecommendBtn');
   if (openRecommendBtn) {
@@ -965,6 +1496,12 @@ function setupStorageSync() {
   if (!browserAPI.storage || !browserAPI.storage.onChanged) return;
   browserAPI.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
+    if (changes.preferredLang) {
+      const nextLang = changes.preferredLang.newValue || 'zh_CN';
+      updatePopupLanguage(nextLang);
+      updateTrackingWidget();
+      updateRankingWidget();
+    }
     if (changes.popupCurrentCards) {
       const now = Date.now();
       if (now - popupLastSaveTime < 500) return;
@@ -982,10 +1519,30 @@ function setupStorageSync() {
 function initPopup() {
   setupPopupControls();
   setupStorageSync();
+  setupOpenSourceDialog();
+  setupShortcutsSettingsButton();
+  setupLanguageToggle();
 
-  browserAPI.storage.local.get(['preferredLang'], (data) => {
-    updatePopupLanguage(data.preferredLang || 'zh_CN');
+  loadPreferredLang().then((lang) => {
+    updatePopupLanguage(lang || 'zh_CN');
+    return loadPopupShortcuts();
+  }).then(() => {
+    updatePopupLanguage(popupRecommendLang);
     refreshPopupRecommendCards();
+    updateTrackingWidget();
+    updateRankingWidget();
+
+    if (popupTrackingIntervalId) clearInterval(popupTrackingIntervalId);
+    popupTrackingIntervalId = setInterval(updateTrackingWidget, 5000);
+
+    if (popupRankingIntervalId) clearInterval(popupRankingIntervalId);
+    popupRankingIntervalId = setInterval(updateRankingWidget, 30000);
+
+    // Re-trigger once shortly after to avoid first-open blank state.
+    setTimeout(() => {
+      updateTrackingWidget();
+      updateRankingWidget();
+    }, 300);
   });
 }
 

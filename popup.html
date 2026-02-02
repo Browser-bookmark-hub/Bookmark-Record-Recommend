@@ -1,107 +1,639 @@
 <!DOCTYPE html>
 <html lang="zh">
+
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bookmark Records & Recommend</title>
-  <link rel="stylesheet" href="font-awesome.min.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title></title>
+  <link rel="stylesheet" href="font-awesome.min.css">
   <script src="theme.js"></script>
   <style>
-    :root {
-      --theme-bg-primary: #f6f7fb;
-      --theme-bg-secondary: #ffffff;
-      --theme-bg-tertiary: #f1f2f6;
-      --theme-text-primary: #1f2430;
-      --theme-text-secondary: #6b7280;
-      --theme-accent-color: #2563eb;
-      --theme-border-primary: #e5e7eb;
-      --theme-success-color: #10b981;
-      --theme-error-color: #ef4444;
+    /* Theme variables */
+    html {
+      /* Light Theme (Default) */
+      --light-bg-primary: #ffffff;
+      --light-bg-secondary: #f8f9fa;
+      --light-bg-tertiary: #f0f0f0;
+      --light-bg-elevated: #ffffff;
+
+      --light-text-primary: #212529;
+      --light-text-secondary: #6c757d;
+      --light-text-disabled: #adb5bd;
+      --light-text-on-accent: #ffffff;
+
+      --light-border-primary: #dee2e6;
+      --light-border-secondary: #ced4da;
+
+      --light-input-bg: #ffffff;
+      --light-input-text: #495057;
+      --light-input-border: #ced4da;
+      --light-input-placeholder: #adb5bd;
+      --light-input-focus-border: #007AFF;
+      --light-input-focus-shadow: rgba(0, 122, 255, 0.2);
+
+      --light-accent-color: #007AFF;
+      --light-accent-color-hover: #0062cc;
+      --light-accent-text-color: #007AFF;
+
+      --light-success-color: #4CAF50;
+      --light-error-color: #FF3B30;
+      --light-warning-color: #ff9800;
+
+      --light-link-color: #007AFF;
+
+      --light-scrollbar-track: #f1f1f1;
+      --light-scrollbar-thumb: #c1c1c1;
+      --light-scrollbar-thumb-hover: #a8a8a8;
+
+      --light-icon-color: #6c757d;
+      --light-svg-icon-stroke-color-path: "%23666";
+
+      --light-status-info-bg: #e6f3ff;
+      --light-status-info-text: #007AFF;
+
+      /* Dark Theme */
+      --dark-bg-primary: #1e1e1e;
+      --dark-bg-secondary: #2d2d2d;
+      --dark-bg-tertiary: #333333;
+      --dark-bg-elevated: #383838;
+
+      --dark-text-primary: #e0e0e0;
+      --dark-text-secondary: #9e9e9e;
+      --dark-text-disabled: #6c6c6c;
+      --dark-text-on-accent: #ffffff;
+
+      --dark-border-primary: #444444;
+      --dark-border-secondary: #555555;
+
+      --dark-input-bg: #2d2d2d;
+      --dark-input-text: #e0e0e0;
+      --dark-input-border: #555555;
+      --dark-input-placeholder: #777777;
+      --dark-input-focus-border: #007AFF;
+      --dark-input-focus-shadow: rgba(0, 122, 255, 0.3);
+
+      --dark-accent-color: #007AFF;
+      --dark-accent-color-hover: #0062cc;
+      --dark-accent-text-color: #3694ff;
+
+      --dark-success-color: #4CAF50;
+      --dark-error-color: #FF3B30;
+      --dark-warning-color: #ff9800;
+
+      --dark-link-color: #3694ff;
+
+      --dark-scrollbar-track: #2d2d2d;
+      --dark-scrollbar-thumb: #555555;
+      --dark-scrollbar-thumb-hover: #666666;
+
+      --dark-icon-color: #9e9e9e;
+      --dark-svg-icon-stroke-color-path: "%23aaa";
+
+      --dark-status-info-bg: #1a3f5f;
+      --dark-status-info-text: #4da3ff;
+
+      /* Apply theme variables - defaults to light theme */
+      --theme-bg-primary: var(--light-bg-primary);
+      --theme-bg-secondary: var(--light-bg-secondary);
+      --theme-bg-tertiary: var(--light-bg-tertiary);
+      --theme-bg-elevated: var(--light-bg-elevated);
+
+      --theme-text-primary: var(--light-text-primary);
+      --theme-text-secondary: var(--light-text-secondary);
+      --theme-text-disabled: var(--light-text-disabled);
+      --theme-text-on-accent: var(--light-text-on-accent);
+
+      --theme-border-primary: var(--light-border-primary);
+      --theme-border-secondary: var(--light-border-secondary);
+
+      --theme-input-bg: var(--light-input-bg);
+      --theme-input-text: var(--light-input-text);
+      --theme-input-border: var(--light-input-border);
+      --theme-input-placeholder: var(--light-input-placeholder);
+      --theme-input-focus-border: var(--light-input-focus-border);
+      --theme-input-focus-shadow: var(--light-input-focus-shadow);
+
+      --theme-accent-color: var(--light-accent-color);
+      --theme-accent-color-hover: var(--light-accent-color-hover);
+      --theme-accent-text-color: var(--light-accent-text-color);
+
+      --theme-success-color: var(--light-success-color);
+      --theme-error-color: var(--light-error-color);
+      --theme-warning-color: var(--light-warning-color);
+
+      --theme-link-color: var(--light-link-color);
+
+      --theme-scrollbar-track: var(--light-scrollbar-track);
+      --theme-scrollbar-thumb: var(--light-scrollbar-thumb);
+      --theme-scrollbar-thumb-hover: var(--light-scrollbar-thumb-hover);
+
+      --theme-icon-color: var(--light-icon-color);
+      --theme-svg-icon-stroke-color-path: var(--light-svg-icon-stroke-color-path);
+
+      --theme-status-info-bg: var(--light-status-info-bg);
+      --theme-status-info-text: var(--light-status-info-text);
+      --theme-status-info-border: #b3d9ff;
+
+      --theme-status-error-bg: #fff2f2;
+      --theme-status-error-text: #FF3B30;
+      --theme-status-error-border: #ffcdd2;
+
+      --theme-hover-bg: #e9ecef;
+      --theme-selected-item-bg: #ddeeff;
+
+      --theme-switch-bg: #ccc;
+      --theme-switch-bg-checked: #007AFF;
+      --theme-switch-slider-bg: #ffffff;
+
+      --theme-backup-mode-auto-gradient: linear-gradient(to right, #e8f5e9, #f0f0f0);
+      --theme-backup-mode-manual-gradient: linear-gradient(to right, #f0f0f0, #e6f7ff);
+      --theme-backup-mode-slider-bg: #ffffff;
+      --theme-backup-mode-auto-text: #4CAF50;
+      --theme-backup-mode-manual-text: #007AFF;
+      --theme-backup-mode-inactive-text: #6c757d;
+
+      --theme-settings-button-bg: #f5f5f5;
+      --theme-settings-button-text: #333;
+      --theme-settings-button-border: #ddd;
+      --theme-settings-button-hover-bg: #eaeaea;
+
+      --theme-dropzone-bg: #f8f9fa;
+      --theme-dropzone-border: #ccc;
+      --theme-dropzone-hover-bg: #f0f7ff;
+      --theme-dropzone-drag-bg: #e8f4fc;
+      --theme-dropzone-success-bg: #f0fff0;
+      --theme-dropzone-error-bg: #fff0f0;
+      --theme-dropzone-text-color: #666;
+
+      color-scheme: light;
     }
-    html, body {
+
+    /* Dark Theme */
+    html[data-theme="dark"] {
+      --theme-bg-primary: var(--dark-bg-primary);
+      --theme-bg-secondary: var(--dark-bg-secondary);
+      --theme-bg-tertiary: var(--dark-bg-tertiary);
+      --theme-bg-elevated: var(--dark-bg-elevated);
+
+      --theme-text-primary: var(--dark-text-primary);
+      --theme-text-secondary: var(--dark-text-secondary);
+      --theme-text-disabled: var(--dark-text-disabled);
+      --theme-text-on-accent: var(--dark-text-on-accent);
+
+      --theme-border-primary: var(--dark-border-primary);
+      --theme-border-secondary: var(--dark-border-secondary);
+
+      --theme-input-bg: var(--dark-input-bg);
+      --theme-input-text: var(--dark-input-text);
+      --theme-input-border: var(--dark-input-border);
+      --theme-input-placeholder: var(--dark-input-placeholder);
+      --theme-input-focus-shadow: var(--dark-input-focus-shadow);
+
+      --theme-accent-text-color: #66b3ff;
+      --theme-link-color: #66b3ff;
+
+      --theme-scrollbar-track: var(--dark-scrollbar-track);
+      --theme-scrollbar-thumb: var(--dark-scrollbar-thumb);
+      --theme-scrollbar-thumb-hover: var(--dark-scrollbar-thumb-hover);
+
+      --theme-icon-color: var(--dark-icon-color);
+      --theme-svg-icon-stroke-color-path: var(--dark-svg-icon-stroke-color-path);
+
+      --theme-status-info-bg: var(--dark-status-info-bg);
+      --theme-status-info-text: var(--dark-status-info-text);
+      --theme-status-info-border: #33628f;
+
+      --theme-status-error-bg: #592626;
+      --theme-status-error-text: #ff7066;
+      --theme-status-error-border: #8f4040;
+
+      --theme-hover-bg: #3a3a3a;
+      --theme-selected-item-bg: #2a3f55;
+
+      --theme-switch-bg: #555;
+      --theme-switch-slider-bg: #121212;
+
+      --theme-backup-mode-auto-gradient: linear-gradient(to right, #253825, #2c2c2c);
+      --theme-backup-mode-manual-gradient: linear-gradient(to right, #2c2c2c, #253845);
+      --theme-backup-mode-slider-bg: #1e1e1e;
+      --theme-backup-mode-inactive-text: #757575;
+
+      --theme-settings-button-bg: #3a3a3a;
+      --theme-settings-button-text: var(--dark-text-primary);
+      --theme-settings-button-border: #555;
+      --theme-settings-button-hover-bg: #4a4a4a;
+
+      --theme-dropzone-bg: #2c2c2c;
+      --theme-dropzone-border: #555;
+      --theme-dropzone-hover-bg: #2a3a4f;
+      --theme-dropzone-drag-bg: #25354a;
+      --theme-dropzone-success-bg: #204020;
+      --theme-dropzone-error-bg: #402020;
+      --theme-dropzone-text-color: var(--dark-text-secondary);
+
+      color-scheme: dark;
+    }
+
+    body {
+      width: 500px;
+      min-width: 500px;
+      height: 560px;
+      min-height: 560px;
       margin: 0;
       padding: 0;
-      width: 380px;
       background: var(--theme-bg-primary);
       color: var(--theme-text-primary);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-y: scroll;
+      scrollbar-gutter: stable;
     }
+
     .popup-root { padding: 12px; }
-    .header {
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      width: 100%;
+    }
+
+    .popup-recommend-card {
+      background: linear-gradient(135deg, var(--theme-bg-secondary) 0%, var(--theme-bg-tertiary) 100%);
+      border: 2px solid var(--theme-border-primary);
+      border-radius: 12px;
+      padding: 12px 10px;
+      min-height: 148px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 10px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+
+    .popup-recommend-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--theme-accent-color), var(--theme-success-color));
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .popup-recommend-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+      border-color: var(--theme-accent-color);
+    }
+
+    .popup-recommend-card:hover::before {
+      opacity: 1;
+    }
+
+    .popup-recommend-card.empty { cursor: default; opacity: 0.6; }
+    .popup-recommend-card-top {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+
+    .popup-recommend-favicon {
+      width: 40px;
+      height: 40px;
+      object-fit: contain;
+      border-radius: 8px;
+    }
+
+    .popup-recommend-title {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.4;
+      max-height: 4.2em;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
+      color: var(--theme-text-primary);
+    }
+
+    .popup-recommend-footer {
+      margin-top: auto;
+      padding-top: 8px;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--theme-text-secondary);
+      border-top: 1px solid var(--theme-border-primary);
+    }
+
+    .popup-recommend-actions { display: flex; gap: 4px; }
+
+    .popup-card-btn {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 8px;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .popup-card-btn:hover { background: var(--theme-hover-bg); }
+
+    .widget-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .time-tracking-widget {
+      padding: 8px;
+      background: var(--theme-bg-elevated);
+      border: 1px solid var(--theme-border-primary);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .time-tracking-widget:hover {
+      border-color: var(--theme-accent-color);
+      box-shadow: 0 2px 8px rgba(0, 122, 255, 0.15);
+    }
+
+    .time-tracking-widget-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--theme-text-primary);
+      margin-bottom: 8px;
+    }
+
+    .time-tracking-widget-header i {
+      color: var(--theme-accent-color);
+      font-size: 14px;
+      transform: translateY(-1px);
+    }
+
+    .widget-header-action-btn {
+      margin-left: auto;
+      background: transparent;
+      border: none;
+      color: var(--theme-text-secondary);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      font-size: 13px;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      transform: translateY(-1px);
+    }
+
+    .widget-header-action-btn:hover {
+      color: var(--theme-text-primary);
+      background: var(--theme-bg-tertiary);
+    }
+
+    .time-tracking-widget-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      height: 120px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .time-tracking-widget-empty {
+      font-size: 12px;
+      color: var(--theme-text-secondary);
+      text-align: center;
+      padding: 8px 0;
+    }
+
+    .time-tracking-widget-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: var(--theme-bg-secondary);
+      border-radius: 6px;
+      font-size: 12px;
+      transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+
+    .time-tracking-widget-item:hover {
+      background: var(--theme-hover-bg);
+      border-color: var(--theme-accent-color);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    }
+
+    .time-tracking-widget-item .item-state {
+      font-size: 10px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+
+    .time-tracking-widget-item .item-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--theme-text-primary);
+      min-width: 0;
+    }
+
+    .time-tracking-widget-item .item-time {
+      font-size: 11px;
+      color: var(--theme-text-secondary);
+      flex-shrink: 0;
+    }
+
+    .time-tracking-widget-more {
+      font-size: 11px;
+      color: var(--theme-text-secondary);
+      text-align: center;
+      padding: 4px 0;
+    }
+
+    .time-tracking-widget-item.ranking-item {
+      cursor: pointer;
+      padding-left: 4px;
+      padding-right: 4px;
+    }
+
+    .time-tracking-widget-item.ranking-item .item-time {
+      margin-left: auto;
+      padding-left: 8px;
+    }
+
+    .time-tracking-widget-item .item-rank {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--theme-text-secondary);
+      background: var(--theme-bg-tertiary);
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .time-tracking-widget-item:nth-child(1) .item-rank {
+      color: #FFD700;
+      background: rgba(255, 215, 0, 0.15);
+    }
+
+    .time-tracking-widget-item:nth-child(2) .item-rank {
+      color: #C0C0C0;
+      background: rgba(192, 192, 192, 0.15);
+    }
+
+    .time-tracking-widget-item:nth-child(3) .item-rank {
+      color: #CD7F32;
+      background: rgba(205, 127, 50, 0.15);
+    }
+
+    .time-tracking-widget-hint {
+      font-size: 10px;
+      color: var(--theme-text-primary);
+      margin-top: 6px;
+      cursor: pointer;
+      transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+      user-select: none;
+      align-self: flex-end;
+      padding: 4px 12px;
+      border-radius: 8px;
+      min-width: 82px;
+      text-align: center;
+      background: var(--theme-border-primary);
+      border: 1px solid var(--theme-border-primary);
+      display: inline-flex;
+      justify-content: center;
+      width: fit-content;
+      margin-left: auto;
+    }
+
+    .time-tracking-widget-hint:hover {
+      color: var(--theme-accent-color);
+      background: var(--theme-bg-tertiary);
+    }
+
+    .recommend-jump-btn {
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .recommend-jump-btn:hover {
+      background: var(--theme-hover-bg);
+    }
+
+    .card-navigation {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .card-nav-btn {
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .card-nav-btn.compact {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    .card-nav-btn.primary {
+      background: var(--theme-accent-color);
+      color: var(--theme-text-on-accent);
+      border-color: var(--theme-accent-color);
+      font-weight: 600;
+    }
+
+    .card-nav-btn.primary:hover {
+      background: var(--theme-accent-color-hover);
+      border-color: var(--theme-accent-color-hover);
+    }
+
+    .section-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 10px;
     }
-    .header-title {
+
+    .section-title {
       font-size: 14px;
       font-weight: 600;
       display: flex;
       align-items: center;
       gap: 6px;
     }
-    .header-actions button {
-      border: 1px solid var(--theme-border-primary);
-      background: var(--theme-bg-secondary);
-      border-radius: 6px;
-      padding: 6px 8px;
-      font-size: 12px;
-      cursor: pointer;
-      margin-left: 6px;
-    }
-    .header-actions button:hover { background: var(--theme-bg-tertiary); }
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
+
+    .section-actions {
+      display: flex;
+      align-items: center;
       gap: 8px;
     }
-    .popup-recommend-card {
-      background: var(--theme-bg-secondary);
-      border: 1px solid var(--theme-border-primary);
-      border-radius: 8px;
-      padding: 8px;
-      min-height: 120px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      cursor: pointer;
-      position: relative;
-    }
-    .popup-recommend-card.empty { cursor: default; opacity: 0.6; }
-    .popup-recommend-card-top { display: flex; gap: 6px; align-items: center; }
-    .popup-recommend-favicon { width: 16px; height: 16px; border-radius: 4px; }
-    .popup-recommend-title {
-      font-size: 12px;
-      line-height: 1.3;
-      max-height: 2.6em;
-      overflow: hidden;
-    }
-    .popup-recommend-footer {
-      margin-top: 6px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-      color: var(--theme-text-secondary);
-    }
-    .popup-recommend-actions {
-      display: flex;
-      gap: 4px;
-    }
-    .popup-card-btn {
-      border: none;
-      background: var(--theme-bg-tertiary);
-      border-radius: 4px;
-      padding: 2px 4px;
-      font-size: 10px;
-      cursor: pointer;
-    }
-    .popup-card-btn:hover { background: #e5e7eb; }
+
     .status {
       margin-top: 8px;
       font-size: 12px;
       color: var(--theme-text-secondary);
     }
+
+    .hint {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--theme-text-secondary);
+    }
+
     .popup-recommend-later-overlay {
       position: fixed;
       top: 0;
@@ -114,7 +646,9 @@
       justify-content: center;
       z-index: 100;
     }
+
     .popup-recommend-later-overlay.show { display: flex; }
+
     .popup-recommend-later-modal {
       background: var(--theme-bg-secondary);
       border-radius: 10px;
@@ -122,15 +656,18 @@
       width: 280px;
       box-shadow: 0 6px 20px rgba(0,0,0,0.18);
     }
+
     .popup-recommend-later-modal h4 {
       margin: 0 0 10px 0;
       font-size: 14px;
     }
+
     .popup-recommend-later-options {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
+
     .popup-later-btn {
       border: 1px solid var(--theme-border-primary);
       background: var(--theme-bg-tertiary);
@@ -139,7 +676,9 @@
       font-size: 12px;
       cursor: pointer;
     }
+
     .popup-later-btn:hover { background: #e5e7eb; }
+
     .popup-recommend-later-close {
       border: none;
       background: transparent;
@@ -149,18 +688,216 @@
       top: 10px;
       cursor: pointer;
     }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+    }
+
+    .modal-content {
+      position: relative;
+      background-color: var(--theme-bg-primary);
+      margin: 10% auto;
+      padding: 16px;
+      width: 86%;
+      max-width: 520px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .modal-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: var(--theme-accent-text-color);
+    }
+
+    .modal-close {
+      border: none;
+      background: transparent;
+      font-size: 18px;
+      color: var(--theme-text-secondary);
+      cursor: pointer;
+    }
+
+    .open-source-links p {
+      margin: 8px 0 4px;
+      font-size: 13px;
+      color: var(--theme-text-secondary);
+    }
+
+    .open-source-links a {
+      display: block;
+      padding: 8px 12px;
+      background-color: var(--theme-bg-tertiary);
+      border-radius: 6px;
+      color: var(--theme-link-color);
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .shortcuts-section {
+      margin-top: 12px;
+      border-top: 1px solid var(--theme-border-primary);
+      padding-top: 12px;
+    }
+
+    .shortcuts-title {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: var(--theme-text-primary);
+    }
+
+    .shortcuts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--theme-text-secondary);
+    }
+
+    .shortcuts-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .shortcuts-row kbd {
+      background: var(--theme-bg-tertiary);
+      border: 1px solid var(--theme-border-primary);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: inherit;
+      color: var(--theme-text-primary);
+    }
+
+    .shortcuts-settings-btn {
+      margin-top: 10px;
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-tertiary);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--theme-text-primary);
+    }
+
+    .shortcuts-settings-btn:hover {
+      background: var(--theme-hover-bg);
+    }
+
+    #lang-toggle-btn {
+      border: none;
+      background-color: var(--theme-accent-color);
+      color: var(--theme-text-on-accent);
+      border-radius: 8px;
+      font-weight: 500;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    #lang-toggle-btn:hover {
+      background-color: var(--theme-accent-color-hover);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+      transform: translateY(-1px);
+    }
   </style>
 </head>
+
 <body>
   <div class="popup-root">
-    <div class="header">
-      <div class="header-title"><i class="fas fa-star"></i><span id="recommendTitle">Bookmark Recommend</span></div>
-      <div class="header-actions">
-        <button id="openRecordsBtn" title="打开书签记录">记录</button>
-        <button id="openRecommendBtn" title="打开推荐页面">推荐</button>
-        <button id="refreshBtn" title="刷新推荐"><i class="fas fa-sync"></i></button>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h2 style="margin: 0; color: #007AFF; font-size: 18px;">
+        <span id="pageTitleElement">书签记录 &amp; 推荐</span>
+      </h2>
+      <div style="display: flex; align-items: center;">
+        <button id="openSourceInfoBtn"
+          style="font-size: 14px; padding: 5px 8px; margin-right: 8px; background-color: var(--theme-bg-tertiary); border: 1px solid var(--theme-border-primary); border-radius: 4px; color: var(--theme-text-secondary); cursor: pointer; position: relative;">
+          <i class="fab fa-github"></i>
+          <span class="tooltip"
+            style="position: absolute; background-color: var(--theme-tooltip-bg, rgba(0,0,0,0.7)); color: var(--theme-tooltip-text, white); padding: 2px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; visibility: hidden; opacity: 0; transition: opacity 0.3s; pointer-events: none; top: 100%; margin-top: 6px; left: 50%; transform: translateX(-50%);"
+            id="openSourceTooltip">开源信息</span>
+        </button>
+        <button id="themeSwitcher"
+          style="font-size: 14px; padding: 5px 8px; margin-right: 8px; background-color: var(--theme-bg-tertiary); border: 1px solid var(--theme-border-primary); border-radius: 4px; color: var(--theme-text-secondary); cursor: pointer; position: relative;">
+          <i class="fas fa-moon" id="darkModeIcon" style="display: none;"></i>
+          <i class="fas fa-sun" id="lightModeIcon" style="display: none;"></i>
+          <i class="fas fa-desktop" id="systemModeIcon"></i>
+          <span class="tooltip"
+            style="position: absolute; background-color: var(--theme-tooltip-bg, rgba(0,0,0,0.7)); color: var(--theme-tooltip-text, white); padding: 2px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; visibility: hidden; opacity: 0; transition: opacity 0.3s; pointer-events: none; top: 100%; margin-top: 6px; left: 50%; transform: translateX(-50%);"
+            id="themeSwitcherTooltip">切换主题</span>
+        </button>
+        <button id="lang-toggle-btn"
+          style="font-size: 12px; padding: 5px 8px; margin: 0; z-index: 10000; position: relative; min-width: 90px; min-height: 28px;">中文
+          / English</button>
       </div>
     </div>
+
+    <div class="section-header">
+      <div class="section-title">
+        <i class="fas fa-plus-circle"></i>
+        <span id="recordsTitle">书签记录</span>
+      </div>
+      <div class="section-actions">
+        <button id="openRecordsBtn" title="打开书签记录" class="recommend-jump-btn" aria-label="打开书签记录">
+          <i class="fas fa-external-link-alt"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="widget-grid">
+      <div class="time-tracking-widget" id="popupTrackingWidget">
+        <div class="time-tracking-widget-header">
+          <i class="fas fa-stopwatch"></i>
+          <span id="popupTrackingTitle">时间追踪</span>
+        </div>
+        <div class="time-tracking-widget-list" id="popupTrackingList">
+          <div class="time-tracking-widget-empty" id="popupTrackingEmpty">
+            <span id="popupTrackingEmptyText">暂无追踪中的书签</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="time-tracking-widget" id="popupRankingWidget">
+      <div class="time-tracking-widget-header">
+        <i class="fas fa-chart-bar"></i>
+        <span id="popupRankingTitle">点击排行</span>
+      </div>
+        <div class="time-tracking-widget-list" id="popupRankingList">
+          <div class="time-tracking-widget-empty" id="popupRankingEmpty">
+            <span id="popupRankingEmptyText">暂无排行数据</span>
+          </div>
+        </div>
+        <div class="time-tracking-widget-hint" id="popupRankingHint">当日 &gt;</div>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <div class="section-title">
+        <i class="fas fa-lightbulb"></i>
+        <span id="recommendTitle">Bookmark Recommend</span>
+      </div>
+      <div class="section-actions">
+        <button id="openRecommendBtn" title="打开推荐页面" class="recommend-jump-btn" aria-label="打开推荐页面">
+          <i class="fas fa-external-link-alt"></i>
+        </button>
+      </div>
+    </div>
+
     <div id="bookmarkRecommendCards" class="cards">
       <div class="popup-recommend-card empty" data-index="0">
         <div class="popup-recommend-card-top">
@@ -170,9 +907,9 @@
         <div class="popup-recommend-footer">
           <span class="popup-recommend-priority">S = --</span>
           <div class="popup-recommend-actions">
-            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
-            <button class="popup-card-btn popup-card-btn-later">稍后</button>
-            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+            <button class="popup-card-btn popup-card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+            <button class="popup-card-btn popup-card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+            <button class="popup-card-btn popup-card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
           </div>
         </div>
       </div>
@@ -184,9 +921,9 @@
         <div class="popup-recommend-footer">
           <span class="popup-recommend-priority">S = --</span>
           <div class="popup-recommend-actions">
-            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
-            <button class="popup-card-btn popup-card-btn-later">稍后</button>
-            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+            <button class="popup-card-btn popup-card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+            <button class="popup-card-btn popup-card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+            <button class="popup-card-btn popup-card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
           </div>
         </div>
       </div>
@@ -198,15 +935,25 @@
         <div class="popup-recommend-footer">
           <span class="popup-recommend-priority">S = --</span>
           <div class="popup-recommend-actions">
-            <button class="popup-card-btn popup-card-btn-block">屏蔽</button>
-            <button class="popup-card-btn popup-card-btn-later">稍后</button>
-            <button class="popup-card-btn popup-card-btn-skip">跳过</button>
+            <button class="popup-card-btn popup-card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+            <button class="popup-card-btn popup-card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+            <button class="popup-card-btn popup-card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
           </div>
         </div>
       </div>
     </div>
+    <div class="card-navigation">
+      <button id="popupRefreshSettingsBtn" class="card-nav-btn compact" title="自动刷新设置">
+        <i class="fas fa-cog"></i>
+      </button>
+      <button id="refreshBtn" class="card-nav-btn primary" title="刷新推荐">
+        <i class="fas fa-sync-alt"></i>
+        <span id="popupRefreshText">刷新推荐</span>
+      </button>
+    </div>
     <div class="status" id="statusText"></div>
   </div>
+
   <div id="popupRecommendLaterOverlay" class="popup-recommend-later-overlay" aria-hidden="true">
     <div class="popup-recommend-later-modal">
       <button class="popup-recommend-later-close" id="popupRecommendLaterClose" aria-label="关闭">×</button>
@@ -219,6 +966,36 @@
       </div>
     </div>
   </div>
+
+  <div id="openSourceInfoDialog" class="modal" aria-hidden="true">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="openSourceInfoTitle">开源信息</h3>
+        <button id="closeOpenSourceDialog" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="open-source-links">
+        <p id="openSourceGithubLabel">GitHub 仓库:</p>
+        <a id="openSourceGithubLink"
+          href="https://github.com/kwenxu/Bookmark-Backup?tab=readme-ov-file#readme" target="_blank">
+          <i class="fab fa-github" style="margin-right: 5px;"></i>
+          https://github.com/kwenxu/Bookmark-Backup
+        </a>
+        <p id="openSourceIssueLabel">问题反馈:</p>
+        <a id="openSourceIssueLink" href="https://github.com/kwenxu/Bookmark-Backup/issues" target="_blank">
+          <span id="openSourceIssueText">提交问题</span>
+        </a>
+      </div>
+      <div class="shortcuts-section">
+        <h4 class="shortcuts-title" id="shortcutsTitle">快捷键</h4>
+        <div class="shortcuts-list" id="shortcutsList"></div>
+        <button id="openShortcutsSettingsBtn" class="shortcuts-settings-btn" type="button">
+          在浏览器中管理快捷键
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
+
 </html>

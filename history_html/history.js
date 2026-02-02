@@ -1646,6 +1646,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (_) { }
     }
 
+    // 如果popup请求打开刷新设置弹窗（推荐视图）
+    try {
+        const result = await new Promise(resolve => {
+            browserAPI.storage.local.get(['openRecommendRefreshSettings'], resolve);
+        });
+        if (result?.openRecommendRefreshSettings) {
+            setTimeout(() => {
+                try { showRefreshSettingsModal(); } catch (_) { }
+            }, 200);
+            browserAPI.storage.local.remove(['openRecommendRefreshSettings'], () => {});
+        }
+    } catch (_) { }
+
     // 立即应用视图状态到DOM
     try { window.currentView = currentView; } catch (_) { }
     console.log('[初始化] >>>立即应用视图状态<<<:', currentView);
@@ -2630,6 +2643,17 @@ async function updateTimeTrackingWidget() {
                         el.appendChild(stateIcon);
                         el.appendChild(title);
                         el.appendChild(time);
+                        el.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (!item.url) return;
+                            if (typeof window.openBookmarkNewTab === 'function') {
+                                window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
+                            } else if (browserAPI?.tabs?.create) {
+                                browserAPI.tabs.create({ url: item.url });
+                            } else {
+                                window.open(item.url, '_blank');
+                            }
+                        });
                         widgetList.appendChild(el);
                     });
 
@@ -2726,7 +2750,14 @@ async function updateTimeTrackingWidget() {
                     // Specific click: Open URL
                     el.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        browserAPI.tabs.create({ url: item.url });
+                        if (!item.url) return;
+                        if (typeof window.openBookmarkNewTab === 'function') {
+                            window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
+                        } else if (browserAPI?.tabs?.create) {
+                            browserAPI.tabs.create({ url: item.url });
+                        } else {
+                            window.open(item.url, '_blank');
+                        }
                     });
 
                     widgetList.appendChild(el);
@@ -2805,13 +2836,18 @@ function initTimeTrackingWidget() {
 
     widget.addEventListener('click', (e) => {
         // Prevent if clicking specific interactive elements that didn't stop propagation (though most should)
-        if (e.target.closest('.widget-header-action-btn') || e.target.closest('.time-tracking-widget-hint') || e.target.closest('a')) return;
+        if (e.target.closest('.widget-header-action-btn') ||
+            e.target.closest('.time-tracking-widget-hint') ||
+            e.target.closest('.time-tracking-widget-item') ||
+            e.target.closest('a')) return;
 
         switchView('additions');
         setTimeout(() => {
             const mode = widget.dataset.mode;
             if (mode === 'ranking') {
                 // Navigate to Click Ranking View
+                const range = window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day';
+                try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
                 const browsingTab = document.getElementById('additionsTabBrowsing');
                 if (browsingTab) {
                     browsingTab.click();

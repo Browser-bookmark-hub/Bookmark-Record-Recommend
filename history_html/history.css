@@ -932,11 +932,12 @@ body {
 /* 时间捕捉小组件 */
 .time-tracking-widget {
     padding: 12px;
-    background: var(--bg-elevated);
+    background: transparent;
     border: 1px solid var(--border-color);
     border-radius: 12px;
     cursor: pointer;
     transition: all 0.2s ease;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12);
 }
 
 .time-tracking-widget:hover {
@@ -1008,14 +1009,18 @@ body {
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    background: var(--bg-secondary);
+    background: var(--bg-tertiary);
     border-radius: 6px;
     font-size: 12px;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+    border: 1px solid transparent;
 }
 
 .time-tracking-widget-item:hover {
-    background: var(--bg-hover);
+    background: var(--bg-secondary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .time-tracking-widget-item .item-state {
@@ -1088,19 +1093,23 @@ body {
 
 .time-tracking-widget-hint {
     font-size: 10px;
-    color: var(--text-tertiary);
-    text-align: right;
-    padding-top: 6px;
-    border-top: 1px solid var(--border-color);
+    color: var(--text-primary);
     margin-top: 6px;
     cursor: pointer;
-    transition: color 0.2s ease;
+    transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
     user-select: none;
+    align-self: flex-end;
+    padding: 4px 12px;
+    border-radius: 8px;
+    min-width: 82px;
+    text-align: center;
+    background: var(--border-color);
+    border: 1px solid var(--border-color);
 }
 
 .time-tracking-widget-hint:hover {
     color: var(--accent-primary);
-    text-decoration: underline;
+    background: var(--bg-tertiary);
 }
 
 /* 侧边栏收起状态 - 时间捕捉小组件 */
