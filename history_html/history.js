@@ -906,6 +906,7 @@ function setupGlobalImageErrorHandler() {
         if (e.target.tagName === 'IMG' &&
             (e.target.classList.contains('addition-icon') ||
                 e.target.classList.contains('tracking-favicon') ||
+                e.target.classList.contains('card-favicon') ||
                 e.target.classList.contains('ranking-favicon') ||
                 e.target.classList.contains('add-result-favicon') ||
                 e.target.classList.contains('heatmap-detail-favicon') ||
@@ -3631,19 +3632,17 @@ async function syncCardsFromStorage(cardState) {
             if (favicon && data.url) {
                 const cachedFavicon = data.favicon || data.faviconUrl || null;
                 try {
-                    const urlObj = new URL(data.url);
-                    const domain = urlObj.hostname;
-                    // 设置初始favicon（网站自己的）
-                    favicon.src = cachedFavicon || `${urlObj.protocol}//${domain}/favicon.ico`;
-                    // 失败时降级到DuckDuckGo
-                    favicon.onerror = () => {
-                        favicon.src = `https://icons.duckduckgo.com/ip3/${domain}.ico`;
-                        // 再失败降级到Google S2
-                        favicon.onerror = () => {
-                            favicon.src = `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
-                            favicon.onerror = () => { favicon.src = fallbackIcon; };
-                        };
-                    };
+                    // [降噪修复] 不再直接请求 `${origin}/favicon.ico`，避免某些站点返回 HTML 导致 preload 警告刷屏。
+                    // 统一走 FaviconCache（第三方服务 + 缓存）。
+                    favicon.onerror = null;
+                    favicon.src = cachedFavicon || getFaviconUrl(data.url);
+
+                    // 异步获取更高质量版本/补全缓存
+                    getFaviconUrlAsync(data.url).then((dataUrl) => {
+                        if (dataUrl && dataUrl !== fallbackIcon) {
+                            favicon.src = dataUrl;
+                        }
+                    }).catch(() => { });
                 } catch (e) {
                     favicon.src = fallbackIcon;
                 }

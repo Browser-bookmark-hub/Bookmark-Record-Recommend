@@ -539,7 +539,7 @@ function loadFaviconForRecent(imgElement, url) {
     const urlObj = new URL(url);
     const domain = urlObj.hostname;
     const faviconSources = [
-      `${urlObj.protocol}//${domain}/favicon.ico`,
+      // 避免直接请求 `${origin}/favicon.ico`：部分站点会返回 HTML（含 preload），导致控制台 warning 刷屏。
       `https://icons.duckduckgo.com/ip3/${domain}.ico`,
       `https://www.google.com/s2/favicons?domain=${domain}&sz=64`
     ];
