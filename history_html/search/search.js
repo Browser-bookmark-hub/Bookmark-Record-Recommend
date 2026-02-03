@@ -2298,7 +2298,7 @@ function shouldShowEmptyQuerySuggestions() {
 }
 
 function handleSearchInputFocus(e) {
-    if (currentView !== 'additions') {
+    if (currentView !== 'additions' && currentView !== 'recommend') {
         hideSearchResultsPanel();
         return;
     }
@@ -2312,7 +2312,7 @@ function handleSearchInputFocus(e) {
         if (!inputEl) return;
 
         // 二次检查 View，防止 Timeout 期间切换了视图
-        if (currentView !== 'additions') {
+        if (currentView !== 'additions' && currentView !== 'recommend') {
             hideSearchResultsPanel();
             return;
         }
@@ -2327,6 +2327,16 @@ function handleSearchInputFocus(e) {
                     showSearchResultsPanel();
                 } else {
                     hideSearchResultsPanel();
+                }
+            } catch (_) { }
+            return;
+        }
+
+        // 有文字就触发搜索显示候选列表（Recommend / Additions）
+        if (currentView === 'recommend') {
+            try {
+                if (typeof searchBookmarkRecommendAndRender === 'function') {
+                    searchBookmarkRecommendAndRender(query);
                 }
             } catch (_) { }
             return;
