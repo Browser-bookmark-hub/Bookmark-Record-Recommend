@@ -941,8 +941,8 @@ const internalScheme = (navigator.userAgent || '').includes('Edg/') ? 'edge://' 
 // =============================================================================
 
 const i18n = {pageTitle: {
-        'zh_CN': '书签记录 & 推荐',
-        'en': 'Bookmark Records & Recommendations'
+        'zh_CN': '书签推荐 & 记录',
+        'en': 'Bookmark Recommend & Records'
     },pageSubtitle: {
         'zh_CN': '',
         'en': ''

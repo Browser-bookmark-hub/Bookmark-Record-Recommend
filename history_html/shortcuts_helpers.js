@@ -19,12 +19,12 @@ function updateShortcutsDisplay() {
     const render = (shortcuts) => {
         const safe = (value, fallback) => (value && typeof value === 'string') ? value : fallback;
         const defaultPrefix = isMac ? '⌥' : 'Alt+';
-        const key4 = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '4'));
-        const key5 = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '5'));
+        const keyRecommend = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '4'));
+        const keyAdditions = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '5'));
 
         const rows = [];
-        rows.push({ key: key4, label: i18n.shortcutAdditions[lang] });
-        rows.push({ key: key5, label: i18n.shortcutRecommend[lang] });
+        rows.push({ key: keyRecommend, label: i18n.shortcutRecommend[lang] });
+        rows.push({ key: keyAdditions, label: i18n.shortcutAdditions[lang] });
 
         shortcutsContent.innerHTML = `
             <div class="shortcuts-card">

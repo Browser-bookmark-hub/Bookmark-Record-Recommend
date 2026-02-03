@@ -22,19 +22,19 @@
   "commands": {
     "open_additions_view": {
       "suggested_key": {
-        "default": "Alt+4",
-        "mac": "Alt+4",
-        "windows": "Alt+4",
-        "linux": "Alt+4"
+        "default": "Alt+5",
+        "mac": "Alt+5",
+        "windows": "Alt+5",
+        "linux": "Alt+5"
       },
       "description": "Open 'Bookmark Records' view"
     },
     "open_recommend_view": {
       "suggested_key": {
-        "default": "Alt+5",
-        "mac": "Alt+5",
-        "windows": "Alt+5",
-        "linux": "Alt+5"
+        "default": "Alt+4",
+        "mac": "Alt+4",
+        "windows": "Alt+4",
+        "linux": "Alt+4"
       },
       "description": "Open 'Bookmark Recommend' view"
     }

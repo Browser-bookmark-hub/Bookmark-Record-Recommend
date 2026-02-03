@@ -9,7 +9,7 @@ const popupRecommendLaterOptionLabels = {
   '604800000': { zh_CN: '1周后', en: 'In 1 week' }
 };
 const popupRecommendTextMap = {
-  pageTitle: { zh_CN: '书签记录 & 推荐', en: 'Bookmark Records & Recommend' },
+  pageTitle: { zh_CN: '书签推荐 & 记录', en: 'Bookmark Recommend & Records' },
   recommendTitle: { zh_CN: '书签推荐', en: 'Bookmark Recommend' },
   openRecordsBtn: { zh_CN: '记录', en: 'Records' },
   openRecommendBtn: { zh_CN: '推荐', en: 'Recommend' },
@@ -39,8 +39,8 @@ const popupRecommendTextMap = {
   shortcutsRecommend: { zh_CN: '打开推荐', en: 'Open recommend' },
   shortcutsSettings: { zh_CN: '在浏览器中管理快捷键', en: 'Manage shortcuts in browser' },
   shortcutHint: {
-    zh_CN: (recordsKey, recommendKey) => `快捷键：记录 ${recordsKey} / 推荐 ${recommendKey}`,
-    en: (recordsKey, recommendKey) => `Shortcuts: Records ${recordsKey} / Recommend ${recommendKey}`
+    zh_CN: (recordsKey, recommendKey) => `快捷键：推荐 ${recommendKey} / 记录 ${recordsKey}`,
+    en: (recordsKey, recommendKey) => `Shortcuts: Recommend ${recommendKey} / Records ${recordsKey}`
   }
 };
 
@@ -231,15 +231,6 @@ function renderShortcutsList(lang) {
   if (!list) return;
   list.innerHTML = '';
 
-  const rowRecords = document.createElement('div');
-  rowRecords.className = 'shortcuts-row';
-  const labelRecords = document.createElement('span');
-  labelRecords.textContent = getPopupText('shortcutsRecords', lang);
-  const keyRecords = document.createElement('kbd');
-  keyRecords.textContent = popupShortcuts.records;
-  rowRecords.appendChild(labelRecords);
-  rowRecords.appendChild(keyRecords);
-
   const rowRecommend = document.createElement('div');
   rowRecommend.className = 'shortcuts-row';
   const labelRecommend = document.createElement('span');
@@ -249,8 +240,17 @@ function renderShortcutsList(lang) {
   rowRecommend.appendChild(labelRecommend);
   rowRecommend.appendChild(keyRecommend);
 
-  list.appendChild(rowRecords);
+  const rowRecords = document.createElement('div');
+  rowRecords.className = 'shortcuts-row';
+  const labelRecords = document.createElement('span');
+  labelRecords.textContent = getPopupText('shortcutsRecords', lang);
+  const keyRecords = document.createElement('kbd');
+  keyRecords.textContent = popupShortcuts.records;
+  rowRecords.appendChild(labelRecords);
+  rowRecords.appendChild(keyRecords);
+
   list.appendChild(rowRecommend);
+  list.appendChild(rowRecords);
 }
 
 function updateOpenSourceText(lang) {
