@@ -2365,6 +2365,100 @@ a.tree-label.tree-bookmark-link:hover {
     flex: 1;
 }
 
+/* 推荐搜索候选二级 UI */
+.recommend-search-modal {
+    max-width: 560px;
+}
+
+.recommend-search-modal .modal-body {
+    padding: 18px 20px;
+}
+
+.recommend-search-card {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.recommend-search-favicon {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.recommend-search-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.recommend-search-url {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.recommend-search-score {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.recommend-search-debug {
+    margin-top: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+
+.recommend-search-debug-header {
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.recommend-search-debug-pre {
+    margin: 0;
+    padding: 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.recommend-search-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+
+.recommend-search-actions .modal-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.recommend-search-actions .modal-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* 详情内容样式 */
 .detail-section {
     margin-bottom: 24px;
@@ -6226,6 +6320,92 @@ a.tree-label.tree-bookmark-link:hover {
     right: 8px;
     font-size: 16px;
     color: var(--success);
+}
+
+.card-debug-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
+    transition: all 0.15s ease;
+}
+
+.card-debug-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-primary);
+}
+
+.recommend-card.empty .card-debug-btn {
+    display: none;
+}
+
+.recommend-debug {
+    position: absolute;
+    inset: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.98);
+    transition: all 0.15s ease;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+}
+
+.recommend-card.debug-open .recommend-debug {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1);
+}
+
+.recommend-debug-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.recommend-debug-body {
+    padding: 8px;
+    overflow: auto;
+    flex: 1;
+}
+
+.recommend-debug-pre {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.recommend-debug-close-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.recommend-debug-close-btn:hover {
+    color: var(--text-primary);
 }
 
 .card-favicon {

@@ -20,12 +20,32 @@
 /**
  * 搜索 UI 状态
  */
+let initialSearchMode = 'additions';
+try {
+    if (typeof window !== 'undefined') {
+        if (window.currentView === 'recommend') {
+            initialSearchMode = 'recommend';
+        } else {
+            const viewAttr = document?.documentElement?.getAttribute('data-initial-view');
+            if (viewAttr === 'recommend') {
+                initialSearchMode = 'recommend';
+            } else {
+                const params = new URLSearchParams(window.location.search);
+                const viewParam = params.get('view');
+                if (viewParam === 'recommend') {
+                    initialSearchMode = 'recommend';
+                }
+            }
+        }
+    }
+} catch (_) { }
+
 const searchUiState = {
     view: null,
     query: '',
     selectedIndex: -1,
     results: [],
-    activeMode: 'additions',
+    activeMode: initialSearchMode,
     isMenuOpen: false,
     isHelpOpen: false
 };
@@ -565,9 +585,387 @@ function activateSearchResult(index) {
         activateAdditionsSearchResult(index);
         return;
     }
+    if (view === 'recommend') {
+        activateRecommendSearchResult(index);
+        return;
+    }
     hideSearchResultsPanel();
 }
 
+
+
+// ==================== Phase 5: 书签推荐搜索 (Recommend) ====================
+
+const RECOMMEND_SEARCH_MAX_RESULTS = 60;
+const RECOMMEND_SEARCH_INDEX_TTL = 60 * 1000;
+
+let recommendSearchIndexState = {
+    builtAt: 0,
+    bookmarkCount: 0,
+    scoreCount: 0,
+    items: [],
+    buildPromise: null
+};
+
+let recommendSearchComputeTriggered = false;
+
+function invalidateRecommendSearchIndex() {
+    recommendSearchIndexState.builtAt = 0;
+    recommendSearchIndexState.bookmarkCount = 0;
+    recommendSearchIndexState.scoreCount = 0;
+    recommendSearchIndexState.items = [];
+}
+
+try {
+    window.invalidateRecommendSearchIndex = invalidateRecommendSearchIndex;
+} catch (_) { }
+
+function updateRecommendSearchScoreCache(bookmarkId, newS) {
+    if (!bookmarkId || !Number.isFinite(newS)) return false;
+    const id = String(bookmarkId);
+    const scoreText = `S = ${newS.toFixed(3)}`;
+    let updated = false;
+
+    try {
+        const items = recommendSearchIndexState.items;
+        if (Array.isArray(items) && items.length) {
+            const target = items.find(item => String(item.id) === id);
+            if (target) {
+                target.s = newS;
+                items.sort((a, b) => {
+                    const diff = b.s - a.s;
+                    if (Math.abs(diff) > 1e-12) return diff;
+                    return String(a.title || '').localeCompare(String(b.title || ''));
+                });
+                updated = true;
+            }
+        }
+    } catch (_) { }
+
+    try {
+        if (searchUiState.view === 'recommend' && Array.isArray(searchUiState.results) && searchUiState.results.length) {
+            let hit = false;
+            searchUiState.results.forEach((item) => {
+                if (!item || item.type !== 'recommend-item') return;
+                const itemId = item.bookmarkId || item.id;
+                if (String(itemId) !== id) return;
+                item.scoreS = newS;
+                if (item.meta && String(item.meta).trim()) {
+                    item.meta = scoreText;
+                }
+                hit = true;
+            });
+            if (hit) {
+                const panel = getSearchResultsPanel();
+                if (panel) {
+                    panel.querySelectorAll('.search-result-item').forEach((row) => {
+                        if (row?.dataset?.nodeId !== id) return;
+                        const metaRow = row.querySelector('.search-result-meta-row');
+                        if (metaRow && metaRow.textContent && metaRow.textContent.trim().startsWith('S')) {
+                            metaRow.textContent = scoreText;
+                        }
+                    });
+                }
+                updated = true;
+            }
+        }
+    } catch (_) { }
+
+    return updated;
+}
+
+try {
+    window.updateRecommendSearchScoreCache = updateRecommendSearchScoreCache;
+} catch (_) { }
+
+function parseRecommendScoreQuery(query) {
+    const raw = String(query || '').trim();
+    if (!raw) return null;
+
+    let q = raw.toLowerCase().trim();
+    q = q.replace(/^\s*(s|score)\s*[:=]?\s*/, '');
+    q = q.replace(/\s+/g, '');
+
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+    // Range: 0.65-0.75 / 0.65~0.75
+    const rangeMatch = q.match(/^(-?\d*\.?\d+)(?:-|~|–|—)(-?\d*\.?\d+)$/);
+    if (rangeMatch) {
+        let a = parseFloat(rangeMatch[1]);
+        let b = parseFloat(rangeMatch[2]);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        a = clamp01(a);
+        b = clamp01(b);
+        const min = Math.min(a, b);
+        const max = Math.max(a, b);
+        return { kind: 'range', min, max };
+    }
+
+    // Comparator: >=0.8 / <0.3 / =0.7
+    const cmpMatch = q.match(/^(>=|<=|>|<|=)(-?\d*\.?\d+)$/);
+    if (cmpMatch) {
+        const op = cmpMatch[1];
+        const valueRaw = parseFloat(cmpMatch[2]);
+        if (!Number.isFinite(valueRaw)) return null;
+        const value = clamp01(valueRaw);
+        if (op === '=') {
+            const eps = 0.001;
+            return { kind: 'range', min: clamp01(value - eps), max: clamp01(value + eps) };
+        }
+        return { kind: 'cmp', op, value };
+    }
+
+    // Plain number: treat as >=
+    const numMatch = q.match(/^(-?\d*\.?\d+)$/);
+    if (numMatch) {
+        const valueRaw = parseFloat(numMatch[1]);
+        if (!Number.isFinite(valueRaw)) return null;
+        return { kind: 'cmp', op: '>=', value: clamp01(valueRaw) };
+    }
+
+    return null;
+}
+
+function findFirstIndexScoreLe(items, threshold) {
+    let lo = 0;
+    let hi = items.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (items[mid].s <= threshold) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+function findFirstIndexScoreLt(items, threshold) {
+    let lo = 0;
+    let hi = items.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (items[mid].s < threshold) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+function filterRecommendItemsByScore(sortedItems, rule, limit = RECOMMEND_SEARCH_MAX_RESULTS) {
+    const maxResults = Number.isFinite(limit) ? limit : RECOMMEND_SEARCH_MAX_RESULTS;
+    const out = [];
+    if (!Array.isArray(sortedItems) || sortedItems.length === 0) return out;
+
+    if (rule.kind === 'cmp') {
+        const v = rule.value;
+        if (rule.op === '>=' || rule.op === '>') {
+            const strict = rule.op === '>';
+            for (const item of sortedItems) {
+                if (strict ? item.s > v : item.s >= v) {
+                    out.push(item);
+                    if (out.length >= maxResults) break;
+                } else {
+                    break;
+                }
+            }
+            return out;
+        }
+
+        if (rule.op === '<=' || rule.op === '<') {
+            const start = (rule.op === '<') ? findFirstIndexScoreLt(sortedItems, v) : findFirstIndexScoreLe(sortedItems, v);
+            for (let i = start; i < sortedItems.length && out.length < maxResults; i++) {
+                out.push(sortedItems[i]);
+            }
+            return out;
+        }
+
+        return out;
+    }
+
+    if (rule.kind === 'range') {
+        const min = rule.min;
+        const max = rule.max;
+
+        // Skip those greater than max (descending list)
+        let i = 0;
+        while (i < sortedItems.length && sortedItems[i].s > max) i++;
+
+        for (; i < sortedItems.length && out.length < maxResults; i++) {
+            const s = sortedItems[i].s;
+            if (s < min) break;
+            if (s <= max) out.push(sortedItems[i]);
+        }
+        return out;
+    }
+
+    return out;
+}
+
+async function buildRecommendSearchIndex(options = {}) {
+    const force = options && options.force === true;
+    const now = Date.now();
+
+    if (!force && recommendSearchIndexState.items && recommendSearchIndexState.items.length &&
+        (now - recommendSearchIndexState.builtAt) < RECOMMEND_SEARCH_INDEX_TTL) {
+        return recommendSearchIndexState;
+    }
+
+    if (recommendSearchIndexState.buildPromise) {
+        return recommendSearchIndexState.buildPromise;
+    }
+
+    recommendSearchIndexState.buildPromise = (async () => {
+        let bookmarks = [];
+        try {
+            if (typeof getAllBookmarksFlat === 'function') {
+                bookmarks = await getAllBookmarksFlat();
+            }
+        } catch (_) { }
+
+        let scoresCache = {};
+        try {
+            const result = await new Promise(resolve => {
+                if (!browserAPI?.storage?.local?.get) return resolve({});
+                browserAPI.storage.local.get(['recommend_scores_cache'], resolve);
+            });
+            scoresCache = result?.recommend_scores_cache || {};
+        } catch (_) {
+            scoresCache = {};
+        }
+
+        const items = [];
+        for (const b of bookmarks) {
+            if (!b || !b.id || !b.url) continue;
+            const cached = scoresCache[b.id];
+            const s = (cached && Number.isFinite(cached.S)) ? cached.S : 0.5;
+            items.push({
+                id: b.id,
+                title: b.title || b.name || '',
+                url: b.url,
+                s
+            });
+        }
+
+        items.sort((a, b) => {
+            const diff = b.s - a.s;
+            if (Math.abs(diff) > 1e-12) return diff;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+        });
+
+        recommendSearchIndexState.builtAt = Date.now();
+        recommendSearchIndexState.bookmarkCount = bookmarks.length;
+        recommendSearchIndexState.scoreCount = Object.keys(scoresCache).length;
+        recommendSearchIndexState.items = items;
+
+        return recommendSearchIndexState;
+    })();
+
+    try {
+        return await recommendSearchIndexState.buildPromise;
+    } finally {
+        recommendSearchIndexState.buildPromise = null;
+    }
+}
+
+async function searchBookmarkRecommendAndRender(query) {
+    const q = String(query || '').trim();
+    const view = 'recommend';
+
+    let idx;
+    try {
+        idx = await buildRecommendSearchIndex();
+    } catch (e) {
+        renderSearchResultsPanel([], { view, query: q, emptyText: 'Search index build failed' });
+        return;
+    }
+
+    if (idx && idx.bookmarkCount > 0 && idx.scoreCount === 0) {
+        if (!recommendSearchComputeTriggered) {
+            recommendSearchComputeTriggered = true;
+            try {
+                browserAPI.runtime.sendMessage({ action: 'computeBookmarkScores' }, () => { });
+            } catch (_) { }
+        }
+
+        const msg = currentLang === 'zh_CN'
+            ? 'S 值缓存为空，已触发后台计算，请稍后再试'
+            : 'S cache is empty. Triggered background computation, please try again later.';
+        renderSearchResultsPanel([], { view, query: q, emptyText: msg });
+        return;
+    }
+
+    const rule = parseRecommendScoreQuery(q);
+    let matches = [];
+
+    if (rule) {
+        matches = filterRecommendItemsByScore(idx.items || [], rule, RECOMMEND_SEARCH_MAX_RESULTS);
+    } else {
+        const token = q.toLowerCase();
+        const items = idx.items || [];
+        for (const item of items) {
+            const title = (item.title || '').toLowerCase();
+            const url = (item.url || '').toLowerCase();
+            if (title.includes(token) || url.includes(token)) {
+                matches.push(item);
+                if (matches.length >= RECOMMEND_SEARCH_MAX_RESULTS) break;
+            }
+        }
+    }
+
+    const results = matches.map(item => ({
+        id: item.id,
+        title: item.title || '',
+        url: item.url,
+        meta: '',
+        nodeType: 'bookmark',
+        type: 'recommend-item',
+        scoreS: item.s,
+        bookmarkId: item.id
+    }));
+
+    let emptyText = i18n.searchNoResults[currentLang];
+    if (!results.length && !rule) {
+        emptyText = currentLang === 'zh_CN'
+            ? '无匹配结果（提示：可用 0.7 / >=0.8 / 0.65-0.75 搜索 S 值）'
+            : 'No results (Tip: use 0.7 / >=0.8 / 0.65-0.75 for S search)';
+    }
+
+    renderSearchResultsPanel(results, { view, query: q, emptyText });
+}
+
+try {
+    window.searchBookmarkRecommendAndRender = searchBookmarkRecommendAndRender;
+} catch (_) { }
+
+function refreshRecommendSearchIfNeeded() {
+    try {
+        if (searchUiState.view !== 'recommend') return;
+        const q = String(searchUiState.query || '').trim();
+        if (!q) return;
+        searchBookmarkRecommendAndRender(q);
+    } catch (_) { }
+}
+
+try {
+    window.refreshRecommendSearchIfNeeded = refreshRecommendSearchIfNeeded;
+} catch (_) { }
+
+function activateRecommendSearchResult(index) {
+    const item = searchUiState.results[index];
+    if (!item) return;
+
+    hideSearchResultsPanel();
+
+    try {
+        if (typeof window.showRecommendSearchResultCard === 'function') {
+            window.showRecommendSearchResultCard(item);
+            return;
+        }
+    } catch (_) { }
+}
 // ==================== Phase 4: 书签添加记录搜索 (Additions) ====================
 
 /**
@@ -2079,8 +2477,8 @@ const SEARCH_MODES = [
         label: '书签推荐',
         labelEn: 'Bookmark Recommend',
         icon: 'fa-lightbulb',
-        desc: '标题 / URL',
-        descEn: 'Title / URL'
+        desc: 'S值 / 标题 / URL',
+        descEn: 'S score / Title / URL'
     }
 ];
 
@@ -2094,6 +2492,11 @@ function getCurrentViewSafe() {
     } catch (_) { }
     try {
         if (typeof currentView === 'string' && currentView) return currentView;
+    } catch (_) { }
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const viewParam = params.get('view');
+        if (viewParam) return viewParam;
     } catch (_) { }
     return '';
 }
@@ -2458,9 +2861,13 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Force refresh mode UI to update placeholder (do not switch view)
-    if (typeof window.setSearchMode === 'function' && window.searchUiState && window.searchUiState.activeMode) {
-        window.setSearchMode(window.searchUiState.activeMode, { switchView: false });
+    // Force refresh mode UI to match current view (do not switch view)
+    if (typeof window.setSearchMode === 'function') {
+        const view = getCurrentViewSafe();
+        const mode = SEARCH_MODE_KEYS.includes(view)
+            ? view
+            : (window.searchUiState && window.searchUiState.activeMode ? window.searchUiState.activeMode : SEARCH_MODE_KEYS[0]);
+        window.setSearchMode(mode, { switchView: false });
     }
 });
 
@@ -2473,8 +2880,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 document.addEventListener('DOMContentLoaded', () => {
     // 1. Force placeholder update (do not switch view)
-    if (window.setSearchMode && window.searchUiState && window.searchUiState.activeMode) {
-        window.setSearchMode(window.searchUiState.activeMode, { switchView: false });
+    if (window.setSearchMode) {
+        const view = getCurrentViewSafe();
+        const mode = SEARCH_MODE_KEYS.includes(view)
+            ? view
+            : (window.searchUiState && window.searchUiState.activeMode ? window.searchUiState.activeMode : SEARCH_MODE_KEYS[0]);
+        window.setSearchMode(mode, { switchView: false });
     }
 
     // 2. Add extra safeguard for button focus cycling IF it wasn't added by previous steps correctly

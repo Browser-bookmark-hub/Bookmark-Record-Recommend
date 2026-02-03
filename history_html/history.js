@@ -51,6 +51,13 @@ let currentView = (() => {
         return DEFAULT_VIEW;
     }
 })();
+// 尽早暴露给搜索模块，避免搜索模式短暂显示错误
+try { window.currentView = currentView; } catch (_) { }
+try {
+    if (document?.documentElement) {
+        document.documentElement.setAttribute('data-initial-view', currentView);
+    }
+} catch (_) { }
 
 // 用于标记由拖拽操作处理过的移动，防止 applyIncrementalMoveToTree 重复处理
 window.__dragMoveHandled = window.__dragMoveHandled || new Set();
@@ -3022,7 +3029,11 @@ function switchView(view) {
         if (typeof cancelPendingMainSearchDebounce === 'function') cancelPendingMainSearchDebounce();
         if (typeof hideSearchResultsPanel === 'function') hideSearchResultsPanel();
         if (typeof toggleSearchModeMenu === 'function') toggleSearchModeMenu(false);
-        if (typeof renderSearchModeUI === 'function') renderSearchModeUI();
+        if (typeof setSearchMode === 'function' && (view === 'additions' || view === 'recommend')) {
+            setSearchMode(view, { switchView: false });
+        } else if (typeof renderSearchModeUI === 'function') {
+            renderSearchModeUI();
+        }
 
         // [Search Isolation] Search box behaviors differ by view.
         // When leaving a view, clear the shared top search input to avoid leaking queries.
@@ -3106,6 +3117,13 @@ let recommendViewInitialized = false;
 
 function renderRecommendView() {
     console.log('[书签推荐] 渲染推荐视图');
+
+    // 确保搜索模式显示为“书签推荐”
+    try {
+        if (typeof setSearchMode === 'function') {
+            setSearchMode('recommend', { switchView: false });
+        }
+    } catch (_) { }
 
     // 只初始化一次事件监听器
     if (!recommendViewInitialized) {
@@ -3349,8 +3367,8 @@ function normalizeWeights() {
 
 function resetFormulaToDefault() {
     document.getElementById('weightFreshness').value = '0.15';
-    document.getElementById('weightColdness').value = '0.20';
-    document.getElementById('weightTimeDegree').value = '0.25';
+    document.getElementById('weightColdness').value = '0.15';
+    document.getElementById('weightTimeDegree').value = '0.30';
     document.getElementById('weightForgetting').value = '0.20';
     document.getElementById('weightLaterReview').value = '0.20';
 
@@ -3366,8 +3384,8 @@ async function saveFormulaConfig() {
     const config = {
         weights: {
             freshness: parseFloat(document.getElementById('weightFreshness').value) || 0.15,
-            coldness: parseFloat(document.getElementById('weightColdness').value) || 0.20,
-            shallowRead: parseFloat(document.getElementById('weightTimeDegree').value) || 0.25,
+            coldness: parseFloat(document.getElementById('weightColdness').value) || 0.15,
+            shallowRead: parseFloat(document.getElementById('weightTimeDegree').value) || 0.30,
             forgetting: parseFloat(document.getElementById('weightForgetting').value) || 0.20,
             laterReview: parseFloat(document.getElementById('weightLaterReview').value) || 0.20
         },
@@ -3632,17 +3650,16 @@ async function syncCardsFromStorage(cardState) {
             if (favicon && data.url) {
                 const cachedFavicon = data.favicon || data.faviconUrl || null;
                 try {
-                    // [降噪修复] 不再直接请求 `${origin}/favicon.ico`，避免某些站点返回 HTML 导致 preload 警告刷屏。
-                    // 统一走 FaviconCache（第三方服务 + 缓存）。
+                    // [打开页面时避免闪烁] 同步恢复只使用已缓存的 favicon，
+                    // 不在此处触发异步刷新，避免“先方块后图标”的闪烁。
                     favicon.onerror = null;
-                    favicon.src = cachedFavicon || getFaviconUrl(data.url);
-
-                    // 异步获取更高质量版本/补全缓存
-                    getFaviconUrlAsync(data.url).then((dataUrl) => {
-                        if (dataUrl && dataUrl !== fallbackIcon) {
-                            favicon.src = dataUrl;
-                        }
-                    }).catch(() => { });
+                    if (cachedFavicon) {
+                        favicon.src = cachedFavicon;
+                    } else {
+                        favicon.src = fallbackIcon;
+                        // 仅预热缓存，不更新当前 DOM
+                        FaviconCache.fetch(data.url).catch(() => { });
+                    }
                 } catch (e) {
                     favicon.src = fallbackIcon;
                 }
@@ -3653,7 +3670,7 @@ async function syncCardsFromStorage(cardState) {
             if (priorityEl) {
                 const cached = scoresCache[bookmarkId];
                 const priority = cached ? cached.S : 0;
-                priorityEl.textContent = `S = ${priority.toFixed(2)}`;
+                priorityEl.textContent = `S = ${priority.toFixed(3)}`;
             }
 
             // 更新翻阅状态
@@ -4127,8 +4144,15 @@ let rankingRefreshInterval = null;  // 排行榜刷新定时器
 const TRACKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次当前会话，更实时
 const RANKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次排行榜，与正在追踪同步
 
+// 书签推荐诊断缓存
+const RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
+const recommendScoreDebugCache = new Map();
+const recommendScoreDebugInFlight = new Map();
+
 // 跳过和屏蔽数据
 let skippedBookmarks = new Set(); // 本次会话跳过的书签（内存，刷新页面后清空）
+let recommendScoresComputeRetryTimer = null;
+let recommendScoresComputeRetryCount = 0;
 
 // 获取当前显示的卡片状态（与popup共享）
 async function getHistoryCurrentCards() {
@@ -4229,7 +4253,7 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         card.classList.remove('flipped');
     }
     card.querySelector('.card-title').textContent = bookmark.title || bookmark.name || bookmark.url;
-    card.querySelector('.card-priority').textContent = `S = ${bookmark.priority.toFixed(2)}`;
+    card.querySelector('.card-priority').textContent = `S = ${bookmark.priority.toFixed(3)}`;
     card.dataset.url = bookmark.url;
     card.dataset.bookmarkId = bookmark.id;
 
@@ -4239,9 +4263,79 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         setHighResFavicon(favicon, bookmark.url);
     }
 
+    // 诊断面板（右上角）
+    card.classList.remove('debug-open');
+    const debugOverlay = card.querySelector('.recommend-debug');
+    if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+    const debugPre = card.querySelector('.recommend-debug-pre');
+    if (debugPre) debugPre.textContent = '--';
+
+    const closeDebug = () => {
+        card.classList.remove('debug-open');
+        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+    };
+
+    const openDebug = async () => {
+        if (!debugOverlay || !debugPre) return;
+        card.classList.add('debug-open');
+        debugOverlay.setAttribute('aria-hidden', 'false');
+        debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
+
+        const cached = getCachedRecommendScoreDebug(bookmark.id);
+        if (cached) {
+            debugPre.textContent = formatRecommendScoreDebugText(cached);
+            if (cached?.factors && typeof cached.factors.S === 'number') {
+                bookmark.priority = cached.factors.S;
+                bookmark.factors = cached.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, cached);
+        } else {
+            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
+        }
+
+        const debug = await getFreshRecommendScoreDebug(bookmark.id);
+        if (!debug) {
+            if (!cached) {
+                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
+            }
+            return;
+        }
+        setCachedRecommendScoreDebug(bookmark.id, debug);
+        debugPre.textContent = formatRecommendScoreDebugText(debug);
+        if (debug?.factors && typeof debug.factors.S === 'number') {
+            bookmark.priority = debug.factors.S;
+            bookmark.factors = debug.factors;
+        }
+        syncRecommendScoreFromDebug(bookmark.id, debug);
+    };
+
+    const debugBtn = card.querySelector('.card-debug-btn');
+    if (debugBtn) {
+        debugBtn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (card.classList.contains('debug-open')) {
+                closeDebug();
+            } else {
+                openDebug();
+            }
+        };
+    }
+
+    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
+    if (debugCloseBtn) {
+        debugCloseBtn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeDebug();
+        };
+    }
+
     // 点击卡片主体：打开链接 + 标记为已翻过 + 记录复习
     card.onclick = async (e) => {
         if (e.target.closest('.card-actions')) return;
+        if (e.target.closest('.card-debug-btn')) return;
+        if (e.target.closest('.recommend-debug')) return;
 
         if (bookmark.url) {
             await markBookmarkFlipped(bookmark.id);
@@ -4305,8 +4399,392 @@ function setCardEmpty(card) {
             btn.onclick = null;
         });
     }
+
+    card.classList.remove('debug-open');
+    const debugOverlay = card.querySelector('.recommend-debug');
+    if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+    const debugPre = card.querySelector('.recommend-debug-pre');
+    if (debugPre) debugPre.textContent = '--';
+    const debugBtn = card.querySelector('.card-debug-btn');
+    if (debugBtn) debugBtn.onclick = null;
+    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
+    if (debugCloseBtn) debugCloseBtn.onclick = null;
 }
 
+
+
+function getCachedRecommendScoreDebug(bookmarkId) {
+    const entry = recommendScoreDebugCache.get(bookmarkId);
+    if (!entry) return null;
+    if ((Date.now() - entry.time) > RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS) {
+        recommendScoreDebugCache.delete(bookmarkId);
+        return null;
+    }
+    return entry.debug || null;
+}
+
+function setCachedRecommendScoreDebug(bookmarkId, debug) {
+    if (!bookmarkId || !debug) return;
+    recommendScoreDebugCache.set(bookmarkId, { time: Date.now(), debug });
+}
+
+function getFreshRecommendScoreDebug(bookmarkId) {
+    if (!bookmarkId) return Promise.resolve(null);
+    const key = String(bookmarkId);
+    if (recommendScoreDebugInFlight.has(key)) {
+        return recommendScoreDebugInFlight.get(key);
+    }
+    const promise = requestRecommendScoreDebug(key)
+        .catch(() => null)
+        .finally(() => {
+            recommendScoreDebugInFlight.delete(key);
+        });
+    recommendScoreDebugInFlight.set(key, promise);
+    return promise;
+}
+
+function updateRecommendCardScoreDisplay(bookmarkId, newS) {
+    if (!bookmarkId || !Number.isFinite(newS)) return;
+    const id = String(bookmarkId);
+    const cards = document.querySelectorAll(`.recommend-card[data-bookmark-id="${id}"]`);
+    if (!cards || !cards.length) return;
+    cards.forEach((card) => {
+        const priorityEl = card.querySelector('.card-priority');
+        if (priorityEl) {
+            priorityEl.textContent = `S = ${newS.toFixed(3)}`;
+        }
+    });
+}
+
+function syncRecommendScoreFromDebug(bookmarkId, debug, options = {}) {
+    if (!bookmarkId || !debug) return null;
+    const cachedS = (typeof debug?.storage?.cachedEntry?.S === 'number') ? debug.storage.cachedEntry.S : null;
+    const computedS = (typeof debug?.factors?.S === 'number') ? debug.factors.S : null;
+    const nextS = (cachedS != null) ? cachedS : computedS;
+    if (!Number.isFinite(nextS)) return null;
+
+    if (options && options.scoreEl) {
+        try {
+            options.scoreEl.textContent = nextS.toFixed(3);
+        } catch (_) { }
+    }
+
+    updateRecommendCardScoreDisplay(bookmarkId, nextS);
+
+    try {
+        if (typeof window.updateRecommendSearchScoreCache === 'function') {
+            const updated = window.updateRecommendSearchScoreCache(bookmarkId, nextS);
+            if (!updated && typeof window.invalidateRecommendSearchIndex === 'function') {
+                window.invalidateRecommendSearchIndex();
+            }
+        } else if (typeof window.invalidateRecommendSearchIndex === 'function') {
+            window.invalidateRecommendSearchIndex();
+        }
+    } catch (_) { }
+
+    return nextS;
+}
+
+function requestRecommendScoreDebug(bookmarkId) {
+    return new Promise((resolve) => {
+        let done = false;
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            resolve(null);
+        }, 3500);
+
+        if (!browserAPI?.runtime?.sendMessage || !bookmarkId) {
+            clearTimeout(timer);
+            resolve(null);
+            return;
+        }
+
+        browserAPI.runtime.sendMessage({ action: 'getBookmarkScoreDebug', bookmarkId }, (response) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            if (browserAPI.runtime.lastError) {
+                resolve(null);
+            } else if (response?.success && response?.debug) {
+                resolve(response.debug);
+            } else {
+                resolve(null);
+            }
+        });
+    });
+}
+
+function formatRecommendDebugTime(ts) {
+    const t = Number(ts || 0);
+    if (!t) return '--';
+    try {
+        const locale = currentLang === 'en' ? 'en-US' : 'zh-CN';
+        return new Date(t).toLocaleString(locale);
+    } catch (_) {
+        return String(t);
+    }
+}
+
+function formatRecommendScoreDebugText(debug) {
+    const isEn = currentLang === 'en';
+    const lines = [];
+    if (!debug) {
+        return isEn ? 'No debug data.' : '没有诊断数据。';
+    }
+
+    const f = debug.factors || {};
+    const h = debug.matches?.history || {};
+    const t = debug.matches?.tracking || {};
+    const raw = debug.raw || {};
+    const w = debug.weightsUsed || {};
+    const th = debug.config?.thresholds || {};
+    const storage = debug.storage || {};
+    const cachedS = typeof storage.cachedEntry?.S === 'number' ? storage.cachedEntry.S : null;
+
+    const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : '--');
+    const fmtDays = (v) => (typeof v === 'number' ? v.toFixed(2) : '--');
+
+    if (cachedS != null && typeof f.S === 'number') {
+        if (isEn) {
+            lines.push(`S=${cachedS.toFixed(3)} (old)  S=${f.S.toFixed(3)} (new)`);
+        } else {
+            lines.push(`S=${cachedS.toFixed(3)}（旧）  S=${f.S.toFixed(3)}（新）`);
+        }
+    } else {
+        lines.push(`S=${fmt(f.S)}`);
+    }
+    lines.push(`F=${fmt(f.F)} C=${fmt(f.C)} T=${fmt(f.T)} D=${fmt(f.D)} L=${fmt(f.L)} R=${fmt(f.R)}`);
+    lines.push(`AddedΔ=${fmtDays(raw.daysSinceAdded)}d  LastVisitΔ=${fmtDays(raw.daysSinceLastVisit)}d  T(min)=${fmtDays(raw.compositeMinutes)}`);
+    lines.push('');
+
+    lines.push(`History: ${h.type || 'none'}  visits=${h.visitCount ?? 0}  last=${formatRecommendDebugTime(h.lastVisitTime)}`);
+    lines.push(`Tracking: ${t.type || 'none'}  ms=${t.compositeMs ?? 0}${t.ignoredTitleHit ? '  (ignored title hit)' : ''}`);
+    lines.push('');
+
+    lines.push(`WeightsUsed: w1=${fmt(w.w1)} w2=${fmt(w.w2)} w3=${fmt(w.w3)} w4=${fmt(w.w4)} w5=${fmt(w.w5)}`);
+    lines.push(`Thresholds: freshness=${th.freshness ?? '--'} coldness=${th.coldness ?? '--'} shallowRead=${th.shallowRead ?? '--'} forgetting=${th.forgetting ?? '--'}`);
+    lines.push('');
+
+    lines.push(`Cache: mode=${storage.cacheMode || '--'} algo=v${storage.algoVersion || '--'} cachedS=${cachedS == null ? '--' : cachedS.toFixed(3)} time=${storage.recommendScoresTime || 0}`);
+    if (storage.staleMeta?.staleAt) {
+        lines.push(`StaleMeta: at=${formatRecommendDebugTime(storage.staleMeta.staleAt)} reason=${storage.staleMeta.reason || ''}`);
+    }
+
+    if (Array.isArray(debug.notes) && debug.notes.length) {
+        lines.push('');
+        lines.push(isEn ? 'Notes:' : '备注:');
+        debug.notes.forEach((note) => lines.push(`- ${note}`));
+    }
+
+    return lines.join('\n');
+}
+
+// 推荐搜索：二级 UI 预览（不影响推荐卡片）
+let recommendSearchPreviewActive = false;
+let recommendSearchModalItem = null;
+
+function closeRecommendSearchModal() {
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    recommendSearchPreviewActive = false;
+}
+
+function initRecommendSearchModal() {
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal || modal.hasAttribute('data-bound')) return;
+    modal.setAttribute('data-bound', 'true');
+
+    const closeBtn = document.getElementById('recommendSearchModalClose');
+    const closeBtn2 = document.getElementById('recommendSearchModalCloseBtn');
+    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
+    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
+    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeRecommendSearchModal);
+    if (closeBtn2) closeBtn2.addEventListener('click', closeRecommendSearchModal);
+
+    if (laterBtn) {
+        laterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item) return;
+            closeRecommendSearchModal();
+            showLaterModal(item);
+        });
+    }
+
+    if (skipBtn) {
+        skipBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+            skippedBookmarks.add(item.id);
+            await refreshRecommendCards(true);
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (blockBtn) {
+        blockBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+            await blockBookmark(item.id);
+            await loadBlockedLists();
+            await refreshRecommendCards(true);
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (openBtn) {
+        openBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.url) return;
+            await openInRecommendWindow(item.url);
+            closeRecommendSearchModal();
+        });
+    }
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeRecommendSearchModal();
+    });
+}
+
+async function showRecommendSearchResultCard(item) {
+    initRecommendSearchModal();
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal) return;
+
+    const faviconEl = document.getElementById('recommendSearchModalFavicon');
+    const titleEl = document.getElementById('recommendSearchModalItemTitle');
+    const urlEl = document.getElementById('recommendSearchModalItemUrl');
+    const scoreEl = document.getElementById('recommendSearchModalItemScore');
+    const debugPre = document.getElementById('recommendSearchModalDebugPre');
+    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
+    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
+    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
+    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+
+    const bookmarkId = item && (item.id || item.bookmarkId);
+    const priority = (item && Number.isFinite(item.scoreS)) ? item.scoreS
+        : (item && Number.isFinite(item.S)) ? item.S
+            : (item && Number.isFinite(item.priority)) ? item.priority
+                : 0.5;
+
+    const bookmark = {
+        id: bookmarkId,
+        title: item?.title || item?.name || '',
+        name: item?.title || item?.name || '',
+        url: item?.url || '',
+        priority
+    };
+
+    // 如果搜索结果缺失 URL，尝试从书签 API 回填
+    if (bookmarkId && !bookmark.url) {
+        try {
+            const nodes = await browserAPI.bookmarks.get(bookmarkId);
+            const node = Array.isArray(nodes) ? nodes[0] : null;
+            if (node && node.url) {
+                bookmark.url = node.url;
+                if (!bookmark.title) {
+                    bookmark.title = node.title || '';
+                    bookmark.name = node.title || '';
+                }
+            }
+        } catch (_) { }
+    }
+
+    // 尝试补充 factors / S
+    if (bookmarkId) {
+        try {
+            const result = await browserAPI.storage.local.get(['recommend_scores_cache']);
+            const cached = result?.recommend_scores_cache?.[bookmarkId];
+            if (cached && Number.isFinite(cached.S)) {
+                bookmark.priority = cached.S;
+                bookmark.factors = cached;
+                try {
+                    if (typeof window.updateRecommendSearchScoreCache === 'function') {
+                        window.updateRecommendSearchScoreCache(bookmarkId, cached.S);
+                    }
+                } catch (_) { }
+            }
+        } catch (_) { }
+    }
+
+    if (titleEl) {
+        titleEl.textContent = bookmark.title || (currentLang === 'zh_CN' ? '（无标题）' : '(Untitled)');
+    }
+    if (urlEl) {
+        urlEl.textContent = bookmark.url || '--';
+        if (bookmark.url) {
+            urlEl.setAttribute('href', bookmark.url);
+            urlEl.setAttribute('title', bookmark.url);
+            urlEl.onclick = (e) => {
+                e.preventDefault();
+                openInRecommendWindow(bookmark.url);
+            };
+        } else {
+            urlEl.setAttribute('href', '#');
+            urlEl.removeAttribute('title');
+            urlEl.onclick = null;
+        }
+    }
+    if (scoreEl) {
+        const scoreValue = Number.isFinite(bookmark.priority) ? bookmark.priority : priority;
+        scoreEl.textContent = Number.isFinite(scoreValue) ? scoreValue.toFixed(3) : '--';
+    }
+    if (faviconEl) {
+        setHighResFavicon(faviconEl, bookmark.url);
+    }
+
+    if (debugPre) {
+        const cached = getCachedRecommendScoreDebug(bookmark.id);
+        if (cached) {
+            debugPre.textContent = formatRecommendScoreDebugText(cached);
+            if (cached?.factors && typeof cached.factors.S === 'number') {
+                bookmark.priority = cached.factors.S;
+                bookmark.factors = cached.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, cached, { scoreEl });
+        } else {
+            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
+        }
+
+        const debug = await getFreshRecommendScoreDebug(bookmark.id);
+        if (!debug) {
+            if (!cached) {
+                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
+            }
+        } else {
+            setCachedRecommendScoreDebug(bookmark.id, debug);
+            debugPre.textContent = formatRecommendScoreDebugText(debug);
+            if (debug?.factors && typeof debug.factors.S === 'number') {
+                bookmark.priority = debug.factors.S;
+                bookmark.factors = debug.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, debug, { scoreEl });
+        }
+    }
+
+    if (openBtn) {
+        openBtn.disabled = !bookmark.url;
+    }
+    if (laterBtn) laterBtn.disabled = !bookmark.id;
+    if (skipBtn) skipBtn.disabled = !bookmark.id;
+    if (blockBtn) blockBtn.disabled = !bookmark.id;
+
+    recommendSearchModalItem = bookmark;
+
+    modal.classList.add('show');
+    recommendSearchPreviewActive = true;
+}
+
+try {
+    window.showRecommendSearchResultCard = showRecommendSearchResultCard;
+} catch (_) { }
 // 获取已屏蔽书签
 async function getBlockedBookmarks() {
     try {
@@ -7692,6 +8170,18 @@ function stopTrackingRefresh() {
     }
 }
 
+function compareRecommendPriority(a, b) {
+    const diff = (b?.priority ?? 0) - (a?.priority ?? 0);
+    if (Math.abs(diff) >= 0.01) return diff;
+    const bAdded = Number(b?.dateAdded || 0);
+    const aAdded = Number(a?.dateAdded || 0);
+    if (bAdded !== aAdded) return bAdded - aAdded;
+    const aTitle = String(a?.title || a?.name || '').toLowerCase();
+    const bTitle = String(b?.title || b?.name || '').toLowerCase();
+    if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
 // 刷新推荐卡片（三卡并排）
 // 获取已翻过的书签ID列表
 async function getFlippedBookmarks() {
@@ -7767,9 +8257,39 @@ async function refreshRecommendCards(force = false) {
         // 如果S值缓存为空，请求background.js全量计算
         if (Object.keys(scoresCache).length === 0 && bookmarks.length > 0) {
             console.log('[书签推荐] S值缓存为空，请求background计算...');
-            await new Promise(resolve => {
-                browserAPI.runtime.sendMessage({ action: 'computeBookmarkScores' }, resolve);
+            const computed = await new Promise(resolve => {
+                browserAPI.runtime.sendMessage({ action: 'computeBookmarkScores' }, (response) => {
+                    if (browserAPI.runtime.lastError) return resolve(false);
+                    resolve(!!(response?.computed || response?.success));
+                });
             });
+
+            if (!computed) {
+                recommendScoresComputeRetryCount += 1;
+                if (recommendScoresComputeRetryCount <= 8) {
+                    if (recommendScoresComputeRetryTimer) clearTimeout(recommendScoresComputeRetryTimer);
+                    recommendScoresComputeRetryTimer = setTimeout(() => {
+                        recommendScoresComputeRetryTimer = null;
+                        refreshRecommendCards(true);
+                    }, 1500);
+                }
+                // 计算尚未完成：保持 UI 稳定，避免空白/闪烁
+                cards.forEach((card, index) => {
+                    card.classList.add('empty');
+                    const titleEl = card.querySelector('.card-title');
+                    const priorityEl = card.querySelector('.card-priority');
+                    if (titleEl) {
+                        titleEl.textContent = index === 0
+                            ? (currentLang === 'en' ? 'Computing...' : '计算中...')
+                            : '--';
+                    }
+                    if (priorityEl) priorityEl.textContent = '';
+                    card.onclick = null;
+                });
+                return;
+            }
+
+            recommendScoresComputeRetryCount = 0;
             scoresCache = await getScoresCache();
         }
 
@@ -7907,15 +8427,8 @@ async function refreshRecommendCards(force = false) {
             return { ...b, priority: 0.5, factors: {}, reviewStatus };
         });
 
-        // 按优先级排序（高优先级在前），S值相同时添加随机因子
-        bookmarksWithPriority.sort((a, b) => {
-            const diff = b.priority - a.priority;
-            // S值差异小于0.01时，添加随机因子
-            if (Math.abs(diff) < 0.01) {
-                return Math.random() - 0.5;
-            }
-            return diff;
-        });
+        // 按优先级排序（高优先级在前），S值相近时使用稳定规则
+        bookmarksWithPriority.sort(compareRecommendPriority);
         recommendCards = bookmarksWithPriority.slice(0, 3);
 
         // 保存新的卡片状态
@@ -11477,8 +11990,11 @@ function performSearch(query) {
             }
             break;
         case 'recommend':
-            // 推荐视图无全局搜索，直接隐藏面板
-            hideSearchResultsPanel();
+            if (typeof window.searchBookmarkRecommendAndRender === 'function') {
+                window.searchBookmarkRecommendAndRender(query);
+            } else {
+                hideSearchResultsPanel();
+            }
             break;
     }
 }
@@ -11607,11 +12123,30 @@ function handleStorageChange(changes, namespace) {
 
     // 书签数据变化时，刷新当前视图数据
     if (changes.lastBookmarkData || changes.lastSyncOperations || changes.lastSyncTime) {
+        // 推荐搜索索引依赖书签树，变更时需要失效（避免搜索结果仍是旧书签）
+        try {
+            if (typeof window.invalidateRecommendSearchIndex === 'function') {
+                window.invalidateRecommendSearchIndex();
+            }
+        } catch (_) { }
+
         loadAllData({ skipRender: true }).then(() => {
             renderCurrentView();
         }).catch((e) => {
             console.warn('[存储监听] 数据刷新失败:', e);
         });
+    }
+
+    // S 值缓存变化时，刷新推荐搜索索引
+    if (changes.recommend_scores_cache) {
+        try {
+            if (typeof window.invalidateRecommendSearchIndex === 'function') {
+                window.invalidateRecommendSearchIndex();
+            }
+            if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
+                window.refreshRecommendSearchIfNeeded();
+            }
+        } catch (_) { }
     }
 
     // 主题变化（只在没有覆盖设置时跟随主UI）

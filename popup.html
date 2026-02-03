@@ -274,6 +274,108 @@
       transition: all 0.2s ease;
     }
 
+    .popup-recommend-card.debug-open:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: var(--theme-accent-color);
+    }
+
+    .popup-card-debug-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 26px;
+      height: 26px;
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--theme-text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3;
+    }
+
+    .popup-recommend-card.empty .popup-card-debug-btn {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    .popup-card-debug-btn:hover {
+      background: var(--theme-hover-bg);
+      color: var(--theme-text-primary);
+    }
+
+    .popup-recommend-debug {
+      position: absolute;
+      inset: 0;
+      padding: 10px;
+      background: var(--theme-bg-primary);
+      border-radius: 12px;
+      border: 2px solid var(--theme-accent-color);
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 2;
+    }
+
+    .popup-recommend-card.debug-open .popup-recommend-debug {
+      display: flex;
+    }
+
+    .popup-recommend-card.debug-open .popup-card-debug-btn {
+      display: none;
+    }
+
+    .popup-recommend-debug-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--theme-text-primary);
+    }
+
+    .popup-card-debug-close-btn {
+      margin-left: auto;
+      width: 26px;
+      height: 26px;
+      border: 1px solid var(--theme-border-primary);
+      background: var(--theme-bg-secondary);
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--theme-text-secondary);
+    }
+
+    .popup-card-debug-close-btn:hover {
+      background: var(--theme-hover-bg);
+      color: var(--theme-text-primary);
+    }
+
+    .popup-recommend-debug-body {
+      flex: 1;
+      overflow: auto;
+      background: var(--theme-bg-secondary);
+      border: 1px solid var(--theme-border-primary);
+      border-radius: 10px;
+      padding: 8px;
+    }
+
+    .popup-recommend-debug-pre {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .popup-recommend-card::before {
       content: '';
       position: absolute;
@@ -310,6 +412,7 @@
       height: 40px;
       object-fit: contain;
       border-radius: 8px;
+      background: rgba(0, 0, 0, 0.04);
     }
 
     .popup-recommend-title {
@@ -424,6 +527,30 @@
       height: 120px;
       overflow-y: auto;
       overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: var(--theme-scrollbar-thumb) var(--theme-scrollbar-track);
+    }
+
+    .time-tracking-widget-list::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .time-tracking-widget-list::-webkit-scrollbar-track {
+      background: var(--theme-scrollbar-track);
+      border-radius: 8px;
+    }
+
+    .time-tracking-widget-list::-webkit-scrollbar-thumb {
+      background: var(--theme-scrollbar-thumb);
+      border-radius: 8px;
+      border: 2px solid transparent;
+      background-clip: content-box;
+    }
+
+    .time-tracking-widget-list::-webkit-scrollbar-thumb:hover {
+      background: var(--theme-scrollbar-thumb-hover);
+      border: 2px solid transparent;
+      background-clip: content-box;
     }
 
     .time-tracking-widget-empty {
@@ -861,8 +988,22 @@
 
     <div id="bookmarkRecommendCards" class="cards">
       <div class="popup-recommend-card empty" data-index="0">
+        <button class="popup-card-debug-btn" title="诊断" aria-label="诊断">
+          <i class="fas fa-info-circle"></i>
+        </button>
+        <div class="popup-recommend-debug" aria-hidden="true">
+          <div class="popup-recommend-debug-header">
+            <span>诊断</span>
+            <button class="popup-card-debug-close-btn" title="关闭" aria-label="关闭">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="popup-recommend-debug-body">
+            <pre class="popup-recommend-debug-pre">--</pre>
+          </div>
+        </div>
         <div class="popup-recommend-card-top">
-          <img class="popup-recommend-favicon" src="" alt="">
+          <img class="popup-recommend-favicon" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E" alt="">
           <div class="popup-recommend-title">--</div>
         </div>
         <div class="popup-recommend-footer">
@@ -875,8 +1016,22 @@
         </div>
       </div>
       <div class="popup-recommend-card empty" data-index="1">
+        <button class="popup-card-debug-btn" title="诊断" aria-label="诊断">
+          <i class="fas fa-info-circle"></i>
+        </button>
+        <div class="popup-recommend-debug" aria-hidden="true">
+          <div class="popup-recommend-debug-header">
+            <span>诊断</span>
+            <button class="popup-card-debug-close-btn" title="关闭" aria-label="关闭">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="popup-recommend-debug-body">
+            <pre class="popup-recommend-debug-pre">--</pre>
+          </div>
+        </div>
         <div class="popup-recommend-card-top">
-          <img class="popup-recommend-favicon" src="" alt="">
+          <img class="popup-recommend-favicon" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E" alt="">
           <div class="popup-recommend-title">--</div>
         </div>
         <div class="popup-recommend-footer">
@@ -889,8 +1044,22 @@
         </div>
       </div>
       <div class="popup-recommend-card empty" data-index="2">
+        <button class="popup-card-debug-btn" title="诊断" aria-label="诊断">
+          <i class="fas fa-info-circle"></i>
+        </button>
+        <div class="popup-recommend-debug" aria-hidden="true">
+          <div class="popup-recommend-debug-header">
+            <span>诊断</span>
+            <button class="popup-card-debug-close-btn" title="关闭" aria-label="关闭">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="popup-recommend-debug-body">
+            <pre class="popup-recommend-debug-pre">--</pre>
+          </div>
+        </div>
         <div class="popup-recommend-card-top">
-          <img class="popup-recommend-favicon" src="" alt="">
+          <img class="popup-recommend-favicon" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E" alt="">
           <div class="popup-recommend-title">--</div>
         </div>
         <div class="popup-recommend-footer">

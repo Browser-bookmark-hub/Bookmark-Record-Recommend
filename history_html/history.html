@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title></title>
     <script src="history_theme_bootstrap.js"></script>
+    <script src="history_view_bootstrap.js"></script>
     <link rel="stylesheet" href="history.css?v=2.1">
     <link rel="stylesheet" href="search/search.css">
     <link rel="stylesheet" href="bookmark_calendar.css">
@@ -295,6 +296,45 @@
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 推荐搜索候选二级 UI -->
+            <div id="recommendSearchModal" class="modal content-center">
+                <div class="modal-content recommend-search-modal">
+                    <div class="modal-header">
+                        <h3 id="recommendSearchModalTitle">推荐候选</h3>
+                        <button id="recommendSearchModalClose" class="modal-close" aria-label="Close">×</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="recommend-search-card">
+                            <img id="recommendSearchModalFavicon" class="recommend-search-favicon" src="" alt="">
+                            <div class="recommend-search-meta">
+                                <div id="recommendSearchModalItemTitle" class="recommend-search-title">--</div>
+                                <a id="recommendSearchModalItemUrl" class="recommend-search-url" href="#" target="_blank" rel="noreferrer">--</a>
+                                <div class="recommend-search-score">S = <span id="recommendSearchModalItemScore">--</span></div>
+                            </div>
+                        </div>
+                        <div class="recommend-search-debug">
+                            <div class="recommend-search-debug-header">诊断</div>
+                            <pre id="recommendSearchModalDebugPre" class="recommend-search-debug-pre">--</pre>
+                        </div>
+                        <div class="recommend-search-actions">
+                            <button class="modal-btn" id="recommendSearchModalLaterBtn">
+                                <i class="fas fa-clock"></i> 待复习
+                            </button>
+                            <button class="modal-btn" id="recommendSearchModalSkipBtn">
+                                <i class="fas fa-forward"></i> 跳过
+                            </button>
+                            <button class="modal-btn danger" id="recommendSearchModalBlockBtn">
+                                <i class="fas fa-ban"></i> 屏蔽
+                            </button>
+                            <button class="modal-btn primary" id="recommendSearchModalOpenBtn">
+                                <i class="fas fa-external-link-alt"></i> 打开
+                            </button>
+                            <button class="modal-btn" id="recommendSearchModalCloseBtn">关闭</button>
                         </div>
                     </div>
                 </div>
@@ -646,6 +686,20 @@
                 <div class="recommend-card-section">
                     <div class="cards-row" id="cardsRow">
                         <div class="recommend-card" data-index="0">
+                            <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <div class="recommend-debug" aria-hidden="true">
+                                <div class="recommend-debug-header">
+                                    <span>诊断</span>
+                                    <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                                <div class="recommend-debug-body">
+                                    <pre class="recommend-debug-pre">--</pre>
+                                </div>
+                            </div>
                             <img class="card-favicon" src="" alt="">
                             <div class="card-title">--</div>
                             <div class="card-footer">
@@ -661,6 +715,20 @@
                             </div>
                         </div>
                         <div class="recommend-card" data-index="1">
+                            <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <div class="recommend-debug" aria-hidden="true">
+                                <div class="recommend-debug-header">
+                                    <span>诊断</span>
+                                    <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                                <div class="recommend-debug-body">
+                                    <pre class="recommend-debug-pre">--</pre>
+                                </div>
+                            </div>
                             <img class="card-favicon" src="" alt="">
                             <div class="card-title">--</div>
                             <div class="card-footer">
@@ -676,6 +744,20 @@
                             </div>
                         </div>
                         <div class="recommend-card" data-index="2">
+                            <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <div class="recommend-debug" aria-hidden="true">
+                                <div class="recommend-debug-header">
+                                    <span>诊断</span>
+                                    <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                                <div class="recommend-debug-body">
+                                    <pre class="recommend-debug-pre">--</pre>
+                                </div>
+                            </div>
                             <img class="card-favicon" src="" alt="">
                             <div class="card-title">--</div>
                             <div class="card-footer">
@@ -792,7 +874,7 @@
                                 </span>
                                 <span class="formula-plus">+</span>
                                 <span class="formula-term">
-                                    <input type="text" class="formula-weight" id="weightColdness" value="0.20" readonly>
+                                    <input type="text" class="formula-weight" id="weightColdness" value="0.15" readonly>
                                     <span class="formula-multiply">×</span>
                                     <span class="formula-factor">C</span>
                                 </span>

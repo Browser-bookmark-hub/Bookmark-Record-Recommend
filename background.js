@@ -15,74 +15,11 @@ import {
   syncTrackingData,
   restoreActiveSessionsFromStorage
 } from './active_time_tracker/index.js';
-import { upsertRepoFile } from './github/repo-api.js';
-
 const browserAPI = (function () {
   if (typeof chrome !== 'undefined') return chrome;
   if (typeof browser !== 'undefined') return browser;
   throw new Error('Unsupported browser');
 })();
-
-async function getCurrentLang() {
-  try {
-    const { currentLang, preferredLang } = await browserAPI.storage.local.get(['currentLang', 'preferredLang']);
-    return currentLang || preferredLang || 'zh_CN';
-  } catch (_) {
-    return 'zh_CN';
-  }
-}
-
-function getExportRootFolderByLang(lang) {
-  return lang === 'zh_CN' ? '书签记录 & 推荐' : 'Bookmark Records & Recommendations';
-}
-
-function getRecordsFolderByLang(lang) {
-  return lang === 'zh_CN' ? '书签记录' : 'Records';
-}
-
-function getClickHistoryFolderByLang(lang) {
-  return lang === 'zh_CN' ? '点击记录' : 'Click History';
-}
-
-function resolveExportSubFolderByKey(folderKey, lang) {
-  const key = String(folderKey || '').trim();
-  switch (key) {
-    case 'records':
-      return getRecordsFolderByLang(lang);
-    case 'click_history':
-      return getClickHistoryFolderByLang(lang);
-    default:
-      return getRecordsFolderByLang(lang);
-  }
-}
-
-function safeBase64(str) {
-  try {
-    return btoa(str);
-  } catch (_) {
-    return btoa(unescape(encodeURIComponent(str)));
-  }
-}
-
-function sanitizeGitHubRepoPathPart(part) {
-  let s = String(part == null ? '' : part);
-  s = s.replace(/[\x00-\x1F\x7F]/g, '');
-  s = s.replace(/[\\/]/g, '_');
-  s = s.replace(/\s+/g, ' ').trim();
-  return s;
-}
-
-function buildGitHubRepoFilePath({ basePath, lang, folderKey, fileName }) {
-  const baseRaw = String(basePath || '').trim().replace(/^\/+/, '').replace(/\/+$/, '');
-  const baseParts = baseRaw
-    ? baseRaw.split('/').filter(Boolean).map(sanitizeGitHubRepoPathPart).filter(Boolean)
-    : [];
-  const root = sanitizeGitHubRepoPathPart(getExportRootFolderByLang(lang));
-  const sub = sanitizeGitHubRepoPathPart(resolveExportSubFolderByKey(folderKey, lang));
-  const leaf = sanitizeGitHubRepoPathPart(String(fileName || '').split('/').pop());
-  const joined = [...baseParts, root, sub, leaf].filter(Boolean).join('/');
-  return joined || 'export.txt';
-}
 
 function arrayBufferToBase64(arrayBuffer) {
   const bytes = new Uint8Array(arrayBuffer);
@@ -95,11 +32,6 @@ function arrayBufferToBase64(arrayBuffer) {
   return btoa(binary);
 }
 
-function textToBase64(text) {
-  const encoder = new TextEncoder();
-  const buf = encoder.encode(String(text ?? '')).buffer;
-  return arrayBufferToBase64(buf);
-}
 
 const POPUP_FAVICON_CACHE_KEY = 'popup_favicon_cache_v1';
 const POPUP_FAVICON_CACHE_MAX = 200;
@@ -296,129 +228,6 @@ if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
   });
 }
 
-async function ensureWebDAVCollectionExists(url, authHeader, errorPrefix) {
-  const checkResponse = await fetch(url, {
-    method: 'PROPFIND',
-    headers: {
-      'Authorization': authHeader,
-      'Depth': '0',
-      'Content-Type': 'application/xml'
-    },
-    body: '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><resourcetype/></prop></propfind>'
-  });
-
-  if (checkResponse.status === 401) {
-    throw new Error('WebDAV认证失败，请检查账号密码是否正确');
-  }
-
-  if (checkResponse.status === 404) {
-    const mkcolResponse = await fetch(url, {
-      method: 'MKCOL',
-      headers: { 'Authorization': authHeader }
-    });
-    if (!mkcolResponse.ok && mkcolResponse.status !== 405) {
-      throw new Error(`${errorPrefix}: ${mkcolResponse.status} - ${mkcolResponse.statusText}`);
-    }
-    return;
-  }
-
-  if (!checkResponse.ok) {
-    throw new Error(`${errorPrefix}: ${checkResponse.status} - ${checkResponse.statusText}`);
-  }
-}
-
-async function uploadExportFileToWebDAV({ lang, folderKey, fileName, content, contentArrayBuffer, contentType }) {
-  const config = await browserAPI.storage.local.get(['serverAddress', 'username', 'password', 'webDAVEnabled']);
-  if (!config.serverAddress || !config.username || !config.password) {
-    return { success: false, skipped: true, error: 'WebDAV 配置不完整' };
-  }
-  if (config.webDAVEnabled === false) {
-    return { success: false, skipped: true, error: 'WebDAV 已禁用' };
-  }
-
-  const serverAddress = config.serverAddress.replace(/\/+$/, '/');
-  const exportRootFolder = getExportRootFolderByLang(lang);
-  const exportSubFolder = resolveExportSubFolderByKey(folderKey, lang);
-  const folderPath = `${exportRootFolder}/${exportSubFolder}/`;
-
-  const fullUrl = `${serverAddress}${folderPath}${fileName}`;
-  const folderUrl = `${serverAddress}${folderPath}`;
-  const parentFolderUrl = `${serverAddress}${exportRootFolder}/`;
-
-  const authHeader = 'Basic ' + safeBase64(`${config.username}:${config.password}`);
-
-  try {
-    await ensureWebDAVCollectionExists(parentFolderUrl, authHeader, '创建父文件夹失败');
-    await ensureWebDAVCollectionExists(folderUrl, authHeader, '创建导出文件夹失败');
-
-    const response = await fetch(fullUrl, {
-      method: 'PUT',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': contentType || 'text/plain;charset=utf-8',
-        'Overwrite': 'T'
-      },
-      body: contentArrayBuffer ? contentArrayBuffer : String(content ?? '')
-    });
-
-    if (!response.ok) {
-      throw new Error(`上传失败: ${response.status} - ${response.statusText}`);
-    }
-
-    return { success: true };
-  } catch (error) {
-    if (String(error?.message || '').includes('Failed to fetch')) {
-      return { success: false, error: '无法连接到WebDAV服务器，请检查地址是否正确或网络是否正常' };
-    }
-    return { success: false, error: error?.message || '上传到WebDAV失败' };
-  }
-}
-
-async function uploadExportFileToGitHubRepo({ lang, folderKey, fileName, content, contentArrayBuffer }) {
-  const config = await browserAPI.storage.local.get([
-    'githubRepoToken',
-    'githubRepoOwner',
-    'githubRepoName',
-    'githubRepoBranch',
-    'githubRepoBasePath',
-    'githubRepoEnabled'
-  ]);
-
-  if (!config.githubRepoToken) {
-    return { success: false, skipped: true, error: 'GitHub Token 未配置' };
-  }
-  if (!config.githubRepoOwner || !config.githubRepoName) {
-    return { success: false, skipped: true, error: '仓库未配置' };
-  }
-  if (config.githubRepoEnabled === false) {
-    return { success: false, skipped: true, error: 'GitHub 仓库已禁用' };
-  }
-
-  const filePath = buildGitHubRepoFilePath({ basePath: config.githubRepoBasePath, lang, folderKey, fileName });
-  const leaf = String(fileName || '').split('/').pop() || 'export';
-  const commitMessage = `Bookmark Records: export ${folderKey} ${leaf}`;
-  const contentBase64 = contentArrayBuffer ? arrayBufferToBase64(contentArrayBuffer) : textToBase64(content);
-
-  try {
-    const result = await upsertRepoFile({
-      token: config.githubRepoToken,
-      owner: config.githubRepoOwner,
-      repo: config.githubRepoName,
-      branch: config.githubRepoBranch,
-      path: filePath,
-      message: commitMessage,
-      contentBase64
-    });
-
-    if (result && result.success === true) {
-      return { success: true, path: result.path || filePath, htmlUrl: result.htmlUrl || null };
-    }
-
-    return { success: false, error: result?.error || '上传到 GitHub 仓库失败' };
-  } catch (error) {
-    return { success: false, error: error?.message || '上传到 GitHub 仓库失败' };
-  }
-}
 
 function openView(view) {
   const safeView = view === 'recommend' ? 'recommend' : 'additions';
@@ -545,10 +354,21 @@ const BOOKMARK_BULK_WINDOW_MS = 800;
 const BOOKMARK_BULK_THRESHOLD = 8;
 const BOOKMARK_BULK_QUIET_MS = 5000;
 
+const SCORE_ALGO_VERSION_KEY = 'recommend_scores_algo_version';
+const SCORE_ALGO_VERSION = 6;
+
 const SCORE_CACHE_MODE_KEY = 'recommend_scores_cache_mode';
 const SCORE_CACHE_MODE_FULL = 'full';
 const SCORE_CACHE_MODE_COMPACT = 'compact';
 const SCORE_CACHE_COMPACT_THRESHOLD = 8000;
+
+const SCORE_BOOTSTRAP_THRESHOLD = 1200;
+const SCORE_BOOTSTRAP_LIMIT = 600;
+
+// Tracking cold-start fairness
+const TRACKING_WARMUP_MIN_MS = 30 * 60 * 1000; // 30 minutes
+const TRACKING_WARMUP_MIN_COUNT = 30; // 30 tracked items
+const TRACKING_NEUTRAL_T = 0.5;
 
 async function invalidateRecommendCaches(reason = '') {
   try {
@@ -570,6 +390,17 @@ async function invalidateRecommendCaches(reason = '') {
   } catch (_) { }
 }
 
+async function ensureScoreAlgoVersion() {
+  try {
+    const result = await browserAPI.storage.local.get([SCORE_ALGO_VERSION_KEY]);
+    if (result?.[SCORE_ALGO_VERSION_KEY] === SCORE_ALGO_VERSION) return;
+    await invalidateRecommendCaches(`algo-v${SCORE_ALGO_VERSION}`);
+    await browserAPI.storage.local.set({ [SCORE_ALGO_VERSION_KEY]: SCORE_ALGO_VERSION });
+  } catch (_) { }
+}
+
+ensureScoreAlgoVersion().catch(() => { });
+
 function scheduleBookmarkBulkExit() {
   if (bookmarkBulkExitTimer) {
     clearTimeout(bookmarkBulkExitTimer);
@@ -580,12 +411,13 @@ function scheduleBookmarkBulkExit() {
   }, BOOKMARK_BULK_QUIET_MS);
 }
 
-function scheduleRecomputeAllScoresSoon(reason = '') {
+function scheduleRecomputeAllScoresSoon(reason = '', options = {}) {
+  const forceFull = options && options.forceFull === true;
   if (scheduledRecomputeTimer) clearTimeout(scheduledRecomputeTimer);
   scheduledRecomputeTimer = setTimeout(() => {
     scheduledRecomputeTimer = null;
     if (isBookmarkImporting || isBookmarkBulkChanging) return;
-    computeAllBookmarkScores()
+    computeAllBookmarkScores({ forceFull })
       .then(() => {
         try {
           browserAPI.storage.local.set({
@@ -636,7 +468,7 @@ async function exitBookmarkBulkChangeMode() {
   // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
   const reason = String(lastBulkReason || '');
   if (!reason.startsWith('import')) {
-    scheduleRecomputeAllScoresSoon('bulk-exit');
+    scheduleRecomputeAllScoresSoon('bulk-exit', { forceFull: true });
   }
 }
 
@@ -665,22 +497,80 @@ function noteBookmarkEventForBulkGuard(eventType = '') {
   }
 }
 
+function pickBootstrapBookmarks(bookmarks, limit) {
+  if (!Array.isArray(bookmarks) || bookmarks.length === 0) return [];
+  const maxCount = Number.isFinite(limit) ? Math.max(1, limit) : SCORE_BOOTSTRAP_LIMIT;
+  const list = bookmarks.slice();
+  list.sort((a, b) => {
+    const diff = (b?.dateAdded || 0) - (a?.dateAdded || 0);
+    if (diff !== 0) return diff;
+    const aTitle = String(a?.title || a?.name || '').toLowerCase();
+    const bTitle = String(b?.title || b?.name || '').toLowerCase();
+    if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+  });
+  return list.slice(0, maxCount);
+}
+
 async function getFormulaConfig() {
-  const result = await browserAPI.storage.local.get(['recommendFormulaConfig', 'trackingEnabled']);
-  const config = result.recommendFormulaConfig || {
-    weights: { freshness: 0.15, coldness: 0.25, shallowRead: 0.20, forgetting: 0.25, laterReview: 0.15 },
-    thresholds: { freshness: 90, coldness: 10, shallowRead: 5, forgetting: 14 }
+  const DEFAULT_CONFIG = {
+    weights: { freshness: 0.15, coldness: 0.15, shallowRead: 0.30, forgetting: 0.20, laterReview: 0.20 },
+    thresholds: { freshness: 30, coldness: 10, shallowRead: 5, forgetting: 14 }
   };
+
+  const result = await browserAPI.storage.local.get(['recommendFormulaConfig', 'trackingEnabled']);
+  const stored = result.recommendFormulaConfig || null;
+  const config = {
+    ...DEFAULT_CONFIG,
+    ...(stored || {}),
+    weights: {
+      ...DEFAULT_CONFIG.weights,
+      ...((stored && stored.weights) ? stored.weights : {})
+    },
+    thresholds: {
+      ...DEFAULT_CONFIG.thresholds,
+      ...((stored && stored.thresholds) ? stored.thresholds : {})
+    }
+  };
+
+  if (!stored) {
+    try {
+      await browserAPI.storage.local.set({ recommendFormulaConfig: config });
+    } catch (_) { }
+    // 之前可能已经按旧默认值计算过缓存：确保公式默认值与 UI 一致后，清空旧缓存避免“显示公式”和“实际分数”不一致。
+    await invalidateRecommendCaches('init-default-formula');
+  }
+
   config.trackingEnabled = result.trackingEnabled !== false;
   return config;
 }
 
+function normalizeBlockedDomain(domain) {
+  if (!domain) return '';
+  return String(domain).toLowerCase().replace(/^www\./, '');
+}
+
+function normalizeScoreUrlKey(url) {
+  if (!url || typeof url !== 'string') return '';
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return String(url);
+    u.hash = '';
+    let pathname = u.pathname || '';
+    if (pathname === '/') pathname = '';
+    return `${u.origin}${pathname}${u.search || ''}`;
+  } catch (_) {
+    return String(url);
+  }
+}
+
 async function getBlockedDataForScore() {
-  const result = await browserAPI.storage.local.get(['blockedBookmarks', 'blockedDomains', 'blockedFolders']);
+  const result = await browserAPI.storage.local.get(['recommend_blocked']);
+  const blocked = result.recommend_blocked || { bookmarks: [], folders: [], domains: [] };
   return {
-    bookmarks: new Set(result.blockedBookmarks || []),
-    domains: new Set(result.blockedDomains || []),
-    folders: new Set(result.blockedFolders || [])
+    bookmarks: new Set(blocked.bookmarks || []),
+    domains: new Set((blocked.domains || []).map(normalizeBlockedDomain).filter(Boolean)),
+    folders: new Set(blocked.folders || [])
   };
 }
 
@@ -691,7 +581,7 @@ async function getScoresCache() {
 
 async function saveScoresCache(cache) {
   try {
-    await browserAPI.storage.local.set({ recommend_scores_cache: cache });
+    await browserAPI.storage.local.set({ recommend_scores_cache: cache, recommend_scores_time: Date.now() });
   } catch (error) {
     if (error.message && error.message.includes('QUOTA')) {
       console.warn('[S-score] storage quota reached, cleaning...');
@@ -712,7 +602,7 @@ async function saveScoresCache(cache) {
           await browserAPI.storage.local.remove(['thumbnailCache']);
         }
 
-        await browserAPI.storage.local.set({ recommend_scores_cache: cache });
+        await browserAPI.storage.local.set({ recommend_scores_cache: cache, recommend_scores_time: Date.now() });
       } catch (retryError) {
         console.error('[S-score] save after cleanup failed:', retryError);
       }
@@ -738,6 +628,8 @@ async function getTrackingDataForScore() {
     const byUrl = new Map();
     const byTitle = new Map();
     const byBookmarkId = new Map();
+    let totalMs = 0;
+    let totalCount = 0;
 
     for (const [key, stat] of Object.entries(stats)) {
       const data = {
@@ -746,15 +638,20 @@ async function getTrackingDataForScore() {
         compositeMs: stat.totalCompositeMs || 0,
         bookmarkId: stat.bookmarkId || null
       };
-      if (stat.url) byUrl.set(stat.url, data);
+      totalMs += data.compositeMs || 0;
+      totalCount += 1;
+      if (stat.url) {
+        const urlKey = normalizeScoreUrlKey(stat.url);
+        if (urlKey) byUrl.set(urlKey, data);
+      }
       if (stat.title) byTitle.set(stat.title, data);
       if (stat.bookmarkId) byBookmarkId.set(stat.bookmarkId, data);
     }
 
-    return { byUrl, byTitle, byBookmarkId };
+    return { byUrl, byTitle, byBookmarkId, totalMs, totalCount };
   } catch (e) {
     console.warn('[S-score] tracking stats failed:', e);
-    return { byUrl: new Map(), byTitle: new Map(), byBookmarkId: new Map() };
+    return { byUrl: new Map(), byTitle: new Map(), byBookmarkId: new Map(), totalMs: 0, totalCount: 0 };
   }
 }
 
@@ -765,33 +662,125 @@ function calculateFactorValue(value, threshold, inverse = false) {
   return inverse ? decayed : (1 - decayed);
 }
 
+function resolveHistoryForScore(bookmark, historyStats) {
+  const empty = { visitCount: 0, lastVisitTime: 0 };
+  const result = {
+    matchType: 'none',
+    matchKey: null,
+    history: empty
+  };
+
+  if (!historyStats || !bookmark?.url) return result;
+
+  const urlKey = normalizeScoreUrlKey(bookmark.url);
+  if (!urlKey) return result;
+
+  let history = historyStats.get(urlKey);
+  if (history && history.visitCount > 0) {
+    return { matchType: 'url', matchKey: urlKey, history };
+  }
+
+  if (bookmark.title && historyStats.titleMap) {
+    history = historyStats.titleMap.get(bookmark.title);
+    if (history && history.visitCount > 0) {
+      return { matchType: 'title', matchKey: bookmark.title, history };
+    }
+  }
+
+  try {
+    if (bookmark.url && historyStats.domainMap) {
+      const domain = normalizeBlockedDomain(new URL(bookmark.url).hostname);
+      history = historyStats.domainMap.get(domain);
+      if (history && history.visitCount > 0) {
+        return { matchType: 'domain', matchKey: domain, history };
+      }
+    }
+  } catch (_) { }
+
+  return result;
+}
+
+function resolveTrackingForScore(bookmark, trackingData) {
+  const result = {
+    matchType: 'none',
+    matchKey: null,
+    compositeMs: 0,
+    ignoredTitleHit: false
+  };
+
+  if (!trackingData || !bookmark) return result;
+
+  if (bookmark.id && trackingData.byBookmarkId && trackingData.byBookmarkId.has(bookmark.id)) {
+    const hit = trackingData.byBookmarkId.get(bookmark.id);
+    return { matchType: 'bookmarkId', matchKey: bookmark.id, compositeMs: hit?.compositeMs || 0, ignoredTitleHit: false };
+  }
+
+  if (bookmark.url && trackingData.byUrl) {
+    const urlKey = normalizeScoreUrlKey(bookmark.url);
+    if (urlKey && trackingData.byUrl.has(urlKey)) {
+      const hit = trackingData.byUrl.get(urlKey);
+      return { matchType: 'url', matchKey: urlKey, compositeMs: hit?.compositeMs || 0, ignoredTitleHit: false };
+    }
+  }
+
+  if (bookmark.title && trackingData.byTitle && trackingData.byTitle.has(bookmark.title)) {
+    const titleHit = trackingData.byTitle.get(bookmark.title);
+    if (titleHit) {
+      if (bookmark.id && titleHit.bookmarkId && titleHit.bookmarkId === bookmark.id) {
+        return { matchType: 'title', matchKey: bookmark.title, compositeMs: titleHit.compositeMs || 0, ignoredTitleHit: false };
+      }
+      if (!bookmark.id && !titleHit.bookmarkId) {
+        return { matchType: 'title', matchKey: bookmark.title, compositeMs: titleHit.compositeMs || 0, ignoredTitleHit: false };
+      }
+      result.ignoredTitleHit = true;
+    }
+  }
+
+  return result;
+}
+
+function resolveLaterFactorForScore(bookmarkId, postponedList) {
+  const result = { L: 0, postponeInfo: null };
+  if (!bookmarkId || !Array.isArray(postponedList) || postponedList.length === 0) return result;
+  const postponeInfo = postponedList.find(p => p.bookmarkId === bookmarkId) || null;
+  if (postponeInfo && postponeInfo.manuallyAdded) {
+    return { L: 1, postponeInfo };
+  }
+  return { L: 0, postponeInfo };
+}
+
+function resolveReviewFactorForScore(bookmarkId, reviewData, now) {
+  const result = {
+    R: 1,
+    review: null,
+    daysSinceReview: null,
+    stability: null,
+    needReview: null
+  };
+  if (!bookmarkId || !reviewData) return result;
+  const review = reviewData[bookmarkId];
+  if (!review) return result;
+
+  const safeNow = typeof now === 'number' ? now : Date.now();
+  const daysSinceReview = (safeNow - review.lastReview) / (1000 * 60 * 60 * 24);
+  const reviewCount = review.reviewCount || 1;
+  const stabilityTable = [3, 7, 14, 30, 60];
+  const stability = stabilityTable[Math.min(reviewCount - 1, stabilityTable.length - 1)];
+  const needReview = 1 - Math.pow(0.9, daysSinceReview / stability);
+  let R = 0.7 + 0.3 * needReview;
+  R = Math.max(0.7, Math.min(1, R));
+  return { R, review, daysSinceReview, stability, needReview };
+}
+
 function calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData) {
   const now = Date.now();
   const thresholds = config.thresholds;
 
-  let history = historyStats.get(bookmark.url);
-  if (!history || history.visitCount === 0) {
-    if (bookmark.title && historyStats.titleMap) {
-      history = historyStats.titleMap.get(bookmark.title);
-    }
-  }
-  history = history || { visitCount: 0, lastVisitTime: 0 };
+  const historyResult = resolveHistoryForScore(bookmark, historyStats);
+  const history = historyResult.history || { visitCount: 0, lastVisitTime: 0 };
 
-  let compositeMs = 0;
-  if (bookmark.id && trackingData.byBookmarkId && trackingData.byBookmarkId.has(bookmark.id)) {
-    compositeMs = trackingData.byBookmarkId.get(bookmark.id).compositeMs;
-  } else if (bookmark.url && trackingData.byUrl.has(bookmark.url)) {
-    compositeMs = trackingData.byUrl.get(bookmark.url).compositeMs;
-  } else if (bookmark.title && trackingData.byTitle && trackingData.byTitle.has(bookmark.title)) {
-    const titleHit = trackingData.byTitle.get(bookmark.title);
-    if (titleHit) {
-      if (bookmark.id && titleHit.bookmarkId && titleHit.bookmarkId === bookmark.id) {
-        compositeMs = titleHit.compositeMs;
-      } else if (!bookmark.id && !titleHit.bookmarkId) {
-        compositeMs = titleHit.compositeMs;
-      }
-    }
-  }
+  const trackingResult = resolveTrackingForScore(bookmark, trackingData);
+  const compositeMs = trackingResult.compositeMs || 0;
 
   const daysSinceAdded = (now - (bookmark.dateAdded || now)) / (1000 * 60 * 60 * 24);
   const F = calculateFactorValue(daysSinceAdded, thresholds.freshness, true);
@@ -799,39 +788,36 @@ function calculateBookmarkScore(bookmark, historyStats, trackingData, config, po
   const C = calculateFactorValue(history.visitCount, thresholds.coldness, true);
 
   const compositeMinutes = compositeMs / (1000 * 60);
-  const T = calculateFactorValue(compositeMinutes, thresholds.shallowRead, true);
+  const trackingWarm = (trackingData?.totalMs || 0) >= TRACKING_WARMUP_MIN_MS
+    || (trackingData?.totalCount || 0) >= TRACKING_WARMUP_MIN_COUNT;
+  const trackingHit = trackingResult.matchType !== 'none';
+  const T = trackingHit
+    ? calculateFactorValue(compositeMinutes, thresholds.shallowRead, true)
+    : TRACKING_NEUTRAL_T;
 
   let daysSinceLastVisit = thresholds.forgetting;
   if (history.lastVisitTime > 0) {
     daysSinceLastVisit = (now - history.lastVisitTime) / (1000 * 60 * 60 * 24);
+  } else {
+    // 从未访问过：用“加入时间”作为 proxy，避免 D 永远固定在阈值处（0.5）导致分数扎堆。
+    daysSinceLastVisit = Math.max(daysSinceAdded, thresholds.forgetting);
   }
   const D = calculateFactorValue(daysSinceLastVisit, thresholds.forgetting, false);
 
-  let L = 0;
-  const postponeInfo = postponedList.find(p => p.bookmarkId === bookmark.id);
-  if (postponeInfo && postponeInfo.manuallyAdded) {
-    L = 1;
-  }
+  const laterResult = resolveLaterFactorForScore(bookmark.id, postponedList);
+  const L = laterResult.L;
 
-  let R = 1;
-  const review = reviewData[bookmark.id];
-  if (review) {
-    const daysSinceReview = (now - review.lastReview) / (1000 * 60 * 60 * 24);
-    const reviewCount = review.reviewCount || 1;
-    const stabilityTable = [3, 7, 14, 30, 60];
-    const stability = stabilityTable[Math.min(reviewCount - 1, stabilityTable.length - 1)];
-    const needReview = 1 - Math.pow(0.9, daysSinceReview / stability);
-    R = 0.7 + 0.3 * needReview;
-    R = Math.max(0.7, Math.min(1, R));
-  }
+  const reviewResult = resolveReviewFactorForScore(bookmark.id, reviewData, now);
+  const R = reviewResult.R;
 
-  let w1 = config.weights.freshness || 0.15;
-  let w2 = config.weights.coldness || 0.25;
-  let w3 = config.weights.shallowRead || 0.20;
-  let w4 = config.weights.forgetting || 0.25;
-  let w5 = config.weights.laterReview || 0.15;
+  const weights = config.weights || {};
+  let w1 = weights.freshness ?? 0.15;
+  let w2 = weights.coldness ?? 0.15;
+  let w3 = weights.shallowRead ?? 0.30;
+  let w4 = weights.forgetting ?? 0.20;
+  let w5 = weights.laterReview ?? 0.20;
 
-  if (!config.trackingEnabled) {
+  if (!config.trackingEnabled || !trackingWarm) {
     const remaining = w1 + w2 + w4 + w5;
     if (remaining > 0) {
       w1 = w1 / remaining;
@@ -844,36 +830,160 @@ function calculateBookmarkScore(bookmark, historyStats, trackingData, config, po
 
   const basePriority = w1 * F + w2 * C + w3 * T + w4 * D + w5 * L;
   const priority = basePriority * R;
-  const randomFactor = (Math.random() - 0.5) * 0.1;
-  const S = Math.max(0, Math.min(1, priority + randomFactor));
+  // 注意：S 值缓存必须可复现（不含随机项），否则每次重算都会抡动推荐结果/数值，用户会感知“闪”“漂”。
+  const S = Math.max(0, Math.min(1, priority));
 
   return { S, F, C, T, D, L, R };
+}
+
+const SCORE_DEBUG_CONTEXT_TTL_MS = 60 * 1000;
+let scoreDebugHistoryStatsCache = { loadedAt: 0, stats: null };
+
+function invalidateScoreDebugHistoryStatsCache() {
+  scoreDebugHistoryStatsCache = { loadedAt: 0, stats: null };
+}
+
+async function getHistoryStatsForScoreDebug() {
+  try {
+    const now = Date.now();
+    if (scoreDebugHistoryStatsCache.stats && (now - (scoreDebugHistoryStatsCache.loadedAt || 0)) < SCORE_DEBUG_CONTEXT_TTL_MS) {
+      return scoreDebugHistoryStatsCache.stats;
+    }
+    const stats = await getBatchHistoryDataWithTitle();
+    scoreDebugHistoryStatsCache = { loadedAt: now, stats };
+    return stats;
+  } catch (_) {
+    return new Map();
+  }
+}
+
+function calculateBookmarkScoreDebug(bookmark, historyStats, trackingData, config, postponedList, reviewData) {
+  const now = Date.now();
+  const thresholds = config.thresholds;
+
+  const historyResult = resolveHistoryForScore(bookmark, historyStats);
+  const history = historyResult.history || { visitCount: 0, lastVisitTime: 0 };
+
+  const trackingResult = resolveTrackingForScore(bookmark, trackingData);
+  const compositeMs = trackingResult.compositeMs || 0;
+
+  const daysSinceAdded = (now - (bookmark.dateAdded || now)) / (1000 * 60 * 60 * 24);
+  const compositeMinutes = compositeMs / (1000 * 60);
+  const trackingWarm = (trackingData?.totalMs || 0) >= TRACKING_WARMUP_MIN_MS
+    || (trackingData?.totalCount || 0) >= TRACKING_WARMUP_MIN_COUNT;
+
+  let daysSinceLastVisit = thresholds.forgetting;
+  if (history.lastVisitTime > 0) {
+    daysSinceLastVisit = (now - history.lastVisitTime) / (1000 * 60 * 60 * 24);
+  } else {
+    daysSinceLastVisit = Math.max(daysSinceAdded, thresholds.forgetting);
+  }
+
+  const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+  const laterResult = resolveLaterFactorForScore(bookmark.id, postponedList);
+  const reviewResult = resolveReviewFactorForScore(bookmark.id, reviewData, now);
+
+  const weights = config.weights || {};
+  let w1 = weights.freshness ?? 0.15;
+  let w2 = weights.coldness ?? 0.15;
+  let w3 = weights.shallowRead ?? 0.30;
+  let w4 = weights.forgetting ?? 0.20;
+  let w5 = weights.laterReview ?? 0.20;
+  if (!config.trackingEnabled || !trackingWarm) {
+    const remaining = w1 + w2 + w4 + w5;
+    if (remaining > 0) {
+      w1 = w1 / remaining;
+      w2 = w2 / remaining;
+      w4 = w4 / remaining;
+      w5 = w5 / remaining;
+    }
+    w3 = 0;
+  }
+
+  return {
+    now,
+    bookmark: {
+      id: bookmark.id,
+      title: bookmark.title || '',
+      url: bookmark.url || '',
+      dateAdded: bookmark.dateAdded || 0,
+      parentId: bookmark.parentId || null
+    },
+    config: {
+      thresholds: { ...thresholds },
+      weights: { ...weights },
+      trackingEnabled: !!config.trackingEnabled
+    },
+    weightsUsed: { w1, w2, w3, w4, w5 },
+    matches: {
+      history: {
+        type: historyResult.matchType,
+        key: historyResult.matchKey,
+        visitCount: history.visitCount || 0,
+        lastVisitTime: history.lastVisitTime || 0
+      },
+      tracking: {
+        type: trackingResult.matchType,
+        key: trackingResult.matchKey,
+        compositeMs,
+        ignoredTitleHit: !!trackingResult.ignoredTitleHit
+      }
+    },
+    raw: {
+      daysSinceAdded,
+      compositeMinutes,
+      daysSinceLastVisit,
+      postponeInfo: laterResult.postponeInfo,
+      review: reviewResult.review,
+      daysSinceReview: reviewResult.daysSinceReview,
+      stability: reviewResult.stability,
+      needReview: reviewResult.needReview
+    },
+    factors: scores
+  };
 }
 
 async function getBatchHistoryDataWithTitle() {
   const urlMap = new Map();
   const titleMap = new Map();
+  const domainMap = new Map();
 
-  if (!browserAPI.history) return { urlMap, titleMap };
+  if (!browserAPI.history) {
+    const result = urlMap;
+    result.titleMap = titleMap;
+    result.domainMap = domainMap;
+    return result;
+  }
 
   try {
-    const oneHundredEightyDaysAgo = Date.now() - 180 * 24 * 60 * 60 * 1000;
+    // 尽量覆盖更多历史（maxResults 兜底），避免导入大量书签后“无历史”比例过高导致分数扎堆。
+    const historyStartTime = 0;
     const historyItems = await new Promise(resolve => {
       browserAPI.history.search({
         text: '',
-        startTime: oneHundredEightyDaysAgo,
+        startTime: historyStartTime,
         maxResults: 50000
       }, resolve);
     });
 
     for (const item of historyItems) {
       if (!item.url) continue;
+      const urlKey = normalizeScoreUrlKey(item.url);
+      if (!urlKey) continue;
       const data = {
         visitCount: item.visitCount || 0,
         lastVisitTime: item.lastVisitTime || 0
       };
 
-      urlMap.set(item.url, data);
+      if (!urlMap.has(urlKey)) {
+        urlMap.set(urlKey, data);
+      } else {
+        const existing = urlMap.get(urlKey);
+        urlMap.set(urlKey, {
+          visitCount: (existing.visitCount || 0) + data.visitCount,
+          lastVisitTime: Math.max(existing.lastVisitTime || 0, data.lastVisitTime || 0)
+        });
+      }
 
       const title = item.title && item.title.trim();
       if (title) {
@@ -887,6 +997,21 @@ async function getBatchHistoryDataWithTitle() {
           });
         }
       }
+
+      try {
+        const domain = normalizeBlockedDomain(new URL(item.url).hostname);
+        if (domain) {
+          if (!domainMap.has(domain)) {
+            domainMap.set(domain, data);
+          } else {
+            const existing = domainMap.get(domain);
+            domainMap.set(domain, {
+              visitCount: existing.visitCount + data.visitCount,
+              lastVisitTime: Math.max(existing.lastVisitTime, data.lastVisitTime)
+            });
+          }
+        }
+      } catch (_) { }
     }
   } catch (e) {
     console.warn('[S-score] batch history load failed:', e);
@@ -894,10 +1019,11 @@ async function getBatchHistoryDataWithTitle() {
 
   const result = urlMap;
   result.titleMap = titleMap;
+  result.domainMap = domainMap;
   return result;
 }
 
-async function computeAllBookmarkScores() {
+async function computeAllBookmarkScores(options = {}) {
   if (isComputingScores) {
     return false;
   }
@@ -907,6 +1033,7 @@ async function computeAllBookmarkScores() {
   isComputingScores = true;
 
   try {
+    const forceFull = options && options.forceFull === true;
     const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
     const allBookmarks = [];
     function traverse(nodes, ancestors = []) {
@@ -925,11 +1052,9 @@ async function computeAllBookmarkScores() {
       return true;
     }
 
-    const [blocked, config, historyStats, trackingData, postponedList, reviewData] = await Promise.all([
+    const [blocked, config, postponedList, reviewData] = await Promise.all([
       getBlockedDataForScore(),
       getFormulaConfig(),
-      getBatchHistoryDataWithTitle(),
-      getTrackingDataForScore(),
       getPostponedBookmarksForScore(),
       getReviewDataForScore()
     ]);
@@ -938,7 +1063,7 @@ async function computeAllBookmarkScores() {
       if (blocked.domains.size === 0 || !bookmark.url) return false;
       try {
         const url = new URL(bookmark.url);
-        return blocked.domains.has(url.hostname);
+        return blocked.domains.has(normalizeBlockedDomain(url.hostname));
       } catch {
         return false;
       }
@@ -964,6 +1089,46 @@ async function computeAllBookmarkScores() {
     const nextMode = totalCount > SCORE_CACHE_COMPACT_THRESHOLD ? SCORE_CACHE_MODE_COMPACT : SCORE_CACHE_MODE_FULL;
     scoreCacheMode = nextMode;
     try { await browserAPI.storage.local.set({ [SCORE_CACHE_MODE_KEY]: nextMode }); } catch (_) { }
+
+    const existingCache = await getScoresCache();
+    const existingCount = Object.keys(existingCache).length;
+    const shouldBootstrap = !forceFull && existingCount === 0 && totalCount >= SCORE_BOOTSTRAP_THRESHOLD;
+
+    if (shouldBootstrap) {
+      const bootstrapBookmarks = pickBootstrapBookmarks(availableBookmarks, SCORE_BOOTSTRAP_LIMIT);
+      const historyStats = new Map();
+      const trackingData = { byUrl: new Map(), byTitle: new Map(), byBookmarkId: new Map(), totalMs: 0, totalCount: 0 };
+      const newCache = {};
+      let computedCount = 0;
+
+      for (const bookmark of bootstrapBookmarks) {
+        const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+        newCache[bookmark.id] = nextMode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+        computedCount += 1;
+        if (computedCount % 50 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+
+      await saveScoresCache(newCache);
+      try {
+        await browserAPI.storage.local.set({
+          recommendScoresStaleMeta: { staleAt: Date.now(), reason: 'bootstrap-partial' }
+        });
+      } catch (_) { }
+
+      isComputingScores = false;
+      scheduleRecomputeAllScoresSoon('bootstrap-full', { forceFull: true });
+      return true;
+    }
+
+    const [historyStats, trackingData] = await Promise.all([
+      getBatchHistoryDataWithTitle(),
+      getTrackingDataForScore()
+    ]);
+    try {
+      scoreDebugHistoryStatsCache = { loadedAt: Date.now(), stats: historyStats };
+    } catch (_) { }
 
     let batchCount = 1;
     if (totalCount > 1000) {
@@ -1016,13 +1181,28 @@ async function updateSingleBookmarkScore(bookmarkId) {
 
     const historyStats = new Map();
     if (browserAPI.history && bookmark.url) {
-      const visits = await new Promise(resolve => {
-        browserAPI.history.getVisits({ url: bookmark.url }, resolve);
-      });
-      historyStats.set(bookmark.url, {
-        visitCount: visits?.length || 0,
-        lastVisitTime: visits?.length > 0 ? Math.max(...visits.map(v => v.visitTime)) : 0
-      });
+      const urlKey = normalizeScoreUrlKey(bookmark.url);
+      if (urlKey) {
+        let visits = await new Promise(resolve => {
+          browserAPI.history.getVisits({ url: bookmark.url }, resolve);
+        });
+        if (!visits?.length) {
+          try {
+            const u = new URL(bookmark.url);
+            u.hash = '';
+            const canonicalUrl = u.href;
+            if (canonicalUrl && canonicalUrl !== bookmark.url) {
+              visits = await new Promise(resolve => {
+                browserAPI.history.getVisits({ url: canonicalUrl }, resolve);
+              });
+            }
+          } catch (_) { }
+        }
+        historyStats.set(urlKey, {
+          visitCount: visits?.length || 0,
+          lastVisitTime: visits?.length > 0 ? Math.max(...visits.map(v => v.visitTime)) : 0
+        });
+      }
 
       if (bookmark.title) {
         historyStats.titleMap = new Map();
@@ -1075,11 +1255,16 @@ async function scheduleScoreUpdateByUrl(url) {
     urlUpdateTimer = null;
 
     try {
+      const urlKeySet = new Set(urls.map(normalizeScoreUrlKey).filter(Boolean));
+      if (urlKeySet.size === 0) return;
       const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
       const bookmarks = [];
       function traverse(nodes) {
         for (const node of nodes) {
-          if (node.url && urls.includes(node.url)) bookmarks.push(node);
+          if (node.url) {
+            const key = normalizeScoreUrlKey(node.url);
+            if (key && urlKeySet.has(key)) bookmarks.push(node);
+          }
           if (node.children) traverse(node.children);
         }
       }
@@ -1094,13 +1279,14 @@ async function scheduleScoreUpdateByUrl(url) {
   }, 1000);
 }
 
-if (browserAPI.history && browserAPI.history.onVisited) {
-  browserAPI.history.onVisited.addListener((result) => {
-    if (result && result.url) {
-      scheduleScoreUpdateByUrl(result.url);
-    }
-  });
-}
+  if (browserAPI.history && browserAPI.history.onVisited) {
+    browserAPI.history.onVisited.addListener((result) => {
+      if (result && result.url) {
+        scheduleScoreUpdateByUrl(result.url);
+        invalidateScoreDebugHistoryStatsCache();
+      }
+    });
+  }
 
 browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
   noteBookmarkEventForBulkGuard('created');
@@ -1176,66 +1362,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   const action = message.action;
-
-  if (action === 'exportFileToClouds') {
-    (async () => {
-      try {
-        const fileName = String(message.fileName || '').trim();
-        const folderKey = String(message.folderKey || '').trim();
-        const contentType = message.contentType;
-        let contentArrayBuffer = message.contentArrayBuffer || null;
-
-        if (!contentArrayBuffer && message.contentBase64Binary) {
-          try {
-            const base64 = message.contentBase64Binary;
-            const binaryString = atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-            contentArrayBuffer = bytes.buffer;
-          } catch (e) {
-            console.error('[exportFileToClouds] Base64 解码失败:', e);
-          }
-        }
-
-        const content = message.content;
-        if (!fileName) throw new Error('缺少文件名');
-        if (!folderKey) throw new Error('缺少导出类型');
-        if (!contentArrayBuffer && (content == null || content === '')) throw new Error('缺少导出内容');
-
-        const lang = message.lang || await getCurrentLang();
-
-        const [webdav, githubRepo] = await Promise.all([
-          uploadExportFileToWebDAV({
-            lang,
-            folderKey,
-            fileName,
-            content,
-            contentArrayBuffer,
-            contentType
-          }),
-          uploadExportFileToGitHubRepo({
-            lang,
-            folderKey,
-            fileName,
-            content,
-            contentArrayBuffer
-          })
-        ]);
-
-        const success =
-          (webdav && webdav.success === true) || (githubRepo && githubRepo.success === true);
-
-        sendResponse({ success, webdav, githubRepo });
-      } catch (error) {
-        sendResponse({ success: false, error: error?.message || '导出到云端失败' });
-      }
-    })();
-
-    return true;
-  }
 
   if (action === 'extensionBookmarkOpen') {
     (async () => {
@@ -1411,7 +1537,8 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const ok = await computeAllBookmarkScores();
-        sendResponse({ success: true, computed: ok });
+        // success 表示“本次确实完成了计算并写入缓存”
+        sendResponse({ success: !!ok, computed: !!ok });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -1440,6 +1567,90 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await scheduleScoreUpdateByUrl(message.url);
         }
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'getBookmarkScoreDebug') {
+    (async () => {
+      try {
+        const bookmarkId = String(message.bookmarkId || '').trim();
+        if (!bookmarkId) {
+          sendResponse({ success: false, error: 'Missing bookmarkId' });
+          return;
+        }
+
+        const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get([bookmarkId], resolve));
+        const bookmark = bookmarks?.[0] || null;
+        if (!bookmark || !bookmark.url) {
+          sendResponse({ success: false, error: 'Bookmark not found or not a URL bookmark' });
+          return;
+        }
+
+        const [cache, mode, config, trackingData, postponedList, reviewData, meta] = await Promise.all([
+          getScoresCache(),
+          getScoreCacheMode(),
+          getFormulaConfig(),
+          getTrackingDataForScore(),
+          getPostponedBookmarksForScore(),
+          getReviewDataForScore(),
+          browserAPI.storage.local.get(['recommendScoresStaleMeta', 'bookmarkBulkChangeFlag', 'recommend_scores_time', SCORE_ALGO_VERSION_KEY])
+        ]);
+
+        const cachedEntry = cache[bookmarkId] || null;
+        const historyStats = await getHistoryStatsForScoreDebug();
+        const debug = calculateBookmarkScoreDebug(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+
+        const cachedS = typeof cachedEntry?.S === 'number' ? cachedEntry.S : null;
+        const computedS = typeof debug?.factors?.S === 'number' ? debug.factors.S : null;
+
+        const notes = [];
+        const trackingWarm = (trackingData?.totalMs || 0) >= TRACKING_WARMUP_MIN_MS
+          || (trackingData?.totalCount || 0) >= TRACKING_WARMUP_MIN_COUNT;
+        const trackingType = debug?.matches?.tracking?.type || 'none';
+        if (isBookmarkImporting) notes.push('importing: score recompute paused');
+        if (isBookmarkBulkChanging) notes.push('bulk-changing: score recompute paused');
+        if (meta?.bookmarkBulkChangeFlag) notes.push('bookmarkBulkChangeFlag=true');
+        if (!trackingWarm) notes.push('tracking cold-start: w3 disabled');
+        if (trackingType === 'none') notes.push('tracking miss: T neutral=0.5');
+        if (cachedEntry && cachedS != null && computedS != null && Math.abs(cachedS - computedS) > 0.02) {
+          notes.push(`cache differs from recompute: cached=${cachedS.toFixed(3)} vs recompute=${computedS.toFixed(3)}`);
+        }
+        if (!cachedEntry) notes.push('no cache entry for this bookmarkId');
+        if (cachedEntry && !('F' in cachedEntry)) notes.push('cache mode is compact (only S stored)');
+
+        // 诊断计算后顺手做一次增量缓存更新
+        let cacheUpdated = false;
+        const canUpdateCache = !isBookmarkImporting && !isBookmarkBulkChanging;
+        if (computedS != null && canUpdateCache) {
+          const shouldUpdate = !cachedEntry || cachedS == null || Math.abs(cachedS - computedS) > 1e-6;
+          if (shouldUpdate) {
+            cache[bookmarkId] = mode === SCORE_CACHE_MODE_FULL ? debug.factors : { S: computedS };
+            await saveScoresCache(cache);
+            cacheUpdated = true;
+          }
+        } else if (computedS != null && !canUpdateCache) {
+          notes.push('cache update skipped due to import/bulk');
+        }
+        if (cacheUpdated) notes.push('cache updated by debug');
+
+        sendResponse({
+          success: true,
+          debug: {
+            ...debug,
+            storage: {
+              cacheMode: mode,
+              cachedEntry: cachedEntry && typeof cachedEntry === 'object' ? cachedEntry : null,
+              recommendScoresTime: Number(meta?.recommend_scores_time || 0),
+              staleMeta: meta?.recommendScoresStaleMeta || null,
+              algoVersion: Number(meta?.[SCORE_ALGO_VERSION_KEY] || 0)
+            },
+            notes
+          }
+        });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
