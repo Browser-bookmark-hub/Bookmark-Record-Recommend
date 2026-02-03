@@ -2,7 +2,15 @@
 // 全局变量和常量
 // =============================================================================
 
-let currentLang = 'zh_CN';
+function detectDefaultLang() {
+    try {
+        const ui = (chrome?.i18n?.getUILanguage?.() || navigator.language || '').toLowerCase();
+        return ui.startsWith('zh') ? 'zh_CN' : 'en';
+    } catch (_) { }
+    return 'en';
+}
+
+let currentLang = detectDefaultLang();
 // [Init] Restore custom language from storage immediately
 try {
     const saved = localStorage.getItem('historyViewerCustomLang');
@@ -10,11 +18,7 @@ try {
         currentLang = saved;
         // console.log('[History Viewer] Restored language:', currentLang);
     } else {
-        try {
-            const ui = (chrome?.i18n?.getUILanguage?.() || '').toLowerCase();
-            currentLang = ui.startsWith('zh') ? 'zh_CN' : 'en';
-        } catch (e) {
-        }
+        currentLang = detectDefaultLang();
     }
 } catch (e) { }
 
@@ -1859,7 +1863,9 @@ function getLangOverride() {
 async function loadUserSettings() {
     return new Promise((resolve) => {
         browserAPI.storage.local.get(['preferredLang', 'currentTheme'], (result) => {
-            const mainUILang = result.preferredLang || 'zh_CN';
+            const mainUILang = (result.preferredLang === 'zh_CN' || result.preferredLang === 'en')
+                ? result.preferredLang
+                : detectDefaultLang();
             const prefersDark = typeof window !== 'undefined'
                 && window.matchMedia
                 && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1885,7 +1891,8 @@ async function loadUserSettings() {
             }
 
             // 应用主题
-            document.documentElement.setAttribute('data-theme', currentTheme);
+            if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+            else document.documentElement.removeAttribute('data-theme');
 
             // 更新主题切换按钮图标
             const themeIcon = document.querySelector('#themeToggle i');
@@ -1908,6 +1915,9 @@ async function loadUserSettings() {
 }
 
 function applyLanguage() {
+    try {
+        document.documentElement.lang = currentLang === 'zh_CN' ? 'zh' : 'en';
+    } catch (_) { }
     document.getElementById('pageTitle').textContent = i18n.pageTitle[currentLang];
     const subtitleEl = document.getElementById('pageSubtitle');
     if (subtitleEl) {
@@ -12022,7 +12032,8 @@ function searchAdditions(query) {
 
 function toggleTheme() {
     currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', currentTheme);
+    if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
 
     // 设置覆盖标志
     try {
@@ -12154,7 +12165,8 @@ function handleStorageChange(changes, namespace) {
         const newTheme = changes.currentTheme.newValue;
         console.log('[存储监听] 主题变化，跟随主UI:', newTheme);
         currentTheme = newTheme;
-        document.documentElement.setAttribute('data-theme', currentTheme);
+        if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+        else document.documentElement.removeAttribute('data-theme');
 
         // 更新主题切换按钮图标
         const icon = document.querySelector('#themeToggle i');
@@ -12165,7 +12177,9 @@ function handleStorageChange(changes, namespace) {
 
     // 语言变化（只在没有覆盖设置时跟随主UI）
     if (changes.preferredLang && !hasLangOverride()) {
-        const newLang = changes.preferredLang.newValue;
+        const newLang = (changes.preferredLang.newValue === 'zh_CN' || changes.preferredLang.newValue === 'en')
+            ? changes.preferredLang.newValue
+            : detectDefaultLang();
         console.log('[存储监听] 语言变化，跟随主UI:', newLang);
         currentLang = newLang;
         window.currentLang = currentLang; // 同步到 window

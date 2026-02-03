@@ -54,7 +54,15 @@ const DEFAULT_RECOMMEND_REFRESH_SETTINGS = {
 
 const POPUP_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
 
-let popupRecommendLang = 'zh_CN';
+function detectDefaultLang() {
+  try {
+    const ui = (browserAPI?.i18n?.getUILanguage?.() || navigator.language || '').toLowerCase();
+    return ui.startsWith('zh') ? 'zh_CN' : 'en';
+  } catch (_) {}
+  return 'en';
+}
+
+let popupRecommendLang = detectDefaultLang();
 let popupRecommendCards = [];
 const popupSkippedBookmarks = new Set();
 let popupRecommendLoading = false;
@@ -160,11 +168,11 @@ function setPreferredLang(lang) {
 function loadPreferredLang() {
   return new Promise((resolve) => {
     if (!browserAPI?.storage?.local) {
-      resolve('zh_CN');
+      resolve(detectDefaultLang());
       return;
     }
     browserAPI.storage.local.get(['preferredLang'], (data) => {
-      resolve(data.preferredLang || 'zh_CN');
+      resolve(data.preferredLang || detectDefaultLang());
     });
   });
 }
@@ -1715,7 +1723,10 @@ async function refreshPopupRecommendCards(force = false) {
 }
 
 function updatePopupLanguage(lang) {
-  popupRecommendLang = lang || 'zh_CN';
+  popupRecommendLang = lang || detectDefaultLang();
+  try {
+    document.documentElement.lang = popupRecommendLang === 'zh_CN' ? 'zh' : 'en';
+  } catch (_) {}
   const pageTitleElement = document.getElementById('pageTitleElement');
   if (pageTitleElement) pageTitleElement.textContent = getPopupText('pageTitle', popupRecommendLang);
 
@@ -1923,7 +1934,7 @@ function setupStorageSync() {
   browserAPI.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
     if (changes.preferredLang) {
-      const nextLang = changes.preferredLang.newValue || 'zh_CN';
+      const nextLang = changes.preferredLang.newValue || detectDefaultLang();
       updatePopupLanguage(nextLang);
       updateTrackingWidget();
       updateRankingWidget();
@@ -1950,7 +1961,7 @@ function initPopup() {
   setupLanguageToggle();
 
   loadPreferredLang().then((lang) => {
-    updatePopupLanguage(lang || 'zh_CN');
+    updatePopupLanguage(lang || detectDefaultLang());
     return loadPopupShortcuts();
   }).then(async () => {
     updatePopupLanguage(popupRecommendLang);
