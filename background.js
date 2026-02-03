@@ -532,6 +532,138 @@ setupAutoBookmarkOpenMonitoring();
 // =================================================================================
 
 let isComputingScores = false;
+let isBookmarkImporting = false;
+let isBookmarkBulkChanging = false;
+let bookmarkBulkWindowStart = 0;
+let bookmarkBulkEventCount = 0;
+let bookmarkBulkExitTimer = null;
+let scheduledRecomputeTimer = null;
+let lastBulkReason = '';
+let scoreCacheMode = null;
+
+const BOOKMARK_BULK_WINDOW_MS = 800;
+const BOOKMARK_BULK_THRESHOLD = 8;
+const BOOKMARK_BULK_QUIET_MS = 5000;
+
+const SCORE_CACHE_MODE_KEY = 'recommend_scores_cache_mode';
+const SCORE_CACHE_MODE_FULL = 'full';
+const SCORE_CACHE_MODE_COMPACT = 'compact';
+const SCORE_CACHE_COMPACT_THRESHOLD = 8000;
+
+async function invalidateRecommendCaches(reason = '') {
+  try {
+    await browserAPI.storage.local.set({
+      recommend_scores_cache: {},
+      recommend_scores_time: 0,
+      [SCORE_CACHE_MODE_KEY]: SCORE_CACHE_MODE_COMPACT,
+      recommendScoresStaleMeta: {
+        staleAt: Date.now(),
+        reason: reason || 'unknown'
+      }
+    });
+  } catch (_) { }
+  scoreCacheMode = SCORE_CACHE_MODE_COMPACT;
+
+  // 推荐卡片状态依赖 bookmarkId：批量导入/删除/移动后可能大量失效
+  try {
+    await browserAPI.storage.local.remove(['popupCurrentCards']);
+  } catch (_) { }
+}
+
+function scheduleBookmarkBulkExit() {
+  if (bookmarkBulkExitTimer) {
+    clearTimeout(bookmarkBulkExitTimer);
+  }
+  bookmarkBulkExitTimer = setTimeout(() => {
+    bookmarkBulkExitTimer = null;
+    exitBookmarkBulkChangeMode().catch(() => { });
+  }, BOOKMARK_BULK_QUIET_MS);
+}
+
+function scheduleRecomputeAllScoresSoon(reason = '') {
+  if (scheduledRecomputeTimer) clearTimeout(scheduledRecomputeTimer);
+  scheduledRecomputeTimer = setTimeout(() => {
+    scheduledRecomputeTimer = null;
+    if (isBookmarkImporting || isBookmarkBulkChanging) return;
+    computeAllBookmarkScores()
+      .then(() => {
+        try {
+          browserAPI.storage.local.set({
+            recommendScoresStaleMeta: { staleAt: 0, reason: reason || '' }
+          });
+        } catch (_) { }
+      })
+      .catch(() => { });
+  }, 800);
+}
+
+async function getScoreCacheMode() {
+  if (scoreCacheMode === SCORE_CACHE_MODE_FULL || scoreCacheMode === SCORE_CACHE_MODE_COMPACT) {
+    return scoreCacheMode;
+  }
+  try {
+    const result = await browserAPI.storage.local.get([SCORE_CACHE_MODE_KEY]);
+    const mode = result?.[SCORE_CACHE_MODE_KEY];
+    scoreCacheMode = mode === SCORE_CACHE_MODE_FULL ? SCORE_CACHE_MODE_FULL : SCORE_CACHE_MODE_COMPACT;
+    return scoreCacheMode;
+  } catch (_) {
+    scoreCacheMode = SCORE_CACHE_MODE_COMPACT;
+    return scoreCacheMode;
+  }
+}
+
+async function enterBookmarkBulkChangeMode(reason = '') {
+  if (isBookmarkBulkChanging) {
+    scheduleBookmarkBulkExit();
+    return;
+  }
+
+  isBookmarkBulkChanging = true;
+  lastBulkReason = reason || 'unknown';
+  try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: true }); } catch (_) { }
+  await invalidateRecommendCaches(`bulk:${reason || 'unknown'}`);
+  scheduleBookmarkBulkExit();
+}
+
+async function exitBookmarkBulkChangeMode() {
+  if (!isBookmarkBulkChanging) return;
+
+  isBookmarkBulkChanging = false;
+  bookmarkBulkWindowStart = 0;
+  bookmarkBulkEventCount = 0;
+  try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: false }); } catch (_) { }
+
+  // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
+  const reason = String(lastBulkReason || '');
+  if (!reason.startsWith('import')) {
+    scheduleRecomputeAllScoresSoon('bulk-exit');
+  }
+}
+
+function noteBookmarkEventForBulkGuard(eventType = '') {
+  // 导入本身有独立 flag：不需要通过计数进入 bulk
+  // 重要：导入期间事件极多，频繁 clearTimeout/setTimeout 也会带来额外卡顿
+  if (isBookmarkImporting) {
+    return;
+  }
+
+  const now = Date.now();
+  if (!bookmarkBulkWindowStart || now - bookmarkBulkWindowStart > BOOKMARK_BULK_WINDOW_MS) {
+    bookmarkBulkWindowStart = now;
+    bookmarkBulkEventCount = 0;
+  }
+
+  bookmarkBulkEventCount += 1;
+
+  if (!isBookmarkBulkChanging && bookmarkBulkEventCount >= BOOKMARK_BULK_THRESHOLD) {
+    enterBookmarkBulkChangeMode(eventType || 'events').catch(() => { });
+    return;
+  }
+
+  if (isBookmarkBulkChanging) {
+    scheduleBookmarkBulkExit();
+  }
+}
 
 async function getFormulaConfig() {
   const result = await browserAPI.storage.local.get(['recommendFormulaConfig', 'trackingEnabled']);
@@ -769,6 +901,9 @@ async function computeAllBookmarkScores() {
   if (isComputingScores) {
     return false;
   }
+  if (isBookmarkImporting) {
+    return false;
+  }
   isComputingScores = true;
 
   try {
@@ -826,6 +961,10 @@ async function computeAllBookmarkScores() {
     );
 
     const totalCount = availableBookmarks.length;
+    const nextMode = totalCount > SCORE_CACHE_COMPACT_THRESHOLD ? SCORE_CACHE_MODE_COMPACT : SCORE_CACHE_MODE_FULL;
+    scoreCacheMode = nextMode;
+    try { await browserAPI.storage.local.set({ [SCORE_CACHE_MODE_KEY]: nextMode }); } catch (_) { }
+
     let batchCount = 1;
     if (totalCount > 1000) {
       batchCount = 3;
@@ -835,6 +974,7 @@ async function computeAllBookmarkScores() {
     const batchSize = Math.ceil(totalCount / batchCount);
 
     const newCache = {};
+    let computedCount = 0;
     for (let i = 0; i < batchCount; i++) {
       const start = i * batchSize;
       const end = Math.min(start + batchSize, totalCount);
@@ -842,7 +982,12 @@ async function computeAllBookmarkScores() {
 
       for (const bookmark of batchBookmarks) {
         const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
-        newCache[bookmark.id] = scores;
+        newCache[bookmark.id] = nextMode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+        computedCount += 1;
+        // 大量书签时让出事件循环，避免 service worker 长时间无响应
+        if (computedCount % 50 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
       }
 
       if (i < batchCount - 1) {
@@ -862,10 +1007,12 @@ async function computeAllBookmarkScores() {
 
 async function updateSingleBookmarkScore(bookmarkId) {
   try {
+    if (isBookmarkImporting || isBookmarkBulkChanging) return;
     const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get([bookmarkId], resolve));
     if (!bookmarks || bookmarks.length === 0) return;
 
     const bookmark = bookmarks[0];
+    if (!bookmark || !bookmark.url) return;
 
     const historyStats = new Map();
     if (browserAPI.history && bookmark.url) {
@@ -904,8 +1051,9 @@ async function updateSingleBookmarkScore(bookmarkId) {
     ]);
 
     const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+    const mode = await getScoreCacheMode();
     const cache = await getScoresCache();
-    cache[bookmarkId] = scores;
+    cache[bookmarkId] = mode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
     await saveScoresCache(cache);
   } catch (e) {
     console.warn('[S-score] incremental update failed:', e);
@@ -955,12 +1103,20 @@ if (browserAPI.history && browserAPI.history.onVisited) {
 }
 
 browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
+  noteBookmarkEventForBulkGuard('created');
+  if (isBookmarkImporting || isBookmarkBulkChanging) {
+    return;
+  }
   if (bookmark.url) {
     setTimeout(() => updateSingleBookmarkScore(id), 500);
   }
 });
 
 browserAPI.bookmarks.onRemoved.addListener(async (id) => {
+  noteBookmarkEventForBulkGuard('removed');
+  if (isBookmarkImporting || isBookmarkBulkChanging) {
+    return;
+  }
   const cache = await getScoresCache();
   if (cache[id]) {
     delete cache[id];
@@ -969,6 +1125,10 @@ browserAPI.bookmarks.onRemoved.addListener(async (id) => {
 });
 
 browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+  noteBookmarkEventForBulkGuard('changed');
+  if (isBookmarkImporting || isBookmarkBulkChanging) {
+    return;
+  }
   if (changeInfo.url || changeInfo.title) {
     await updateSingleBookmarkScore(id);
     if (changeInfo.url) {
@@ -981,6 +1141,29 @@ browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
     }
   }
 });
+
+// 移动/重排不直接影响 S 值公式，但在大批量移动时会触发事件风暴：用 bulk guard 兜底降噪
+if (browserAPI.bookmarks.onMoved) {
+  browserAPI.bookmarks.onMoved.addListener(() => {
+    noteBookmarkEventForBulkGuard('moved');
+  });
+}
+
+// Chrome 书签管理器“导入书签”会触发 onImportBegan/onImportEnded（并伴随大量 onCreated/onMoved 等）
+try {
+  if (browserAPI.bookmarks.onImportBegan) {
+    browserAPI.bookmarks.onImportBegan.addListener(() => {
+      isBookmarkImporting = true;
+      enterBookmarkBulkChangeMode('import').catch(() => { });
+    });
+  }
+  if (browserAPI.bookmarks.onImportEnded) {
+    browserAPI.bookmarks.onImportEnded.addListener(() => {
+      isBookmarkImporting = false;
+      scheduleBookmarkBulkExit();
+    });
+  }
+} catch (_) { }
 
 // =================================================================================
 // Runtime message handler

@@ -884,6 +884,54 @@ let bookmarkTitleToOriginal = new Map();  // 规范化标题 -> 原始书签标�
 let bookmarkTitleToId = new Map();        // 规范化标题 -> 书签ID
 let bookmarkIdToParentIds = new Map();    // 书签ID -> 父级文件夹链
 
+// =============================================================================
+// 书签导入/批量变化保护
+// - 导入会触发海量 onCreated/onChanged/onMoved，若每次都 rebuildBookmarkCache() 会把浏览器拖死
+// - 策略：事件期间仅做防抖，导入结束后统一重建一次
+// =============================================================================
+
+let isBookmarkImporting = false;
+let bookmarkCacheRebuildTimer = null;
+let bookmarkCacheRebuildPending = false;
+let lastBookmarkCacheRebuildAt = 0;
+
+const BOOKMARK_CACHE_REBUILD_DEBOUNCE_MS = 1500;
+const BOOKMARK_CACHE_REBUILD_MIN_INTERVAL_MS = 2000;
+
+function scheduleBookmarkCacheRebuild(reason = 'bookmark-change') {
+    if (!trackingEnabled) return;
+
+    bookmarkCacheRebuildPending = true;
+
+    if (isBookmarkImporting) {
+        // 导入期间不做 rebuild（等 onImportEnded 后再统一做一次）
+        return;
+    }
+
+    if (bookmarkCacheRebuildTimer) {
+        clearTimeout(bookmarkCacheRebuildTimer);
+    }
+
+    bookmarkCacheRebuildTimer = setTimeout(async () => {
+        bookmarkCacheRebuildTimer = null;
+        if (!bookmarkCacheRebuildPending) return;
+        if (isBookmarkImporting || !trackingEnabled) return;
+
+        const now = Date.now();
+        if (lastBookmarkCacheRebuildAt && now - lastBookmarkCacheRebuildAt < BOOKMARK_CACHE_REBUILD_MIN_INTERVAL_MS) {
+            scheduleBookmarkCacheRebuild('min-interval');
+            return;
+        }
+
+        bookmarkCacheRebuildPending = false;
+        lastBookmarkCacheRebuildAt = now;
+
+        try {
+            await rebuildBookmarkCache();
+        } catch (_) { }
+    }, BOOKMARK_CACHE_REBUILD_DEBOUNCE_MS);
+}
+
 function normalizeUrl(url) {
     if (!url) return null;
     try {
@@ -2335,11 +2383,7 @@ function setupEventListeners() {
 
     // 书签变化时重建缓存
     if (browserAPI.bookmarks) {
-        const rebuildCache = () => {
-            if (trackingEnabled) {
-                rebuildBookmarkCache();
-            }
-        };
+        const rebuildCache = () => scheduleBookmarkCacheRebuild('bookmarks-event');
 
         if (browserAPI.bookmarks.onCreated) {
             browserAPI.bookmarks.onCreated.addListener(rebuildCache);
@@ -2348,6 +2392,11 @@ function setupEventListeners() {
         // 书签删除时：删除对应的时间记录，然后重建缓存
         if (browserAPI.bookmarks.onRemoved) {
             browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
+                // 导入/批量期间跳过逐条清理，避免 IndexedDB 风暴；导入结束后会统一 rebuild 缓存
+                if (isBookmarkImporting) {
+                    scheduleBookmarkCacheRebuild('import-remove');
+                    return;
+                }
                 const node = removeInfo.node;
                 if (node && node.url) {
                     // 删除该 URL 的时间记录
@@ -2372,6 +2421,30 @@ function setupEventListeners() {
         if (browserAPI.bookmarks.onChanged) {
             browserAPI.bookmarks.onChanged.addListener(rebuildCache);
         }
+
+        if (browserAPI.bookmarks.onMoved) {
+            browserAPI.bookmarks.onMoved.addListener(rebuildCache);
+        }
+
+        // Chrome 书签管理器导入：导入期间禁止频繁 rebuild，导入结束统一 rebuild 一次
+        try {
+            if (browserAPI.bookmarks.onImportBegan) {
+                browserAPI.bookmarks.onImportBegan.addListener(() => {
+                    isBookmarkImporting = true;
+                    bookmarkCacheRebuildPending = true;
+                    if (bookmarkCacheRebuildTimer) {
+                        clearTimeout(bookmarkCacheRebuildTimer);
+                        bookmarkCacheRebuildTimer = null;
+                    }
+                });
+            }
+            if (browserAPI.bookmarks.onImportEnded) {
+                browserAPI.bookmarks.onImportEnded.addListener(() => {
+                    isBookmarkImporting = false;
+                    scheduleBookmarkCacheRebuild('import-ended');
+                });
+            }
+        } catch (_) { }
     }
 
     // Service Worker 暂停时保存所有活跃会话
