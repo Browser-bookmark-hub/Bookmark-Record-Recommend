@@ -1443,7 +1443,7 @@ body {
 .additions-tabs {
     display: flex;
     gap: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 8px;
 }
 
 .additions-tab {
@@ -1485,12 +1485,17 @@ body {
     display: block;
 }
 
+#additionsTrackingPanel {
+    margin-top: 23.5px;
+}
+
 /* 浏览记录子标签样式 */
 .browsing-sub-tabs {
     display: flex;
     gap: 8px;
-    margin-bottom: 16px;
-    padding-top: 8px;
+    margin-top: 15px;
+    margin-bottom: 12px;
+    padding-top: 0;
     justify-content: center;
 }
 
@@ -8422,12 +8427,13 @@ a.tree-label.tree-bookmark-link:hover {
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     border-radius: 8px 8px 0 0;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 }
 
 .tracking-panel-title {
     font-size: 13px;
     color: var(--text-secondary);
+    line-height: 1.2;
 }
 
 .tracking-panel-actions {
@@ -8552,6 +8558,7 @@ a.tree-label.tree-bookmark-link:hover {
     font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
+    line-height: 1.2;
 }
 
 .tracking-section-title i {
