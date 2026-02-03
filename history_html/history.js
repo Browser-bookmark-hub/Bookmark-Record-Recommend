@@ -2928,11 +2928,9 @@ function initSidebarToggle() {
     function updateWidgetToggleBtn() {
         const btn = document.getElementById('timeTrackingToggleViewBtn');
         if (btn) {
-            // 检查 CSS 类折叠状态 或 视觉上的折叠状态 (即宽度小于阈值，例如150px)
-            // 这样能涵盖"自动收缩"但没有collapsed类的情况
+            // 覆盖手动收起 + 自动收缩（宽度阈值更高）
             const isClassCollapsed = sidebar.classList.contains('collapsed');
-            const isVisuallyCollapsed = sidebar.offsetWidth < 150;
-
+            const isVisuallyCollapsed = sidebar.offsetWidth < 230;
             btn.style.display = (isClassCollapsed || isVisuallyCollapsed) ? 'none' : '';
         }
     }
@@ -2975,6 +2973,14 @@ function initSidebarToggle() {
         syncSidebarWidth();
         updateWidgetToggleBtn();
     });
+
+    // 监听侧边栏真实尺寸变化，避免非 resize 场景下按钮状态错误
+    try {
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => updateWidgetToggleBtn());
+            ro.observe(sidebar);
+        }
+    } catch (_) { }
 }
 
 // =============================================================================
