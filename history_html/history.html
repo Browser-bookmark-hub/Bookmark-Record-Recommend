@@ -250,6 +250,7 @@
                                 </li>
                                 <li id="formulaHelpNote2"><strong>D</strong> 使用正向模式：未访问天数越多，遗忘度越高</li>
                                 <li id="formulaHelpNote3"><strong>L</strong> 是布尔值：手动添加=1，否则=0</li>
+                                <li id="formulaHelpNote4"><strong>备份恢复</strong>：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失</li>
                             </ul>
                         </div>
 
@@ -925,16 +926,20 @@
                                 </div>
                                 <div class="formula-thresholds-wrapper">
                                     <div class="formula-thresholds">
-                                        <span class="threshold-item">F = 1/(1+(添加天数/<input type="text"
+                                        <span class="threshold-item">F = 1/(1+(<span
+                                                id="thresholdFreshnessLabel">添加天数</span>/<input type="text"
                                                 class="threshold-value" id="thresholdFreshness" value="30">)⁰·⁷)</span>
-                                        <span class="threshold-item">C = 1/(1+(点击数/<input type="text"
+                                        <span class="threshold-item">C = 1/(1+(<span
+                                                id="thresholdColdnessLabel">点击数</span>/<input type="text"
                                                 class="threshold-value" id="thresholdColdness" value="10">)⁰·⁷)</span>
-                                        <span class="threshold-item">T = 1/(1+(综合时间/<input type="text"
+                                        <span class="threshold-item">T = 1/(1+(<span
+                                                id="thresholdTimeDegreeLabel">综合时间</span>/<input type="text"
                                                 class="threshold-value" id="thresholdTimeDegree"
-                                                value="5">分钟)⁰·⁷)</span>
-                                        <span class="threshold-item">D = 1-1/(1+(未访问/<input type="text"
+                                                value="5"><span id="thresholdMinutesUnit">分钟</span>)⁰·⁷)</span>
+                                        <span class="threshold-item">D = 1-1/(1+(<span
+                                                id="thresholdForgettingLabel">未访问</span>/<input type="text"
                                                 class="threshold-value" id="thresholdForgetting"
-                                                value="14">天)⁰·⁷)</span>
+                                                value="14"><span id="thresholdDaysUnit">天</span>)⁰·⁷)</span>
                                         <span class="threshold-item" id="thresholdLaterReviewItem">L = <span
                                                 id="laterReviewStatus">0</span><span
                                                 id="laterReviewDesc">（手动添加后=1）</span></span>

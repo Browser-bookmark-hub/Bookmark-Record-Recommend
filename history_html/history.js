@@ -1321,6 +1321,24 @@ const i18n = {pageTitle: {
     },legendTimeDegree: {
         'zh_CN': '时间度',
         'en': 'Time Degree'
+    },thresholdFreshnessLabel: {
+        'zh_CN': '添加天数',
+        'en': 'Days since added'
+    },thresholdColdnessLabel: {
+        'zh_CN': '点击数',
+        'en': 'Click count'
+    },thresholdTimeDegreeLabel: {
+        'zh_CN': '综合时间',
+        'en': 'Composite time'
+    },thresholdMinutesUnit: {
+        'zh_CN': '分钟',
+        'en': ' min'
+    },thresholdForgettingLabel: {
+        'zh_CN': '未访问',
+        'en': 'Unvisited'
+    },thresholdDaysUnit: {
+        'zh_CN': '天',
+        'en': ' days'
     },legendForgetting: {
         'zh_CN': '遗忘度',
         'en': 'Forgetting'
@@ -2148,6 +2166,18 @@ function applyLanguage() {
     if (recallDesc) recallDesc.textContent = i18n.recallDesc[currentLang];
     const laterReviewDesc = document.getElementById('laterReviewDesc');
     if (laterReviewDesc) laterReviewDesc.textContent = i18n.laterReviewDesc[currentLang];
+    const thresholdFreshnessLabel = document.getElementById('thresholdFreshnessLabel');
+    if (thresholdFreshnessLabel) thresholdFreshnessLabel.textContent = i18n.thresholdFreshnessLabel[currentLang];
+    const thresholdColdnessLabel = document.getElementById('thresholdColdnessLabel');
+    if (thresholdColdnessLabel) thresholdColdnessLabel.textContent = i18n.thresholdColdnessLabel[currentLang];
+    const thresholdTimeDegreeLabel = document.getElementById('thresholdTimeDegreeLabel');
+    if (thresholdTimeDegreeLabel) thresholdTimeDegreeLabel.textContent = i18n.thresholdTimeDegreeLabel[currentLang];
+    const thresholdMinutesUnit = document.getElementById('thresholdMinutesUnit');
+    if (thresholdMinutesUnit) thresholdMinutesUnit.textContent = i18n.thresholdMinutesUnit[currentLang];
+    const thresholdForgettingLabel = document.getElementById('thresholdForgettingLabel');
+    if (thresholdForgettingLabel) thresholdForgettingLabel.textContent = i18n.thresholdForgettingLabel[currentLang];
+    const thresholdDaysUnit = document.getElementById('thresholdDaysUnit');
+    if (thresholdDaysUnit) thresholdDaysUnit.textContent = i18n.thresholdDaysUnit[currentLang];
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
         const id = btn.getAttribute('data-mode');
@@ -4145,6 +4175,12 @@ function updateFormulaHelpModalI18n() {
     document.getElementById('formulaHelpNote3').innerHTML = isEn
         ? '<strong>L</strong> is boolean: manually added = 1, otherwise = 0'
         : '<strong>L</strong> 是布尔值：手动添加=1，否则=0';
+    const note4 = document.getElementById('formulaHelpNote4');
+    if (note4) {
+        note4.innerHTML = isEn
+            ? '<strong>Backup restore</strong>: Restoring bookmarks via other tools may reassign bookmark IDs, so history and recommendation state can be lost'
+            : '<strong>备份恢复</strong>：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失';
+    }
 }
 
 // 推荐卡片数据
