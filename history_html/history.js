@@ -1033,6 +1033,9 @@ const i18n = {pageTitle: {
     },calendarWeek: {
         'zh_CN': '第{0}周',
         'en': 'Week {0}'
+    },calendarWeekLabel: {
+        'zh_CN': '周',
+        'en': 'Week'
     },calendarMonth: {
         'zh_CN': '{0}月',
         'en': 'Month {0}'
