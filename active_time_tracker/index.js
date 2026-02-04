@@ -18,6 +18,7 @@ const CONFIG = {
     SLEEP_THRESHOLD_MS: 5000,         // 休眠判定阈值：时间跳跃>5秒视为休眠
     AUTO_BOOKMARK_ATTRIBUTION_TTL_MS: 6 * 60 * 60 * 1000, // 书签打开归因TTL：6小时
     AUTO_BOOKMARK_REDIRECT_WINDOW_MS: 15000, // 仅把“打开后短时间内的跳转/重定向”算作同一次书签打开
+    TRACKING_STATS_MAX_ENTRIES: 0,
     DB_NAME: 'BookmarkActiveTimeDB',
     DB_VERSION: 1,
     STORE_NAME: 'active_sessions'
@@ -305,10 +306,25 @@ async function updateTrackingStats(record) {
             stats[key].bookmarkId = record.bookmarkId;
         }
 
+        pruneTrackingStats(stats, now);
+
         await browserAPI.storage.local.set({ trackingStats: stats });
         console.log('[ActiveTimeTracker] 累积统计已更新:', key);
     } catch (error) {
         console.warn('[ActiveTimeTracker] 更新累积统计失败:', error);
+    }
+}
+
+function pruneTrackingStats(stats, now) {
+    if (!stats || typeof stats !== 'object') return;
+    const keys = Object.keys(stats);
+    const maxEntries = CONFIG.TRACKING_STATS_MAX_ENTRIES;
+    if (maxEntries && keys.length > maxEntries) {
+        keys.sort((a, b) => (stats[a]?.lastUpdate || 0) - (stats[b]?.lastUpdate || 0));
+        const removeCount = keys.length - maxEntries;
+        for (let i = 0; i < removeCount; i += 1) {
+            delete stats[keys[i]];
+        }
     }
 }
 
@@ -542,9 +558,11 @@ async function syncTrackingData() {
 
         if (diff.added.length > 0 || diff.removed.length > 0 || diff.updated.length > 0) {
             console.log('[ActiveTimeTracker] 发现数据不一致:', diff);
+            pruneTrackingStats(recalculatedStats, Date.now());
+            const prunedKeys = Object.keys(recalculatedStats);
             await browserAPI.storage.local.set({ trackingStats: recalculatedStats });
-            console.log('[ActiveTimeTracker] 已同步 trackingStats，共', recalcKeys.length, '条记录');
-            return { synced: true, diff, totalRecords: recalcKeys.length };
+            console.log('[ActiveTimeTracker] 已同步 trackingStats，共', prunedKeys.length, '条记录');
+            return { synced: true, diff, totalRecords: prunedKeys.length };
         }
 
         console.log('[ActiveTimeTracker] 数据一致，无需同步');

@@ -454,6 +454,7 @@ async function enterBookmarkBulkChangeMode(reason = '') {
   lastBulkReason = reason || 'unknown';
   try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: true }); } catch (_) { }
   await invalidateRecommendCaches(`bulk:${reason || 'unknown'}`);
+  clearBookmarkUrlIndex();
   scheduleBookmarkBulkExit();
 }
 
@@ -562,6 +563,110 @@ function normalizeScoreUrlKey(url) {
   } catch (_) {
     return String(url);
   }
+}
+
+let bookmarkUrlIndexReady = false;
+let bookmarkUrlIndexBuilding = null;
+let bookmarkUrlIndexStale = false;
+const bookmarkUrlIndex = new Map(); // urlKey -> Set<bookmarkId>
+const bookmarkIdToUrlKey = new Map();
+
+function clearBookmarkUrlIndex() {
+  bookmarkUrlIndex.clear();
+  bookmarkIdToUrlKey.clear();
+  bookmarkUrlIndexReady = false;
+  bookmarkUrlIndexStale = true;
+}
+
+function addBookmarkToUrlIndex(bookmark) {
+  if (!bookmark || !bookmark.id || !bookmark.url) return;
+  const key = normalizeScoreUrlKey(bookmark.url);
+  if (!key) return;
+  let set = bookmarkUrlIndex.get(key);
+  if (!set) {
+    set = new Set();
+    bookmarkUrlIndex.set(key, set);
+  }
+  set.add(bookmark.id);
+  bookmarkIdToUrlKey.set(bookmark.id, key);
+}
+
+function removeBookmarkFromUrlIndex(bookmarkId) {
+  if (!bookmarkId) return;
+  const key = bookmarkIdToUrlKey.get(bookmarkId);
+  if (!key) return;
+  const set = bookmarkUrlIndex.get(key);
+  if (set) {
+    set.delete(bookmarkId);
+    if (set.size === 0) {
+      bookmarkUrlIndex.delete(key);
+    }
+  }
+  bookmarkIdToUrlKey.delete(bookmarkId);
+}
+
+function updateBookmarkUrlIndex(bookmarkId, newUrl) {
+  removeBookmarkFromUrlIndex(bookmarkId);
+  if (!newUrl) return;
+  const key = normalizeScoreUrlKey(newUrl);
+  if (!key) return;
+  let set = bookmarkUrlIndex.get(key);
+  if (!set) {
+    set = new Set();
+    bookmarkUrlIndex.set(key, set);
+  }
+  set.add(bookmarkId);
+  bookmarkIdToUrlKey.set(bookmarkId, key);
+}
+
+async function buildBookmarkUrlIndex() {
+  const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+  const nextIndex = new Map();
+  const nextIdMap = new Map();
+
+  function traverse(nodes) {
+    for (const node of nodes) {
+      if (node.url) {
+        const key = normalizeScoreUrlKey(node.url);
+        if (key) {
+          let set = nextIndex.get(key);
+          if (!set) {
+            set = new Set();
+            nextIndex.set(key, set);
+          }
+          set.add(node.id);
+          nextIdMap.set(node.id, key);
+        }
+      }
+      if (node.children) traverse(node.children);
+    }
+  }
+
+  traverse(tree);
+
+  bookmarkUrlIndex.clear();
+  bookmarkIdToUrlKey.clear();
+  for (const [key, set] of nextIndex.entries()) {
+    bookmarkUrlIndex.set(key, set);
+  }
+  for (const [id, key] of nextIdMap.entries()) {
+    bookmarkIdToUrlKey.set(id, key);
+  }
+  bookmarkUrlIndexReady = true;
+  bookmarkUrlIndexStale = false;
+}
+
+async function ensureBookmarkUrlIndex() {
+  if (bookmarkUrlIndexReady && !bookmarkUrlIndexStale) return true;
+  if (bookmarkUrlIndexBuilding) return bookmarkUrlIndexBuilding;
+  if (isBookmarkImporting || isBookmarkBulkChanging) return false;
+  bookmarkUrlIndexBuilding = buildBookmarkUrlIndex()
+    .then(() => true)
+    .catch(() => false)
+    .finally(() => {
+      bookmarkUrlIndexBuilding = null;
+    });
+  return bookmarkUrlIndexBuilding;
 }
 
 async function getBlockedDataForScore() {
@@ -1244,6 +1349,7 @@ let pendingUrlUpdates = new Set();
 let urlUpdateTimer = null;
 
 async function scheduleScoreUpdateByUrl(url) {
+  if (isBookmarkImporting || isBookmarkBulkChanging) return;
   if (!url) return;
   pendingUrlUpdates.add(url);
 
@@ -1257,6 +1363,23 @@ async function scheduleScoreUpdateByUrl(url) {
     try {
       const urlKeySet = new Set(urls.map(normalizeScoreUrlKey).filter(Boolean));
       if (urlKeySet.size === 0) return;
+
+      const indexReady = await ensureBookmarkUrlIndex();
+      if (indexReady) {
+        const idSet = new Set();
+        for (const key of urlKeySet) {
+          const ids = bookmarkUrlIndex.get(key);
+          if (ids) {
+            ids.forEach(id => idSet.add(id));
+          }
+        }
+        if (idSet.size === 0) return;
+        for (const bookmarkId of idSet) {
+          await updateSingleBookmarkScore(bookmarkId);
+        }
+        return;
+      }
+
       const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
       const bookmarks = [];
       function traverse(nodes) {
@@ -1294,6 +1417,7 @@ browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
     return;
   }
   if (bookmark.url) {
+    addBookmarkToUrlIndex(bookmark);
     setTimeout(() => updateSingleBookmarkScore(id), 500);
   }
 });
@@ -1303,6 +1427,7 @@ browserAPI.bookmarks.onRemoved.addListener(async (id) => {
   if (isBookmarkImporting || isBookmarkBulkChanging) {
     return;
   }
+  removeBookmarkFromUrlIndex(id);
   const cache = await getScoresCache();
   if (cache[id]) {
     delete cache[id];
@@ -1316,6 +1441,9 @@ browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
     return;
   }
   if (changeInfo.url || changeInfo.title) {
+    if (changeInfo.url) {
+      updateBookmarkUrlIndex(id, changeInfo.url);
+    }
     await updateSingleBookmarkScore(id);
     if (changeInfo.url) {
       try {

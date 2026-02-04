@@ -317,7 +317,7 @@ function handleHistoryVisited(result) {
 function handleHistoryVisitRemoved(details) {
     if (!details) return;
     console.log('[History] onVisitRemoved:', details);
-    scheduleHistoryRefresh({ forceFull: true });
+    scheduleHistoryRefresh({ forceFull: false });
 }
 
 let historyRealtimeBound = false;
@@ -12263,7 +12263,7 @@ browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
             // S值计算由background.js的bookmarks.onCreated监听器处理
             // 书签集合变化会影响「点击记录」「点击排行」「书签关联记录」
             // 这里使用全量重建（仅限最近一年的历史，内部有lookback与去重）
-            scheduleHistoryRefresh({ forceFull: true });
+            scheduleHistoryRefresh({ forceFull: false });
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onCreated 处理异常:', e);
@@ -12286,7 +12286,7 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
             }
 
             // 书签被删除后，对应的点击记录与排行需要重算
-            scheduleHistoryRefresh({ forceFull: true });
+            scheduleHistoryRefresh({ forceFull: false });
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onRemoved 处理异常:', e);
@@ -12313,7 +12313,7 @@ browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
             }
 
             // 书签URL或标题变化会影响匹配结果，重建最近一年的点击记录
-            scheduleHistoryRefresh({ forceFull: true });
+            scheduleHistoryRefresh({ forceFull: false });
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onChanged 处理异常:', e);

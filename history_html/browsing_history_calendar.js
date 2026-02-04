@@ -68,6 +68,26 @@ const BROWSING_HISTORY_MAX_VISITS_PER_URL = 400; // 单个站点最多缓存多�
 const BROWSING_HISTORY_CACHE_KEY = 'bb_cache_browsing_history_v1';
 const PENDING_AUTO_BOOKMARK_CLICKS_KEY = 'bb_pending_auto_bookmark_clicks_v1';
 const BROWSING_HISTORY_INCREMENTAL_PADDING_MS = 60 * 1000; // 增量同步时回溯1分钟
+const BROWSING_HISTORY_SEARCH_PAGE_SIZE = 5000;
+const BROWSING_HISTORY_SEARCH_MAX_ITEMS = 50000;
+const BROWSING_HISTORY_CACHE_DB_NAME = 'BookmarkBrowsingHistoryCacheDB';
+const BROWSING_HISTORY_CACHE_DB_VERSION = 1;
+const BROWSING_HISTORY_CACHE_DB_STORE = 'records';
+const BROWSING_HISTORY_CACHE_DB_META = 'meta';
+
+function normalizeDomain(domain) {
+    if (!domain) return '';
+    return String(domain).toLowerCase().replace(/^www\./, '');
+}
+
+function getUrlDomain(url) {
+    if (!url) return '';
+    try {
+        return normalizeDomain(new URL(url).hostname);
+    } catch (_) {
+        return '';
+    }
+}
 
 function getHistoryCacheStorageArea() {
     try {
@@ -81,7 +101,7 @@ function getHistoryCacheStorageArea() {
     return null;
 }
 
-function readHistoryCacheValue(key) {
+function readHistoryStorageValue(key) {
     return new Promise((resolve) => {
         const storageArea = getHistoryCacheStorageArea();
         if (storageArea) {
@@ -101,7 +121,7 @@ function readHistoryCacheValue(key) {
     });
 }
 
-function writeHistoryCacheValue(key, value) {
+function writeHistoryStorageValue(key, value) {
     return new Promise((resolve) => {
         const storageArea = getHistoryCacheStorageArea();
         if (storageArea) {
@@ -118,7 +138,7 @@ function writeHistoryCacheValue(key, value) {
     });
 }
 
-function removeHistoryCacheValue(key) {
+function removeHistoryStorageValue(key) {
     return new Promise((resolve) => {
         const storageArea = getHistoryCacheStorageArea();
         if (storageArea) {
@@ -130,6 +150,226 @@ function removeHistoryCacheValue(key) {
         } catch (_) { }
         resolve();
     });
+}
+
+let browsingHistoryCacheDbPromise = null;
+
+function openBrowsingHistoryCacheDB() {
+    if (browsingHistoryCacheDbPromise) return browsingHistoryCacheDbPromise;
+    if (typeof indexedDB === 'undefined') {
+        return Promise.resolve(null);
+    }
+    browsingHistoryCacheDbPromise = new Promise((resolve) => {
+        const request = indexedDB.open(BROWSING_HISTORY_CACHE_DB_NAME, BROWSING_HISTORY_CACHE_DB_VERSION);
+        request.onerror = () => {
+            console.warn('[BrowsingHistoryCalendar] 打开缓存DB失败:', request.error);
+            resolve(null);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(BROWSING_HISTORY_CACHE_DB_STORE)) {
+                db.createObjectStore(BROWSING_HISTORY_CACHE_DB_STORE, { keyPath: 'dateKey' });
+            }
+            if (!db.objectStoreNames.contains(BROWSING_HISTORY_CACHE_DB_META)) {
+                db.createObjectStore(BROWSING_HISTORY_CACHE_DB_META, { keyPath: 'key' });
+            }
+        };
+    });
+    return browsingHistoryCacheDbPromise;
+}
+
+async function readBrowsingHistoryCacheFromIDB() {
+    const db = await openBrowsingHistoryCacheDB();
+    if (!db) return null;
+
+    return new Promise((resolve) => {
+        const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readonly');
+        const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+        const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+        const recordsRequest = recordsStore.getAll();
+        const metaRequest = metaStore.get('lastSyncTime');
+        let records = null;
+        let lastSyncTime = 0;
+        let pending = 2;
+
+        const finish = () => {
+            pending -= 1;
+            if (pending > 0) return;
+            if (!records || records.length === 0) {
+                resolve(null);
+                return;
+            }
+            const normalizedRecords = records.map(entry => [entry.dateKey, entry.items || []]);
+            resolve({ lastSyncTime, records: normalizedRecords });
+        };
+
+        recordsRequest.onsuccess = () => {
+            records = recordsRequest.result || [];
+            finish();
+        };
+        recordsRequest.onerror = () => {
+            records = null;
+            finish();
+        };
+        metaRequest.onsuccess = () => {
+            lastSyncTime = metaRequest.result?.value || 0;
+            finish();
+        };
+        metaRequest.onerror = () => {
+            lastSyncTime = 0;
+            finish();
+        };
+    });
+}
+
+async function readBrowsingHistoryCacheFromIDBRange(startKey, endKey) {
+    const db = await openBrowsingHistoryCacheDB();
+    if (!db) return null;
+
+    return new Promise((resolve) => {
+        const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readonly');
+        const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+        const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+        const range = (startKey && endKey) ? IDBKeyRange.bound(startKey, endKey) : null;
+        const records = [];
+        const cursorRequest = range ? recordsStore.openCursor(range) : recordsStore.openCursor();
+        const metaRequest = metaStore.get('lastSyncTime');
+        let lastSyncTime = 0;
+        let cursorDone = false;
+        let metaDone = false;
+
+        const finish = () => {
+            if (!cursorDone || !metaDone) return;
+            if (!records.length) {
+                resolve(null);
+                return;
+            }
+            const normalizedRecords = records.map(entry => [entry.dateKey, entry.items || []]);
+            resolve({ lastSyncTime, records: normalizedRecords });
+        };
+
+        cursorRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                records.push(cursor.value);
+                cursor.continue();
+            } else {
+                cursorDone = true;
+                finish();
+            }
+        };
+        cursorRequest.onerror = () => {
+            cursorDone = true;
+            finish();
+        };
+        metaRequest.onsuccess = () => {
+            lastSyncTime = metaRequest.result?.value || 0;
+            metaDone = true;
+            finish();
+        };
+        metaRequest.onerror = () => {
+            lastSyncTime = 0;
+            metaDone = true;
+            finish();
+        };
+    });
+}
+
+async function writeBrowsingHistoryCacheToIDB(payload) {
+    if (!payload || !Array.isArray(payload.records)) return false;
+    const db = await openBrowsingHistoryCacheDB();
+    if (!db) return false;
+
+    return new Promise((resolve) => {
+        const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readwrite');
+        const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+        const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+        try {
+            for (const [dateKey, items] of payload.records) {
+                if (!dateKey) continue;
+                recordsStore.put({ dateKey, items: Array.isArray(items) ? items : [] });
+            }
+            metaStore.put({ key: 'lastSyncTime', value: payload.lastSyncTime || Date.now() });
+        } catch (error) {
+            console.warn('[BrowsingHistoryCalendar] 写入缓存DB失败:', error);
+            resolve(false);
+            return;
+        }
+
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+    });
+}
+
+async function removeBrowsingHistoryCacheFromIDB() {
+    const db = await openBrowsingHistoryCacheDB();
+    if (!db) return false;
+
+    return new Promise((resolve) => {
+        const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readwrite');
+        tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE).clear();
+        tx.objectStore(BROWSING_HISTORY_CACHE_DB_META).clear();
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+    });
+}
+
+async function readHistoryCacheValue(key) {
+    if (key === BROWSING_HISTORY_CACHE_KEY) {
+        const idbValue = await readBrowsingHistoryCacheFromIDB();
+        if (idbValue) return idbValue;
+        const legacy = await readHistoryStorageValue(key);
+        if (legacy) {
+            const ok = await writeBrowsingHistoryCacheToIDB(legacy);
+            if (ok) {
+                await removeHistoryStorageValue(key);
+            }
+        }
+        return legacy || null;
+    }
+
+    return readHistoryStorageValue(key);
+}
+
+async function readHistoryCacheRange(startKey, endKey) {
+    const idbValue = await readBrowsingHistoryCacheFromIDBRange(startKey, endKey);
+    if (idbValue) return idbValue;
+
+    const legacy = await readHistoryStorageValue(BROWSING_HISTORY_CACHE_KEY);
+    if (legacy && Array.isArray(legacy.records)) {
+        const filtered = legacy.records.filter(([dateKey]) => {
+            if (!dateKey) return false;
+            if (startKey && dateKey < startKey) return false;
+            if (endKey && dateKey > endKey) return false;
+            return true;
+        });
+        const payload = { lastSyncTime: legacy.lastSyncTime || 0, records: filtered };
+        const ok = await writeBrowsingHistoryCacheToIDB(legacy);
+        if (ok) {
+            await removeHistoryStorageValue(BROWSING_HISTORY_CACHE_KEY);
+        }
+        return payload;
+    }
+
+    return null;
+}
+
+async function writeHistoryCacheValue(key, value) {
+    if (key === BROWSING_HISTORY_CACHE_KEY) {
+        const ok = await writeBrowsingHistoryCacheToIDB(value);
+        if (ok) return;
+    }
+    await writeHistoryStorageValue(key, value);
+}
+
+async function removeHistoryCacheValue(key) {
+    if (key === BROWSING_HISTORY_CACHE_KEY) {
+        await removeBrowsingHistoryCacheFromIDB();
+    }
+    await removeHistoryStorageValue(key);
 }
 
 // 按小时分组书签
@@ -162,6 +402,8 @@ class BrowsingHistoryCalendar {
         this.historyCacheMeta = { lastSyncTime: 0 };
         this.historyCacheRestored = false;
         this.visitKeySet = new Set();
+        this.loadedRangeKeys = null;
+        this.viewDataLoading = false;
 
         // 拖拽勾选相关状态
         this.isDragging = false; // 是否正在拖拽
@@ -182,47 +424,14 @@ class BrowsingHistoryCalendar {
 
     async restoreBrowsingHistoryCache() {
         try {
-            const cached = await readHistoryCacheValue(BROWSING_HISTORY_CACHE_KEY);
-            if (!cached || !Array.isArray(cached.records)) {
-                return false;
+            const range = this.getViewDateRange();
+            if (!range) return false;
+            const { startKey, endKey } = this.getRangeKeys(range);
+            const loaded = await this.loadViewRangeFromCache(startKey, endKey);
+            if (loaded) {
+                console.log('[BrowsingHistoryCalendar] 已从缓存恢复', this.bookmarksByDate.size, '天数据');
             }
-
-            this.bookmarksByDate.clear();
-            this.visitKeySet.clear();
-
-            cached.records.forEach(([dateKey, records]) => {
-                if (!Array.isArray(records) || !records.length) return;
-                const normalized = records.map(record => {
-                    const visitTime = typeof record.visitTime === 'number'
-                        ? record.visitTime
-                        : (record.dateAdded || Date.now());
-                    const dateAdded = new Date(record.dateAdded || visitTime);
-                    this.visitKeySet.add(`${record.url}|${visitTime}`);
-                    return {
-                        id: record.id,
-                        title: record.title,
-                        url: record.url,
-                        dateAdded,
-                        visitTime,
-                        visitCount: record.visitCount || 1,
-                        typedCount: record.typedCount || 0,
-                        folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
-                        transition: record.transition || '',
-                        referringVisitId: record.referringVisitId || null,
-                        aggregated: !!record.aggregated
-                    };
-                });
-                if (normalized.length) {
-                    this.bookmarksByDate.set(dateKey, normalized);
-                }
-            });
-
-            this.historyCacheMeta = {
-                lastSyncTime: cached.lastSyncTime || Date.now()
-            };
-            this.historyCacheRestored = true;
-            console.log('[BrowsingHistoryCalendar] 已从缓存恢复', this.bookmarksByDate.size, '天数据');
-            return true;
+            return loaded;
         } catch (error) {
             console.warn('[BrowsingHistoryCalendar] 恢复缓存失败:', error);
             return false;
@@ -258,6 +467,123 @@ class BrowsingHistoryCalendar {
         } catch (error) {
             console.warn('[BrowsingHistoryCalendar] 保存缓存失败:', error);
         }
+    }
+
+    async loadViewRangeFromCache(startKey, endKey) {
+        const cached = await readHistoryCacheRange(startKey, endKey);
+        this.bookmarksByDate.clear();
+        this.visitKeySet.clear();
+
+        if (cached && Array.isArray(cached.records)) {
+            cached.records.forEach(([dateKey, records]) => {
+                if (!Array.isArray(records) || !records.length) return;
+                const normalized = records.map(record => {
+                    const visitTime = typeof record.visitTime === 'number'
+                        ? record.visitTime
+                        : (record.dateAdded || Date.now());
+                    const dateAdded = new Date(record.dateAdded || visitTime);
+                    this.visitKeySet.add(`${record.url}|${visitTime}`);
+                    return {
+                        id: record.id,
+                        title: record.title,
+                        url: record.url,
+                        dateAdded,
+                        visitTime,
+                        visitCount: record.visitCount || 1,
+                        typedCount: record.typedCount || 0,
+                        folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
+                        transition: record.transition || '',
+                        referringVisitId: record.referringVisitId || null,
+                        aggregated: !!record.aggregated
+                    };
+                });
+                if (normalized.length) {
+                    this.bookmarksByDate.set(dateKey, normalized);
+                }
+            });
+        }
+
+        this.historyCacheMeta = {
+            lastSyncTime: cached?.lastSyncTime || this.historyCacheMeta.lastSyncTime || Date.now()
+        };
+        this.historyCacheRestored = !!cached;
+        this.loadedRangeKeys = { startKey, endKey };
+        return !!cached;
+    }
+
+    getViewDateRange() {
+        const now = new Date();
+        const year = Number.isFinite(this.currentYear) ? this.currentYear : now.getFullYear();
+        const month = Number.isFinite(this.currentMonth) ? this.currentMonth : now.getMonth();
+        const currentDay = this.currentDay ? new Date(this.currentDay) : now;
+
+        if (!this.currentWeekStart) {
+            const today = new Date(now);
+            const todayDay = today.getDay() || 7;
+            const weekStart = new Date(today);
+            weekStart.setDate(today.getDate() - todayDay + 1);
+            weekStart.setHours(0, 0, 0, 0);
+            this.currentWeekStart = weekStart;
+        }
+        const weekStart = new Date(this.currentWeekStart);
+        weekStart.setHours(0, 0, 0, 0);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        weekEnd.setHours(23, 59, 59, 999);
+
+        switch (this.viewLevel) {
+            case 'year': {
+                const start = new Date(year, 0, 1, 0, 0, 0, 0);
+                const end = new Date(year, 11, 31, 23, 59, 59, 999);
+                return { start, end };
+            }
+            case 'month': {
+                const start = new Date(year, month, 1, 0, 0, 0, 0);
+                const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+                return { start, end };
+            }
+            case 'day': {
+                const start = new Date(currentDay);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(currentDay);
+                end.setHours(23, 59, 59, 999);
+                return { start, end };
+            }
+            case 'week':
+            default:
+                return { start: weekStart, end: weekEnd };
+        }
+    }
+
+    getRangeKeys(range) {
+        if (!range) return { startKey: null, endKey: null };
+        return {
+            startKey: this.getDateKey(range.start),
+            endKey: this.getDateKey(range.end)
+        };
+    }
+
+    maybeLoadViewRange() {
+        if (this.useNewArchitecture) return false;
+        const range = this.getViewDateRange();
+        if (!range) return false;
+        const { startKey, endKey } = this.getRangeKeys(range);
+        if (this.loadedRangeKeys) {
+            const loadedStart = this.loadedRangeKeys.startKey;
+            const loadedEnd = this.loadedRangeKeys.endKey;
+            if (loadedStart && loadedEnd && startKey >= loadedStart && endKey <= loadedEnd) {
+                return false;
+            }
+        }
+        if (this.viewDataLoading) return true;
+        this.viewDataLoading = true;
+        this.loadViewRangeFromCache(startKey, endKey)
+            .catch(() => false)
+            .finally(() => {
+                this.viewDataLoading = false;
+                this.render();
+            });
+        return true;
     }
 
     announceHistoryDataUpdated() {
@@ -731,8 +1057,9 @@ class BrowsingHistoryCalendar {
             // 修改：同时收集URL和标题
             const bookmarkUrls = new Set();
             const bookmarkTitles = new Set();
+            const titleDomainMap = new Map();
             const bookmarks = await browserAPI.bookmarks.getTree();
-            this.collectBookmarkUrlsAndTitles(bookmarks[0], bookmarkUrls, bookmarkTitles);
+            this.collectBookmarkUrlsAndTitles(bookmarks[0], bookmarkUrls, bookmarkTitles, [], titleDomainMap);
             if (bookmarkUrls.size === 0) {
                 return;
             }
@@ -746,17 +1073,19 @@ class BrowsingHistoryCalendar {
             const startTime = canIncremental
                 ? Math.max(0, (this.historyCacheMeta.lastSyncTime || 0) - BROWSING_HISTORY_INCREMENTAL_PADDING_MS)
                 : 0;
+            const effectiveStartTime = cutoffTime ? Math.max(startTime, cutoffTime) : startTime;
 
             if (!canIncremental) {
                 this.bookmarksByDate.clear();
                 this.visitKeySet.clear();
             }
 
-            const historyItems = await new Promise((resolve, reject) => {
+            const fetchHistoryBatch = (pageStart, pageEnd) => new Promise((resolve, reject) => {
                 browserAPI.history.search({
                     text: '',
-                    startTime,
-                    maxResults: 0
+                    startTime: pageStart,
+                    endTime: pageEnd,
+                    maxResults: BROWSING_HISTORY_SEARCH_PAGE_SIZE
                 }, (results) => {
                     if (browserAPI.runtime && browserAPI.runtime.lastError) {
                         reject(browserAPI.runtime.lastError);
@@ -766,20 +1095,64 @@ class BrowsingHistoryCalendar {
                 });
             });
 
+            const historyItems = [];
+            let pageEnd = now;
+
+            while (pageEnd >= effectiveStartTime) {
+                const batch = await fetchHistoryBatch(effectiveStartTime, pageEnd);
+                if (!batch.length) break;
+
+                historyItems.push(...batch);
+
+                if (historyItems.length >= BROWSING_HISTORY_SEARCH_MAX_ITEMS) {
+                    historyItems.length = BROWSING_HISTORY_SEARCH_MAX_ITEMS;
+                    break;
+                }
+
+                if (batch.length < BROWSING_HISTORY_SEARCH_PAGE_SIZE) break;
+
+                let oldest = pageEnd;
+                for (const item of batch) {
+                    const t = item.lastVisitTime || pageEnd;
+                    if (t < oldest) oldest = t;
+                }
+                if (!oldest || oldest <= effectiveStartTime) break;
+                pageEnd = oldest - 1;
+            }
+
             this.pruneOldRecords(cutoffTime);
 
             // 修改：使用URL或标题进行匹配（并集）
+            let urlMatchCount = 0;
+            let titleMatchCount = 0;
             const relevantHistoryItems = historyItems.filter(item => {
                 // 条件1：URL匹配
                 if (bookmarkUrls.has(item.url)) {
+                    urlMatchCount += 1;
                     return true;
                 }
-                // 条件2：标题匹配（去除空白后比较）
-                if (item.title && item.title.trim() && bookmarkTitles.has(item.title.trim())) {
-                    return true;
+                // 条件2：标题匹配 + 域名约束
+                const title = item.title && item.title.trim();
+                if (title && bookmarkTitles.has(title)) {
+                    const allowedDomains = titleDomainMap.get(title);
+                    if (allowedDomains && allowedDomains.size > 0) {
+                        const itemDomain = getUrlDomain(item.url);
+                        if (itemDomain && allowedDomains.has(itemDomain)) {
+                            titleMatchCount += 1;
+                            return true;
+                        }
+                    }
                 }
                 return false;
             });
+            if (historyItems.length) {
+                console.log('[BrowsingHistoryCalendar] 历史匹配结果:', {
+                    total: historyItems.length,
+                    urlMatch: urlMatchCount,
+                    titleMatch: titleMatchCount,
+                    relevant: relevantHistoryItems.length
+                });
+            }
             if (!relevantHistoryItems.length) {
                 this.historyCacheMeta.lastSyncTime = now;
                 if (!canIncremental) {
@@ -885,18 +1258,34 @@ class BrowsingHistoryCalendar {
                 await this.saveBrowsingHistoryCache();
                 this.announceHistoryDataUpdated();
             }
+
+            if (this.loadedRangeKeys && this.loadedRangeKeys.startKey && this.loadedRangeKeys.endKey) {
+                await this.loadViewRangeFromCache(this.loadedRangeKeys.startKey, this.loadedRangeKeys.endKey);
+            }
         } catch (error) {
             console.error('[BrowsingHistoryCalendar] 加载失败:', error);
         }
     }
 
     // 递归收集所有书签URL、标题和文件夹路径
-    collectBookmarkUrlsAndTitles(node, urlSet, titleSet, parentPath = []) {
+    collectBookmarkUrlsAndTitles(node, urlSet, titleSet, parentPath = [], titleDomainMap = null) {
         if (node.url) {
             urlSet.add(node.url);
             // 同时收集标题（去除空白后存储）
             if (node.title && node.title.trim()) {
-                titleSet.add(node.title.trim());
+                const trimmedTitle = node.title.trim();
+                titleSet.add(trimmedTitle);
+                if (titleDomainMap) {
+                    const domain = getUrlDomain(node.url);
+                    if (domain) {
+                        let domains = titleDomainMap.get(trimmedTitle);
+                        if (!domains) {
+                            domains = new Set();
+                            titleDomainMap.set(trimmedTitle, domains);
+                        }
+                        domains.add(domain);
+                    }
+                }
             }
             // 保存URL到文件夹路径的映射
             if (!this.bookmarkFolderPaths) {
@@ -910,7 +1299,7 @@ class BrowsingHistoryCalendar {
         if (node.children) {
             // 构建当前节点的路径（排除根节点）
             const currentPath = node.title ? [...parentPath, node.title] : parentPath;
-            node.children.forEach(child => this.collectBookmarkUrlsAndTitles(child, urlSet, titleSet, currentPath));
+            node.children.forEach(child => this.collectBookmarkUrlsAndTitles(child, urlSet, titleSet, currentPath, titleDomainMap));
         }
     }
 
@@ -1491,6 +1880,9 @@ class BrowsingHistoryCalendar {
     render() {
         // [Performance] Guard: Don't render if hidden
         if (this.isVisible && !this.isVisible()) {
+            return;
+        }
+        if (this.maybeLoadViewRange()) {
             return;
         }
 
