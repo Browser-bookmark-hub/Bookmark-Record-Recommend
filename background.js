@@ -919,6 +919,7 @@ let bookmarkBulkEventCount = 0;
 let bookmarkBulkExitTimer = null;
 let scheduledRecomputeTimer = null;
 let lastBulkReason = '';
+let bookmarkBulkHasRemoval = false;
 let scoreCacheMode = null;
 
 const BOOKMARK_BULK_WINDOW_MS = 800;
@@ -1023,6 +1024,7 @@ async function enterBookmarkBulkChangeMode(reason = '') {
 
   isBookmarkBulkChanging = true;
   lastBulkReason = reason || 'unknown';
+  bookmarkBulkHasRemoval = reason === 'removed';
   try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: true }); } catch (_) { }
   await invalidateRecommendCaches(`bulk:${reason || 'unknown'}`);
   clearBookmarkUrlIndex();
@@ -1039,9 +1041,10 @@ async function exitBookmarkBulkChangeMode() {
 
   // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
   const reason = String(lastBulkReason || '');
-  if (!reason.startsWith('import')) {
+  if (!reason.startsWith('import') && !bookmarkBulkHasRemoval) {
     scheduleRecomputeAllScoresSoon('bulk-exit', { forceFull: true });
   }
+  bookmarkBulkHasRemoval = false;
 }
 
 function noteBookmarkEventForBulkGuard(eventType = '') {
@@ -1049,6 +1052,10 @@ function noteBookmarkEventForBulkGuard(eventType = '') {
   // 重要：导入期间事件极多，频繁 clearTimeout/setTimeout 也会带来额外卡顿
   if (isBookmarkImporting) {
     return;
+  }
+
+  if (eventType === 'removed') {
+    bookmarkBulkHasRemoval = true;
   }
 
   const now = Date.now();
@@ -1916,6 +1923,70 @@ async function updateSingleBookmarkScore(bookmarkId) {
   }
 }
 
+function collectBookmarkIdsUnderFolders(nodes, folderIdSet, inTarget, output) {
+  if (!Array.isArray(nodes)) return;
+  for (const node of nodes) {
+    const isTargetBranch = inTarget || (node && folderIdSet.has(String(node.id)));
+    if (node && node.url && isTargetBranch) {
+      output.push(String(node.id));
+    }
+    if (node && node.children) {
+      collectBookmarkIdsUnderFolders(node.children, folderIdSet, isTargetBranch, output);
+    }
+  }
+}
+
+async function getBookmarkIdsByFolderIds(folderIds) {
+  const ids = [];
+  const folderIdSet = new Set((folderIds || []).map(id => String(id)).filter(Boolean));
+  if (folderIdSet.size === 0 || !browserAPI?.bookmarks?.getTree) return ids;
+  const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+  collectBookmarkIdsUnderFolders(tree, folderIdSet, false, ids);
+  return [...new Set(ids)];
+}
+
+function collectBookmarkIdsByDomains(nodes, domainSet, output) {
+  if (!Array.isArray(nodes)) return;
+  for (const node of nodes) {
+    if (node && node.url) {
+      try {
+        const host = normalizeBlockedDomain(new URL(node.url).hostname);
+        if (host && domainSet.has(host)) {
+          output.push(String(node.id));
+        }
+      } catch (_) { }
+    }
+    if (node && node.children) {
+      collectBookmarkIdsByDomains(node.children, domainSet, output);
+    }
+  }
+}
+
+async function getBookmarkIdsByDomains(domains) {
+  const ids = [];
+  const domainSet = new Set((domains || [])
+    .map(normalizeBlockedDomain)
+    .filter(Boolean));
+  if (domainSet.size === 0 || !browserAPI?.bookmarks?.getTree) return ids;
+  const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+  collectBookmarkIdsByDomains(tree, domainSet, ids);
+  return [...new Set(ids)];
+}
+
+async function updateBookmarkScoresByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  const unique = Array.from(new Set(ids.map(id => String(id)).filter(Boolean)));
+  let updated = 0;
+  for (const id of unique) {
+    await updateSingleBookmarkScore(id);
+    updated += 1;
+    if (updated % 25 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+  return updated;
+}
+
 let pendingUrlUpdates = new Set();
 let urlUpdateTimer = null;
 
@@ -2004,12 +2075,6 @@ browserAPI.bookmarks.onRemoved.addListener(async (id) => {
     delete cache[id];
     await saveScoresCache(cache);
   }
-  recordDeletionForCalibration({
-    source: 'bookmark',
-    urlCount: 1,
-    hasUrlList: true,
-    allHistory: false
-  }).catch(() => {});
 });
 
 browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
@@ -2294,6 +2359,34 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await updateSingleBookmarkScore(message.bookmarkId);
         }
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'updateBookmarkScoresByFolder') {
+    (async () => {
+      try {
+        const folderIds = Array.isArray(message.folderIds) ? message.folderIds : [message.folderId];
+        const ids = await getBookmarkIdsByFolderIds(folderIds);
+        const updated = await updateBookmarkScoresByIds(ids);
+        sendResponse({ success: true, updated, total: ids.length });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'updateBookmarkScoresByDomain') {
+    (async () => {
+      try {
+        const domains = Array.isArray(message.domains) ? message.domains : [message.domain];
+        const ids = await getBookmarkIdsByDomains(domains);
+        const updated = await updateBookmarkScoresByIds(ids);
+        sendResponse({ success: true, updated, total: ids.length });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }

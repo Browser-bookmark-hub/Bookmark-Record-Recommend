@@ -5110,6 +5110,20 @@ async function getBlockedBookmarks() {
     }
 }
 
+async function requestRecommendScoreUpdate(action, payload) {
+    try {
+        const response = await browserAPI.runtime.sendMessage({ action, ...(payload || {}) });
+        if (response && response.success === false) {
+            console.warn('[推荐] S值增量更新失败:', response.error || response);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.warn('[推荐] S值增量更新失败:', e);
+        return false;
+    }
+}
+
 // 屏蔽书签（按标题匹配，同名书签一起屏蔽）
 async function blockBookmark(bookmarkId) {
     try {
@@ -5166,7 +5180,7 @@ async function unblockBookmark(bookmarkId) {
         await browserAPI.storage.local.set({ recommend_blocked: blocked });
         console.log('[屏蔽] 已恢复书签:', bookmarkId);
         // 恢复后触发S值计算（该书签之前没有缓存）
-        browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId });
+        await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
         return true;
     } catch (e) {
         console.error('[屏蔽] 恢复书签失败:', e);
@@ -8114,6 +8128,7 @@ async function unblockFolder(folderId) {
         const blocked = await getBlockedBookmarks();
         blocked.folders = blocked.folders.filter(id => id !== folderId);
         await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderId });
         return true;
     } catch (e) {
         return false;
@@ -8139,6 +8154,7 @@ async function unblockDomain(domain) {
         const blocked = await getBlockedBookmarks();
         blocked.domains = blocked.domains.filter(d => d !== domain);
         await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain });
         return true;
     } catch (e) {
         return false;
