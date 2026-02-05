@@ -436,10 +436,66 @@
                 <div id="additionsBrowsingPanel" class="additions-subview">
                     <!-- 浏览记录子视图标签 -->
                     <div class="browsing-sub-tabs">
-                        <button id="browsingTabHistory" class="browsing-sub-tab active"
-                            data-sub-tab="history">点击记录</button>
-                        <button id="browsingTabRanking" class="browsing-sub-tab" data-sub-tab="ranking">点击排行</button>
-                        <button id="browsingTabRelated" class="browsing-sub-tab" data-sub-tab="related">关联记录</button>
+                        <div class="browsing-sub-tab-group">
+                            <button id="browsingTabHistory" class="browsing-sub-tab active"
+                                data-sub-tab="history">点击记录</button>
+                            <button id="browsingTabRanking" class="browsing-sub-tab" data-sub-tab="ranking">点击排行</button>
+                            <button id="browsingTabRelated" class="browsing-sub-tab" data-sub-tab="related">关联记录</button>
+                        </div>
+                        <div class="browsing-sub-tab-actions">
+                            <button id="browsingCalibrationBtn" class="browsing-calibrate-btn" type="button">
+                                <i class="fas fa-sliders-h"></i>
+                                <span id="browsingCalibrationText">校准</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 自动校准设置面板（内嵌二级 UI） -->
+                    <div id="browsingCalibrationSettingsPanel" class="browsing-calibration-settings-panel" hidden>
+                        <div class="browsing-calibration-settings-header">
+                            <div class="browsing-calibration-settings-title">
+                                <i class="fas fa-cog"></i>
+                                <span id="browsingCalibrationSettingsTitle">自动校准设置</span>
+                            </div>
+                            <button class="modal-close" id="browsingCalibrationSettingsClose" type="button">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="browsing-calibration-settings-body">
+                            <div class="calibration-settings-desc">
+                                <p id="browsingCalibrationSettingsDesc1">说明：<span class="calibration-desc-highlight">浏览器历史删除 API</span> 有时不会返回完整 URL 列表，因此需要通过校准对齐数据。</p>
+                                <p id="browsingCalibrationSettingsDesc3">校准在后台执行，避免影响前台使用体验。</p>
+                            </div>
+                            <div class="refresh-settings-section" style="margin-top: 10px;">
+                                <label class="refresh-setting-item">
+                                    <input type="checkbox" id="browsingCalibrationDeleteEnabled" checked>
+                                    <span id="browsingCalibrationDeleteLabel">累计删除</span>
+                                    <input type="number" id="browsingCalibrationDeleteValue" value="15" min="1" max="999999"
+                                        style="width: 70px; margin: 0 6px;">
+                                    <span id="browsingCalibrationDeleteUnit">次后自动校准</span>
+                                    <span id="browsingCalibrationDeleteCount" class="calibration-count">(0/15)</span>
+                                </label>
+                                <label class="refresh-setting-item">
+                                    <input type="checkbox" id="browsingCalibrationOpenEnabled">
+                                    <span id="browsingCalibrationOpenLabel">打开/点击书签浏览记录</span>
+                                    <input type="number" id="browsingCalibrationOpenValue" value="50" min="1" max="999999"
+                                        style="width: 70px; margin: 0 6px;">
+                                    <span id="browsingCalibrationOpenUnit">次后自动校准</span>
+                                    <span id="browsingCalibrationOpenCount" class="calibration-count">(0/50)</span>
+                                </label>
+                            </div>
+                            <div class="calibration-settings-actions"
+                                style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 10px; align-items: center;">
+                                <button id="browsingCalibrationManualActionBtn" class="view-action-btn view-action-btn-ghost"
+                                    style="display: inline-flex; width: auto;">
+                                    <i class="fas fa-sync-alt"></i> <span id="browsingCalibrationManualActionText">手动校准</span>
+                                </button>
+                                <button id="browsingCalibrationSettingsSaveBtn" class="view-action-btn"
+                                    style="display: inline-flex; width: auto;">
+                                    <i class="fas fa-check"></i> <span id="browsingCalibrationSettingsSaveText">保存</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- 子视图 2.1：点击记录（日历视图） -->

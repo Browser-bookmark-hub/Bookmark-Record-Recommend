@@ -1492,11 +1492,138 @@ body {
 /* 浏览记录子标签样式 */
 .browsing-sub-tabs {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 12px;
     margin-top: 15px;
     margin-bottom: 12px;
     padding-top: 0;
+    width: 100%;
     justify-content: center;
+    flex-wrap: wrap;
+    position: relative;
+}
+
+.browsing-sub-tab-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    justify-content: center;
+    min-width: 0;
+}
+
+.browsing-sub-tab-actions {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex: 0 0 auto;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.browsing-calibrate-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.browsing-calibrate-btn i {
+    font-size: 11px;
+}
+
+.browsing-calibrate-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.browsing-calibrate-btn.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.browsing-calibrate-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 180px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-md);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 30;
+}
+
+.browsing-calibrate-menu[hidden] {
+    display: none;
+}
+
+.browsing-calibrate-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s ease;
+}
+
+.browsing-calibrate-menu-item i {
+    font-size: 12px;
+}
+
+.browsing-calibrate-menu-item:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.browsing-calibrate-menu-item.active {
+    color: var(--accent-primary);
+}
+
+.browsing-calibrate-status {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.browsing-calibrate-status.is-on {
+    color: var(--accent-primary);
+}
+
+@media (max-width: 720px) {
+    .browsing-sub-tabs {
+        gap: 8px;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .browsing-sub-tab-actions {
+        position: static;
+        transform: none;
+    }
 }
 
 .browsing-sub-tab {
@@ -2050,6 +2177,35 @@ body {
 
 .view-action-btn i {
     font-size: 13px;
+}
+
+.view-action-btn.view-action-btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    box-shadow: none;
+}
+
+.view-action-btn.view-action-btn-ghost:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+    box-shadow: none;
+}
+
+.view-action-btn.view-action-btn-ghost:active {
+    transform: translateY(0);
+}
+
+.calibration-desc-highlight {
+    color: #f59e0b;
+}
+
+.calibration-count {
+    margin-left: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
 }
 
 /* 切换按钮 */
@@ -6678,6 +6834,64 @@ a.tree-label.tree-bookmark-link:hover {
 /* 刷新设置弹窗特定样式 */
 .refresh-settings-modal {
     max-width: 450px;
+}
+
+/* 自动校准设置面板（内嵌二级 UI） */
+.browsing-calibration-settings-panel {
+    width: 100%;
+    margin: 4px auto 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.browsing-calibration-settings-panel[hidden] {
+    display: none;
+}
+
+.browsing-calibration-settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.browsing-calibration-settings-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.browsing-calibration-settings-body {
+    padding: 12px 14px 14px;
+}
+
+.calibration-settings-desc {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.calibration-settings-desc p {
+    margin: 0;
+}
+
+.calibration-settings-note {
+    padding: 8px 10px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .modal-header.compact {

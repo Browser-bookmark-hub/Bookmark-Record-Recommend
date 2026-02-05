@@ -314,12 +314,19 @@ function handleHistoryVisited(result) {
     scheduleHistoryRefresh({ forceFull: false });
 }
 
-function handleHistoryVisitRemoved(details) {
+async function handleHistoryVisitRemoved(details) {
     if (!details) return;
     console.log('[History] onVisitRemoved:', details);
-    scheduleHistoryRefresh({ forceFull: false });
-}
 
+    const urls = Array.isArray(details.urls) ? details.urls.filter(Boolean) : [];
+    if (!details.allHistory && urls.length === 0 && typeof showToast === 'function') {
+        const msg = currentLang === 'zh_CN'
+            ? '检测到历史删除，但未提供URL列表，可手动校准。'
+            : 'History removed without URL list; you can calibrate manually.';
+        showToast(msg, 4000);
+    }
+    scheduleBrowsingCalibrationCountRefresh();
+}
 let historyRealtimeBound = false;
 let messageListenerRegistered = false;
 let historyPollingTimer = null;
@@ -404,6 +411,204 @@ async function refreshBrowsingHistoryData(options = {}) {
         await browsingHistoryRefreshPromise;
     } catch (_) {
     }
+}
+
+async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
+    const inst = window.browsingHistoryCalendarInstance;
+    if (!inst) return;
+
+    if (browsingHistoryRefreshPromise) {
+        try {
+            await browsingHistoryRefreshPromise;
+        } catch (_) { }
+    }
+
+    try {
+        if (inst.useNewArchitecture && inst.dbManager && typeof inst.syncFromDatabaseManager === 'function') {
+            inst.syncFromDatabaseManager();
+            if (typeof inst.render === 'function') inst.render();
+            if (typeof inst.updateSelectModeButton === 'function') inst.updateSelectModeButton();
+        } else if (typeof inst.getViewDateRange === 'function' && typeof inst.getRangeKeys === 'function' && typeof inst.loadViewRangeFromCache === 'function') {
+            const range = inst.getViewDateRange();
+            if (range) {
+                const { startKey, endKey } = inst.getRangeKeys(range);
+                await inst.loadViewRangeFromCache(startKey, endKey);
+                if (typeof inst.render === 'function') inst.render();
+                if (typeof inst.updateSelectModeButton === 'function') inst.updateSelectModeButton();
+            }
+        }
+
+        browsingClickRankingStats = null;
+        document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
+    } catch (error) {
+        if (!silent) {
+            console.warn('[BrowsingHistory] 缓存刷新失败:', error);
+        }
+    }
+}
+
+// =============================================================================
+// 浏览记录校准
+// =============================================================================
+
+const BROWSING_CALIBRATION_RECOMMENDED = {
+    deleteThreshold: 15,
+    openThreshold: 50
+};
+
+const DEFAULT_BROWSING_CALIBRATION_SETTINGS = {
+    autoEnabled: true,
+    deleteThreshold: BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold,
+    openThreshold: 0,
+    lastCalibrationTime: 0
+};
+
+const DEFAULT_BROWSING_CALIBRATION_STATE = {
+    pendingDeleteCount: 0,
+    pendingOpenCount: 0,
+    lastCalibrationTime: 0
+};
+
+function normalizeBrowsingCalibrationSettings(raw = {}) {
+    const settings = { ...DEFAULT_BROWSING_CALIBRATION_SETTINGS, ...(raw || {}) };
+    const hasDelete = Object.prototype.hasOwnProperty.call(raw || {}, 'deleteThreshold');
+    const hasOpen = Object.prototype.hasOwnProperty.call(raw || {}, 'openThreshold');
+    const hasClick = Object.prototype.hasOwnProperty.call(raw || {}, 'clickThreshold');
+    const hasAutoEnabled = Object.prototype.hasOwnProperty.call(raw || {}, 'autoEnabled');
+    const autoDisabled = hasAutoEnabled ? raw.autoEnabled === false : false;
+
+    if (!hasOpen && hasClick) {
+        settings.openThreshold = raw.clickThreshold;
+    }
+
+    if (raw && autoDisabled) {
+        if (!hasDelete) settings.deleteThreshold = 0;
+        if (!hasOpen && !hasClick) settings.openThreshold = 0;
+    }
+
+    settings.deleteThreshold = Math.max(0, parseInt(settings.deleteThreshold, 10) || 0);
+    settings.openThreshold = Math.max(0, parseInt(settings.openThreshold, 10) || 0);
+    return settings;
+}
+
+function normalizeBrowsingCalibrationState(raw = {}) {
+    const state = { ...DEFAULT_BROWSING_CALIBRATION_STATE, ...(raw || {}) };
+    if (Object.prototype.hasOwnProperty.call(raw || {}, 'pendingClickCount')) {
+        const clickCount = Math.max(0, parseInt(raw.pendingClickCount, 10) || 0);
+        state.pendingOpenCount = Math.max(0, parseInt(state.pendingOpenCount, 10) || 0) + clickCount;
+    }
+    state.pendingDeleteCount = Math.max(0, parseInt(state.pendingDeleteCount, 10) || 0);
+    state.pendingOpenCount = Math.max(0, parseInt(state.pendingOpenCount, 10) || 0);
+    return state;
+}
+
+async function getBrowsingCalibrationSettings() {
+    try {
+        const result = await browserAPI.storage.local.get('browsingCalibrationSettings');
+        return normalizeBrowsingCalibrationSettings(result.browsingCalibrationSettings || {});
+    } catch (e) {
+        console.warn('[校准设置] 读取失败:', e);
+        return normalizeBrowsingCalibrationSettings({});
+    }
+}
+
+async function getBrowsingCalibrationStateUI() {
+    try {
+        const result = await browserAPI.storage.local.get('browsingCalibrationState');
+        return normalizeBrowsingCalibrationState(result.browsingCalibrationState || {});
+    } catch (e) {
+        console.warn('[校准状态] 读取失败:', e);
+        return normalizeBrowsingCalibrationState({});
+    }
+}
+
+async function saveBrowsingCalibrationSettings(settings) {
+    try {
+        const next = { ...settings };
+        next.deleteThreshold = Math.max(0, parseInt(next.deleteThreshold, 10) || 0);
+        next.openThreshold = Math.max(0, parseInt(next.openThreshold, 10) || 0);
+        delete next.clickThreshold;
+        next.autoEnabled = next.deleteThreshold > 0 || next.openThreshold > 0;
+        await browserAPI.storage.local.set({ browsingCalibrationSettings: next });
+    } catch (e) {
+        console.warn('[校准设置] 保存失败:', e);
+    }
+}
+ 
+let browsingCalibrationCountTimer = null;
+
+function isBrowsingCalibrationPanelVisible() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    return !!panel && !panel.hidden;
+}
+
+async function updateBrowsingCalibrationCounts() {
+    if (!isBrowsingCalibrationPanelVisible()) return;
+    const state = await getBrowsingCalibrationStateUI();
+
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    const deleteCountEl = document.getElementById('browsingCalibrationDeleteCount');
+    const openCountEl = document.getElementById('browsingCalibrationOpenCount');
+
+    const deleteThreshold = Math.max(1, parseInt(deleteValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold);
+    const openThreshold = Math.max(1, parseInt(openValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.openThreshold);
+
+    if (deleteCountEl) {
+        deleteCountEl.textContent = `(${state.pendingDeleteCount || 0}/${deleteThreshold})`;
+    }
+    if (openCountEl) {
+        openCountEl.textContent = `(${state.pendingOpenCount || 0}/${openThreshold})`;
+    }
+}
+
+function scheduleBrowsingCalibrationCountRefresh(delay = 300) {
+    if (!isBrowsingCalibrationPanelVisible()) return;
+    if (browsingCalibrationCountTimer) {
+        clearTimeout(browsingCalibrationCountTimer);
+    }
+    browsingCalibrationCountTimer = setTimeout(() => {
+        browsingCalibrationCountTimer = null;
+        updateBrowsingCalibrationCounts();
+    }, delay);
+}
+
+function recordBrowsingCalibrationInteraction(type, payload = {}) {
+    try {
+        if (!browserAPI || !browserAPI.runtime || typeof browserAPI.runtime.sendMessage !== 'function') return;
+        const normalizedType = type === 'click' ? 'open' : type;
+        browserAPI.runtime.sendMessage({
+            action: 'recordBrowsingInteraction',
+            payload: { type: normalizedType, ...payload }
+        }).catch(() => { });
+        scheduleBrowsingCalibrationCountRefresh();
+    } catch (_) { }
+}
+
+async function runBrowsingCalibration({ reason = 'manual', showToast: shouldToast = true } = {}) {
+    const inst = window.browsingHistoryCalendarInstance;
+    if (!inst) return false;
+
+    await refreshBrowsingHistoryData({ forceFull: true, silent: false });
+
+    const settings = await getBrowsingCalibrationSettings();
+    settings.lastCalibrationTime = Date.now();
+    await saveBrowsingCalibrationSettings(settings);
+    try {
+        browserAPI.runtime.sendMessage({
+            action: 'resetBrowsingCalibrationState',
+            payload: { reason }
+        }).catch(() => { });
+    } catch (_) { }
+    scheduleBrowsingCalibrationCountRefresh(600);
+
+    if (shouldToast && typeof showToast === 'function') {
+        const msg = currentLang === 'zh_CN' ? '校准完成' : 'Calibration completed';
+        showToast(msg, 2500);
+    }
+
+    console.log('[校准] 完成:', reason);
+    return true;
 }
 
 // 预加载缓存
@@ -997,6 +1202,39 @@ const i18n = {pageTitle: {
     },browsingTabRelated: {
         'zh_CN': '关联记录',
         'en': 'Related History'
+    },browsingCalibrationText: {
+        'zh_CN': '校准',
+        'en': 'Calibrate'
+    },browsingCalibrationManual: {
+        'zh_CN': '手动校准',
+        'en': 'Manual calibrate'
+    },browsingCalibrationSettings: {
+        'zh_CN': '自动校准设置',
+        'en': 'Auto calibration settings'
+    },browsingCalibrationSettingsTitle: {
+        'zh_CN': '自动校准设置',
+        'en': 'Auto calibration settings'
+    },browsingCalibrationSettingsDesc1: {
+        'zh_CN': '说明：<span class="calibration-desc-highlight">浏览器历史删除 API</span> 有时不会返回完整 URL 列表，因此需要通过校准对齐数据。',
+        'en': 'Note: The <span class="calibration-desc-highlight">browser history deletion API</span> may not return the full URL list, so calibration is used to realign data.'
+    },browsingCalibrationSettingsDesc3: {
+        'zh_CN': '校准在后台执行，避免影响前台使用体验。',
+        'en': 'Calibration runs in the background to avoid impacting the UI.'
+    },browsingCalibrationSettingsSave: {
+        'zh_CN': '保存',
+        'en': 'Save'
+    },browsingCalibrationDeleteLabel: {
+        'zh_CN': '累计删除',
+        'en': 'Auto calibrate after'
+    },browsingCalibrationDeleteUnit: {
+        'zh_CN': '次后自动校准',
+        'en': 'deletions'
+    },browsingCalibrationOpenLabel: {
+        'zh_CN': '打开/点击书签浏览记录',
+        'en': 'Auto calibrate after'
+    },browsingCalibrationOpenUnit: {
+        'zh_CN': '次后自动校准',
+        'en': 'opens/clicks of browsing records'
     },browsingRankingTitle: {
         'zh_CN': '点击排行',
         'en': 'Click Ranking'
@@ -2031,6 +2269,31 @@ function applyLanguage() {
     if (browsingTabRanking) browsingTabRanking.textContent = i18n.browsingTabRanking[currentLang];
     const browsingTabRelated = document.getElementById('browsingTabRelated');
     if (browsingTabRelated) browsingTabRelated.textContent = i18n.browsingTabRelated[currentLang];
+    const browsingCalibrationText = document.getElementById('browsingCalibrationText');
+    if (browsingCalibrationText) browsingCalibrationText.textContent = i18n.browsingCalibrationText[currentLang];
+    const browsingCalibrationManualText = document.getElementById('browsingCalibrationManualText');
+    if (browsingCalibrationManualText) browsingCalibrationManualText.textContent = i18n.browsingCalibrationManual[currentLang];
+    const browsingCalibrationSettingsText = document.getElementById('browsingCalibrationSettingsText');
+    if (browsingCalibrationSettingsText) browsingCalibrationSettingsText.textContent = i18n.browsingCalibrationSettings[currentLang];
+    const browsingCalibrationManualActionText = document.getElementById('browsingCalibrationManualActionText');
+    if (browsingCalibrationManualActionText) browsingCalibrationManualActionText.textContent = i18n.browsingCalibrationManual[currentLang];
+
+    const browsingCalibrationSettingsTitle = document.getElementById('browsingCalibrationSettingsTitle');
+    if (browsingCalibrationSettingsTitle) browsingCalibrationSettingsTitle.textContent = i18n.browsingCalibrationSettingsTitle[currentLang];
+    const browsingCalibrationSettingsDesc1 = document.getElementById('browsingCalibrationSettingsDesc1');
+    if (browsingCalibrationSettingsDesc1) browsingCalibrationSettingsDesc1.innerHTML = i18n.browsingCalibrationSettingsDesc1[currentLang];
+    const browsingCalibrationSettingsDesc3 = document.getElementById('browsingCalibrationSettingsDesc3');
+    if (browsingCalibrationSettingsDesc3) browsingCalibrationSettingsDesc3.textContent = i18n.browsingCalibrationSettingsDesc3[currentLang];
+    const browsingCalibrationSettingsSaveText = document.getElementById('browsingCalibrationSettingsSaveText');
+    if (browsingCalibrationSettingsSaveText) browsingCalibrationSettingsSaveText.textContent = i18n.browsingCalibrationSettingsSave[currentLang];
+    const browsingCalibrationDeleteLabel = document.getElementById('browsingCalibrationDeleteLabel');
+    if (browsingCalibrationDeleteLabel) browsingCalibrationDeleteLabel.textContent = i18n.browsingCalibrationDeleteLabel[currentLang];
+    const browsingCalibrationDeleteUnit = document.getElementById('browsingCalibrationDeleteUnit');
+    if (browsingCalibrationDeleteUnit) browsingCalibrationDeleteUnit.textContent = i18n.browsingCalibrationDeleteUnit[currentLang];
+    const browsingCalibrationOpenLabel = document.getElementById('browsingCalibrationOpenLabel');
+    if (browsingCalibrationOpenLabel) browsingCalibrationOpenLabel.textContent = i18n.browsingCalibrationOpenLabel[currentLang];
+    const browsingCalibrationOpenUnit = document.getElementById('browsingCalibrationOpenUnit');
+    if (browsingCalibrationOpenUnit) browsingCalibrationOpenUnit.textContent = i18n.browsingCalibrationOpenUnit[currentLang];
 
     const browsingRankingTitle = document.getElementById('browsingRankingTitle');
     if (browsingRankingTitle) browsingRankingTitle.textContent = i18n.browsingRankingTitle[currentLang];
@@ -2389,6 +2652,8 @@ function initializeUI() {
         document.addEventListener('click', handleSearchOutsideClick, true);
         document.documentElement.setAttribute('data-search-outside-bound', 'true');
     }
+
+    initBrowsingCalibrationMenu();
 
     console.log('[initializeUI] UI事件监听器初始化完成，当前视图:', currentView);
 }
@@ -5268,6 +5533,127 @@ function initRefreshSettingsModal() {
     const saveBtn = document.getElementById('refreshSettingsSaveBtn');
     if (saveBtn) {
         saveBtn.onclick = saveRefreshSettingsFromUI;
+    }
+}
+
+function initBrowsingCalibrationMenu() {
+    const mainBtn = document.getElementById('browsingCalibrationBtn');
+    if (!mainBtn) return;
+    if (mainBtn.hasAttribute('data-calibration-bound')) return;
+    mainBtn.setAttribute('data-calibration-bound', 'true');
+
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showBrowsingCalibrationSettingsModal();
+    });
+
+    initBrowsingCalibrationSettingsModal();
+}
+
+function showBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (!panel) return;
+    loadBrowsingCalibrationSettingsToUI();
+    panel.hidden = false;
+    updateBrowsingCalibrationCounts();
+    try {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (_) { }
+}
+
+function hideBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (panel) {
+        panel.hidden = true;
+    }
+}
+
+async function loadBrowsingCalibrationSettingsToUI() {
+    const settings = await getBrowsingCalibrationSettings();
+
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    if (deleteEnabled) deleteEnabled.checked = settings.deleteThreshold > 0;
+    if (deleteValue) {
+        deleteValue.value = settings.deleteThreshold > 0
+            ? settings.deleteThreshold
+            : BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold;
+    }
+
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    if (openEnabled) openEnabled.checked = settings.openThreshold > 0;
+    if (openValue) {
+        openValue.value = settings.openThreshold > 0
+            ? settings.openThreshold
+            : BROWSING_CALIBRATION_RECOMMENDED.openThreshold;
+    }
+    updateBrowsingCalibrationCounts();
+}
+
+async function saveBrowsingCalibrationSettingsFromUI() {
+    const settings = await getBrowsingCalibrationSettings();
+
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    settings.deleteThreshold = deleteEnabled?.checked
+        ? Math.max(1, parseInt(deleteValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold)
+        : 0;
+
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    settings.openThreshold = openEnabled?.checked
+        ? Math.max(1, parseInt(openValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.openThreshold)
+        : 0;
+    delete settings.clickThreshold;
+
+    await saveBrowsingCalibrationSettings(settings);
+    hideBrowsingCalibrationSettingsModal();
+
+    if (typeof showToast === 'function') {
+        const msg = currentLang === 'zh_CN' ? '自动校准设置已保存' : 'Calibration settings saved';
+        showToast(msg, 2000);
+    }
+}
+
+function initBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (!panel) return;
+    if (panel.hasAttribute('data-calibration-settings-bound')) return;
+    panel.setAttribute('data-calibration-settings-bound', 'true');
+
+    const closeBtn = document.getElementById('browsingCalibrationSettingsClose');
+    if (closeBtn) {
+        closeBtn.onclick = hideBrowsingCalibrationSettingsModal;
+    }
+
+    const manualBtn = document.getElementById('browsingCalibrationManualActionBtn');
+    if (manualBtn) {
+        manualBtn.onclick = async () => {
+            await runBrowsingCalibration({ reason: 'manual', showToast: true });
+        };
+    }
+
+    const saveBtn = document.getElementById('browsingCalibrationSettingsSaveBtn');
+    if (saveBtn) {
+        saveBtn.onclick = saveBrowsingCalibrationSettingsFromUI;
+    }
+
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    if (deleteValue) {
+        deleteValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
+    }
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    if (openValue) {
+        openValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
+    }
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    if (deleteEnabled) {
+        deleteEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
+    }
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    if (openEnabled) {
+        openEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
     }
 }
 
@@ -10088,6 +10474,9 @@ function initAdditionsSubTabs() {
             }
         } else if (target === 'browsing') {
             browsingPanel.classList.add('active');
+            if (currentView === 'additions') {
+                recordBrowsingCalibrationInteraction('open', { source: 'browsing-tab' });
+            }
             // 初始化浏览记录日历（首次点击时）
             if (!browsingHistoryInitialized) {
                 browsingHistoryInitialized = true;
@@ -10889,6 +11278,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
             });
             bookmarkItem.addEventListener('click', (e) => {
                 e.stopPropagation();
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-folder' });
                 try {
                     const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
                     if (browserAPI?.tabs?.create) {
@@ -10998,6 +11388,9 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
             titleLink.target = '_blank';
             titleLink.rel = 'noopener noreferrer';
             titleLink.textContent = entry.title;
+            titleLink.addEventListener('click', () => {
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-link' });
+            });
 
             const urlDiv = document.createElement('div');
             urlDiv.className = 'addition-url';
@@ -11118,6 +11511,7 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
                 detail.style.display = visible ? 'none' : 'block';
 
                 try {
+                    recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking' });
                     if (browserAPI && browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
                         browserAPI.tabs.create({ url: entry.url });
                     } else {
@@ -11381,8 +11775,19 @@ async function refreshActiveBrowsingRankingIfVisible() {
         const timeout = 2000; // 2秒超时
         while (Date.now() - start < timeout) {
             const inst = window.browsingHistoryCalendarInstance;
-            if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-                return true;
+            if (inst) {
+                if (inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
+                    return true;
+                }
+                if (inst.useNewArchitecture && inst.dbManager) {
+                    return true;
+                }
+                if (inst.historyCacheMeta && inst.historyCacheMeta.lastSyncTime) {
+                    return true;
+                }
+                if (inst.historyCacheRestored) {
+                    return true;
+                }
             }
             await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -12405,6 +12810,9 @@ function setupRealtimeMessageListener() {
             } catch (e) {
                 console.warn('[history.js] 清除 localStorage 失败:', e);
             }
+        } else if (message.action === 'browsingCalibrationCompleted') {
+            refreshBrowsingHistoryFromCache({ silent: true });
+            scheduleBrowsingCalibrationCountRefresh(600);
         }
     });
 }
@@ -12546,8 +12954,19 @@ async function refreshBrowsingRelatedHistory() {
         const timeout = 2000; // 2秒超时
         while (Date.now() - start < timeout) {
             const inst = window.browsingHistoryCalendarInstance;
-            if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-                return true;
+            if (inst) {
+                if (inst.bookmarksByDate) {
+                    return true;
+                }
+                if (inst.useNewArchitecture && inst.dbManager) {
+                    return true;
+                }
+                if (inst.historyCacheMeta && typeof inst.historyCacheMeta.lastSyncTime === 'number') {
+                    return true;
+                }
+                if (inst.historyCacheRestored) {
+                    return true;
+                }
             }
             await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -13104,6 +13523,7 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
             try {
                 if (item.lastVisitTime) browsingRelatedFocusedVisitTime = item.lastVisitTime;
             } catch (_) { }
+            recordBrowsingCalibrationInteraction('click', { source: 'browsing-related' });
             const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
             if (browserAPI && browserAPI.tabs && browserAPI.tabs.create) {
                 browserAPI.tabs.create({ url: item.url });

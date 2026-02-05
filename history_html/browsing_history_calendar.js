@@ -61,6 +61,17 @@ function formatYearMonth(year, month) {
     return t('calendarYearMonth', year, monthName).replace('{0}', year).replace('{1}', monthName);
 }
 
+function notifyBrowsingCalibrationInteraction(type, payload = {}) {
+    try {
+        const api = (typeof chrome !== 'undefined') ? chrome : (typeof browser !== 'undefined' ? browser : null);
+        if (!api || !api.runtime || typeof api.runtime.sendMessage !== 'function') return;
+        api.runtime.sendMessage({
+            action: 'recordBrowsingInteraction',
+            payload: { type, ...payload }
+        }).catch(() => { });
+    } catch (_) { }
+}
+
 // 浏览记录保留时长（天）
 // 0 表示不做时间窗口限制，由浏览器自身的历史保留策略决定。
 const BROWSING_HISTORY_LOOKBACK_DAYS = 0;
@@ -87,6 +98,15 @@ function getUrlDomain(url) {
     } catch (_) {
         return '';
     }
+}
+
+function normalizeHistoryUrlKey(url) {
+    if (!url || typeof url !== 'string') return '';
+    let normalized = url.trim();
+    if (normalized.length > 1 && normalized.endsWith('/')) {
+        normalized = normalized.slice(0, -1);
+    }
+    return normalized;
 }
 
 function getHistoryCacheStorageArea() {
@@ -438,8 +458,11 @@ class BrowsingHistoryCalendar {
         }
     }
 
-    async saveBrowsingHistoryCache() {
+    async saveBrowsingHistoryCache(options = {}) {
         try {
+            if (options.reset) {
+                await removeHistoryCacheValue(BROWSING_HISTORY_CACHE_KEY);
+            }
             const records = [];
             for (const [dateKey, items] of this.bookmarksByDate.entries()) {
                 records.push([
@@ -648,6 +671,206 @@ class BrowsingHistoryCalendar {
                 this.bookmarksByDate.delete(dateKey);
             }
         }
+    }
+
+    removeRecordsByUrl(urlSet, normalizedUrlSet, removedUrlSet) {
+        if (!urlSet || urlSet.size === 0) return 0;
+        let removed = 0;
+        for (const [dateKey, records] of this.bookmarksByDate.entries()) {
+            const remaining = [];
+            for (const record of records) {
+                const recordUrl = record?.url || '';
+                const normalized = normalizedUrlSet ? normalizeHistoryUrlKey(recordUrl) : '';
+                if (urlSet.has(recordUrl) || (normalized && normalizedUrlSet && normalizedUrlSet.has(normalized))) {
+                    const visitTime = typeof record.visitTime === 'number'
+                        ? record.visitTime
+                        : (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
+                    if (recordUrl && visitTime) {
+                        this.visitKeySet.delete(`${recordUrl}|${visitTime}`);
+                    }
+                    if (removedUrlSet) {
+                        removedUrlSet.add(recordUrl);
+                        if (normalized) removedUrlSet.add(normalized);
+                    }
+                    removed += 1;
+                    continue;
+                }
+                remaining.push(record);
+            }
+            if (remaining.length) {
+                this.bookmarksByDate.set(dateKey, remaining);
+            } else {
+                this.bookmarksByDate.delete(dateKey);
+            }
+        }
+        return removed;
+    }
+
+    async syncHistoryForUrls(urls = []) {
+        const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
+        if (!browserAPI || !browserAPI.history) {
+            return { removed: 0, added: 0 };
+        }
+
+        const urlList = Array.isArray(urls)
+            ? urls.map(u => (typeof u === 'string' ? u.trim() : '')).filter(Boolean)
+            : [];
+        if (!urlList.length) {
+            return { removed: 0, added: 0 };
+        }
+
+        const normalizedSet = new Set();
+        const urlSet = new Set();
+        const dedupedUrls = [];
+        urlList.forEach((url) => {
+            const normalized = normalizeHistoryUrlKey(url);
+            const key = normalized || url;
+            if (urlSet.has(key)) return;
+            urlSet.add(key);
+            if (normalized) normalizedSet.add(normalized);
+            dedupedUrls.push(url);
+        });
+
+        const removedUrlSet = new Set();
+        const removed = this.removeRecordsByUrl(urlSet, normalizedSet, removedUrlSet);
+        const now = Date.now();
+        const lookbackMs = (typeof BROWSING_HISTORY_LOOKBACK_DAYS === 'number' && BROWSING_HISTORY_LOOKBACK_DAYS > 0)
+            ? BROWSING_HISTORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+            : 0;
+        const cutoffTime = lookbackMs ? (now - lookbackMs) : 0;
+        const maxVisitsPerUrl = (typeof BROWSING_HISTORY_MAX_VISITS_PER_URL === 'number' && BROWSING_HISTORY_MAX_VISITS_PER_URL > 0)
+            ? BROWSING_HISTORY_MAX_VISITS_PER_URL
+            : 0;
+        const hasGetVisits = typeof browserAPI.history.getVisits === 'function';
+
+        let bookmarkUrls = null;
+        let bookmarkTitles = null;
+        let titleDomainMap = null;
+        if (browserAPI.bookmarks && typeof browserAPI.bookmarks.getTree === 'function') {
+            try {
+                const tree = await browserAPI.bookmarks.getTree();
+                bookmarkUrls = new Set();
+                bookmarkTitles = new Set();
+                titleDomainMap = new Map();
+                this.collectBookmarkUrlsAndTitles(tree[0], bookmarkUrls, bookmarkTitles, [], titleDomainMap);
+            } catch (error) {
+                console.warn('[BrowsingHistoryCalendar] 获取书签集合失败:', error);
+                bookmarkUrls = null;
+                bookmarkTitles = null;
+                titleDomainMap = null;
+            }
+        }
+
+        const fetchHistoryItem = (url) => new Promise((resolve) => {
+            try {
+                browserAPI.history.search({
+                    text: url,
+                    startTime: 0,
+                    maxResults: 10
+                }, (results) => {
+                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                        resolve(null);
+                        return;
+                    }
+                    const match = Array.isArray(results)
+                        ? results.find(item => item && item.url === url)
+                        : null;
+                    resolve(match || null);
+                });
+            } catch (_) {
+                resolve(null);
+            }
+        });
+
+        const getVisitsAsync = (url) => new Promise((resolve) => {
+            try {
+                browserAPI.history.getVisits({ url }, (visits) => {
+                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                        resolve([]);
+                        return;
+                    }
+                    resolve(visits || []);
+                });
+            } catch (_) {
+                resolve([]);
+            }
+        });
+
+        let added = 0;
+
+        for (const url of dedupedUrls) {
+            const item = await fetchHistoryItem(url);
+            const baseItem = item || { url, title: url, typedCount: 0, id: url };
+            const normalized = normalizeHistoryUrlKey(url);
+            let shouldTrack = removedUrlSet.has(url) || (normalized && removedUrlSet.has(normalized));
+            if (!shouldTrack && bookmarkUrls && bookmarkUrls.has(url)) {
+                shouldTrack = true;
+            }
+            if (!shouldTrack && item?.title && bookmarkTitles && titleDomainMap) {
+                const title = item.title.trim();
+                if (title && bookmarkTitles.has(title)) {
+                    const allowedDomains = titleDomainMap.get(title);
+                    const itemDomain = getUrlDomain(url);
+                    if (allowedDomains && itemDomain && allowedDomains.has(itemDomain)) {
+                        shouldTrack = true;
+                    }
+                }
+            }
+            if (!shouldTrack) {
+                continue;
+            }
+
+            if (!hasGetVisits) {
+                const fallbackTime = item?.lastVisitTime || 0;
+                const fallbackCount = Math.max(item?.visitCount || 1, 1);
+                if (fallbackTime) {
+                    if (this.addVisitRecordFromHistory(baseItem, fallbackTime, {
+                        count: fallbackCount,
+                        aggregated: true,
+                        id: item?.id || url
+                    }, cutoffTime)) {
+                        added += 1;
+                    }
+                }
+                continue;
+            }
+
+            const visits = await getVisitsAsync(url);
+            let inserted = 0;
+            if (Array.isArray(visits) && visits.length) {
+                for (const visit of visits) {
+                    const visitTime = typeof visit.visitTime === 'number' ? visit.visitTime : 0;
+                    if (!visitTime) continue;
+                    if (this.addVisitRecordFromHistory(baseItem, visitTime, {
+                        id: `${baseItem.id || baseItem.url}-${visit.visitId || visitTime}-${inserted}`,
+                        transition: visit.transition || '',
+                        referringVisitId: visit.referringVisitId || null,
+                        count: 1
+                    }, cutoffTime)) {
+                        inserted += 1;
+                        added += 1;
+                    }
+                    if (maxVisitsPerUrl && inserted >= maxVisitsPerUrl) break;
+                }
+            } else if (item?.lastVisitTime) {
+                if (this.addVisitRecordFromHistory(baseItem, item.lastVisitTime, {
+                    count: Math.max(item.visitCount || 1, 1),
+                    aggregated: true,
+                    id: item.id || url
+                }, cutoffTime)) {
+                    added += 1;
+                }
+            }
+        }
+
+        this.pruneOldRecords(cutoffTime);
+        this.historyCacheMeta.lastSyncTime = now;
+        await this.saveBrowsingHistoryCache();
+        this.announceHistoryDataUpdated();
+        if (this.isVisible()) {
+            this.render();
+        }
+        return { removed, added };
     }
 
     async init() {
@@ -1070,6 +1293,7 @@ class BrowsingHistoryCalendar {
             const now = Date.now();
             const cutoffTime = lookbackMs ? (now - lookbackMs) : 0;
             const canIncremental = incremental && this.historyCacheMeta && this.historyCacheMeta.lastSyncTime;
+            const shouldResetCache = !canIncremental;
             const startTime = canIncremental
                 ? Math.max(0, (this.historyCacheMeta.lastSyncTime || 0) - BROWSING_HISTORY_INCREMENTAL_PADDING_MS)
                 : 0;
@@ -1156,7 +1380,7 @@ class BrowsingHistoryCalendar {
             if (!relevantHistoryItems.length) {
                 this.historyCacheMeta.lastSyncTime = now;
                 if (!canIncremental) {
-                    await this.saveBrowsingHistoryCache();
+                    await this.saveBrowsingHistoryCache({ reset: shouldResetCache });
                     this.announceHistoryDataUpdated();
                 }
                 return;
@@ -1183,7 +1407,7 @@ class BrowsingHistoryCalendar {
 
                 this.historyCacheMeta.lastSyncTime = now;
                 if (hasChanges || !canIncremental) {
-                    await this.saveBrowsingHistoryCache();
+                    await this.saveBrowsingHistoryCache({ reset: shouldResetCache });
                     this.announceHistoryDataUpdated();
                 }
                 return;
@@ -1255,7 +1479,7 @@ class BrowsingHistoryCalendar {
             this.historyCacheMeta.lastSyncTime = now;
 
             if (hasChanges || !canIncremental) {
-                await this.saveBrowsingHistoryCache();
+                await this.saveBrowsingHistoryCache({ reset: shouldResetCache });
                 this.announceHistoryDataUpdated();
             }
 
@@ -3263,6 +3487,7 @@ class BrowsingHistoryCalendar {
         }
 
         item.addEventListener('click', () => {
+            notifyBrowsingCalibrationInteraction('click', { source: 'browsing-history-calendar' });
             chrome.tabs.create({ url: bookmark.url });
         });
 
@@ -3864,6 +4089,7 @@ class BrowsingHistoryCalendar {
         }
 
         item.addEventListener('click', () => {
+            notifyBrowsingCalibrationInteraction('click', { source: 'browsing-history-calendar' });
             chrome.tabs.create({ url: bookmark.url });
         });
 
