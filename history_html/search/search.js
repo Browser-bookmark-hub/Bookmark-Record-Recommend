@@ -50,6 +50,36 @@ const searchUiState = {
     isHelpOpen: false
 };
 
+function isSidePanelModeInSearch() {
+    try {
+        if (window.__SIDE_PANEL_MODE__ === true) return true;
+        if (document && document.documentElement && document.documentElement.classList.contains('side-panel-mode')) return true;
+        const params = new URLSearchParams(window.location.search);
+        const flag = params.get('sidepanel') || params.get('side_panel') || params.get('panel');
+        return flag === '1' || flag === 'true';
+    } catch (_) {
+        return false;
+    }
+}
+
+function setSidePanelSearchExpanded(expanded) {
+    const container = document.querySelector('.search-container');
+    if (!container) return;
+
+    const shouldExpand = !!expanded;
+    if (shouldExpand) {
+        container.classList.add('side-panel-search-expanded');
+        return;
+    }
+
+    container.classList.remove('side-panel-search-expanded');
+}
+
+function isSidePanelSearchExpanded() {
+    const container = document.querySelector('.search-container');
+    return !!(container && container.classList.contains('side-panel-search-expanded'));
+}
+
 // ==================== 搜索上下文管理器 (Phase 4) ====================
 
 /**
@@ -2191,6 +2221,11 @@ function handleSearchKeydown(e) {
             hideSearchResultsPanel();
             toggleSearchModeMenu(false);
             toggleSearchHelpMenu(false);
+            if (isSidePanelModeInSearch()) {
+                const input = document.getElementById('searchInput');
+                const hasQuery = !!(input && String(input.value || '').trim());
+                if (!hasQuery) setSidePanelSearchExpanded(false);
+            }
         }
         return;
     }
@@ -2216,6 +2251,11 @@ function handleSearchKeydown(e) {
         hideSearchResultsPanel();
         toggleSearchModeMenu(false);
         toggleSearchHelpMenu(false);
+        if (isSidePanelModeInSearch()) {
+            const input = document.getElementById('searchInput');
+            const hasQuery = !!(input && String(input.value || '').trim());
+            if (!hasQuery) setSidePanelSearchExpanded(false);
+        }
     }
 }
 
@@ -2268,6 +2308,11 @@ function handleSearchOutsideClick(e) {
     hideSearchResultsPanel();
     toggleSearchModeMenu(false); // Close mode menu as well
     toggleSearchHelpMenu(false);
+    if (isSidePanelModeInSearch()) {
+        const input = document.getElementById('searchInput');
+        const hasQuery = !!(input && String(input.value || '').trim());
+        if (!hasQuery) setSidePanelSearchExpanded(false);
+    }
 }
 
 /**
@@ -2310,6 +2355,10 @@ function handleSearchInputFocus(e) {
         const inputEl = e.target;
         // Check if input element still exists and is focused (optional, but good for safety)
         if (!inputEl) return;
+
+        if (isSidePanelModeInSearch()) {
+            setSidePanelSearchExpanded(true);
+        }
 
         // 二次检查 View，防止 Timeout 期间切换了视图
         if (currentView !== 'additions' && currentView !== 'recommend') {
@@ -2594,8 +2643,9 @@ function renderSearchModeUI() {
     const mode = getActiveSearchMode();
     const isZh = currentLang === 'zh_CN';
     const label = isZh ? mode.label : mode.labelEn;
+    const modeColorClass = mode && mode.key === 'recommend' ? 'mode-color-orange' : 'mode-color-blue';
 
-    trigger.innerHTML = `<i class="fas ${mode.icon}"></i><span class="search-mode-label">${label}</span>`;
+    trigger.innerHTML = `<i class="fas ${mode.icon} ${modeColorClass}"></i><span class="search-mode-label ${modeColorClass}">${label}</span>`;
     trigger.title = isZh ? `搜索模式：${label}` : `Mode: ${label}`;
 }
 
@@ -2664,9 +2714,36 @@ function initSearchModeUI() {
 
         // Click: open help menu (per hint text)
         trigger.addEventListener('click', (e) => {
+            const view = getCurrentViewSafe();
+            if (view !== 'additions' && view !== 'recommend') return;
+
             e.stopPropagation();
+
+            if (isSidePanelModeInSearch()) {
+                const input = document.getElementById('searchInput');
+                if (!isSidePanelSearchExpanded()) {
+                    setSidePanelSearchExpanded(true);
+                    try {
+                        if (input) requestAnimationFrame(() => input.focus());
+                    } catch (_) { }
+                    return;
+                }
+
+                toggleSearchHelpMenu(false);
+                toggleSearchModeMenu();
+                try {
+                    if (input) requestAnimationFrame(() => input.focus());
+                } catch (_) { }
+                return;
+            }
+
             toggleSearchModeMenu(false);
             toggleSearchHelpMenu();
+
+            try {
+                const input = document.getElementById('searchInput');
+                if (input) requestAnimationFrame(() => input.focus());
+            } catch (_) { }
         });
 
         // Keyboard: allow mode cycling
@@ -2749,6 +2826,24 @@ function initSearchEvents() {
         // Phase 4.7: Exit filter mode when input is empty and loses focus
         searchInput.addEventListener('blur', () => {
             try {
+                if (isSidePanelModeInSearch()) {
+                    setTimeout(() => {
+                        try {
+                            const container = document.querySelector('.search-container');
+                            const activeEl = document.activeElement;
+                            if (container && activeEl && container.contains(activeEl)) return;
+
+                            const hasQuery = !!(searchInput && String(searchInput.value || '').trim());
+                            if (hasQuery) return;
+
+                            hideSearchResultsPanel();
+                            toggleSearchModeMenu(false);
+                            toggleSearchHelpMenu(false);
+                            setSidePanelSearchExpanded(false);
+                        } catch (_) { }
+                    }, 120);
+                }
+
                 // Use a small delay to allow click events on exit button to fire first
                 setTimeout(() => {
                     const q = (searchInput.value || '').trim();

@@ -19,6 +19,7 @@
     <script src="browsing_history_calendar.js" defer></script>
     <!-- 浏览历史辅助工具（通用工具函数） -->
     <script src="database/utils.js" defer></script>
+    <script src="sidepanel_toggle_bridge.js" defer></script>
     <script src="history.js" defer></script>
     <!-- 搜索模块 -->
     <script src="search/search.js" defer></script>
@@ -28,7 +29,9 @@
     <!-- 头部导航 -->
     <header class="history-header">
         <div class="header-left">
-            <h1 id="pageTitle">书签记录 &amp; 推荐</h1>
+            <div class="header-title-row">
+                <h1 id="pageTitle">书签记录 &amp; 推荐</h1>
+            </div>
             <span class="header-subtitle" id="pageSubtitle"></span>
         </div>
         <div class="header-right">
@@ -52,21 +55,112 @@
             <!-- 工具按钮组 -->
             <div class="tool-buttons">
 
-                <!-- 主题切换按钮 - 独立设置，主UI优先 -->
-                <button id="themeToggle" class="tool-btn">
+                <!-- 侧边栏中：跳转到 HTML 页面 -->
+                <button id="openHistoryPageBtn" class="tool-btn sidepanel-only open-html-btn" aria-label="Open HTML Page" type="button">
+                    <i class="fas fa-expand"></i>
+                    <span class="btn-tooltip" id="openHistoryPageTooltip"></span>
+                </button>
+
+                <!-- 统一设置按钮 -->
+                <button id="settingsToggle" class="tool-btn settings-btn" aria-label="Settings" type="button">
+                    <i class="fas fa-cog"></i>
+                    <span class="btn-tooltip" id="settingsTooltip"></span>
+                </button>
+
+                <!-- 保留隐藏代理按钮，供设置菜单触发现有逻辑 -->
+                <button id="themeToggle" class="tool-btn legacy-settings-proxy" tabindex="-1" aria-hidden="true" type="button">
                     <i class="fas fa-moon"></i>
                     <span class="btn-tooltip" id="themeTooltip"></span>
                 </button>
-                <!-- 语言切换按钮 - 独立设置，主UI优先 -->
-                <button id="langToggle" class="tool-btn">
+                <button id="langToggle" class="tool-btn legacy-settings-proxy" tabindex="-1" aria-hidden="true" type="button">
                     <span class="lang-text">EN</span>
                     <span class="btn-tooltip" id="langTooltip"></span>
                 </button>
-                <!-- 说明按钮：快捷键 & 开源信息 -->
-                <button id="helpToggle" class="tool-btn">
+                <button id="helpToggle" class="tool-btn legacy-settings-proxy" tabindex="-1" aria-hidden="true" type="button">
                     <i class="fab fa-github"></i>
                     <span class="btn-tooltip" id="helpTooltip"></span>
                 </button>
+            </div>
+
+            <div class="title-side-tools" id="titleSideTools">
+                <!-- HTML 页面中：打开/关闭浏览器侧边栏 -->
+                <button id="titleSidePanelToggleBtn" class="tool-btn title-sidepanel-toggle-btn page-only" aria-label="Open/Close Side Panel" type="button">
+                    <span class="title-sidepanel-icon" aria-hidden="true"></span>
+                    <span class="btn-tooltip" id="titleSidePanelToggleTooltip"></span>
+                </button>
+            </div>
+
+            <div id="settingsMenu" class="settings-menu" hidden>
+                <button class="settings-menu-item" data-action="toggle-theme" type="button">
+                    <i class="fas fa-moon"></i>
+                    <span id="settingsThemeText"></span>
+                </button>
+                <button class="settings-menu-item" data-action="toggle-language" type="button">
+                    <i class="fas fa-language"></i>
+                    <span id="settingsLanguageText"></span>
+                </button>
+                <button class="settings-menu-item" data-action="open-help" type="button">
+                    <i class="fab fa-github"></i>
+                    <span id="settingsHelpText"></span>
+                </button>
+                <div class="settings-menu-divider" aria-hidden="true"></div>
+                <button class="settings-menu-item settings-menu-item-expandable" data-action="toggle-sidebar-settings"
+                    id="sidebarSettingsToggle" type="button" aria-expanded="false">
+                    <i class="fas fa-columns"></i>
+                    <span id="settingsSidebarText"></span>
+                    <i class="fas fa-chevron-down settings-submenu-caret" aria-hidden="true"></i>
+                </button>
+                <div id="sidebarSettingsPanel" class="sidebar-settings-panel" hidden>
+                    <div class="sidebar-settings-row">
+                        <span class="sidebar-settings-label" id="sidebarCollapseModeLabel"></span>
+                        <div class="sidebar-mode-switch" role="group" aria-label="Sidebar Mode">
+                            <button class="sidebar-mode-btn" id="sidebarModeAutoBtn" data-action="set-sidebar-mode"
+                                data-mode="auto" type="button" aria-pressed="false">
+                                <span id="sidebarModeAutoText"></span>
+                            </button>
+                            <button class="sidebar-mode-btn" id="sidebarModeManualBtn" data-action="set-sidebar-mode"
+                                data-mode="manual" type="button" aria-pressed="false">
+                                <span id="sidebarModeManualText"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="settings-menu-divider sidebar-settings-divider" aria-hidden="true"></div>
+                    <div class="sidebar-settings-row sidebar-auto-threshold-row">
+                        <label class="sidebar-settings-label" for="sidebarAutoWidthInput" id="sidebarAutoWidthLabel"></label>
+                        <input id="sidebarAutoWidthInput" class="sidebar-settings-input" type="number" min="320" max="2000"
+                            step="10" />
+                    </div>
+                    <div class="sidebar-settings-row sidebar-auto-target-row">
+                        <span class="sidebar-settings-label" id="sidebarAutoStateLabel"></span>
+                        <div class="sidebar-state-switch" role="group" aria-label="Auto Target State">
+                            <button class="sidebar-state-btn" id="sidebarAutoStateCompactBtn"
+                                data-action="set-sidebar-auto-state" data-state="compact" type="button" aria-pressed="false">
+                                <span id="sidebarAutoStateCompactText"></span>
+                            </button>
+                            <button class="sidebar-state-btn" id="sidebarAutoStateHiddenBtn"
+                                data-action="set-sidebar-auto-state" data-state="hidden" type="button" aria-pressed="false">
+                                <span id="sidebarAutoStateHiddenText"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="sidebar-settings-row sidebar-manual-state-row">
+                        <span class="sidebar-settings-label" id="sidebarManualStateLabel"></span>
+                        <div class="sidebar-state-switch" role="group" aria-label="Manual State">
+                            <button class="sidebar-state-btn" id="sidebarManualStateExpandedBtn"
+                                data-action="set-sidebar-manual-state" data-state="expanded" type="button" aria-pressed="false">
+                                <span id="sidebarStateExpandedText"></span>
+                            </button>
+                            <button class="sidebar-state-btn" id="sidebarManualStateCompactBtn"
+                                data-action="set-sidebar-manual-state" data-state="compact" type="button" aria-pressed="false">
+                                <span id="sidebarStateCompactText"></span>
+                            </button>
+                            <button class="sidebar-state-btn" id="sidebarManualStateHiddenBtn"
+                                data-action="set-sidebar-manual-state" data-state="hidden" type="button" aria-pressed="false">
+                                <span id="sidebarStateHiddenText"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
@@ -76,9 +170,10 @@
         <!-- 左侧导航栏 -->
         <aside class="sidebar" id="sidebar">
             <!-- 侧边栏收起按钮 -->
-            <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开侧边栏">
+            <button class="sidebar-toggle" id="sidebarToggle" title="收起菜单栏" aria-label="收起菜单栏" aria-expanded="true">
                 <i class="fas fa-chevron-left"></i>
             </button>
+            <div class="sidebar-resize-handle" id="sidebarResizeHandle" aria-hidden="true"></div>
 
             <nav class="nav-tabs">
                 <div class="nav-group">

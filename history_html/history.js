@@ -55,6 +55,23 @@ let currentView = (() => {
         return DEFAULT_VIEW;
     }
 })();
+
+const isSidePanelMode = (() => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const flag = params.get('sidepanel') || params.get('side_panel') || params.get('panel');
+        return flag === '1' || flag === 'true';
+    } catch (_) {
+        return false;
+    }
+})();
+
+window.__SIDE_PANEL_MODE__ = isSidePanelMode;
+try {
+    if (isSidePanelMode && document && document.documentElement) {
+        document.documentElement.classList.add('side-panel-mode');
+    }
+} catch (_) { }
 // 尽早暴露给搜索模块，避免搜索模式短暂显示错误
 try { window.currentView = currentView; } catch (_) { }
 try {
@@ -83,6 +100,7 @@ const DATA_CACHE_KEYS = {
 let additionsCacheRestored = false;
 let saveAdditionsCacheTimer = null;
 let browsingHistoryRefreshPromise = null;
+let additionsTreeRefreshInFlight = null;
 
 function readCachedValue(key) {
     return new Promise((resolve) => {
@@ -109,25 +127,126 @@ function readCachedValue(key) {
     });
 }
 
-function writeCachedValue(key, value) {
+function setCachedValueToStorage(storageArea, key, value) {
     return new Promise((resolve) => {
+        storageArea.set({ [key]: value }, () => {
+            if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                resolve(browserAPI.runtime.lastError.message || String(browserAPI.runtime.lastError));
+                return;
+            }
+            resolve(null);
+        });
+    });
+}
+
+function isQuotaExceededErrorMessage(message) {
+    if (!message || typeof message !== 'string') return false;
+    const normalized = message.toLowerCase();
+    return normalized.includes('quota') || normalized.includes('kquotabytes') || normalized.includes('exceeded');
+}
+
+function buildAdditionsCachePayloadVariant(payload, options = {}) {
+    if (!payload || !Array.isArray(payload.bookmarks)) {
+        return payload;
+    }
+
+    const {
+        omitPath = false,
+        omitAncestors = false,
+        maxBookmarks = Infinity
+    } = options;
+
+    const source = payload.bookmarks;
+    const limited = Number.isFinite(maxBookmarks) ? source.slice(0, Math.max(0, maxBookmarks)) : source;
+
+    const bookmarks = limited
+        .map((entry) => {
+            if (!entry || !entry.url) return null;
+
+            const dateAdded = typeof entry.dateAdded === 'number'
+                ? entry.dateAdded
+                : (entry.dateAdded instanceof Date ? entry.dateAdded.getTime() : Date.now());
+
+            return {
+                id: entry.id,
+                title: entry.title || entry.url || '',
+                url: entry.url || '',
+                dateAdded,
+                parentId: entry.parentId || '',
+                path: omitPath ? '' : (entry.path || ''),
+                ancestorFolderIds: omitAncestors
+                    ? []
+                    : (Array.isArray(entry.ancestorFolderIds)
+                        ? entry.ancestorFolderIds.filter(id => id != null).map(id => String(id))
+                        : [])
+            };
+        })
+        .filter(Boolean);
+
+    return {
+        timestamp: payload.timestamp || Date.now(),
+        totalBookmarks: source.length,
+        truncated: Number.isFinite(maxBookmarks) ? source.length > bookmarks.length : false,
+        compact: omitPath || omitAncestors || Number.isFinite(maxBookmarks),
+        bookmarks
+    };
+}
+
+function writeCachedValue(key, value) {
+    return new Promise(async (resolve) => {
         const storageArea = getCacheStorageArea();
         if (storageArea) {
-            storageArea.set({ [key]: value }, () => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                    console.warn('[Cache] 写入失败:', browserAPI.runtime.lastError.message);
+            let writeError = await setCachedValueToStorage(storageArea, key, value);
+            if (!writeError) {
+                resolve({ ok: true, compact: false });
+                return;
+            }
+
+            if (
+                key === DATA_CACHE_KEYS.additions
+                && value
+                && Array.isArray(value.bookmarks)
+                && isQuotaExceededErrorMessage(writeError)
+            ) {
+                const fallbackStrategies = [
+                    { label: 'drop-path', options: { omitPath: true } },
+                    { label: 'drop-path-ancestor', options: { omitPath: true, omitAncestors: true } },
+                    { label: 'trim-12000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 12000 } },
+                    { label: 'trim-8000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 8000 } },
+                    { label: 'trim-5000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 5000 } },
+                    { label: 'trim-3000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 3000 } }
+                ];
+
+                for (const strategy of fallbackStrategies) {
+                    const fallbackPayload = buildAdditionsCachePayloadVariant(value, strategy.options);
+                    const fallbackError = await setCachedValueToStorage(storageArea, key, fallbackPayload);
+                    if (!fallbackError) {
+                        console.warn(`[Cache] 添加记录缓存超限，已降级保存(${strategy.label}): ${fallbackPayload.bookmarks.length}/${value.bookmarks.length}`);
+                        resolve({
+                            ok: true,
+                            compact: true,
+                            strategy: strategy.label,
+                            savedBookmarks: fallbackPayload.bookmarks.length,
+                            totalBookmarks: value.bookmarks.length
+                        });
+                        return;
+                    }
+                    writeError = fallbackError;
                 }
-                resolve();
-            });
+            }
+
+            console.warn('[Cache] 写入失败:', writeError);
+            resolve({ ok: false, error: writeError });
             return;
         }
 
         try {
             localStorage.setItem(key, JSON.stringify(value));
+            resolve({ ok: true, compact: false });
         } catch (error) {
             console.warn('[Cache] 写入 localStorage 失败:', error);
+            resolve({ ok: false, error: error?.message || String(error) });
         }
-        resolve();
     });
 }
 
@@ -136,13 +255,17 @@ function normalizeBookmarkCacheEntry(entry) {
     const timestamp = typeof entry.dateAdded === 'number'
         ? entry.dateAdded
         : (entry.dateAdded instanceof Date ? entry.dateAdded.getTime() : Date.now());
+    const ancestorFolderIds = Array.isArray(entry.ancestorFolderIds)
+        ? entry.ancestorFolderIds.filter(id => id != null).map(id => String(id))
+        : [];
     return {
         id: entry.id,
         title: entry.title || entry.url || '',
         url: entry.url || '',
         dateAdded: timestamp,
         parentId: entry.parentId || '',
-        path: entry.path || ''
+        path: entry.path || '',
+        ancestorFolderIds
     };
 }
 
@@ -159,7 +282,7 @@ async function ensureAdditionsCacheLoaded(skipRender) {
             additionsCacheRestored = true;
             rebuildBookmarkUrlSet();
             console.log('[AdditionsCache] 已从缓存恢复记录:', allBookmarks.length);
-            if (!skipRender) {
+            if (!skipRender && currentView === 'additions') {
                 renderAdditionsView();
             }
         }
@@ -174,7 +297,17 @@ async function persistAdditionsCache() {
             timestamp: Date.now(),
             bookmarks: allBookmarks.map(normalizeBookmarkCacheEntry).filter(Boolean)
         };
-        await writeCachedValue(DATA_CACHE_KEYS.additions, payload);
+
+        const result = await writeCachedValue(DATA_CACHE_KEYS.additions, payload);
+        if (result && result.ok === false) {
+            return;
+        }
+
+        if (result && result.compact) {
+            console.log('[AdditionsCache] 已降级保存:', `${result.savedBookmarks}/${result.totalBookmarks}`);
+            return;
+        }
+
         console.log('[AdditionsCache] 已保存:', payload.bookmarks.length);
     } catch (error) {
         console.warn('[AdditionsCache] 保存失败:', error);
@@ -1895,7 +2028,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateViewParamInUrl(currentView);
     } else if (requestedView && ALLOWED_VIEWS.includes(requestedView)) {
         currentView = requestedView;
-        console.log('[初始化] 从popup请求设置视图:', currentView);
+        console.log('[初始化] 从后台请求设置视图:', currentView);
         updateViewParamInUrl(currentView);
     } else {
         const lastView = localStorage.getItem('lastActiveView');
@@ -1917,7 +2050,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (_) { }
     }
 
-    // 如果popup请求打开刷新设置弹窗（推荐视图）
+    // 如果后台请求打开刷新设置弹窗（推荐视图）
     try {
         const result = await new Promise(resolve => {
             browserAPI.storage.local.get(['openRecommendRefreshSettings'], resolve);
@@ -2216,12 +2349,80 @@ function applyLanguage() {
     const timeTrackingWidgetEmptyText = document.getElementById('timeTrackingWidgetEmptyText');
     if (timeTrackingWidgetEmptyText) timeTrackingWidgetEmptyText.textContent = i18n.timeTrackingWidgetEmpty[currentLang];
 
+    const isEn = currentLang === 'en';
+
     const themeTooltip = document.getElementById('themeTooltip');
     if (themeTooltip) themeTooltip.textContent = i18n.themeTooltip[currentLang];
     const langTooltip = document.getElementById('langTooltip');
     if (langTooltip) langTooltip.textContent = i18n.langTooltip[currentLang];
     const helpTooltip = document.getElementById('helpTooltip');
     if (helpTooltip) helpTooltip.textContent = i18n.helpTooltip[currentLang];
+
+    const settingsToggle = document.getElementById('settingsToggle');
+    if (settingsToggle) settingsToggle.setAttribute('aria-label', isEn ? 'Settings' : '设置');
+    const settingsTooltip = document.getElementById('settingsTooltip');
+    if (settingsTooltip) settingsTooltip.textContent = isEn ? 'Settings' : '设置';
+
+    const settingsThemeText = document.getElementById('settingsThemeText');
+    if (settingsThemeText) settingsThemeText.textContent = '主题切换';
+    const settingsLanguageText = document.getElementById('settingsLanguageText');
+    if (settingsLanguageText) settingsLanguageText.textContent = '中文 - English';
+    const settingsHelpText = document.getElementById('settingsHelpText');
+    if (settingsHelpText) settingsHelpText.textContent = isEn ? 'Open Source & Shortcuts' : '开源信息与快捷键';
+    const settingsSidebarText = document.getElementById('settingsSidebarText');
+    if (settingsSidebarText) settingsSidebarText.textContent = isEn ? 'Sidebar Width Settings' : '菜单栏宽度设置';
+
+    const sidebarCollapseModeLabel = document.getElementById('sidebarCollapseModeLabel');
+    if (sidebarCollapseModeLabel) sidebarCollapseModeLabel.textContent = isEn ? 'Mode' : '模式';
+    const sidebarModeAutoText = document.getElementById('sidebarModeAutoText');
+    if (sidebarModeAutoText) sidebarModeAutoText.textContent = isEn ? 'Auto State' : '自动状态';
+    const sidebarModeManualText = document.getElementById('sidebarModeManualText');
+    if (sidebarModeManualText) sidebarModeManualText.textContent = isEn ? 'Manual State' : '手动状态';
+
+    const sidebarAutoWidthLabel = document.getElementById('sidebarAutoWidthLabel');
+    if (sidebarAutoWidthLabel) sidebarAutoWidthLabel.textContent = isEn ? 'Auto Threshold (px)' : '自动阈值 (px)';
+    const sidebarAutoStateLabel = document.getElementById('sidebarAutoStateLabel');
+    if (sidebarAutoStateLabel) sidebarAutoStateLabel.textContent = isEn ? 'Below Threshold' : '低于阈值时';
+    const sidebarAutoStateCompactText = document.getElementById('sidebarAutoStateCompactText');
+    if (sidebarAutoStateCompactText) sidebarAutoStateCompactText.textContent = isEn ? 'Compact' : '缩窄';
+    const sidebarAutoStateHiddenText = document.getElementById('sidebarAutoStateHiddenText');
+    if (sidebarAutoStateHiddenText) sidebarAutoStateHiddenText.textContent = isEn ? 'Hidden' : '隐藏';
+
+    const sidebarManualStateLabel = document.getElementById('sidebarManualStateLabel');
+    if (sidebarManualStateLabel) sidebarManualStateLabel.textContent = isEn ? 'Manual State' : '手动状态';
+    const sidebarStateExpandedText = document.getElementById('sidebarStateExpandedText');
+    if (sidebarStateExpandedText) sidebarStateExpandedText.textContent = isEn ? 'Expanded' : '展开';
+    const sidebarStateCompactText = document.getElementById('sidebarStateCompactText');
+    if (sidebarStateCompactText) sidebarStateCompactText.textContent = isEn ? 'Compact' : '缩窄';
+    const sidebarStateHiddenText = document.getElementById('sidebarStateHiddenText');
+    if (sidebarStateHiddenText) sidebarStateHiddenText.textContent = isEn ? 'Hidden' : '隐藏';
+
+    const settingsThemeIcon = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
+    if (settingsThemeIcon) {
+        settingsThemeIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
+
+    const openHistoryPageTooltip = document.getElementById('openHistoryPageTooltip');
+    if (openHistoryPageTooltip) {
+        openHistoryPageTooltip.textContent = isEn ? 'Open HTML Page' : '打开 HTML 页面';
+    }
+    const openHistoryPageBtn = document.getElementById('openHistoryPageBtn');
+    if (openHistoryPageBtn) {
+        const label = isEn ? 'Open HTML Page' : '打开 HTML 页面';
+        openHistoryPageBtn.setAttribute('aria-label', label);
+    }
+    const titleSidePanelToggleTooltip = document.getElementById('titleSidePanelToggleTooltip');
+    if (titleSidePanelToggleTooltip) {
+        titleSidePanelToggleTooltip.textContent = isEn ? 'Open Side Panel' : '打开侧边栏';
+    }
+    const titleSidePanelToggleBtn = document.getElementById('titleSidePanelToggleBtn');
+    if (titleSidePanelToggleBtn) {
+        const label = isEn ? 'Open Side Panel' : '打开侧边栏';
+        titleSidePanelToggleBtn.setAttribute('aria-label', label);
+    }
+    if (!isSidePanelMode) {
+        refreshTitleSidePanelToggleButtonState();
+    }
 
     const shortcutsModalTitle = document.getElementById('shortcutsModalTitle');
     if (shortcutsModalTitle) shortcutsModalTitle.textContent = i18n.shortcutsModalTitle[currentLang];
@@ -2585,11 +2786,24 @@ function applyLanguage() {
     if (themeIcon) {
         themeIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
+    const settingsThemeIconTail = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
+    if (settingsThemeIconTail) {
+        settingsThemeIconTail.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
 }
 
 // =============================================================================
 // UI 初始化
 // =============================================================================
+
+function openShortcutsInfoModal() {
+    const shortcutsModal = document.getElementById('shortcutsModal');
+    if (!shortcutsModal) return;
+    if (typeof updateShortcutsDisplay === 'function') {
+        updateShortcutsDisplay();
+    }
+    shortcutsModal.classList.add('show');
+}
 
 function initializeUI() {
     // 导航标签切换
@@ -2613,10 +2827,7 @@ function initializeUI() {
     const closeShortcutsModal = document.getElementById('closeShortcutsModal');
     if (helpToggle && shortcutsModal) {
         helpToggle.addEventListener('click', () => {
-            if (typeof updateShortcutsDisplay === 'function') {
-                updateShortcutsDisplay();
-            }
-            shortcutsModal.classList.add('show');
+            openShortcutsInfoModal();
         });
     }
     if (closeShortcutsModal && shortcutsModal) {
@@ -2631,6 +2842,10 @@ function initializeUI() {
             }
         });
     }
+
+    setupOpenHistoryPageButton();
+    setupTitleSidePanelToggleButton();
+    setupSettingsMenu();
 
     // 搜索
     const searchInputEl = document.getElementById('searchInput');
@@ -2661,21 +2876,59 @@ function initializeUI() {
 // 数据加载
 // =============================================================================
 
-async function loadAllData(options = {}) {
-    const { skipRender = false } = options;
-    console.log('[loadAllData] 开始加载所有数据...');
+async function refreshAdditionsDataFromTree(options = {}) {
+    const { renderAfter = false } = options;
 
-    try {
-        await ensureAdditionsCacheLoaded(skipRender);
+    if (additionsTreeRefreshInFlight) {
+        return await additionsTreeRefreshInFlight;
+    }
 
-        const bookmarkTree = await loadBookmarkTree();
+    additionsTreeRefreshInFlight = (async () => {
+        const bookmarkTree = cachedBookmarkTree || await loadBookmarkTree();
         allBookmarks = flattenBookmarkTree(bookmarkTree);
         rebuildBookmarkUrlSet();
         additionsCacheRestored = true;
-        await persistAdditionsCache();
         cachedBookmarkTree = bookmarkTree;
+        persistAdditionsCache();
 
-        console.log('[loadAllData] 数据加载完成:', {
+        if (renderAfter && currentView === 'additions') {
+            renderAdditionsView();
+        }
+
+        return allBookmarks;
+    })();
+
+    try {
+        return await additionsTreeRefreshInFlight;
+    } finally {
+        additionsTreeRefreshInFlight = null;
+    }
+}
+
+async function loadAllData(options = {}) {
+    const { skipRender = false, forceRefresh = false } = options;
+    console.log('[loadAllData] 开始加载所有数据...');
+
+    try {
+        await ensureAdditionsCacheLoaded(skipRender || currentView !== 'additions');
+
+        const hasCachedBookmarks = additionsCacheRestored && allBookmarks.length > 0;
+
+        if (hasCachedBookmarks && !forceRefresh) {
+            console.log('[loadAllData] 命中共享缓存，后台刷新书签树...');
+            refreshAdditionsDataFromTree({ renderAfter: !skipRender }).catch((e) => {
+                console.warn('[loadAllData] 后台刷新书签树失败:', e);
+            });
+
+            console.log('[loadAllData] 数据加载完成(缓存):', {
+                书签总数: allBookmarks.length
+            });
+            return;
+        }
+
+        await refreshAdditionsDataFromTree({ renderAfter: !skipRender });
+
+        console.log('[loadAllData] 数据加载完成(实时):', {
             书签总数: allBookmarks.length
         });
 
@@ -2822,7 +3075,9 @@ function loadBookmarkTree() {
     });
 }
 
-function flattenBookmarkTree(node, parentPath = '') {
+function flattenBookmarkTree(node, parentPath = '', ancestorFolderIds = []) {
+    if (!node) return [];
+
     const bookmarks = [];
     const currentPath = parentPath ? `${parentPath}/${node.title}` : node.title;
 
@@ -2833,13 +3088,15 @@ function flattenBookmarkTree(node, parentPath = '') {
             url: node.url,
             dateAdded: node.dateAdded,
             path: currentPath,
-            parentId: node.parentId
+            parentId: node.parentId,
+            ancestorFolderIds: [...ancestorFolderIds]
         });
     }
 
     if (node.children) {
+        const nextAncestors = node.url ? ancestorFolderIds : [...ancestorFolderIds, node.id];
         node.children.forEach(child => {
-            bookmarks.push(...flattenBookmarkTree(child, currentPath));
+            bookmarks.push(...flattenBookmarkTree(child, currentPath, nextAncestors));
         });
     }
 
@@ -3209,11 +3466,13 @@ function initTimeTrackingWidget() {
 
     // 检查侧边栏状态，只有展开时才启动刷新
     const sidebar = document.getElementById('sidebar');
-    const isCollapsed = sidebar && sidebar.classList.contains('collapsed');
-    if (!isCollapsed) {
+    const collapseState = sidebar?.dataset?.collapseState || (sidebar?.classList?.contains('compact')
+        ? 'compact'
+        : (sidebar?.classList?.contains('hidden') || sidebar?.classList?.contains('collapsed') ? 'hidden' : 'expanded'));
+    if (collapseState === 'expanded') {
         startTimeTrackingWidgetRefresh();
     } else {
-        console.log('[时间捕捉小组件] 侧边栏收起，跳过刷新启动');
+        console.log('[时间捕捉小组件] 侧边栏非展开状态，跳过刷新启动:', collapseState);
     }
 }
 
@@ -3224,79 +3483,781 @@ function initTimeTrackingWidget() {
 function initSidebarToggle() {
     const sidebar = document.getElementById('sidebar');
     const toggleBtn = document.getElementById('sidebarToggle');
+    const resizeHandle = document.getElementById('sidebarResizeHandle');
 
     if (!sidebar || !toggleBtn) {
         console.warn('[侧边栏] 找不到侧边栏或切换按钮');
         return;
     }
+    if (!resizeHandle) {
+        console.warn('[侧边栏] 找不到宽度拖拽条，将跳过拖拽改宽');
+    }
 
-    // 根据当前实际 DOM 宽度更新侧边栏宽度 CSS 变量
+    const SIDEBAR_STATE_KEY = 'sidebarCollapseState';
+    const SIDEBAR_MODE_KEY = 'directoryCollapseMode';
+    const SIDEBAR_AUTO_WIDTH_KEY = 'directoryAutoCollapseWidth';
+    const SIDEBAR_AUTO_STATE_KEY = 'sidebarAutoCollapseState';
+    const SIDEBAR_MANUAL_KEY = 'sidebarManualOverride';
+    const SIDEBAR_POSITION_KEY = 'sidebarDockSide';
+    const SIDEBAR_WIDTH_LEFT_KEY = 'sidebarExpandedWidthLeft';
+    const SIDEBAR_WIDTH_RIGHT_KEY = 'sidebarExpandedWidthRight';
+    const SIDEBAR_TOGGLE_TOP_RATIO_KEY = 'sidebarToggleTopRatio';
+    const LEGACY_COLLAPSED_KEY = 'sidebarCollapsed';
+
+    const SIDEBAR_STATES = ['expanded', 'compact', 'hidden'];
+    const SIDEBAR_POSITIONS = ['left', 'right'];
+    const SIDEBAR_MODE_AUTO = 'auto';
+    const SIDEBAR_MODE_MANUAL = 'manual';
+
+    const AUTO_COLLAPSE_WIDTH_DEFAULT = 600;
+    const AUTO_COLLAPSE_WIDTH_MIN = 320;
+    const AUTO_COLLAPSE_WIDTH_MAX = 2000;
+
+    const SIDEBAR_MIN_WIDTH = 180;
+    const SIDEBAR_MAX_WIDTH = 560;
+    const SIDEBAR_RESIZE_COMPACT_THRESHOLD = 56;
+
+    const TOGGLE_VERTICAL_MARGIN_PX = 28;
+    const TOGGLE_DEFAULT_RATIO = 0.65;
+    const TOGGLE_RATIO_MIN = 0.08;
+    const TOGGLE_RATIO_MAX = 0.92;
+    const TOGGLE_DRAG_ACTIVATE_THRESHOLD = 10;
+    const TOGGLE_HINT_HOLD_DELAY_MS = 160;
+    const TOGGLE_DRAG_DIRECTION_THRESHOLD = 8;
+    const TOGGLE_DRAG_SWITCH_THRESHOLD = 42;
+
+    const AUTO_RESIZE_DEBOUNCE_MS = 180;
+
+    let toggleDragSession = null;
+    let resizeDragSession = null;
+    let suppressToggleClick = false;
+    let autoResizeDebounceTimer = null;
+
+    let toggleHintUp = null;
+    let toggleHintDown = null;
+    let toggleHintOutward = null;
+    let toggleHintHoldTimer = null;
+    let toggleHoldVisualActive = false;
+    let toggleDragGuideDirection = null;
+
+    function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+    }
+
+    function readStorage(key) {
+        try {
+            return localStorage.getItem(key);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function writeStorage(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (_) { }
+    }
+
+    function normalizeSidebarState(raw) {
+        const value = String(raw || '').toLowerCase();
+        if (value === 'collapsed') return 'hidden';
+        return SIDEBAR_STATES.includes(value) ? value : null;
+    }
+
+    function normalizeSidebarPosition(raw) {
+        const value = String(raw || '').toLowerCase();
+        return SIDEBAR_POSITIONS.includes(value) ? value : 'left';
+    }
+
+    function normalizeSidebarMode(raw) {
+        const value = String(raw || '').toLowerCase();
+        return value === SIDEBAR_MODE_MANUAL ? SIDEBAR_MODE_MANUAL : SIDEBAR_MODE_AUTO;
+    }
+
+    function normalizeAutoCollapseWidth(raw) {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return AUTO_COLLAPSE_WIDTH_DEFAULT;
+        return clamp(Math.round(value), AUTO_COLLAPSE_WIDTH_MIN, AUTO_COLLAPSE_WIDTH_MAX);
+    }
+
+    function normalizeAutoCollapsedState(raw) {
+        const value = normalizeSidebarState(raw);
+        return value === 'compact' || value === 'hidden' ? value : 'hidden';
+    }
+
+    function normalizeSidebarWidth(raw) {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return null;
+        return clamp(Math.round(value), SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+    }
+
+    function normalizeToggleRatio(raw) {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return null;
+        return clamp(value, TOGGLE_RATIO_MIN, TOGGLE_RATIO_MAX);
+    }
+
+    let toggleTopRatio = normalizeToggleRatio(readStorage(SIDEBAR_TOGGLE_TOP_RATIO_KEY));
+    if (toggleTopRatio == null) toggleTopRatio = TOGGLE_DEFAULT_RATIO;
+
+    let sidebarPosition = normalizeSidebarPosition(readStorage(SIDEBAR_POSITION_KEY));
+
+    let sidebarMode = normalizeSidebarMode(readStorage(SIDEBAR_MODE_KEY));
+    let autoCollapseWidth = normalizeAutoCollapseWidth(readStorage(SIDEBAR_AUTO_WIDTH_KEY));
+    let autoCollapsedState = normalizeAutoCollapsedState(readStorage(SIDEBAR_AUTO_STATE_KEY));
+
+    const legacyCollapsed = readStorage(LEGACY_COLLAPSED_KEY) === 'true';
+    let currentState = normalizeSidebarState(readStorage(SIDEBAR_STATE_KEY));
+    if (!currentState) {
+        currentState = legacyCollapsed ? 'hidden' : 'expanded';
+    }
+
+    const initialRect = sidebar.getBoundingClientRect();
+    const defaultExpandedWidth = normalizeSidebarWidth(initialRect && initialRect.width)
+        || normalizeSidebarWidth(getComputedStyle(sidebar).width)
+        || 260;
+
+    let expandedWidthBySide = {
+        left: normalizeSidebarWidth(readStorage(SIDEBAR_WIDTH_LEFT_KEY)) || defaultExpandedWidth,
+        right: normalizeSidebarWidth(readStorage(SIDEBAR_WIDTH_RIGHT_KEY)) || defaultExpandedWidth
+    };
+
+    function getExpandedWidth(position) {
+        const safePosition = normalizeSidebarPosition(position);
+        const width = expandedWidthBySide[safePosition];
+        return normalizeSidebarWidth(width) || defaultExpandedWidth;
+    }
+
+    function applyExpandedWidthToDom(position = sidebarPosition) {
+        const safePosition = normalizeSidebarPosition(position);
+        const width = getExpandedWidth(safePosition);
+        document.documentElement.style.setProperty('--sidebar-expanded-width', `${width}px`);
+        if (currentState === 'expanded') {
+            sidebar.style.width = `${width}px`;
+        }
+    }
+
+    function setExpandedWidth(position, width, options = {}) {
+        const safePosition = normalizeSidebarPosition(position);
+        const safeWidth = normalizeSidebarWidth(width) || defaultExpandedWidth;
+        expandedWidthBySide[safePosition] = safeWidth;
+
+        if (options.persist !== false) {
+            writeStorage(
+                safePosition === 'right' ? SIDEBAR_WIDTH_RIGHT_KEY : SIDEBAR_WIDTH_LEFT_KEY,
+                String(safeWidth)
+            );
+        }
+
+        if (options.apply !== false) {
+            applyExpandedWidthToDom(safePosition);
+        }
+
+        return safeWidth;
+    }
+
+    function getAutoState() {
+        return window.innerWidth <= autoCollapseWidth ? autoCollapsedState : 'expanded';
+    }
+
+    function getNextCycleState(state) {
+        if (state === 'expanded') return 'compact';
+        if (state === 'compact') return 'hidden';
+        return 'expanded';
+    }
+
+    function getSidebarStateSnapshot() {
+        return {
+            state: currentState,
+            mode: sidebarMode,
+            autoCollapseWidth,
+            autoCollapsedState,
+            position: sidebarPosition,
+            expandedWidth: getExpandedWidth(sidebarPosition)
+        };
+    }
+
+    function emitSidebarSettingsChanged() {
+        try {
+            window.dispatchEvent(new CustomEvent('history-sidebar-settings-changed', {
+                detail: getSidebarStateSnapshot()
+            }));
+        } catch (_) { }
+    }
+
+    function ensureRootSidebarStateClass(state) {
+        const root = document.documentElement;
+        root.classList.remove('sidebar-state-expanded', 'sidebar-state-compact', 'sidebar-state-hidden');
+        root.classList.add(`sidebar-state-${state}`);
+    }
+
     function syncSidebarWidth() {
-        // 直接读取 sidebar 实际渲染宽度，兼容：
-        // - 手动折叠/展开（.collapsed）
-        // - 响应式 CSS 自动收缩
         const rect = sidebar.getBoundingClientRect();
-        const widthPx = rect && rect.width ? `${rect.width}px` : '260px';
+        const widthPx = rect && rect.width ? `${Math.max(0, Math.round(rect.width))}px` : '0px';
         document.documentElement.style.setProperty('--sidebar-width', widthPx);
     }
 
-    // 更新小组件切换按钮显隐状态
     function updateWidgetToggleBtn() {
         const btn = document.getElementById('timeTrackingToggleViewBtn');
-        if (btn) {
-            // 覆盖手动收起 + 自动收缩（宽度阈值更高）
-            const isClassCollapsed = sidebar.classList.contains('collapsed');
-            const isVisuallyCollapsed = sidebar.offsetWidth < 230;
-            btn.style.display = (isClassCollapsed || isVisuallyCollapsed) ? 'none' : '';
+        if (!btn) return;
+        btn.style.display = currentState === 'expanded' ? '' : 'none';
+    }
+
+    function applySidebarPosition(position, options = {}) {
+        const nextPosition = normalizeSidebarPosition(position);
+        sidebarPosition = nextPosition;
+
+        const onRight = nextPosition === 'right';
+        sidebar.classList.toggle('position-right', onRight);
+        sidebar.dataset.position = nextPosition;
+        document.documentElement.classList.toggle('sidebar-on-right', onRight);
+        applyExpandedWidthToDom(nextPosition);
+
+        if (options.persist !== false) {
+            writeStorage(SIDEBAR_POSITION_KEY, nextPosition);
+        }
+
+        updateToggleLabel();
+        syncSidebarWidth();
+        emitSidebarSettingsChanged();
+    }
+
+    function setToggleTopRatio(ratio, options = {}) {
+        const safeRatio = normalizeToggleRatio(ratio);
+        if (safeRatio == null) return;
+        toggleTopRatio = safeRatio;
+        const percent = `${(safeRatio * 100).toFixed(2)}%`;
+        document.documentElement.style.setProperty('--sidebar-toggle-top', percent);
+        if (options.persist !== false) {
+            writeStorage(SIDEBAR_TOGGLE_TOP_RATIO_KEY, String(safeRatio));
         }
     }
 
-    // 从 localStorage 恢复侧边栏状态
-    const savedState = localStorage.getItem('sidebarCollapsed');
-    if (savedState === 'true') {
-        sidebar.classList.add('collapsed');
-        console.log('[侧边栏] 恢复收起状态');
+    function getToggleRatioFromClientY(clientY) {
+        const rect = sidebar.getBoundingClientRect();
+        if (!rect || !rect.height) return toggleTopRatio;
+        const minTop = TOGGLE_VERTICAL_MARGIN_PX;
+        const maxTop = Math.max(minTop, rect.height - TOGGLE_VERTICAL_MARGIN_PX);
+        const localY = clamp(clientY - rect.top, minTop, maxTop);
+        return localY / rect.height;
     }
-    // 恢复完状态后，同步一次真实宽度
-    syncSidebarWidth();
-    updateWidgetToggleBtn();
 
-    // 点击切换按钮
-    toggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sidebar.classList.toggle('collapsed');
+    function persistSidebarState(state) {
+        const safe = normalizeSidebarState(state) || 'expanded';
+        writeStorage(SIDEBAR_STATE_KEY, safe);
+        writeStorage(LEGACY_COLLAPSED_KEY, safe === 'expanded' ? 'false' : 'true');
+    }
 
-        // 保存状态到 localStorage
-        const isCollapsed = sidebar.classList.contains('collapsed');
-        localStorage.setItem('sidebarCollapsed', isCollapsed.toString());
+    function persistSidebarPrefs() {
+        writeStorage(SIDEBAR_MODE_KEY, sidebarMode);
+        writeStorage(SIDEBAR_AUTO_WIDTH_KEY, String(autoCollapseWidth));
+        writeStorage(SIDEBAR_AUTO_STATE_KEY, autoCollapsedState);
+    }
 
-        // 更新 CSS 变量（用于弹窗定位）
-        syncSidebarWidth();
-        updateWidgetToggleBtn();
+    function ensureToggleDragHints() {
+        if (!toggleHintUp || !toggleHintUp.isConnected) {
+            toggleHintUp = toggleBtn.querySelector('.sidebar-toggle-hint-up');
+            if (!toggleHintUp) {
+                toggleHintUp = document.createElement('span');
+                toggleHintUp.className = 'sidebar-toggle-hint sidebar-toggle-hint-up';
+                toggleHintUp.setAttribute('aria-hidden', 'true');
+                toggleBtn.appendChild(toggleHintUp);
+            }
+        }
 
-        // 控制时间捕捉小组件刷新：收起时停止，展开时恢复
-        if (isCollapsed) {
-            stopTimeTrackingWidgetRefresh();
+        if (!toggleHintDown || !toggleHintDown.isConnected) {
+            toggleHintDown = toggleBtn.querySelector('.sidebar-toggle-hint-down');
+            if (!toggleHintDown) {
+                toggleHintDown = document.createElement('span');
+                toggleHintDown.className = 'sidebar-toggle-hint sidebar-toggle-hint-down';
+                toggleHintDown.setAttribute('aria-hidden', 'true');
+                toggleBtn.appendChild(toggleHintDown);
+            }
+        }
+
+        if (!toggleHintOutward || !toggleHintOutward.isConnected) {
+            toggleHintOutward = toggleBtn.querySelector('.sidebar-toggle-hint-outward');
+            if (!toggleHintOutward) {
+                toggleHintOutward = document.createElement('span');
+                toggleHintOutward.className = 'sidebar-toggle-hint sidebar-toggle-hint-outward';
+                toggleHintOutward.setAttribute('aria-hidden', 'true');
+                toggleBtn.appendChild(toggleHintOutward);
+            }
+        }
+    }
+
+    function setToggleHoldVisualActive(active) {
+        const nextActive = active === true;
+        if (toggleHoldVisualActive === nextActive) return;
+        toggleHoldVisualActive = nextActive;
+        toggleBtn.classList.toggle('sidebar-toggle-hold-active', nextActive);
+        updateToggleIcon();
+    }
+
+    function setToggleDragGuideDirection(direction) {
+        const safeDirection = (direction === 'up' || direction === 'down' || direction === 'outward' || direction === 'inward')
+            ? direction
+            : null;
+        if (toggleDragGuideDirection === safeDirection) return;
+        toggleDragGuideDirection = safeDirection;
+        toggleBtn.dataset.dragGuide = safeDirection || '';
+        updateToggleIcon();
+    }
+
+    function getToggleDragGuideDirection(dx, dy) {
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        if (absDy >= TOGGLE_DRAG_DIRECTION_THRESHOLD && absDy > absDx) {
+            return dy < 0 ? 'up' : 'down';
+        }
+
+        if (absDx >= TOGGLE_DRAG_DIRECTION_THRESHOLD && absDx > absDy) {
+            const outward = (sidebarPosition === 'left' && dx > 0)
+                || (sidebarPosition === 'right' && dx < 0);
+            if (outward) return 'outward';
+            return 'inward';
+        }
+
+        return null;
+    }
+
+    function clearToggleHintHoldTimer() {
+        if (toggleHintHoldTimer == null) return;
+        window.clearTimeout(toggleHintHoldTimer);
+        toggleHintHoldTimer = null;
+    }
+
+    function scheduleToggleHintReveal() {
+        clearToggleHintHoldTimer();
+        toggleHintHoldTimer = window.setTimeout(() => {
+            toggleHintHoldTimer = null;
+            if (!toggleDragSession) return;
+            toggleBtn.classList.add('sidebar-toggle-show-hints');
+            setToggleHoldVisualActive(true);
+        }, TOGGLE_HINT_HOLD_DELAY_MS);
+    }
+
+    function updateToggleIcon() {
+        const icon = toggleBtn.querySelector('i');
+        if (!icon) return;
+
+        const collapsePointTo = sidebarPosition === 'left' ? 'left' : 'right';
+        const expandPointTo = sidebarPosition === 'left' ? 'right' : 'left';
+        const defaultPointTo = currentState === 'hidden' ? expandPointTo : collapsePointTo;
+
+        if (toggleHoldVisualActive) {
+            if (toggleDragGuideDirection === 'up') {
+                icon.className = 'fas fa-chevron-up';
+                return;
+            }
+            if (toggleDragGuideDirection === 'down') {
+                icon.className = 'fas fa-chevron-down';
+                return;
+            }
+            if (toggleDragGuideDirection === 'outward') {
+                icon.className = `fas fa-chevron-${expandPointTo}`;
+                return;
+            }
+            if (toggleDragGuideDirection === 'inward') {
+                icon.className = `fas fa-chevron-${collapsePointTo}`;
+                return;
+            }
+            icon.className = `fas fa-chevron-${expandPointTo}`;
+            return;
+        }
+
+        icon.className = `fas fa-chevron-${defaultPointTo}`;
+    }
+
+    function updateToggleLabel() {
+        const isEn = currentLang === 'en';
+        const compactTitle = isEn ? 'Compact sidebar' : '缩窄菜单栏';
+        const hideTitle = isEn ? 'Hide sidebar' : '隐藏菜单栏';
+        const expandTitle = isEn ? 'Expand sidebar' : '展开菜单栏';
+
+        let title = expandTitle;
+        if (currentState === 'expanded') title = compactTitle;
+        else if (currentState === 'compact') title = hideTitle;
+
+        toggleBtn.setAttribute('title', title);
+        toggleBtn.setAttribute('aria-label', title);
+        toggleBtn.setAttribute('aria-expanded', currentState === 'expanded' ? 'true' : 'false');
+        toggleBtn.dataset.collapseState = currentState;
+
+        ensureToggleDragHints();
+        updateToggleIcon();
+    }
+
+    function applySidebarState(state, options = {}) {
+        const safeState = normalizeSidebarState(state) || 'expanded';
+        const prevState = currentState;
+        currentState = safeState;
+
+        sidebar.classList.toggle('compact', safeState === 'compact');
+        sidebar.classList.toggle('hidden', safeState === 'hidden');
+        sidebar.classList.toggle('collapsed', safeState === 'hidden');
+        sidebar.dataset.collapseState = safeState;
+
+        if (safeState === 'expanded') {
+            applyExpandedWidthToDom(sidebarPosition);
         } else {
-            startTimeTrackingWidgetRefresh();
+            sidebar.style.removeProperty('width');
+            document.documentElement.style.setProperty('--sidebar-expanded-width', `${getExpandedWidth(sidebarPosition)}px`);
         }
 
-        console.log('[侧边栏]', isCollapsed ? '已收起' : '已展开');
-    });
+        ensureRootSidebarStateClass(safeState);
+        persistSidebarState(safeState);
 
-    // 窗口尺寸变化时，侧边栏可能被 CSS 自动收缩/展开，这里也同步一次宽度
-    window.addEventListener('resize', () => {
+        if (options.persistMode === true) {
+            persistSidebarPrefs();
+        }
+
+        if (safeState === 'expanded') {
+            try { startTimeTrackingWidgetRefresh(); } catch (_) { }
+        } else if (prevState !== safeState) {
+            try { stopTimeTrackingWidgetRefresh(); } catch (_) { }
+        }
+
         syncSidebarWidth();
         updateWidgetToggleBtn();
+        updateToggleLabel();
+        emitSidebarSettingsChanged();
+        return safeState;
+    }
+
+    function setSidebarState(state, options = {}) {
+        const manual = options && options.manual === true;
+        if (manual && sidebarMode !== SIDEBAR_MODE_MANUAL) {
+            sidebarMode = SIDEBAR_MODE_MANUAL;
+            writeStorage(SIDEBAR_MODE_KEY, sidebarMode);
+            writeStorage(SIDEBAR_MANUAL_KEY, 'true');
+        }
+        return applySidebarState(state, { persistMode: false });
+    }
+
+    function applyAutoState(options = {}) {
+        const force = options && options.force === true;
+        if (sidebarMode !== SIDEBAR_MODE_AUTO && !force) {
+            return;
+        }
+        const targetState = getAutoState();
+        writeStorage(SIDEBAR_MANUAL_KEY, 'false');
+        applySidebarState(targetState, { persistMode: false });
+    }
+
+    function scheduleAutoStateOnResize() {
+        if (sidebarMode !== SIDEBAR_MODE_AUTO) return;
+        if (autoResizeDebounceTimer != null) {
+            window.clearTimeout(autoResizeDebounceTimer);
+        }
+        autoResizeDebounceTimer = window.setTimeout(() => {
+            autoResizeDebounceTimer = null;
+            applyAutoState({ force: true });
+            syncSidebarWidth();
+        }, AUTO_RESIZE_DEBOUNCE_MS);
+    }
+
+    function setSidebarMode(mode, options = {}) {
+        const nextMode = normalizeSidebarMode(mode);
+        if (nextMode === sidebarMode && !options.forceApply) {
+            emitSidebarSettingsChanged();
+            return sidebarMode;
+        }
+
+        sidebarMode = nextMode;
+        writeStorage(SIDEBAR_MODE_KEY, sidebarMode);
+        writeStorage(SIDEBAR_MANUAL_KEY, sidebarMode === SIDEBAR_MODE_MANUAL ? 'true' : 'false');
+
+        if (sidebarMode === SIDEBAR_MODE_AUTO) {
+            applyAutoState({ force: true });
+        } else {
+            applySidebarState(currentState);
+        }
+
+        emitSidebarSettingsChanged();
+        return sidebarMode;
+    }
+
+    function setAutoCollapseWidth(width, options = {}) {
+        autoCollapseWidth = normalizeAutoCollapseWidth(width);
+        writeStorage(SIDEBAR_AUTO_WIDTH_KEY, String(autoCollapseWidth));
+
+        if (sidebarMode === SIDEBAR_MODE_AUTO || options.forceApply === true) {
+            applyAutoState({ force: true });
+        }
+
+        emitSidebarSettingsChanged();
+        return autoCollapseWidth;
+    }
+
+    function setAutoCollapsedState(state, options = {}) {
+        autoCollapsedState = normalizeAutoCollapsedState(state);
+        writeStorage(SIDEBAR_AUTO_STATE_KEY, autoCollapsedState);
+
+        if (sidebarMode === SIDEBAR_MODE_AUTO || options.forceApply === true) {
+            applyAutoState({ force: true });
+        }
+
+        emitSidebarSettingsChanged();
+        return autoCollapsedState;
+    }
+
+    const sidebarController = {
+        getState: () => getSidebarStateSnapshot(),
+        setMode: (mode) => setSidebarMode(mode),
+        setAutoWidth: (width) => setAutoCollapseWidth(width),
+        setAutoCollapsedState: (state) => setAutoCollapsedState(state),
+        setManualState: (state) => setSidebarState(state, { manual: true }),
+        cycleState: () => setSidebarState(getNextCycleState(currentState), { manual: true }),
+        setPosition: (position) => applySidebarPosition(position, { persist: true }),
+        applyAutoState: () => applyAutoState({ force: true })
+    };
+
+    window.__historySidebarController = sidebarController;
+
+    try {
+        window.dispatchEvent(new CustomEvent('history-sidebar-settings-ready', {
+            detail: getSidebarStateSnapshot()
+        }));
+    } catch (_) { }
+
+    applySidebarPosition(sidebarPosition, { persist: false });
+    setToggleTopRatio(toggleTopRatio, { persist: false });
+
+    if (sidebarMode === SIDEBAR_MODE_AUTO) {
+        applyAutoState({ force: true });
+    } else {
+        applySidebarState(currentState);
+    }
+
+    // 点击切换按钮：expanded -> compact -> hidden -> expanded
+    toggleBtn.addEventListener('click', (e) => {
+        if (suppressToggleClick) {
+            suppressToggleClick = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+
+        e.stopPropagation();
+        const nextState = getNextCycleState(currentState);
+        setSidebarState(nextState, { manual: true });
+        console.log('[侧边栏] 状态切换:', nextState);
     });
 
-    // 监听侧边栏真实尺寸变化，避免非 resize 场景下按钮状态错误
+    function clearToggleDragSession() {
+        clearToggleHintHoldTimer();
+        setToggleDragGuideDirection(null);
+
+        toggleBtn.classList.remove('sidebar-toggle-dragging');
+        toggleBtn.classList.remove('sidebar-toggle-show-hints');
+        setToggleHoldVisualActive(false);
+
+        if (!toggleDragSession) return;
+        try {
+            if (toggleBtn.hasPointerCapture(toggleDragSession.pointerId)) {
+                toggleBtn.releasePointerCapture(toggleDragSession.pointerId);
+            }
+        } catch (_) { }
+        toggleDragSession = null;
+    }
+
+    toggleBtn.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        toggleDragSession = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            moved: false
+        };
+        try {
+            toggleBtn.setPointerCapture(event.pointerId);
+        } catch (_) { }
+        setToggleDragGuideDirection(null);
+        toggleBtn.classList.remove('sidebar-toggle-show-hints');
+        setToggleHoldVisualActive(false);
+        scheduleToggleHintReveal();
+        event.preventDefault();
+    });
+
+    toggleBtn.addEventListener('pointermove', (event) => {
+        if (!toggleDragSession || event.pointerId !== toggleDragSession.pointerId) return;
+
+        const dx = event.clientX - toggleDragSession.startX;
+        const dy = event.clientY - toggleDragSession.startY;
+        const dragDistance = Math.hypot(dx, dy);
+        if (!toggleDragSession.moved && dragDistance >= TOGGLE_DRAG_ACTIVATE_THRESHOLD) {
+            toggleDragSession.moved = true;
+            clearToggleHintHoldTimer();
+            toggleBtn.classList.add('sidebar-toggle-show-hints');
+            setToggleHoldVisualActive(true);
+            toggleBtn.classList.add('sidebar-toggle-dragging');
+        }
+        if (!toggleDragSession.moved) return;
+
+        setToggleDragGuideDirection(getToggleDragGuideDirection(dx, dy));
+        setToggleTopRatio(getToggleRatioFromClientY(event.clientY), { persist: false });
+    });
+
+    function finishToggleDrag(event, canceled) {
+        if (!toggleDragSession || event.pointerId !== toggleDragSession.pointerId) return;
+
+        const dx = event.clientX - toggleDragSession.startX;
+        const dy = event.clientY - toggleDragSession.startY;
+        const dragDistance = Math.hypot(dx, dy);
+        const moved = toggleDragSession.moved || dragDistance >= TOGGLE_DRAG_ACTIVATE_THRESHOLD;
+
+        if (moved && !canceled) {
+            setToggleTopRatio(getToggleRatioFromClientY(event.clientY), { persist: true });
+            if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= TOGGLE_DRAG_SWITCH_THRESHOLD) {
+                const shouldSwitch = (sidebarPosition === 'left' && dx > 0)
+                    || (sidebarPosition === 'right' && dx < 0);
+                if (shouldSwitch) {
+                    const nextPosition = sidebarPosition === 'left' ? 'right' : 'left';
+                    applySidebarPosition(nextPosition, { persist: true });
+                }
+            }
+            suppressToggleClick = true;
+            window.setTimeout(() => {
+                suppressToggleClick = false;
+            }, 0);
+        }
+
+        clearToggleDragSession();
+    }
+
+    toggleBtn.addEventListener('pointerup', (event) => {
+        finishToggleDrag(event, false);
+    });
+    toggleBtn.addEventListener('pointercancel', (event) => {
+        finishToggleDrag(event, true);
+    });
+
+    function clearResizeDragSession() {
+        if (!resizeDragSession || !resizeHandle) return;
+        const { pointerId } = resizeDragSession;
+        try {
+            if (resizeHandle.hasPointerCapture(pointerId)) {
+                resizeHandle.releasePointerCapture(pointerId);
+            }
+        } catch (_) { }
+        resizeDragSession = null;
+        sidebar.classList.remove('is-resizing');
+        document.body.classList.remove('sidebar-resizing');
+    }
+
+    function widthFromDragDelta(startWidth, dx) {
+        return sidebarPosition === 'right' ? startWidth - dx : startWidth + dx;
+    }
+
+    if (resizeHandle) {
+        resizeHandle.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) return;
+
+            const rect = sidebar.getBoundingClientRect();
+            const startWidth = currentState === 'expanded'
+                ? (rect && rect.width ? rect.width : getExpandedWidth(sidebarPosition))
+                : 0;
+
+            resizeDragSession = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startWidth,
+                moved: false,
+                previewState: currentState,
+                previewWidth: getExpandedWidth(sidebarPosition)
+            };
+
+            sidebar.classList.add('is-resizing');
+            document.body.classList.add('sidebar-resizing');
+
+            try {
+                resizeHandle.setPointerCapture(event.pointerId);
+            } catch (_) { }
+
+            event.preventDefault();
+        });
+
+        resizeHandle.addEventListener('pointermove', (event) => {
+            if (!resizeDragSession || event.pointerId !== resizeDragSession.pointerId) return;
+
+            const dx = event.clientX - resizeDragSession.startX;
+            if (!resizeDragSession.moved && Math.abs(dx) > 1) {
+                resizeDragSession.moved = true;
+            }
+
+            const rawWidth = widthFromDragDelta(resizeDragSession.startWidth, dx);
+            if (rawWidth <= SIDEBAR_RESIZE_COMPACT_THRESHOLD) {
+                currentState = applySidebarState('compact');
+                resizeDragSession.previewState = 'compact';
+                syncSidebarWidth();
+                return;
+            }
+
+            const safeWidth = setExpandedWidth(sidebarPosition, rawWidth, { persist: false, apply: false });
+            currentState = applySidebarState('expanded');
+            sidebar.style.width = `${safeWidth}px`;
+            document.documentElement.style.setProperty('--sidebar-expanded-width', `${safeWidth}px`);
+            resizeDragSession.previewState = 'expanded';
+            resizeDragSession.previewWidth = safeWidth;
+            syncSidebarWidth();
+        });
+
+        function finishResizeDrag(event, canceled) {
+            if (!resizeDragSession || event.pointerId !== resizeDragSession.pointerId) return;
+
+            const moved = resizeDragSession.moved;
+            const previewState = resizeDragSession.previewState;
+            const previewWidth = resizeDragSession.previewWidth;
+
+            clearResizeDragSession();
+
+            if (!moved || canceled) {
+                currentState = applySidebarState(currentState);
+                return;
+            }
+
+            if (previewState === 'expanded') {
+                setExpandedWidth(sidebarPosition, previewWidth, { persist: true, apply: true });
+                currentState = setSidebarState('expanded', { manual: true });
+                return;
+            }
+
+            currentState = setSidebarState('compact', { manual: true });
+        }
+
+        resizeHandle.addEventListener('pointerup', (event) => {
+            finishResizeDrag(event, false);
+        });
+        resizeHandle.addEventListener('pointercancel', (event) => {
+            finishResizeDrag(event, true);
+        });
+    }
+
+    window.addEventListener('resize', () => {
+        setToggleTopRatio(toggleTopRatio, { persist: false });
+        syncSidebarWidth();
+        updateWidgetToggleBtn();
+        scheduleAutoStateOnResize();
+    });
+
     try {
         if (window.ResizeObserver) {
-            const ro = new ResizeObserver(() => updateWidgetToggleBtn());
+            const ro = new ResizeObserver(() => {
+                setToggleTopRatio(toggleTopRatio, { persist: false });
+                updateWidgetToggleBtn();
+            });
             ro.observe(sidebar);
         }
     } catch (_) { }
+
+    // 覆盖 click：如果刚拖拽则抑制一次点击
+    toggleBtn.addEventListener('click', (event) => {
+        if (!suppressToggleClick) return;
+        event.preventDefault();
+        event.stopPropagation();
+    }, true);
 }
 
 // =============================================================================
@@ -3855,7 +4816,550 @@ function setHighResFavicon(imgElement, url) {
     });
 }
 
-// 推荐卡片专用窗口 - 使用storage共享窗口ID（与popup同步）
+function getHistoryPageUrl(view = 'recommend', options = {}) {
+    const safeView = view === 'additions' ? 'additions' : 'recommend';
+    const query = new URLSearchParams();
+    query.set('view', safeView);
+    if (options.sidepanel === true) {
+        query.set('sidepanel', '1');
+    }
+    const qs = query.toString();
+    if (browserAPI?.runtime?.getURL) {
+        return browserAPI.runtime.getURL(`history_html/history.html${qs ? `?${qs}` : ''}`);
+    }
+    return `history_html/history.html${qs ? `?${qs}` : ''}`;
+}
+
+function getHistoryPageExtensionOrigin() {
+    try {
+        if (!browserAPI?.runtime?.getURL) return null;
+        return new URL(browserAPI.runtime.getURL('')).origin;
+    } catch (_) {
+        return null;
+    }
+}
+
+function isMatchingHistoryPageUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return false;
+
+    const extensionOrigin = getHistoryPageExtensionOrigin();
+    try {
+        const parsed = new URL(rawUrl);
+        if (extensionOrigin && parsed.origin !== extensionOrigin) return false;
+        if (!parsed.pathname.endsWith('/history_html/history.html')) return false;
+
+        const view = parsed.searchParams.get('view');
+        if (view && view !== 'additions' && view !== 'recommend') return false;
+
+        if (parsed.searchParams.get('sidepanel') === '1') return false;
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function queryTabs(params) {
+    return new Promise((resolve) => {
+        try {
+            if (!browserAPI?.tabs?.query) {
+                resolve([]);
+                return;
+            }
+            browserAPI.tabs.query(params, (tabs) => {
+                resolve(Array.isArray(tabs) ? tabs : []);
+            });
+        } catch (_) {
+            resolve([]);
+        }
+    });
+}
+
+async function findLatestHistoryPageTabInCurrentWindow() {
+    const tabs = await queryTabs({ currentWindow: true });
+    const candidates = tabs
+        .filter(tab => tab && typeof tab.id === 'number' && isMatchingHistoryPageUrl(tab.url || tab.pendingUrl || ''))
+        .sort((a, b) => {
+            const aId = typeof a.id === 'number' ? a.id : -1;
+            const bId = typeof b.id === 'number' ? b.id : -1;
+            return bId - aId;
+        });
+    return candidates.length ? candidates[0] : null;
+}
+
+async function activateTab(tabId) {
+    if (typeof tabId !== 'number' || !browserAPI?.tabs?.update) return null;
+    return await new Promise((resolve) => {
+        try {
+            browserAPI.tabs.update(tabId, { active: true }, (tab) => {
+                resolve(tab || { id: tabId });
+            });
+        } catch (_) {
+            resolve({ id: tabId });
+        }
+    });
+}
+
+async function createHistoryPageTab(url) {
+    if (!browserAPI?.tabs?.create) return null;
+    return await new Promise((resolve) => {
+        try {
+            browserAPI.tabs.create({ url, active: true }, (tab) => {
+                resolve(tab || null);
+            });
+        } catch (_) {
+            resolve(null);
+        }
+    });
+}
+
+async function openOrFocusHistoryPage(options = {}) {
+    const { view = currentView || 'recommend' } = options;
+    const safeView = view === 'additions' ? 'additions' : 'recommend';
+    const url = getHistoryPageUrl(safeView, { sidepanel: false });
+
+    let targetTab = await findLatestHistoryPageTabInCurrentWindow();
+    if (targetTab && typeof targetTab.id === 'number') {
+        try {
+            const parsed = new URL(targetTab.url || targetTab.pendingUrl || '');
+            const currentTabView = parsed.searchParams.get('view');
+            if (currentTabView !== safeView) {
+                targetTab = await new Promise((resolve) => {
+                    try {
+                        browserAPI.tabs.update(targetTab.id, { url, active: true }, (tab) => resolve(tab || targetTab));
+                    } catch (_) {
+                        resolve(targetTab);
+                    }
+                });
+            } else {
+                targetTab = await activateTab(targetTab.id);
+            }
+        } catch (_) {
+            targetTab = await activateTab(targetTab.id);
+        }
+    } else {
+        targetTab = await createHistoryPageTab(url);
+    }
+
+    const targetTabId = targetTab && typeof targetTab.id === 'number' ? targetTab.id : null;
+    if (typeof targetTabId !== 'number') {
+        try {
+            window.open(url, '_blank');
+        } catch (_) { }
+        return null;
+    }
+    return targetTabId;
+}
+
+async function getCurrentWindowIdForSidePanelToggle() {
+    return await new Promise((resolve) => {
+        try {
+            if (!browserAPI?.windows?.getCurrent) {
+                resolve(null);
+                return;
+            }
+            browserAPI.windows.getCurrent((win) => {
+                resolve(win && typeof win.id === 'number' ? win.id : null);
+            });
+        } catch (_) {
+            resolve(null);
+        }
+    });
+}
+
+async function requestSidePanelToggle(action) {
+    const payload = { action };
+    const windowId = await getCurrentWindowIdForSidePanelToggle();
+    if (typeof windowId === 'number') {
+        payload.windowId = windowId;
+    }
+
+    return await new Promise((resolve) => {
+        try {
+            if (!browserAPI?.runtime?.sendMessage) {
+                resolve({ success: false, error: 'runtime_unavailable' });
+                return;
+            }
+            browserAPI.runtime.sendMessage(payload, (response) => {
+                try {
+                    const err = browserAPI?.runtime?.lastError;
+                    if (err) {
+                        resolve({ success: false, error: err.message || 'send_message_failed' });
+                        return;
+                    }
+                } catch (_) { }
+                resolve(response && typeof response === 'object' ? response : { success: false });
+            });
+        } catch (error) {
+            resolve({ success: false, error: error?.message || 'send_message_failed' });
+        }
+    });
+}
+
+async function openSidePanelDirectlyFromHistoryPage() {
+    const windowId = await getCurrentWindowIdForSidePanelToggle();
+    if (typeof windowId !== 'number') return { success: false, error: 'window_unavailable' };
+    if (!browserAPI?.sidePanel?.open) return { success: false, error: 'sidepanel_unavailable' };
+
+    const safeView = currentView === 'additions' ? 'additions' : 'recommend';
+
+    try {
+        if (typeof browserAPI?.sidePanel?.setOptions === 'function') {
+            await new Promise((resolve) => {
+                try {
+                    browserAPI.sidePanel.setOptions({
+                        path: `history_html/history.html?view=${safeView}&sidepanel=1`,
+                        enabled: true,
+                        windowId
+                    }, () => {
+                        try {
+                            const err = browserAPI?.runtime?.lastError;
+                            if (err && err.message) {
+                                // ignore and continue open attempt
+                            }
+                        } catch (_) { }
+                        resolve();
+                    });
+                } catch (_) {
+                    resolve();
+                }
+            });
+        }
+    } catch (_) { }
+
+    return await new Promise((resolve) => {
+        try {
+            browserAPI.sidePanel.open({ windowId }, () => {
+                try {
+                    const err = browserAPI?.runtime?.lastError;
+                    if (err) {
+                        resolve({ success: false, error: err.message || 'open_failed' });
+                        return;
+                    }
+                } catch (_) { }
+                resolve({ success: true, isOpen: true });
+            });
+        } catch (error) {
+            resolve({ success: false, error: error?.message || 'open_failed' });
+        }
+    });
+}
+
+function applyTitleSidePanelToggleButtonState(isOpen) {
+    const btn = document.getElementById('titleSidePanelToggleBtn');
+    if (!btn) return;
+    const open = isOpen === true;
+    btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    const tooltip = document.getElementById('titleSidePanelToggleTooltip');
+    if (tooltip) {
+        tooltip.textContent = open
+            ? (currentLang === 'en' ? 'Close Side Panel' : '关闭侧边栏')
+            : (currentLang === 'en' ? 'Open Side Panel' : '打开侧边栏');
+    }
+}
+
+function refreshTitleSidePanelToggleButtonState() {
+    if (isSidePanelMode) return;
+    requestSidePanelToggle('getSidePanelStateFromHistoryPage')
+        .then((result) => {
+            if (result && result.success) {
+                applyTitleSidePanelToggleButtonState(result.isOpen === true);
+            }
+        })
+        .catch(() => { });
+}
+
+function bindTitleSidePanelToggleStateRefreshEvents() {
+    if (isSidePanelMode) return;
+    if (document.documentElement.hasAttribute('data-sidepanel-state-bound')) return;
+    document.documentElement.setAttribute('data-sidepanel-state-bound', 'true');
+
+    window.addEventListener('focus', () => {
+        refreshTitleSidePanelToggleButtonState();
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshTitleSidePanelToggleButtonState();
+    });
+}
+
+function setupSettingsMenu() {
+    const toggle = document.getElementById('settingsToggle');
+    const menu = document.getElementById('settingsMenu');
+    if (!toggle || !menu) return;
+    if (menu.dataset.bound === 'true') return;
+    menu.dataset.bound = 'true';
+
+    const sidebarPanelToggle = document.getElementById('sidebarSettingsToggle');
+    const sidebarPanel = document.getElementById('sidebarSettingsPanel');
+    const autoWidthInput = document.getElementById('sidebarAutoWidthInput');
+
+    const modeAutoBtn = document.getElementById('sidebarModeAutoBtn');
+    const modeManualBtn = document.getElementById('sidebarModeManualBtn');
+
+    const autoCompactBtn = document.getElementById('sidebarAutoStateCompactBtn');
+    const autoHiddenBtn = document.getElementById('sidebarAutoStateHiddenBtn');
+
+    const manualExpandedBtn = document.getElementById('sidebarManualStateExpandedBtn');
+    const manualCompactBtn = document.getElementById('sidebarManualStateCompactBtn');
+    const manualHiddenBtn = document.getElementById('sidebarManualStateHiddenBtn');
+
+    function getSidebarController() {
+        const controller = window.__historySidebarController;
+        if (!controller || typeof controller.getState !== 'function') return null;
+        return controller;
+    }
+
+    function setPressed(btn, active) {
+        if (!btn) return;
+        const on = !!active;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+
+    function closeSidebarPanel() {
+        if (!sidebarPanel) return;
+        sidebarPanel.setAttribute('hidden', '');
+        if (sidebarPanelToggle) {
+            sidebarPanelToggle.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    function toggleSidebarPanel() {
+        if (!sidebarPanel) return;
+        if (sidebarPanel.hasAttribute('hidden')) {
+            sidebarPanel.removeAttribute('hidden');
+            if (sidebarPanelToggle) {
+                sidebarPanelToggle.setAttribute('aria-expanded', 'true');
+            }
+        } else {
+            closeSidebarPanel();
+        }
+    }
+
+    function closeMenu() {
+        closeSidebarPanel();
+        if (!menu.hasAttribute('hidden')) {
+            menu.setAttribute('hidden', '');
+        }
+    }
+
+    function syncSidebarSettingsControls() {
+        const controller = getSidebarController();
+        const snapshot = controller ? controller.getState() : null;
+
+        const mode = snapshot?.mode === 'manual' ? 'manual' : 'auto';
+        const state = snapshot?.state || 'expanded';
+        const autoState = snapshot?.autoCollapsedState === 'compact' ? 'compact' : 'hidden';
+        const autoWidth = Number(snapshot?.autoCollapseWidth) > 0 ? Number(snapshot.autoCollapseWidth) : 600;
+
+        menu.classList.toggle('sidebar-mode-auto', mode === 'auto');
+        menu.classList.toggle('sidebar-mode-manual', mode === 'manual');
+
+        setPressed(modeAutoBtn, mode === 'auto');
+        setPressed(modeManualBtn, mode === 'manual');
+
+        setPressed(autoCompactBtn, autoState === 'compact');
+        setPressed(autoHiddenBtn, autoState === 'hidden');
+
+        setPressed(manualExpandedBtn, state === 'expanded');
+        setPressed(manualCompactBtn, state === 'compact');
+        setPressed(manualHiddenBtn, state === 'hidden');
+
+        if (autoWidthInput) {
+            autoWidthInput.value = String(autoWidth);
+            autoWidthInput.disabled = mode !== 'auto';
+        }
+
+        if (sidebarPanelToggle) {
+            sidebarPanelToggle.disabled = !controller;
+        }
+    }
+
+    function commitAutoWidthValue() {
+        const controller = getSidebarController();
+        if (!controller || !autoWidthInput) return;
+        const value = Number(autoWidthInput.value);
+        if (!Number.isFinite(value)) {
+            syncSidebarSettingsControls();
+            return;
+        }
+        controller.setAutoWidth(value);
+        syncSidebarSettingsControls();
+    }
+
+    toggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (menu.hasAttribute('hidden')) {
+            menu.removeAttribute('hidden');
+            syncSidebarSettingsControls();
+        } else {
+            closeMenu();
+        }
+    });
+
+    menu.addEventListener('click', (e) => {
+        const target = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        if (!target || !menu.contains(target)) return;
+
+        const action = target.dataset.action || '';
+        const controller = getSidebarController();
+
+        if (action === 'toggle-theme') {
+            closeMenu();
+            toggleTheme();
+            return;
+        }
+
+        if (action === 'toggle-language') {
+            closeMenu();
+            toggleLanguage();
+            return;
+        }
+
+        if (action === 'open-help') {
+            closeMenu();
+            openShortcutsInfoModal();
+            return;
+        }
+
+        if (action === 'toggle-sidebar-settings') {
+            e.preventDefault();
+            toggleSidebarPanel();
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (!controller) return;
+
+        if (action === 'set-sidebar-mode') {
+            controller.setMode(target.dataset.mode || 'auto');
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (action === 'set-sidebar-auto-state') {
+            controller.setAutoCollapsedState(target.dataset.state || 'hidden');
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (action === 'set-sidebar-manual-state') {
+            controller.setManualState(target.dataset.state || 'expanded');
+            syncSidebarSettingsControls();
+            return;
+        }
+    });
+
+    if (autoWidthInput) {
+        autoWidthInput.addEventListener('change', commitAutoWidthValue);
+        autoWidthInput.addEventListener('blur', commitAutoWidthValue);
+        autoWidthInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commitAutoWidthValue();
+            }
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        if (menu.hasAttribute('hidden')) return;
+        if (menu.contains(e.target) || toggle.contains(e.target)) return;
+        closeMenu();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeMenu();
+        }
+    });
+
+    window.addEventListener('history-sidebar-settings-changed', () => {
+        syncSidebarSettingsControls();
+    });
+    window.addEventListener('history-sidebar-settings-ready', () => {
+        syncSidebarSettingsControls();
+    });
+
+    syncSidebarSettingsControls();
+}
+
+function setupOpenHistoryPageButton() {
+    if (!isSidePanelMode) return;
+    const btn = document.getElementById('openHistoryPageBtn');
+    if (!btn || btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+
+    btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+            await openOrFocusHistoryPage({ view: currentView || 'recommend' });
+        } catch (_) { }
+    });
+}
+
+function setupTitleSidePanelToggleButton() {
+    if (isSidePanelMode) return;
+    const btn = document.getElementById('titleSidePanelToggleBtn');
+    if (!btn || btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+
+    let stateSyncSeq = 0;
+
+    const syncButtonStateFromBackground = async () => {
+        const requestSeq = ++stateSyncSeq;
+        const result = await requestSidePanelToggle('getSidePanelStateFromHistoryPage');
+        if (requestSeq !== stateSyncSeq) return null;
+        if (result && result.success) {
+            const isOpen = result.isOpen === true;
+            applyTitleSidePanelToggleButtonState(isOpen);
+            return isOpen;
+        }
+        return null;
+    };
+
+    applyTitleSidePanelToggleButtonState(false);
+    bindTitleSidePanelToggleStateRefreshEvents();
+
+    btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (btn.dataset.loading === 'true') return;
+        btn.dataset.loading = 'true';
+        try {
+            const syncedState = await syncButtonStateFromBackground();
+            const currentlyOpen = typeof syncedState === 'boolean'
+                ? syncedState
+                : btn.getAttribute('aria-pressed') === 'true';
+
+            if (currentlyOpen) {
+                const closeResult = await requestSidePanelToggle('closeSidePanelFromHistoryPage');
+                if (closeResult && closeResult.success) {
+                    applyTitleSidePanelToggleButtonState(false);
+                } else {
+                    const failMsg = currentLang === 'en' ? 'Failed to toggle side panel' : '侧边栏切换失败';
+                    try { showToast(failMsg); } catch (_) { }
+                }
+            } else {
+                const openResult = await openSidePanelDirectlyFromHistoryPage();
+                if (openResult && openResult.success) {
+                    applyTitleSidePanelToggleButtonState(true);
+                    try {
+                        requestSidePanelToggle('markSidePanelOpenFromHistoryPage');
+                    } catch (_) { }
+                } else {
+                    const failMsg = currentLang === 'en' ? 'Failed to toggle side panel' : '侧边栏切换失败';
+                    try { showToast(failMsg); } catch (_) { }
+                }
+            }
+        } finally {
+            btn.dataset.loading = 'false';
+        }
+    });
+
+    syncButtonStateFromBackground().catch(() => {
+        applyTitleSidePanelToggleButtonState(false);
+    });
+}
+
+// 推荐卡片专用窗口 - 使用storage共享窗口ID（同一页面多实例同步）
 async function getSharedRecommendWindowId() {
     return new Promise((resolve) => {
         browserAPI.storage.local.get(['recommendWindowId'], (result) => {
@@ -3868,134 +5372,7 @@ async function saveSharedRecommendWindowId(windowId) {
     await browserAPI.storage.local.set({ recommendWindowId: windowId });
 }
 
-// 监听storage变化，实现history和popup页面的实时同步
-// 标志：用于防止 history 页面自己保存的变化触发重复刷新
 let historyLastSaveTime = 0;
-browserAPI.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.popupCurrentCards) {
-        // 仅在推荐视图时处理
-        if (currentView !== 'recommend') return;
-
-        // 检查是否是 history 页面自己刚保存的（500ms内忽略）
-        const now = Date.now();
-        if (now - historyLastSaveTime < 500) {
-            console.log('[卡片同步] 忽略本页面保存触发的变化');
-            return;
-        }
-
-        const newValue = changes.popupCurrentCards.newValue;
-        const oldValue = changes.popupCurrentCards.oldValue;
-
-        if (newValue && newValue.cardIds) {
-            // 检查卡片ID是否变化（popup刷新了卡片）
-            const oldCardIds = oldValue?.cardIds || [];
-            const newCardIds = newValue.cardIds || [];
-            const cardIdsChanged = JSON.stringify(oldCardIds.sort()) !== JSON.stringify(newCardIds.sort());
-
-            if (cardIdsChanged) {
-                // 卡片ID变化（来自popup的刷新），同步更新HTML页面
-                console.log('[卡片同步] popup刷新了卡片，同步更新HTML');
-                syncCardsFromStorage(newValue);
-                return;
-            }
-
-            // 检查是否全部勾选
-            if (newValue.flippedIds) {
-                const allFlipped = newValue.cardIds.every(id => newValue.flippedIds.includes(id));
-                if (allFlipped && newValue.cardIds.length > 0) {
-                    // 全部勾选（来自popup的操作），刷新获取新卡片
-                    console.log('[卡片同步] popup完成翻牌，刷新卡片');
-                    refreshRecommendCards(true);
-                }
-            }
-        }
-    }
-});
-
-// 从storage同步卡片显示（不重新计算，直接使用popup的数据）
-async function syncCardsFromStorage(cardState) {
-    try {
-        const cardsRow = document.getElementById('cardsRow');
-        if (!cardsRow) return;
-
-        const cards = cardsRow.querySelectorAll('.recommend-card');
-        if (cards.length === 0 || !cardState.cardData) return;
-
-        const { cardIds, flippedIds, cardData } = cardState;
-
-        // 获取S值缓存用于显示优先级
-        const scoresCache = await getScoresCache();
-
-        for (let index = 0; index < cards.length; index += 1) {
-            if (index >= cardData.length) continue;
-
-            const card = cards[index];
-            const data = cardData[index] || {};
-            const bookmarkId = cardIds[index];
-            const isFlipped = flippedIds?.includes(bookmarkId);
-
-            // 更新卡片内容
-            card.dataset.bookmarkId = bookmarkId;
-
-            const titleEl = card.querySelector('.card-title');
-            if (titleEl) {
-                let displayTitle = data.title || '';
-                if (!displayTitle && bookmarkId) {
-                    try {
-                        const list = await new Promise(resolve => {
-                            browserAPI.bookmarks.get(bookmarkId, resolve);
-                        });
-                        displayTitle = list?.[0]?.title || list?.[0]?.name || '';
-                    } catch (_) {
-                        displayTitle = '';
-                    }
-                }
-                titleEl.textContent = displayTitle || data.url || '--';
-            }
-
-            // 更新favicon（三层降级：网站自己 → DuckDuckGo → Google S2）
-            const favicon = card.querySelector('.card-favicon');
-            if (favicon && data.url) {
-                const cachedFavicon = data.favicon || data.faviconUrl || null;
-                try {
-                    // [打开页面时避免闪烁] 同步恢复只使用已缓存的 favicon，
-                    // 不在此处触发异步刷新，避免“先方块后图标”的闪烁。
-                    favicon.onerror = null;
-                    if (cachedFavicon) {
-                        favicon.src = cachedFavicon;
-                    } else {
-                        favicon.src = fallbackIcon;
-                        // 仅预热缓存，不更新当前 DOM
-                        FaviconCache.fetch(data.url).catch(() => { });
-                    }
-                } catch (e) {
-                    favicon.src = fallbackIcon;
-                }
-            }
-
-            // 更新优先级显示
-            const priorityEl = card.querySelector('.card-priority');
-            if (priorityEl) {
-                const cached = scoresCache[bookmarkId];
-                const priority = cached ? cached.S : 0;
-                priorityEl.textContent = `S = ${priority.toFixed(3)}`;
-            }
-
-            // 更新翻阅状态
-            if (isFlipped) {
-                card.classList.add('flipped');
-            } else {
-                card.classList.remove('flipped');
-            }
-
-            card.classList.remove('empty');
-        }
-
-        console.log('[卡片同步] HTML页面已同步popup的卡片');
-    } catch (e) {
-        console.warn('[卡片同步] 同步失败:', e);
-    }
-}
 
 // 在推荐窗口中打开链接
 async function openInRecommendWindow(url) {
@@ -4046,7 +5423,7 @@ async function openInRecommendWindow(url) {
                 await window.reportExtensionBookmarkOpen({ tabId, url, source: 'recommend_window' });
             }
         } catch (_) { }
-        // 保存窗口ID到storage，供popup和history共享
+        // 保存窗口ID到storage，供多个 history 页面共享
         await saveSharedRecommendWindowId(win.id);
 
     } catch (error) {
@@ -4468,22 +5845,22 @@ let skippedBookmarks = new Set(); // 本次会话跳过的书签（内存，刷�
 let recommendScoresComputeRetryTimer = null;
 let recommendScoresComputeRetryCount = 0;
 
-// 获取当前显示的卡片状态（与popup共享）
+// 获取当前显示的卡片状态（本页面共享）
 async function getHistoryCurrentCards() {
     return new Promise((resolve) => {
-        browserAPI.storage.local.get(['popupCurrentCards'], (result) => {
-            resolve(result.popupCurrentCards || null);
+        browserAPI.storage.local.get(['historyCurrentCards'], (result) => {
+            resolve(result.historyCurrentCards || null);
         });
     });
 }
 
-// 保存当前显示的卡片状态（与popup共享）
+// 保存当前显示的卡片状态（本页面共享）
 async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
     // 标记本次保存时间，防止触发循环刷新
     historyLastSaveTime = Date.now();
 
     const dataToSave = {
-        popupCurrentCards: {
+        historyCurrentCards: {
             cardIds: cardIds,
             flippedIds: flippedIds,
             timestamp: Date.now()
@@ -4491,12 +5868,12 @@ async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
     };
     // 如果提供了卡片数据（包含url和favicon），也保存它们
     if (cardData && cardData.length > 0) {
-        dataToSave.popupCurrentCards.cardData = cardData;
+        dataToSave.historyCurrentCards.cardData = cardData;
     }
     await browserAPI.storage.local.set(dataToSave);
 }
 
-// 异步获取并保存当前卡片的数据（含priority和favicon，供popup使用）
+// 异步获取并保存当前卡片的数据（含priority和favicon）
 async function saveCardFaviconsToStorage(bookmarks) {
     if (!bookmarks || bookmarks.length === 0) return;
 
@@ -4536,7 +5913,7 @@ async function saveCardFaviconsToStorage(bookmarks) {
         // 更新storage中的卡片数据
         currentCards.cardData = cardData;
         historyLastSaveTime = Date.now(); // 防止触发循环刷新
-        await browserAPI.storage.local.set({ popupCurrentCards: currentCards });
+        await browserAPI.storage.local.set({ historyCurrentCards: currentCards });
     } catch (error) {
         // 静默处理错误
     }
@@ -7386,25 +8763,52 @@ function renderDomainList(domains) {
     });
 }
 
-// 获取所有书签（扁平化）
-async function getAllBookmarksFlat() {
-    const tree = await browserAPI.bookmarks.getTree();
-    const bookmarks = [];
+function normalizeRuntimeBookmarkEntry(entry) {
+    if (!entry || !entry.url) return null;
 
-    function traverse(nodes, ancestors = []) {
-        for (const node of nodes) {
-            if (node.url) {
-                bookmarks.push({ ...node, ancestorFolderIds: ancestors });
-            }
-            if (node.children) {
-                const nextAncestors = node.url ? ancestors : [...ancestors, node.id];
-                traverse(node.children, nextAncestors);
-            }
-        }
+    const ancestorFolderIds = Array.isArray(entry.ancestorFolderIds)
+        ? entry.ancestorFolderIds.filter(id => id != null).map(id => String(id))
+        : [];
+
+    return {
+        id: entry.id,
+        title: entry.title || entry.name || entry.url || '',
+        name: entry.title || entry.name || entry.url || '',
+        url: entry.url,
+        parentId: entry.parentId || '',
+        path: entry.path || '',
+        dateAdded: entry.dateAdded,
+        ancestorFolderIds
+    };
+}
+
+// 获取所有书签（扁平化）
+async function getAllBookmarksFlat(options = {}) {
+    const { forceRefresh = false } = options;
+
+    const canUseMemoryCache = !forceRefresh
+        && Array.isArray(allBookmarks)
+        && allBookmarks.length > 0
+        && allBookmarks.every(item => Array.isArray(item.ancestorFolderIds));
+
+    if (canUseMemoryCache) {
+        return allBookmarks
+            .map(normalizeRuntimeBookmarkEntry)
+            .filter(Boolean);
     }
 
-    traverse(tree, []);
-    return bookmarks;
+    const bookmarkTree = await loadBookmarkTree();
+    const flattened = flattenBookmarkTree(bookmarkTree);
+
+    allBookmarks = flattened;
+    rebuildBookmarkUrlSet();
+    additionsCacheRestored = true;
+    cachedBookmarkTree = bookmarkTree;
+    persistAdditionsCache();
+
+    return flattened
+        .map(normalizeRuntimeBookmarkEntry)
+        .filter(Boolean);
 }
 
 // 确认添加到待复习
@@ -8682,24 +10086,8 @@ async function refreshRecommendCards(force = false) {
     cards.forEach(card => card.classList.remove('flipped'));
 
     try {
-        // 获取所有书签（用于后续查找）
-        const bookmarks = await new Promise((resolve) => {
-            browserAPI.bookmarks.getTree((tree) => {
-                const allBookmarks = [];
-                function traverse(nodes) {
-                    for (const node of nodes) {
-                        if (node.url) {
-                            allBookmarks.push(node);
-                        }
-                        if (node.children) {
-                            traverse(node.children);
-                        }
-                    }
-                }
-                traverse(tree);
-                resolve(allBookmarks);
-            });
-        });
+        // 复用共享缓存，避免每次推荐刷新都全量 getTree
+        const bookmarks = await getAllBookmarksFlat();
         const bookmarkMap = new Map(bookmarks.map(b => [b.id, b]));
 
         // 一次性获取所有缓存的S值
@@ -8744,7 +10132,7 @@ async function refreshRecommendCards(force = false) {
             scoresCache = await getScoresCache();
         }
 
-        // 检查是否有已保存的卡片状态（与popup共享）
+        // 检查是否有已保存的卡片状态（供本页面复用）
         const currentCards = await getHistoryCurrentCards();
         const postponed = await getPostponedBookmarks();
         const reviewData = await getReviewData();
@@ -8890,7 +10278,7 @@ async function refreshRecommendCards(force = false) {
         const urlsToPreload = bookmarksWithPriority.slice(0, 9).map(b => b.url).filter(Boolean);
         preloadHighResFavicons(urlsToPreload);
 
-        // 异步保存favicon URLs到storage（供popup使用，不阻塞UI）
+        // 异步保存favicon URLs到storage（供本页面复用，不阻塞UI）
         saveCardFaviconsToStorage(recommendCards);
 
         // 更新卡片显示
@@ -12306,7 +13694,11 @@ function filterBookmarks(groups) {
     return groups;
 }
 
+let additionsGroupItemsCache = new Map();
+
 function renderBookmarkGroups(groups, timeFilter) {
+    additionsGroupItemsCache = new Map();
+
     const sortedDates = Object.keys(groups).sort((a, b) => {
         // 根据timeFilter决定排序方式
         if (timeFilter === 'year') {
@@ -12321,6 +13713,8 @@ function renderBookmarkGroups(groups, timeFilter) {
         // 默认折叠
         const isExpanded = false;
 
+        additionsGroupItemsCache.set(groupId, bookmarks);
+
         return `
             <div class="addition-group" data-group-id="${groupId}">
                 <div class="addition-group-header" data-group-id="${groupId}">
@@ -12330,9 +13724,7 @@ function renderBookmarkGroups(groups, timeFilter) {
                         <span class="addition-count">${bookmarks.length} ${i18n.bookmarks[currentLang]}</span>
                     </div>
                 </div>
-                <div class="addition-items ${isExpanded ? 'expanded' : ''}" data-group-id="${groupId}">
-                    ${bookmarks.map(renderBookmarkItem).join('')}
-                </div>
+                <div class="addition-items ${isExpanded ? 'expanded' : ''}" data-group-id="${groupId}" data-loaded="0"></div>
             </div>
         `;
     }).join('');
@@ -12340,17 +13732,29 @@ function renderBookmarkGroups(groups, timeFilter) {
 
 // 绑定折叠/展开事件
 function attachAdditionGroupEvents() {
-    document.querySelectorAll('.addition-group-header').forEach(header => {
-        header.addEventListener('click', (e) => {
-            const groupId = header.getAttribute('data-group-id');
-            const items = document.querySelector(`.addition-items[data-group-id="${groupId}"]`);
-            const toggle = header.querySelector('.addition-group-toggle');
+    const container = document.getElementById('additionsList');
+    if (!container || container.dataset.groupEventsBound === '1') return;
+    container.dataset.groupEventsBound = '1';
 
-            if (items && toggle) {
-                items.classList.toggle('expanded');
-                toggle.classList.toggle('expanded');
-            }
-        });
+    container.addEventListener('click', (e) => {
+        const header = e.target && e.target.closest ? e.target.closest('.addition-group-header') : null;
+        if (!header || !container.contains(header)) return;
+
+        const groupId = header.getAttribute('data-group-id');
+        const items = header.parentElement ? header.parentElement.querySelector('.addition-items') : null;
+        const toggle = header.querySelector('.addition-group-toggle');
+
+        if (!items || !toggle) return;
+
+        const willExpand = !items.classList.contains('expanded');
+        if (willExpand && items.getAttribute('data-loaded') !== '1') {
+            const groupBookmarks = additionsGroupItemsCache.get(groupId) || [];
+            items.innerHTML = groupBookmarks.map(renderBookmarkItem).join('');
+            items.setAttribute('data-loaded', '1');
+        }
+
+        items.classList.toggle('expanded');
+        toggle.classList.toggle('expanded');
     });
 }
 
@@ -12509,6 +13913,10 @@ function toggleTheme() {
     if (icon) {
         icon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
+    const settingsIcon = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
+    if (settingsIcon) {
+        settingsIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
 }
 
 function toggleLanguage() {
@@ -12601,7 +14009,7 @@ function handleStorageChange(changes, namespace) {
             }
         } catch (_) { }
 
-        loadAllData({ skipRender: true }).then(() => {
+        loadAllData({ skipRender: true, forceRefresh: true }).then(() => {
             renderCurrentView();
         }).catch((e) => {
             console.warn('[存储监听] 数据刷新失败:', e);
@@ -12632,6 +14040,10 @@ function handleStorageChange(changes, namespace) {
         const icon = document.querySelector('#themeToggle i');
         if (icon) {
             icon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+        }
+        const settingsIcon = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
+        if (settingsIcon) {
+            settingsIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
         }
     }
 

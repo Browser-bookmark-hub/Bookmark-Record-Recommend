@@ -21,212 +21,7 @@ const browserAPI = (function () {
   throw new Error('Unsupported browser');
 })();
 
-function arrayBufferToBase64(arrayBuffer) {
-  const bytes = new Uint8Array(arrayBuffer);
-  const chunkSize = 0x2000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-
-const POPUP_FAVICON_CACHE_KEY = 'popup_favicon_cache_v1';
-const POPUP_FAVICON_CACHE_MAX = 200;
-const POPUP_FAVICON_CACHE_TTL_MS = 120 * 24 * 60 * 60 * 1000; // 120 days
-let popupFaviconCache = null; // Map<domain, { dataUrl, time }>
-let popupFaviconCacheLoading = null;
-let popupFaviconSaveTimer = null;
-
-function normalizeFaviconDomain(url) {
-  if (!url || typeof url !== 'string') return '';
-  try {
-    const hostname = new URL(url).hostname || '';
-    return hostname.toLowerCase().replace(/^www\./, '');
-  } catch (_) {
-    return '';
-  }
-}
-
-async function loadPopupFaviconCache() {
-  if (popupFaviconCache) return popupFaviconCache;
-  if (popupFaviconCacheLoading) return popupFaviconCacheLoading;
-  popupFaviconCacheLoading = (async () => {
-    try {
-      const result = await browserAPI.storage.local.get([POPUP_FAVICON_CACHE_KEY]);
-      const raw = result[POPUP_FAVICON_CACHE_KEY] || {};
-      const now = Date.now();
-      const map = new Map();
-      for (const [domain, entry] of Object.entries(raw)) {
-        const time = entry?.time || 0;
-        const dataUrl = entry?.dataUrl || '';
-        if (!dataUrl) continue;
-        if (time && now - time > POPUP_FAVICON_CACHE_TTL_MS) continue;
-        map.set(domain, { dataUrl, time: time || now });
-      }
-      popupFaviconCache = map;
-      return popupFaviconCache;
-    } catch (_) {
-      popupFaviconCache = new Map();
-      return popupFaviconCache;
-    } finally {
-      popupFaviconCacheLoading = null;
-    }
-  })();
-  return popupFaviconCacheLoading;
-}
-
-function prunePopupFaviconCache(map) {
-  if (map.size <= POPUP_FAVICON_CACHE_MAX) return map;
-  const entries = Array.from(map.entries());
-  entries.sort((a, b) => (a[1]?.time || 0) - (b[1]?.time || 0));
-  const keep = entries.slice(entries.length - POPUP_FAVICON_CACHE_MAX);
-  return new Map(keep);
-}
-
-function schedulePopupFaviconCacheSave() {
-  if (popupFaviconSaveTimer) return;
-  popupFaviconSaveTimer = setTimeout(async () => {
-    popupFaviconSaveTimer = null;
-    try {
-      const map = await loadPopupFaviconCache();
-      const pruned = prunePopupFaviconCache(map);
-      popupFaviconCache = pruned;
-      const obj = {};
-      for (const [domain, entry] of pruned.entries()) {
-        obj[domain] = { dataUrl: entry.dataUrl, time: entry.time };
-      }
-      await browserAPI.storage.local.set({ [POPUP_FAVICON_CACHE_KEY]: obj });
-    } catch (_) { }
-  }, 400);
-}
-
-async function getPopupFaviconFromCache(url) {
-  const domain = normalizeFaviconDomain(url);
-  if (!domain) return null;
-  const cache = await loadPopupFaviconCache();
-  const entry = cache.get(domain);
-  if (!entry || !entry.dataUrl) return null;
-  return entry.dataUrl;
-}
-
-async function savePopupFaviconToCache(url, dataUrl) {
-  const domain = normalizeFaviconDomain(url);
-  if (!domain || !dataUrl) return;
-  const cache = await loadPopupFaviconCache();
-  cache.set(domain, { dataUrl, time: Date.now() });
-  popupFaviconCache = prunePopupFaviconCache(cache);
-  schedulePopupFaviconCacheSave();
-}
-
-async function fetchFaviconDataUrl(url) {
-  const domain = normalizeFaviconDomain(url);
-  if (!domain) return null;
-  const sources = [
-    `https://icons.duckduckgo.com/ip3/${domain}.ico`,
-    `https://www.google.com/s2/favicons?domain=${domain}&sz=64`,
-    `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
-  ];
-
-  for (const src of sources) {
-    try {
-      const response = await fetch(src, { cache: 'force-cache' });
-      if (!response.ok) continue;
-      const contentType = response.headers.get('content-type') || 'image/png';
-      const arrayBuffer = await response.arrayBuffer();
-      if (!arrayBuffer || arrayBuffer.byteLength === 0) continue;
-      const base64 = arrayBufferToBase64(arrayBuffer);
-      return `data:${contentType};base64,${base64}`;
-    } catch (_) {
-      continue;
-    }
-  }
-  return null;
-}
-
-async function fetchImageAsDataUrl(imageUrl) {
-  try {
-    if (!imageUrl) return null;
-    if (imageUrl.startsWith('data:')) return imageUrl;
-    const response = await fetch(imageUrl, { cache: 'force-cache' });
-    if (!response.ok) return null;
-    const contentType = response.headers.get('content-type') || 'image/png';
-    const arrayBuffer = await response.arrayBuffer();
-    if (!arrayBuffer || arrayBuffer.byteLength === 0) return null;
-    const base64 = arrayBufferToBase64(arrayBuffer);
-    return `data:${contentType};base64,${base64}`;
-  } catch (_) {
-    return null;
-  }
-}
-
-async function getOrFetchPopupFavicon(url) {
-  const cached = await getPopupFaviconFromCache(url);
-  if (cached) return cached;
-  const dataUrl = await fetchFaviconDataUrl(url);
-  if (dataUrl) {
-    await savePopupFaviconToCache(url, dataUrl);
-  }
-  return dataUrl;
-}
-
-async function prefetchPopupFavicons(urls) {
-  if (!Array.isArray(urls) || urls.length === 0) return;
-  const unique = [];
-  const seen = new Set();
-  for (const url of urls) {
-    const domain = normalizeFaviconDomain(url);
-    if (!domain || seen.has(domain)) continue;
-    seen.add(domain);
-    unique.push(url);
-    if (unique.length >= 12) break;
-  }
-
-  for (const url of unique) {
-    try {
-      const cached = await getPopupFaviconFromCache(url);
-      if (cached) continue;
-      await getOrFetchPopupFavicon(url);
-    } catch (_) { }
-  }
-}
-
-const processedPopupFavicons = new Map();
-const POPUP_FAVICON_UPDATE_COOLDOWN = 5000;
-
-if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
-  browserAPI.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    try {
-      if (!changeInfo?.favIconUrl || !tab?.url) return;
-      if (!tab.url.startsWith('http://') && !tab.url.startsWith('https://')) return;
-
-      const now = Date.now();
-      const last = processedPopupFavicons.get(tab.url);
-      if (last && (now - last) < POPUP_FAVICON_UPDATE_COOLDOWN) return;
-      processedPopupFavicons.set(tab.url, now);
-
-      if (processedPopupFavicons.size > 1000) {
-        const entries = Array.from(processedPopupFavicons.entries());
-        entries.sort((a, b) => a[1] - b[1]);
-        entries.slice(0, 500).forEach(([url]) => processedPopupFavicons.delete(url));
-      }
-
-      const dataUrl = await fetchImageAsDataUrl(changeInfo.favIconUrl || tab.favIconUrl);
-      if (dataUrl) {
-        await savePopupFaviconToCache(tab.url, dataUrl);
-        try {
-          browserAPI.runtime.sendMessage({
-            action: 'updateFaviconFromTab',
-            url: tab.url,
-            favIconUrl: dataUrl
-          }).catch(() => {});
-        } catch (_) {}
-      }
-    } catch (_) { }
-  });
-}
+const SIDE_PANEL_HISTORY_PATH = 'history_html/history.html?view=recommend&sidepanel=1';
 
 
 function openView(view) {
@@ -240,6 +35,335 @@ function openView(view) {
   const url = `${baseUrl}?view=${safeView}`;
   browserAPI.tabs.create({ url });
 }
+
+function initSidePanel() {
+  if (!browserAPI?.sidePanel) return;
+  try {
+    if (browserAPI.sidePanel.setPanelBehavior) {
+      browserAPI.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }, () => {});
+    }
+  } catch (_) {}
+  try {
+    if (browserAPI.sidePanel.setOptions) {
+      browserAPI.sidePanel.setOptions({ path: SIDE_PANEL_HISTORY_PATH, enabled: true }, () => {});
+    }
+  } catch (_) {}
+}
+
+async function getCurrentWindowIdAsync() {
+  return await new Promise((resolve) => {
+    try {
+      if (!browserAPI?.windows?.getCurrent) {
+        resolve(null);
+        return;
+      }
+      browserAPI.windows.getCurrent((win) => {
+        resolve(win && typeof win.id === 'number' ? win.id : null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function resolveWindowIdForSidePanelAction(message, sender) {
+  const requestedWindowId = Number(message && message.windowId);
+  if (Number.isFinite(requestedWindowId) && requestedWindowId >= 0) {
+    return requestedWindowId;
+  }
+  const senderWindowId = sender && sender.tab && typeof sender.tab.windowId === 'number'
+    ? sender.tab.windowId
+    : null;
+  if (senderWindowId != null) return senderWindowId;
+  return await getCurrentWindowIdAsync();
+}
+
+async function setSidePanelOptionsForWindow(windowId, view = 'recommend') {
+  if (typeof browserAPI?.sidePanel?.setOptions !== 'function') {
+    return { success: true };
+  }
+
+  const safeView = view === 'additions' ? 'additions' : 'recommend';
+  const path = `history_html/history.html?view=${safeView}&sidepanel=1`;
+  const baseOptions = { path, enabled: true };
+  const candidates = [];
+  if (typeof windowId === 'number') {
+    candidates.push({ ...baseOptions, windowId });
+  }
+  candidates.push(baseOptions);
+
+  let last = { success: false, error: 'set_options_failed' };
+  for (const opts of candidates) {
+    const result = await new Promise((resolve) => {
+      try {
+        browserAPI.sidePanel.setOptions(opts, () => {
+          const err = browserAPI?.runtime?.lastError;
+          if (err) {
+            resolve({ success: false, error: err.message || 'set_options_failed' });
+            return;
+          }
+          resolve({ success: true });
+        });
+      } catch (error) {
+        resolve({ success: false, error: error?.message || 'set_options_failed' });
+      }
+    });
+
+    if (result && result.success) return result;
+    last = result || last;
+  }
+
+  return last;
+}
+
+async function openSidePanelInWindow(windowId, view = 'recommend') {
+  if (typeof windowId !== 'number') {
+    return { success: false, error: 'window_unavailable' };
+  }
+  if (typeof browserAPI?.sidePanel?.open !== 'function') {
+    return { success: false, error: 'open_unavailable' };
+  }
+
+  const configured = await setSidePanelOptionsForWindow(windowId, view);
+  if (!configured || configured.success !== true) {
+    return { success: false, error: configured?.error || 'set_options_failed' };
+  }
+
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.sidePanel.open({ windowId }, () => {
+        const err = browserAPI?.runtime?.lastError;
+        if (err) {
+          resolve({ success: false, error: err.message || 'open_failed' });
+          return;
+        }
+        setSidePanelOpenWindowState(windowId, true);
+        resolve({ success: true, isOpen: true });
+      });
+    } catch (error) {
+      resolve({ success: false, error: error?.message || 'open_failed' });
+    }
+  });
+}
+
+const SIDE_PANEL_CONTEXT = browserAPI?.runtime?.ContextType?.SIDE_PANEL || 'SIDE_PANEL';
+const SIDE_PANEL_TOGGLE_PORT = 'bookmark-record-recommend-sidepanel-toggle-v1';
+const sidePanelOpenWindows = new Set();
+const sidePanelTogglePortsByWindow = new Map();
+const sidePanelToggleUnboundPorts = new Set();
+let sidePanelTogglePortListenerRegistered = false;
+
+function setSidePanelOpenWindowState(windowId, isOpen) {
+  if (typeof windowId !== 'number') return;
+  if (isOpen) {
+    sidePanelOpenWindows.add(windowId);
+    return;
+  }
+  sidePanelOpenWindows.delete(windowId);
+}
+
+function addUnboundSidePanelTogglePort(port) {
+  if (!port) return;
+  sidePanelToggleUnboundPorts.add(port);
+}
+
+function removeUnboundSidePanelTogglePort(port) {
+  if (!port) return;
+  sidePanelToggleUnboundPorts.delete(port);
+}
+
+function addSidePanelTogglePort(windowId, port) {
+  if (typeof windowId !== 'number' || !port) return;
+  removeUnboundSidePanelTogglePort(port);
+  let windowPorts = sidePanelTogglePortsByWindow.get(windowId);
+  if (!windowPorts) {
+    windowPorts = new Set();
+    sidePanelTogglePortsByWindow.set(windowId, windowPorts);
+  }
+  windowPorts.add(port);
+}
+
+function cleanupWindowPortSetIfEmpty(windowId, windowPorts) {
+  if (!windowPorts || windowPorts.size !== 0) return;
+  sidePanelTogglePortsByWindow.delete(windowId);
+}
+
+function removeSidePanelTogglePort(windowId, port) {
+  if (typeof windowId !== 'number' || !port) return;
+  const windowPorts = sidePanelTogglePortsByWindow.get(windowId);
+  if (!windowPorts) return;
+  windowPorts.delete(port);
+  cleanupWindowPortSetIfEmpty(windowId, windowPorts);
+}
+
+function removeSidePanelTogglePortEverywhere(port) {
+  if (!port) return;
+  removeUnboundSidePanelTogglePort(port);
+  for (const [windowId, windowPorts] of Array.from(sidePanelTogglePortsByWindow.entries())) {
+    if (!windowPorts.has(port)) continue;
+    windowPorts.delete(port);
+    cleanupWindowPortSetIfEmpty(windowId, windowPorts);
+  }
+}
+
+function registerSidePanelTogglePortListener() {
+  if (sidePanelTogglePortListenerRegistered) return;
+  if (!browserAPI?.runtime?.onConnect?.addListener) return;
+  sidePanelTogglePortListenerRegistered = true;
+
+  browserAPI.runtime.onConnect.addListener((port) => {
+    if (!port || port.name !== SIDE_PANEL_TOGGLE_PORT) return;
+
+    let trackedWindowId = null;
+    addUnboundSidePanelTogglePort(port);
+
+    const updateTrackedWindowId = (windowId) => {
+      if (typeof windowId !== 'number') return;
+      if (trackedWindowId === windowId) return;
+      if (typeof trackedWindowId === 'number') {
+        removeSidePanelTogglePort(trackedWindowId, port);
+      }
+      trackedWindowId = windowId;
+      addSidePanelTogglePort(trackedWindowId, port);
+      setSidePanelOpenWindowState(trackedWindowId, true);
+    };
+
+    const senderWindowId = port?.sender?.tab?.windowId;
+    if (typeof senderWindowId === 'number') {
+      updateTrackedWindowId(senderWindowId);
+    }
+
+    const onMessage = (message) => {
+      if (!message || typeof message !== 'object') return;
+      if (message.type === 'sidepanel_toggle_bridge_hello') {
+        updateTrackedWindowId(message.windowId);
+        try {
+          port.postMessage({ type: 'sidepanel_toggle_bridge_ack', ts: Date.now() });
+        } catch (_) { }
+      }
+    };
+
+    const onDisconnect = () => {
+      try {
+        const err = browserAPI?.runtime?.lastError;
+        if (err && err.message) {
+          // touch lastError to avoid unchecked runtime.lastError noise.
+        }
+      } catch (_) { }
+
+      if (typeof trackedWindowId === 'number') {
+        setSidePanelOpenWindowState(trackedWindowId, false);
+      }
+      removeSidePanelTogglePortEverywhere(port);
+      try {
+        port.onMessage.removeListener(onMessage);
+        port.onDisconnect.removeListener(onDisconnect);
+      } catch (_) { }
+    };
+
+    try {
+      port.onMessage.addListener(onMessage);
+      port.onDisconnect.addListener(onDisconnect);
+    } catch (_) { }
+
+    try {
+      port.postMessage({ type: 'sidepanel_toggle_bridge_request_window_id', ts: Date.now() });
+    } catch (_) { }
+  });
+
+  if (browserAPI?.windows?.onRemoved?.addListener) {
+    browserAPI.windows.onRemoved.addListener((windowId) => {
+      if (typeof windowId !== 'number') return;
+      sidePanelTogglePortsByWindow.delete(windowId);
+      setSidePanelOpenWindowState(windowId, false);
+    });
+  }
+}
+
+async function getSidePanelContexts() {
+  if (!browserAPI?.runtime?.getContexts) return null;
+  try {
+    const filter = { contextTypes: [SIDE_PANEL_CONTEXT] };
+    const result = browserAPI.runtime.getContexts(filter);
+    if (result && typeof result.then === 'function') {
+      return await result;
+    }
+    return await new Promise((resolve) => {
+      try {
+        browserAPI.runtime.getContexts(filter, (contexts) => {
+          resolve(Array.isArray(contexts) ? contexts : []);
+        });
+      } catch (_) {
+        resolve([]);
+      }
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+async function refreshSidePanelOpenWindows() {
+  const contexts = await getSidePanelContexts();
+  if (!Array.isArray(contexts)) return null;
+  sidePanelOpenWindows.clear();
+  contexts.forEach((ctx) => {
+    if (ctx && typeof ctx.windowId === 'number') {
+      setSidePanelOpenWindowState(ctx.windowId, true);
+    }
+  });
+  return contexts;
+}
+
+async function getSidePanelOpenStateForWindow(windowId) {
+  if (typeof windowId !== 'number') return false;
+  const contexts = await refreshSidePanelOpenWindows();
+  if (Array.isArray(contexts) && sidePanelOpenWindows.has(windowId)) {
+    return true;
+  }
+
+  const windowPorts = sidePanelTogglePortsByWindow.get(windowId);
+  if (windowPorts && windowPorts.size > 0) {
+    return true;
+  }
+
+  return sidePanelOpenWindows.has(windowId);
+}
+
+async function closeSidePanelInWindow(windowId) {
+  if (typeof windowId !== 'number') {
+    return { success: false, error: 'window_unavailable' };
+  }
+  if (typeof browserAPI?.sidePanel?.close !== 'function') {
+    return { success: false, error: 'close_unavailable' };
+  }
+
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.sidePanel.close({ windowId }, () => {
+        const err = browserAPI?.runtime?.lastError;
+        if (err) {
+          resolve({ success: false, error: err.message || 'close_failed' });
+          return;
+        }
+        setSidePanelOpenWindowState(windowId, false);
+        resolve({ success: true, isOpen: false });
+      });
+    } catch (error) {
+      resolve({ success: false, error: error?.message || 'close_failed' });
+    }
+  });
+}
+
+if (browserAPI?.runtime?.onInstalled) {
+  browserAPI.runtime.onInstalled.addListener(() => {
+    initSidePanel();
+    refreshSidePanelOpenWindows().catch(() => {});
+  });
+}
+
+initSidePanel();
+registerSidePanelTogglePortListener();
+refreshSidePanelOpenWindows().catch(() => {});
 
 if (browserAPI.commands && browserAPI.commands.onCommand) {
   browserAPI.commands.onCommand.addListener((command) => {
@@ -958,7 +1082,7 @@ async function invalidateRecommendCaches(reason = '') {
 
   // 推荐卡片状态依赖 bookmarkId：批量导入/删除/移动后可能大量失效
   try {
-    await browserAPI.storage.local.remove(['popupCurrentCards']);
+    await browserAPI.storage.local.remove(['historyCurrentCards']);
   } catch (_) { }
 }
 
@@ -2492,40 +2616,107 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (action === 'getPopupFavicon') {
-    (async () => {
-      try {
-        const url = message.url;
-        if (!url) {
-          sendResponse({ success: false, error: 'Missing URL' });
-          return;
-        }
-        const dataUrl = await getOrFetchPopupFavicon(url);
-        sendResponse({ success: true, dataUrl: dataUrl || null });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'prefetchPopupFavicons') {
-    (async () => {
-      try {
-        await prefetchPopupFavicons(message.urls || []);
-        sendResponse({ success: true });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
   if (action === 'trackingDataUpdated') {
     if (message.url) {
       scheduleScoreUpdateByUrl(message.url);
     }
     return false;
+  }
+
+  if (action === 'openSidePanelFromHistoryPage') {
+    (async () => {
+      try {
+        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
+        const view = message.view === 'additions' ? 'additions' : 'recommend';
+        const result = await openSidePanelInWindow(windowId, view);
+        if (!result || result.success !== true) {
+          sendResponse({ success: false, error: result?.error || 'open_failed' });
+          return;
+        }
+        sendResponse({ success: true, isOpen: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'getSidePanelStateFromHistoryPage') {
+    (async () => {
+      try {
+        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
+        if (windowId == null) {
+          sendResponse({ success: false, error: 'window_unavailable' });
+          return;
+        }
+        const isOpen = await getSidePanelOpenStateForWindow(windowId);
+        sendResponse({ success: true, isOpen });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'closeSidePanelFromHistoryPage') {
+    (async () => {
+      try {
+        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
+        const result = await closeSidePanelInWindow(windowId);
+        if (!result || result.success !== true) {
+          sendResponse({ success: false, error: result?.error || 'close_failed' });
+          return;
+        }
+        sendResponse({ success: true, isOpen: false });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'toggleSidePanelFromHistoryPage') {
+    (async () => {
+      try {
+        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
+        if (windowId == null) {
+          sendResponse({ success: false, error: 'window_unavailable' });
+          return;
+        }
+        const view = message.view === 'additions' ? 'additions' : 'recommend';
+        const isOpen = await getSidePanelOpenStateForWindow(windowId);
+        const result = isOpen
+          ? await closeSidePanelInWindow(windowId)
+          : await openSidePanelInWindow(windowId, view);
+
+        if (!result || result.success !== true) {
+          sendResponse({ success: false, error: result?.error || 'toggle_failed' });
+          return;
+        }
+
+        sendResponse({ success: true, isOpen: result.isOpen === true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'markSidePanelOpenFromHistoryPage') {
+    (async () => {
+      try {
+        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
+        if (windowId == null) {
+          sendResponse({ success: false, error: 'window_unavailable' });
+          return;
+        }
+        setSidePanelOpenWindowState(windowId, true);
+        sendResponse({ success: true, isOpen: true, state: 'opened' });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
   }
 
   sendResponse({ success: false, error: 'Unsupported action' });

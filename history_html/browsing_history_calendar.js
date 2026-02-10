@@ -3549,9 +3549,9 @@ class BrowsingHistoryCalendar {
     }
 
     // 渲染树节点（递归）
-    renderTreeNode(node, level = 0, expandToLevel = 0, isLastChild = false) {
+    renderTreeNode(node, level = 0, expandToLevel = 0, isLastChild = false, options = {}) {
         const nodeContainer = document.createElement('div');
-        const themeColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
+        const { lazyRenderCollapsed = false } = options;
 
         // 判断当前层级是否应该展开：
         // expandToLevel 指定展开到哪一层
@@ -3562,7 +3562,7 @@ class BrowsingHistoryCalendar {
         if (level === 0) {
             node.children.forEach((child, index) => {
                 const isLast = index === node.children.length - 1 && node.bookmarks.length === 0;
-                nodeContainer.appendChild(this.renderTreeNode(child, level + 1, expandToLevel, isLast));
+                nodeContainer.appendChild(this.renderTreeNode(child, level + 1, expandToLevel, isLast, options));
             });
             // 根节点的书签（未分类）
             if (node.bookmarks.length > 0) {
@@ -3580,10 +3580,30 @@ class BrowsingHistoryCalendar {
                 const bookmarksContainer = document.createElement('div');
                 bookmarksContainer.style.paddingLeft = `${(level + 1) * 16}px`;
                 bookmarksContainer.style.display = shouldExpandThisLevel ? 'block' : 'none';
-                bookmarksContainer.appendChild(this.renderBookmarkList(node.bookmarks));
+
+                const shouldLazyRenderBookmarks = lazyRenderCollapsed && !shouldExpandThisLevel;
+                const renderBookmarks = () => {
+                    if (bookmarksContainer.dataset.lazyLoaded === '1') return;
+                    bookmarksContainer.innerHTML = '';
+                    bookmarksContainer.appendChild(this.renderBookmarkList(node.bookmarks));
+                    bookmarksContainer.dataset.lazyLoaded = '1';
+                };
+
+                if (shouldLazyRenderBookmarks) {
+                    bookmarksContainer.dataset.lazyLoaded = '0';
+                } else {
+                    renderBookmarks();
+                }
+
                 uncategorizedFolder.appendChild(bookmarksContainer);
 
-                this.attachFolderToggle(folderHeader, bookmarksContainer, uncategorizedFolder, !shouldExpandThisLevel);
+                this.attachFolderToggle(
+                    folderHeader,
+                    bookmarksContainer,
+                    uncategorizedFolder,
+                    !shouldExpandThisLevel,
+                    shouldLazyRenderBookmarks ? renderBookmarks : null
+                );
                 nodeContainer.appendChild(uncategorizedFolder);
             }
             return nodeContainer;
@@ -3649,37 +3669,58 @@ class BrowsingHistoryCalendar {
         childrenContainer.style.paddingLeft = '20px'; // 缩进与树状线对齐
         childrenContainer.style.position = 'relative';
 
-        // 为子内容添加纵向连接线
-        if (level > 0 && (node.bookmarks.length > 0 || node.children.length > 0)) {
-            const childrenVerticalLine = document.createElement('div');
-            childrenVerticalLine.style.position = 'absolute';
-            childrenVerticalLine.style.left = '0';
-            childrenVerticalLine.style.top = '0';
-            childrenVerticalLine.style.width = '1px';
-            childrenVerticalLine.style.height = '100%';
-            childrenVerticalLine.style.background = 'var(--border-color)';
-            childrenVerticalLine.style.opacity = '0.5';
-            childrenContainer.appendChild(childrenVerticalLine);
-        }
+        const shouldLazyRenderChildren = lazyRenderCollapsed && !shouldExpandThisLevel;
 
-        // 先渲染当前文件夹的书签
-        if (node.bookmarks.length > 0) {
-            const bookmarksWrapper = document.createElement('div');
-            bookmarksWrapper.style.position = 'relative';
-            bookmarksWrapper.appendChild(this.renderBookmarkList(node.bookmarks, level > 0));
-            childrenContainer.appendChild(bookmarksWrapper);
-        }
+        const renderChildrenContent = () => {
+            if (childrenContainer.dataset.lazyLoaded === '1') return;
+            childrenContainer.innerHTML = '';
 
-        // 再渲染子文件夹
-        node.children.forEach((child, index) => {
-            const isLast = index === node.children.length - 1;
-            childrenContainer.appendChild(this.renderTreeNode(child, level + 1, expandToLevel, isLast));
-        });
+            // 为子内容添加纵向连接线
+            if (level > 0 && (node.bookmarks.length > 0 || node.children.length > 0)) {
+                const childrenVerticalLine = document.createElement('div');
+                childrenVerticalLine.style.position = 'absolute';
+                childrenVerticalLine.style.left = '0';
+                childrenVerticalLine.style.top = '0';
+                childrenVerticalLine.style.width = '1px';
+                childrenVerticalLine.style.height = '100%';
+                childrenVerticalLine.style.background = 'var(--border-color)';
+                childrenVerticalLine.style.opacity = '0.5';
+                childrenContainer.appendChild(childrenVerticalLine);
+            }
+
+            // 先渲染当前文件夹的书签
+            if (node.bookmarks.length > 0) {
+                const bookmarksWrapper = document.createElement('div');
+                bookmarksWrapper.style.position = 'relative';
+                bookmarksWrapper.appendChild(this.renderBookmarkList(node.bookmarks, level > 0));
+                childrenContainer.appendChild(bookmarksWrapper);
+            }
+
+            // 再渲染子文件夹
+            node.children.forEach((child, index) => {
+                const isLast = index === node.children.length - 1;
+                childrenContainer.appendChild(this.renderTreeNode(child, level + 1, expandToLevel, isLast, options));
+            });
+
+            childrenContainer.dataset.lazyLoaded = '1';
+        };
+
+        if (shouldLazyRenderChildren) {
+            childrenContainer.dataset.lazyLoaded = '0';
+        } else {
+            renderChildrenContent();
+        }
 
         folderContainer.appendChild(childrenContainer);
 
         // 添加折叠功能
-        this.attachFolderToggle(folderHeader, childrenContainer, folderContainer, !shouldExpandThisLevel);
+        this.attachFolderToggle(
+            folderHeader,
+            childrenContainer,
+            folderContainer,
+            !shouldExpandThisLevel,
+            shouldLazyRenderChildren ? renderChildrenContent : null
+        );
 
         return folderContainer;
     }
@@ -3726,7 +3767,9 @@ class BrowsingHistoryCalendar {
     }
 
     // 附加文件夹折叠功能
-    attachFolderToggle(folderHeader, childrenContainer, folderContainer, defaultCollapsed = false) {
+    attachFolderToggle(folderHeader, childrenContainer, folderContainer, defaultCollapsed = false, onFirstExpand = null) {
+        let hasExpandedOnce = false;
+
         // 设置初始状态
         if (defaultCollapsed) {
             folderHeader.dataset.collapsed = 'true';
@@ -3739,6 +3782,7 @@ class BrowsingHistoryCalendar {
             // 展开状态
             folderHeader.dataset.collapsed = 'false';
             // chevron 已经是 fa-chevron-down，不需要修改
+            hasExpandedOnce = true;
         }
 
         folderHeader.addEventListener('click', () => {
@@ -3746,6 +3790,11 @@ class BrowsingHistoryCalendar {
             const chevron = folderHeader.querySelector('.fa-chevron-down, .fa-chevron-right');
 
             if (isCollapsed) {
+                if (!hasExpandedOnce && typeof onFirstExpand === 'function') {
+                    onFirstExpand();
+                    hasExpandedOnce = true;
+                }
+
                 childrenContainer.style.display = 'block';
                 folderHeader.dataset.collapsed = 'false';
                 folderContainer.style.marginBottom = '12px';
@@ -3777,27 +3826,29 @@ class BrowsingHistoryCalendar {
         const BOOKMARK_COLLAPSE_THRESHOLD = 10;
         const shouldCollapseBookmarks = bookmarks.length > BOOKMARK_COLLAPSE_THRESHOLD;
 
-        // 显示前5个书签
         const visibleCount = shouldCollapseBookmarks ? BOOKMARK_COLLAPSE_THRESHOLD : bookmarks.length;
         for (let i = 0; i < visibleCount; i++) {
             const isLastVisible = !shouldCollapseBookmarks && i === bookmarks.length - 1;
             container.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLastVisible));
         }
 
-        // 如果超过5个，创建隐藏容器和展开按钮
         if (shouldCollapseBookmarks) {
             const hiddenBookmarksContainer = document.createElement('div');
             hiddenBookmarksContainer.style.display = 'none';
             hiddenBookmarksContainer.dataset.collapsed = 'true';
+            hiddenBookmarksContainer.dataset.lazyLoaded = '0';
 
-            for (let i = BOOKMARK_COLLAPSE_THRESHOLD; i < bookmarks.length; i++) {
-                const isLast = i === bookmarks.length - 1;
-                hiddenBookmarksContainer.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLast));
-            }
+            const loadHiddenBookmarks = () => {
+                if (hiddenBookmarksContainer.dataset.lazyLoaded === '1') return;
+                for (let i = BOOKMARK_COLLAPSE_THRESHOLD; i < bookmarks.length; i++) {
+                    const isLast = i === bookmarks.length - 1;
+                    hiddenBookmarksContainer.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLast));
+                }
+                hiddenBookmarksContainer.dataset.lazyLoaded = '1';
+            };
 
             container.appendChild(hiddenBookmarksContainer);
 
-            // 展开/收起按钮（改进UI）
             const toggleBtn = document.createElement('button');
             toggleBtn.style.width = '100%';
             toggleBtn.style.padding = '8px 12px';
@@ -3829,6 +3880,7 @@ class BrowsingHistoryCalendar {
                 e.stopPropagation();
                 const isCollapsed = hiddenBookmarksContainer.dataset.collapsed === 'true';
                 if (isCollapsed) {
+                    loadHiddenBookmarks();
                     hiddenBookmarksContainer.style.display = 'block';
                     hiddenBookmarksContainer.dataset.collapsed = 'false';
                     toggleBtn.innerHTML = `
@@ -3879,11 +3931,13 @@ class BrowsingHistoryCalendar {
 
         if (bookmarks.length === 0) return container;
 
-        // 根据排序状态对书签进行排序
         const sortedBookmarks = [...bookmarks].sort((a, b) => {
             const timeCompare = a.dateAdded - b.dateAdded;
             return this.bookmarkSortAsc ? timeCompare : -timeCompare;
         });
+
+        const LARGE_DATASET_THRESHOLD = 300;
+        const isLargeDataset = sortedBookmarks.length > LARGE_DATASET_THRESHOLD;
 
         // 为每个书签填充 folderPath（从 bookmarkFolderPaths 获取）
         const bookmarksWithPath = sortedBookmarks.map(bm => {
@@ -3899,9 +3953,13 @@ class BrowsingHistoryCalendar {
             return this.createFlatBookmarkList(sortedBookmarks);
         }
 
+        const expandToLevel = isLargeDataset ? 0 : 1;
+
         // 使用树状结构显示
         const tree = this.buildBookmarkTree(bookmarksWithPath);
-        const treeNode = this.renderTreeNode(tree, 0, 1); // expandToLevel=1 展开第一层
+        const treeNode = this.renderTreeNode(tree, 0, expandToLevel, false, {
+            lazyRenderCollapsed: isLargeDataset
+        });
         container.appendChild(treeNode);
 
         return container;
@@ -3927,10 +3985,15 @@ class BrowsingHistoryCalendar {
             const hiddenContainer = document.createElement('div');
             hiddenContainer.style.display = 'none';
             hiddenContainer.dataset.collapsed = 'true';
+            hiddenContainer.dataset.lazyLoaded = '0';
 
-            for (let i = BOOKMARK_COLLAPSE_THRESHOLD; i < bookmarks.length; i++) {
-                hiddenContainer.appendChild(this.createFlatHistoryBookmarkItem(bookmarks[i]));
-            }
+            const loadHiddenItems = () => {
+                if (hiddenContainer.dataset.lazyLoaded === '1') return;
+                for (let i = BOOKMARK_COLLAPSE_THRESHOLD; i < bookmarks.length; i++) {
+                    hiddenContainer.appendChild(this.createFlatHistoryBookmarkItem(bookmarks[i]));
+                }
+                hiddenContainer.dataset.lazyLoaded = '1';
+            };
 
             container.appendChild(hiddenContainer);
 
@@ -3965,6 +4028,7 @@ class BrowsingHistoryCalendar {
                 e.stopPropagation();
                 const isCollapsed = hiddenContainer.dataset.collapsed === 'true';
                 if (isCollapsed) {
+                    loadHiddenItems();
                     hiddenContainer.style.display = 'block';
                     hiddenContainer.dataset.collapsed = 'false';
                     toggleBtn.innerHTML = `

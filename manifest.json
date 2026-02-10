@@ -12,8 +12,10 @@
     "default_icon": {
       "200": "icons/icon200.png"
     },
-    "default_title": "__MSG_actionTitle__",
-    "default_popup": "popup.html"
+    "default_title": "__MSG_actionTitle__"
+  },
+  "side_panel": {
+    "default_path": "history_html/history.html?view=recommend&sidepanel=1"
   },
   "background": {
     "service_worker": "background.js",
@@ -40,6 +42,8 @@
     }
   },
   "permissions": [
+    "unlimitedStorage",
+    "sidePanel",
     "bookmarks",
     "history",
     "storage",
@@ -60,7 +64,6 @@
         "<all_urls>"
       ],
       "resources": [
-        "popup.html",
         "icons/icon200.png",
         "history_html/*"
       ]
