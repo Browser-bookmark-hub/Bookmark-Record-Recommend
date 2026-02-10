@@ -3,7 +3,7 @@
   try {
     const params = new URLSearchParams(location.search);
     let view = params.get('view');
-    let defaultView = 'additions';
+    let defaultView = 'widgets';
     if (Array.isArray(window.__ALLOWED_VIEWS) && window.__ALLOWED_VIEWS.length) {
       defaultView = window.__ALLOWED_VIEWS[0];
     }

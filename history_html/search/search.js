@@ -67,12 +67,16 @@ function setSidePanelSearchExpanded(expanded) {
     if (!container) return;
 
     const shouldExpand = !!expanded;
+    const header = document.querySelector('.history-header');
+
     if (shouldExpand) {
         container.classList.add('side-panel-search-expanded');
+        if (header) header.classList.add('sidepanel-search-overlay-active');
         return;
     }
 
     container.classList.remove('side-panel-search-expanded');
+    if (header) header.classList.remove('sidepanel-search-overlay-active');
 }
 
 function isSidePanelSearchExpanded() {

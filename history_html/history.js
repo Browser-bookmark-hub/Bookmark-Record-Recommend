@@ -24,7 +24,7 @@ try {
 
 window.currentLang = currentLang; // 暴露给其他模块使用
 // 允许外部页面限制可用视图（拆分插件时使用）
-const DEFAULT_VIEWS = ['additions', 'recommend'];
+const DEFAULT_VIEWS = ['widgets', 'recommend', 'additions'];
 const ALLOWED_VIEWS = (Array.isArray(window.__ALLOWED_VIEWS) && window.__ALLOWED_VIEWS.length)
     ? window.__ALLOWED_VIEWS
     : DEFAULT_VIEWS;
@@ -1311,6 +1311,30 @@ const i18n = {pageTitle: {
     },navRecommend: {
         'zh_CN': '书签推荐',
         'en': 'Bookmark Recommend'
+    },navWidgets: {
+        'zh_CN': '小组件',
+        'en': 'Widgets'
+    },widgetsViewTitle: {
+        'zh_CN': '小组件',
+        'en': 'Widgets'
+    },widgetsViewDescription: {
+        'zh_CN': '',
+        'en': ''
+    },widgetsTrackingWidgetTitle: {
+        'zh_CN': '时间捕捉',
+        'en': 'Time Tracking'
+    },widgetsTrackingWidgetEmpty: {
+        'zh_CN': '暂无追踪中的书签',
+        'en': 'No bookmarks being tracked'
+    },widgetsRankingWidgetTitle: {
+        'zh_CN': '点击排行',
+        'en': 'Click Ranking'
+    },widgetsRankingWidgetEmpty: {
+        'zh_CN': '暂无点击记录',
+        'en': 'No click records'
+    },widgetsRankingRangeToggle: {
+        'zh_CN': '切换范围',
+        'en': 'Switch range'
     },additionsTabReview: {
         'zh_CN': '书签添加记录',
         'en': 'Bookmark additions'
@@ -2114,6 +2138,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 初始化侧边栏收起功能
     initSidebarToggle();
+
+    if (isViewAllowed('widgets')) {
+        initWidgetsView();
+    }
+
     // 初始化时间捕捉/追踪相关功能（仅在允许 additions 视图时）
     if (isViewAllowed('additions')) {
         initTimeTrackingWidget();
@@ -2207,7 +2236,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 监听书签API变化（实时更新书签树视图）
     setupBookmarkListener();
-    if (isViewAllowed('additions') || isViewAllowed('recommend')) {
+    if (isViewAllowed('additions') || isViewAllowed('recommend') || isViewAllowed('widgets')) {
         setupBrowsingHistoryRealtimeListeners();
     }
 
@@ -2336,18 +2365,35 @@ function applyLanguage() {
             window.updateSearchUILanguage();
         }
     } catch (_) { }
+    updateMainSearchVisibility();
 
     const navAdditionsText = document.getElementById('navAdditionsText');
     if (navAdditionsText) navAdditionsText.textContent = i18n.navAdditions[currentLang];
     const navRecommendText = document.getElementById('navRecommendText');
     if (navRecommendText) navRecommendText.textContent = i18n.navRecommend[currentLang];
-    const bookmarkToolboxTitle = document.getElementById('bookmarkToolboxTitle');
-    if (bookmarkToolboxTitle) bookmarkToolboxTitle.textContent = i18n.bookmarkToolboxTitle[currentLang];
+    const navWidgetsText = document.getElementById('navWidgetsText');
+    if (navWidgetsText) navWidgetsText.textContent = i18n.navWidgets[currentLang];
+
+    const widgetsViewTitle = document.getElementById('widgetsViewTitle');
+    if (widgetsViewTitle) widgetsViewTitle.textContent = i18n.widgetsViewTitle[currentLang];
+    const widgetsViewDescription = document.getElementById('widgetsViewDescription');
+    if (widgetsViewDescription) widgetsViewDescription.textContent = i18n.widgetsViewDescription[currentLang];
 
     const timeTrackingWidgetTitle = document.getElementById('timeTrackingWidgetTitle');
     if (timeTrackingWidgetTitle) timeTrackingWidgetTitle.textContent = i18n.timeTrackingWidgetTitle[currentLang];
     const timeTrackingWidgetEmptyText = document.getElementById('timeTrackingWidgetEmptyText');
     if (timeTrackingWidgetEmptyText) timeTrackingWidgetEmptyText.textContent = i18n.timeTrackingWidgetEmpty[currentLang];
+
+    const widgetsTrackingWidgetTitle = document.getElementById('widgetsTrackingWidgetTitle');
+    if (widgetsTrackingWidgetTitle) widgetsTrackingWidgetTitle.textContent = i18n.widgetsTrackingWidgetTitle[currentLang];
+    const widgetsTrackingWidgetEmptyText = document.getElementById('widgetsTrackingWidgetEmptyText');
+    if (widgetsTrackingWidgetEmptyText) widgetsTrackingWidgetEmptyText.textContent = i18n.widgetsTrackingWidgetEmpty[currentLang];
+
+    const widgetsRankingWidgetTitle = document.getElementById('widgetsRankingWidgetTitle');
+    if (widgetsRankingWidgetTitle) widgetsRankingWidgetTitle.textContent = i18n.widgetsRankingWidgetTitle[currentLang];
+    const widgetsRankingWidgetEmptyText = document.getElementById('widgetsRankingWidgetEmptyText');
+    if (widgetsRankingWidgetEmptyText) widgetsRankingWidgetEmptyText.textContent = i18n.widgetsRankingWidgetEmpty[currentLang];
+    updateWidgetsRankingRangeToggleLabel();
 
     const isEn = currentLang === 'en';
 
@@ -2364,7 +2410,7 @@ function applyLanguage() {
     if (settingsTooltip) settingsTooltip.textContent = isEn ? 'Settings' : '设置';
 
     const settingsThemeText = document.getElementById('settingsThemeText');
-    if (settingsThemeText) settingsThemeText.textContent = '主题切换';
+    if (settingsThemeText) settingsThemeText.textContent = isEn ? 'Theme Switch' : '主题切换';
     const settingsLanguageText = document.getElementById('settingsLanguageText');
     if (settingsLanguageText) settingsLanguageText.textContent = '中文 - English';
     const settingsHelpText = document.getElementById('settingsHelpText');
@@ -2790,6 +2836,10 @@ function applyLanguage() {
     if (settingsThemeIconTail) {
         settingsThemeIconTail.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
+
+    if (currentView === 'widgets' && typeof updateWidgetsViewData === 'function') {
+        updateWidgetsViewData();
+    }
 }
 
 // =============================================================================
@@ -2803,6 +2853,22 @@ function openShortcutsInfoModal() {
         updateShortcutsDisplay();
     }
     shortcutsModal.classList.add('show');
+}
+
+function updateMainSearchVisibility() {
+    const searchContainer = document.querySelector('.search-container');
+    if (!searchContainer) return;
+
+    const shouldHide = currentView === 'widgets';
+    searchContainer.classList.toggle('search-container-hidden', shouldHide);
+
+    if (shouldHide) {
+        try {
+            if (typeof hideSearchResultsPanel === 'function') hideSearchResultsPanel();
+            if (typeof toggleSearchModeMenu === 'function') toggleSearchModeMenu(false);
+            if (typeof setSidePanelSearchExpanded === 'function') setSidePanelSearchExpanded(false);
+        } catch (_) { }
+    }
 }
 
 function initializeUI() {
@@ -2869,6 +2935,7 @@ function initializeUI() {
     }
 
     initBrowsingCalibrationMenu();
+    updateMainSearchVisibility();
 
     console.log('[initializeUI] UI事件监听器初始化完成，当前视图:', currentView);
 }
@@ -3388,6 +3455,12 @@ function formatActiveTime(ms) {
 }
 
 function startTimeTrackingWidgetRefresh() {
+    const legacyWidgetList = document.getElementById('timeTrackingWidgetList');
+    if (!legacyWidgetList) {
+        stopTimeTrackingWidgetRefresh();
+        return;
+    }
+
     if (timeTrackingWidgetInterval) {
         clearInterval(timeTrackingWidgetInterval);
     }
@@ -3493,16 +3566,18 @@ function initSidebarToggle() {
         console.warn('[侧边栏] 找不到宽度拖拽条，将跳过拖拽改宽');
     }
 
-    const SIDEBAR_STATE_KEY = 'sidebarCollapseState';
-    const SIDEBAR_MODE_KEY = 'directoryCollapseMode';
-    const SIDEBAR_AUTO_WIDTH_KEY = 'directoryAutoCollapseWidth';
-    const SIDEBAR_AUTO_STATE_KEY = 'sidebarAutoCollapseState';
-    const SIDEBAR_MANUAL_KEY = 'sidebarManualOverride';
-    const SIDEBAR_POSITION_KEY = 'sidebarDockSide';
-    const SIDEBAR_WIDTH_LEFT_KEY = 'sidebarExpandedWidthLeft';
-    const SIDEBAR_WIDTH_RIGHT_KEY = 'sidebarExpandedWidthRight';
-    const SIDEBAR_TOGGLE_TOP_RATIO_KEY = 'sidebarToggleTopRatio';
-    const LEGACY_COLLAPSED_KEY = 'sidebarCollapsed';
+    const SIDEBAR_STORAGE_SCOPE_SUFFIX = isSidePanelMode ? '__sidepanel' : '';
+    const SIDEBAR_STATE_KEY = `sidebarCollapseState${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_MODE_KEY = `directoryCollapseMode${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_AUTO_WIDTH_KEY = `directoryAutoCollapseWidth${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_AUTO_STATE_KEY = `sidebarAutoCollapseState${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_MANUAL_KEY = `sidebarManualOverride${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_POSITION_KEY = `sidebarDockSide${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_WIDTH_LEFT_KEY = `sidebarExpandedWidthLeft${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_WIDTH_RIGHT_KEY = `sidebarExpandedWidthRight${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_TOGGLE_TOP_RATIO_KEY = `sidebarToggleTopRatio${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const SIDEBAR_TOGGLE_TOP_CUSTOMIZED_KEY = `sidebarToggleTopCustomized${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
+    const LEGACY_COLLAPSED_KEY = `sidebarCollapsed${SIDEBAR_STORAGE_SCOPE_SUFFIX}`;
 
     const SIDEBAR_STATES = ['expanded', 'compact', 'hidden'];
     const SIDEBAR_POSITIONS = ['left', 'right'];
@@ -3518,7 +3593,7 @@ function initSidebarToggle() {
     const SIDEBAR_RESIZE_COMPACT_THRESHOLD = 56;
 
     const TOGGLE_VERTICAL_MARGIN_PX = 28;
-    const TOGGLE_DEFAULT_RATIO = 0.65;
+    const TOGGLE_DEFAULT_RATIO = 0.6;
     const TOGGLE_RATIO_MIN = 0.08;
     const TOGGLE_RATIO_MAX = 0.92;
     const TOGGLE_DRAG_ACTIVATE_THRESHOLD = 10;
@@ -3597,19 +3672,35 @@ function initSidebarToggle() {
         return clamp(value, TOGGLE_RATIO_MIN, TOGGLE_RATIO_MAX);
     }
 
-    let toggleTopRatio = normalizeToggleRatio(readStorage(SIDEBAR_TOGGLE_TOP_RATIO_KEY));
+    const storedToggleTopRatioRaw = readStorage(SIDEBAR_TOGGLE_TOP_RATIO_KEY);
+    const hasCustomToggleTopRatio = readStorage(SIDEBAR_TOGGLE_TOP_CUSTOMIZED_KEY) === 'true';
+    let toggleTopRatio = normalizeToggleRatio(storedToggleTopRatioRaw);
+    if (!hasCustomToggleTopRatio) {
+        toggleTopRatio = TOGGLE_DEFAULT_RATIO;
+    }
     if (toggleTopRatio == null) toggleTopRatio = TOGGLE_DEFAULT_RATIO;
 
     let sidebarPosition = normalizeSidebarPosition(readStorage(SIDEBAR_POSITION_KEY));
 
-    let sidebarMode = normalizeSidebarMode(readStorage(SIDEBAR_MODE_KEY));
+    const storedSidebarModeRaw = readStorage(SIDEBAR_MODE_KEY);
+    let sidebarMode = normalizeSidebarMode(storedSidebarModeRaw);
     let autoCollapseWidth = normalizeAutoCollapseWidth(readStorage(SIDEBAR_AUTO_WIDTH_KEY));
     let autoCollapsedState = normalizeAutoCollapsedState(readStorage(SIDEBAR_AUTO_STATE_KEY));
 
+    const storedSidebarStateRaw = readStorage(SIDEBAR_STATE_KEY);
     const legacyCollapsed = readStorage(LEGACY_COLLAPSED_KEY) === 'true';
-    let currentState = normalizeSidebarState(readStorage(SIDEBAR_STATE_KEY));
+    let currentState = normalizeSidebarState(storedSidebarStateRaw);
     if (!currentState) {
         currentState = legacyCollapsed ? 'hidden' : 'expanded';
+    }
+
+    if (isSidePanelMode) {
+        if (!storedSidebarModeRaw) {
+            sidebarMode = SIDEBAR_MODE_MANUAL;
+        }
+        if (!storedSidebarStateRaw) {
+            currentState = 'compact';
+        }
     }
 
     const initialRect = sidebar.getBoundingClientRect();
@@ -3730,6 +3821,7 @@ function initSidebarToggle() {
         document.documentElement.style.setProperty('--sidebar-toggle-top', percent);
         if (options.persist !== false) {
             writeStorage(SIDEBAR_TOGGLE_TOP_RATIO_KEY, String(safeRatio));
+            writeStorage(SIDEBAR_TOGGLE_TOP_CUSTOMIZED_KEY, 'true');
         }
     }
 
@@ -4108,9 +4200,14 @@ function initSidebarToggle() {
         const dragDistance = Math.hypot(dx, dy);
         const moved = toggleDragSession.moved || dragDistance >= TOGGLE_DRAG_ACTIVATE_THRESHOLD;
 
-        if (moved && !canceled) {
-            setToggleTopRatio(getToggleRatioFromClientY(event.clientY), { persist: true });
-            if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= TOGGLE_DRAG_SWITCH_THRESHOLD) {
+        if (moved) {
+            if (!canceled) {
+                setToggleTopRatio(getToggleRatioFromClientY(event.clientY), { persist: true });
+            } else {
+                setToggleTopRatio(toggleTopRatio, { persist: true });
+            }
+
+            if (!canceled && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= TOGGLE_DRAG_SWITCH_THRESHOLD) {
                 const shouldSwitch = (sidebarPosition === 'left' && dx > 0)
                     || (sidebarPosition === 'right' && dx < 0);
                 if (shouldSwitch) {
@@ -4319,6 +4416,8 @@ function switchView(view) {
         // 当前仅保留「书签记录/推荐」，无需清理历史视图搜索缓存
     } catch (_) { }
 
+    updateMainSearchVisibility();
+
     // 更新导航标签
     document.querySelectorAll('.nav-tab').forEach(tab => {
         if (tab.dataset.view === view) {
@@ -4368,14 +4467,384 @@ function renderCurrentView() {
         stopTrackingRefresh();
     }
 
+    if (currentView !== 'widgets') {
+        stopWidgetsViewRefresh();
+    }
+
     switch (currentView) {
+        case 'widgets':
+            renderWidgetsView();
+            break;
         case 'additions':
             renderAdditionsView();
             break;
         case 'recommend':
             renderRecommendView();
             break;
+        default:
+            break;
     }
+}
+
+// =============================================================================
+// 小组件视图
+// =============================================================================
+
+let widgetsViewBound = false;
+let widgetsViewRefreshInterval = null;
+const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
+
+function normalizeWidgetsRankingRange(range) {
+    const safe = String(range || '').toLowerCase();
+    if (safe === 'day' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'day';
+}
+
+function getWidgetsRankingRangeConfig(range) {
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const map = {
+        day: { text: currentLang === 'zh_CN' ? '当日' : 'Today', key: 'dayCount' },
+        week: { text: currentLang === 'zh_CN' ? '当周' : 'This Week', key: 'weekCount' },
+        month: { text: currentLang === 'zh_CN' ? '当月' : 'This Month', key: 'monthCount' },
+        year: { text: currentLang === 'zh_CN' ? '当年' : 'This Year', key: 'yearCount' },
+        all: { text: currentLang === 'zh_CN' ? '全部' : 'All Time', key: 'allCount' }
+    };
+    return map[safeRange] || map.day;
+}
+
+function updateWidgetsRankingRangeToggleLabel(range) {
+    const btn = document.getElementById('widgetsRankingRangeToggleBtn');
+    if (!btn) return;
+
+    const safeRange = normalizeWidgetsRankingRange(
+        range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day'
+    );
+    const activeConfig = getWidgetsRankingRangeConfig(safeRange);
+    const toggleLabel = i18n.widgetsRankingRangeToggle
+        ? i18n.widgetsRankingRangeToggle[currentLang]
+        : (currentLang === 'zh_CN' ? '切换范围' : 'Switch range');
+
+    btn.textContent = activeConfig.text;
+    btn.title = `${toggleLabel} (${activeConfig.text})`;
+    btn.setAttribute('aria-label', btn.title);
+}
+
+function getTrackingStateIcon(state) {
+    if (state === 'active') return '🟢';
+    if (state === 'sleeping') return '💤';
+    if (state === 'background') return '⚪';
+    if (state === 'visible') return '🔵';
+    return '🟡';
+}
+
+function openBookmarkFromWidgets(url, title = '') {
+    if (!url) return;
+    if (typeof window.openBookmarkNewTab === 'function') {
+        window.openBookmarkNewTab(url, { title, source: 'widgets_view' });
+    } else if (browserAPI?.tabs?.create) {
+        browserAPI.tabs.create({ url });
+    } else {
+        window.open(url, '_blank');
+    }
+}
+
+function navigateToAdditionsTrackingFromWidgets() {
+    switchView('additions');
+    setTimeout(() => {
+        const trackingTab = document.getElementById('additionsTabTracking');
+        if (trackingTab) trackingTab.click();
+    }, 100);
+}
+
+function navigateToAdditionsRankingFromWidgets() {
+    const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+    try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
+
+    switchView('additions');
+    setTimeout(() => {
+        const browsingTab = document.getElementById('additionsTabBrowsing');
+        if (!browsingTab) return;
+        browsingTab.click();
+        setTimeout(() => {
+            const rankingTab = document.getElementById('browsingTabRanking');
+            if (rankingTab) rankingTab.click();
+        }, 50);
+    }, 100);
+}
+
+async function updateWidgetsTrackingWidget() {
+    const widgetList = document.getElementById('widgetsTrackingWidgetList');
+    if (!widgetList) return;
+
+    const emptyText = (i18n.widgetsTrackingWidgetEmpty && i18n.widgetsTrackingWidgetEmpty[currentLang])
+        ? i18n.widgetsTrackingWidgetEmpty[currentLang]
+        : (i18n.timeTrackingWidgetEmpty ? i18n.timeTrackingWidgetEmpty[currentLang] : (currentLang === 'zh_CN' ? '暂无追踪中的书签' : 'No bookmarks being tracked'));
+
+    let isTrackingEnabled = true;
+    try {
+        const enabledResponse = await browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' });
+        if (enabledResponse && enabledResponse.success) {
+            isTrackingEnabled = enabledResponse.enabled;
+        }
+    } catch (_) { }
+
+    if (!isTrackingEnabled) {
+        const disabledText = currentLang === 'zh_CN' ? '时间追踪已关闭' : 'Time Tracking Disabled';
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${disabledText}</span></div>`;
+        return;
+    }
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
+        const sessions = response && response.success && Array.isArray(response.sessions)
+            ? response.sessions
+            : [];
+
+        if (!sessions.length) {
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            return;
+        }
+
+        const groupedSessions = new Map();
+        for (const session of sessions) {
+            const key = `${session.url || ''}::${session.title || ''}`;
+            if (!groupedSessions.has(key)) groupedSessions.set(key, []);
+            groupedSessions.get(key).push(session);
+        }
+
+        const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
+        const displayItems = [];
+        for (const list of groupedSessions.values()) {
+            const totalCompositeMs = list.reduce((sum, item) => sum + (item.compositeMs || item.activeMs || 0), 0);
+            const bestState = list.reduce((best, item) => {
+                const bestIdx = stateOrder.indexOf(best);
+                const currIdx = stateOrder.indexOf(item.state);
+                return currIdx < bestIdx ? item.state : best;
+            }, 'sleeping');
+
+            displayItems.push({
+                title: list[0]?.title || '',
+                url: list[0]?.url || '',
+                state: bestState,
+                compositeMs: totalCompositeMs,
+                count: list.length
+            });
+        }
+
+        displayItems.sort((a, b) => b.compositeMs - a.compositeMs);
+        const showItems = displayItems.slice(0, 5);
+        const remaining = displayItems.length - showItems.length;
+
+        widgetList.innerHTML = '';
+
+        showItems.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'time-tracking-widget-item';
+
+            const stateIcon = document.createElement('span');
+            stateIcon.className = 'item-state';
+            stateIcon.textContent = getTrackingStateIcon(item.state);
+
+            const title = document.createElement('span');
+            title.className = 'item-title';
+            let titleText = item.title;
+            if (!titleText) {
+                try {
+                    titleText = new URL(item.url).hostname;
+                } catch (_) {
+                    titleText = item.url || '--';
+                }
+            }
+            if (item.count > 1) titleText += ` (${item.count})`;
+            title.textContent = titleText;
+            title.title = item.title || item.url;
+
+            const time = document.createElement('span');
+            time.className = 'item-time';
+            time.textContent = formatActiveTime(item.compositeMs);
+
+            row.appendChild(stateIcon);
+            row.appendChild(title);
+            row.appendChild(time);
+
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openBookmarkFromWidgets(item.url, item.title || '');
+            });
+
+            widgetList.appendChild(row);
+        });
+
+        if (remaining > 0) {
+            const more = document.createElement('div');
+            more.className = 'time-tracking-widget-more';
+            const moreTextTpl = i18n.timeTrackingWidgetMore ? i18n.timeTrackingWidgetMore[currentLang] : null;
+            more.textContent = moreTextTpl ? moreTextTpl.replace('{count}', remaining) : `${remaining}`;
+            widgetList.appendChild(more);
+        }
+    } catch (error) {
+        console.warn('[Widgets] 更新时间捕捉小组件失败:', error);
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
+}
+
+async function updateWidgetsRankingWidget() {
+    const widgetList = document.getElementById('widgetsRankingWidgetList');
+    if (!widgetList) return;
+
+    const emptyText = (i18n.widgetsRankingWidgetEmpty && i18n.widgetsRankingWidgetEmpty[currentLang])
+        ? i18n.widgetsRankingWidgetEmpty[currentLang]
+        : (currentLang === 'zh_CN' ? '暂无点击记录' : 'No click records');
+
+    if (!window.timeTrackingWidgetRankingRange) {
+        window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+    } else {
+        window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange);
+    }
+
+    const currentRange = window.timeTrackingWidgetRankingRange;
+    const activeConfig = getWidgetsRankingRangeConfig(currentRange);
+    updateWidgetsRankingRangeToggleLabel(currentRange);
+
+    try {
+        const stats = await ensureBrowsingClickRankingStats();
+
+        let items = [];
+        if (stats && !stats.error && stats.items) {
+            items = getBrowsingRankingItemsForRange(currentRange);
+        }
+
+        widgetList.innerHTML = '';
+
+        if (items.length > 0) {
+            const topItems = items.slice(0, 5);
+            topItems.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'time-tracking-widget-item ranking-item';
+
+                const rankNum = document.createElement('span');
+                rankNum.className = 'item-rank';
+                rankNum.textContent = `${index + 1}`;
+
+                const title = document.createElement('span');
+                title.className = 'item-title';
+                try {
+                    title.textContent = item.title || new URL(item.url).hostname;
+                } catch (_) {
+                    title.textContent = item.title || item.url;
+                }
+                title.title = item.title || item.url;
+
+                const count = document.createElement('span');
+                count.className = 'item-time';
+                count.textContent = `${item[activeConfig.key]}${currentLang === 'zh_CN' ? '次' : 'x'}`;
+
+                row.appendChild(rankNum);
+                row.appendChild(title);
+                row.appendChild(count);
+
+                row.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openBookmarkFromWidgets(item.url, item.title || '');
+                });
+
+                widgetList.appendChild(row);
+            });
+        } else {
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        }
+
+    } catch (error) {
+        console.warn('[Widgets] 更新点击排行小组件失败:', error);
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
+}
+
+async function updateWidgetsViewData() {
+    await Promise.all([
+        updateWidgetsTrackingWidget(),
+        updateWidgetsRankingWidget()
+    ]);
+}
+
+function startWidgetsViewRefresh() {
+    if (widgetsViewRefreshInterval) return;
+
+    updateWidgetsViewData().catch((error) => {
+        console.warn('[Widgets] 初次刷新失败:', error);
+    });
+
+    widgetsViewRefreshInterval = setInterval(() => {
+        if (currentView !== 'widgets') return;
+        updateWidgetsViewData().catch((error) => {
+            console.warn('[Widgets] 周期刷新失败:', error);
+        });
+    }, WIDGETS_VIEW_REFRESH_INTERVAL_MS);
+}
+
+function stopWidgetsViewRefresh() {
+    if (!widgetsViewRefreshInterval) return;
+    clearInterval(widgetsViewRefreshInterval);
+    widgetsViewRefreshInterval = null;
+}
+
+function cycleWidgetsRankingRange() {
+    const ranges = ['day', 'week', 'month', 'year', 'all'];
+    const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+    const currentIndex = Math.max(0, ranges.indexOf(currentRange));
+    const nextRange = ranges[(currentIndex + 1) % ranges.length];
+
+    window.timeTrackingWidgetRankingRange = nextRange;
+    try { localStorage.setItem('timeTrackingWidgetRankingRange', nextRange); } catch (_) { }
+    updateWidgetsRankingRangeToggleLabel(nextRange);
+
+    updateWidgetsRankingWidget().catch((error) => {
+        console.warn('[Widgets] 切换排行范围失败:', error);
+    });
+}
+
+function initWidgetsView() {
+    if (widgetsViewBound) return;
+
+    const trackingWidget = document.getElementById('widgetsTrackingWidget');
+    const rankingWidget = document.getElementById('widgetsRankingWidget');
+    const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
+
+    if (!trackingWidget && !rankingWidget) {
+        return;
+    }
+
+    if (trackingWidget) {
+        trackingWidget.addEventListener('click', (e) => {
+            if (e.target.closest('.time-tracking-widget-item') || e.target.closest('a')) return;
+            navigateToAdditionsTrackingFromWidgets();
+        });
+    }
+
+    if (rankingWidget) {
+        rankingWidget.addEventListener('click', (e) => {
+            if (e.target.closest('#widgetsRankingRangeToggleBtn') || e.target.closest('.time-tracking-widget-item') || e.target.closest('a')) return;
+            navigateToAdditionsRankingFromWidgets();
+        });
+    }
+
+    if (rankingRangeBtn) {
+        rankingRangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsRankingRange();
+        });
+    }
+
+    widgetsViewBound = true;
+}
+
+function renderWidgetsView() {
+    if (!widgetsViewBound) {
+        initWidgetsView();
+    }
+    startWidgetsViewRefresh();
 }
 
 // =============================================================================
@@ -4816,8 +5285,15 @@ function setHighResFavicon(imgElement, url) {
     });
 }
 
-function getHistoryPageUrl(view = 'recommend', options = {}) {
-    const safeView = view === 'additions' ? 'additions' : 'recommend';
+function normalizeHistoryPageView(view, fallback = 'widgets') {
+    if (view === 'widgets' || view === 'recommend' || view === 'additions') {
+        return view;
+    }
+    return fallback;
+}
+
+function getHistoryPageUrl(view = 'widgets', options = {}) {
+    const safeView = normalizeHistoryPageView(view, 'widgets');
     const query = new URLSearchParams();
     query.set('view', safeView);
     if (options.sidepanel === true) {
@@ -4849,7 +5325,7 @@ function isMatchingHistoryPageUrl(rawUrl) {
         if (!parsed.pathname.endsWith('/history_html/history.html')) return false;
 
         const view = parsed.searchParams.get('view');
-        if (view && view !== 'additions' && view !== 'recommend') return false;
+        if (view && view !== 'additions' && view !== 'recommend' && view !== 'widgets') return false;
 
         if (parsed.searchParams.get('sidepanel') === '1') return false;
         return true;
@@ -4913,8 +5389,8 @@ async function createHistoryPageTab(url) {
 }
 
 async function openOrFocusHistoryPage(options = {}) {
-    const { view = currentView || 'recommend' } = options;
-    const safeView = view === 'additions' ? 'additions' : 'recommend';
+    const { view = currentView || 'widgets' } = options;
+    const safeView = normalizeHistoryPageView(view, 'widgets');
     const url = getHistoryPageUrl(safeView, { sidepanel: false });
 
     let targetTab = await findLatestHistoryPageTabInCurrentWindow();
@@ -5000,7 +5476,7 @@ async function openSidePanelDirectlyFromHistoryPage() {
     if (typeof windowId !== 'number') return { success: false, error: 'window_unavailable' };
     if (!browserAPI?.sidePanel?.open) return { success: false, error: 'sidepanel_unavailable' };
 
-    const safeView = currentView === 'additions' ? 'additions' : 'recommend';
+    const safeView = normalizeHistoryPageView(currentView, 'widgets');
 
     try {
         if (typeof browserAPI?.sidePanel?.setOptions === 'function') {
@@ -5291,7 +5767,7 @@ function setupOpenHistoryPageButton() {
     btn.addEventListener('click', async (e) => {
         e.preventDefault();
         try {
-            await openOrFocusHistoryPage({ view: currentView || 'recommend' });
+            await openOrFocusHistoryPage({ view: currentView || 'widgets' });
         } catch (_) { }
     });
 }
@@ -13869,6 +14345,10 @@ function performSearch(query) {
             } else {
                 hideSearchResultsPanel();
             }
+            break;
+        case 'widgets':
+        default:
+            hideSearchResultsPanel();
             break;
     }
 }

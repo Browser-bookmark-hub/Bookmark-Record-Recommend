@@ -21,11 +21,17 @@ const browserAPI = (function () {
   throw new Error('Unsupported browser');
 })();
 
-const SIDE_PANEL_HISTORY_PATH = 'history_html/history.html?view=recommend&sidepanel=1';
+const SIDE_PANEL_HISTORY_PATH = 'history_html/history.html?view=widgets&sidepanel=1';
 
+function normalizeHistoryPanelView(view, fallback = 'widgets') {
+  if (view === 'widgets' || view === 'recommend' || view === 'additions') {
+    return view;
+  }
+  return fallback;
+}
 
 function openView(view) {
-  const safeView = view === 'recommend' ? 'recommend' : 'additions';
+  const safeView = normalizeHistoryPanelView(view, 'widgets');
   try {
     browserAPI.storage.local.set({
       historyRequestedView: { view: safeView, time: Date.now() }
@@ -78,12 +84,12 @@ async function resolveWindowIdForSidePanelAction(message, sender) {
   return await getCurrentWindowIdAsync();
 }
 
-async function setSidePanelOptionsForWindow(windowId, view = 'recommend') {
+async function setSidePanelOptionsForWindow(windowId, view = 'widgets') {
   if (typeof browserAPI?.sidePanel?.setOptions !== 'function') {
     return { success: true };
   }
 
-  const safeView = view === 'additions' ? 'additions' : 'recommend';
+  const safeView = normalizeHistoryPanelView(view, 'widgets');
   const path = `history_html/history.html?view=${safeView}&sidepanel=1`;
   const baseOptions = { path, enabled: true };
   const candidates = [];
@@ -116,7 +122,7 @@ async function setSidePanelOptionsForWindow(windowId, view = 'recommend') {
   return last;
 }
 
-async function openSidePanelInWindow(windowId, view = 'recommend') {
+async function openSidePanelInWindow(windowId, view = 'widgets') {
   if (typeof windowId !== 'number') {
     return { success: false, error: 'window_unavailable' };
   }
@@ -2627,7 +2633,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const windowId = await resolveWindowIdForSidePanelAction(message, sender);
-        const view = message.view === 'additions' ? 'additions' : 'recommend';
+        const view = normalizeHistoryPanelView(message.view, 'widgets');
         const result = await openSidePanelInWindow(windowId, view);
         if (!result || result.success !== true) {
           sendResponse({ success: false, error: result?.error || 'open_failed' });
@@ -2683,7 +2689,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: 'window_unavailable' });
           return;
         }
-        const view = message.view === 'additions' ? 'additions' : 'recommend';
+        const view = normalizeHistoryPanelView(message.view, 'widgets');
         const isOpen = await getSidePanelOpenStateForWindow(windowId);
         const result = isOpen
           ? await closeSidePanelInWindow(windowId)
