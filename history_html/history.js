@@ -97,10 +97,104 @@ const DATA_CACHE_KEYS = {
     additions: 'bb_cache_additions_v1'
 };
 
+const ADDITIONS_CACHE_BACKOFF_KEY = 'bb_cache_additions_write_backoff_until_v1';
+const ADDITIONS_CACHE_WRITE_BACKOFF_MS = 10 * 60 * 1000;
+const ADDITIONS_TREE_REFRESH_TS_KEY = 'bb_cache_additions_tree_refresh_ts_v1';
+const SIDEPANEL_TREE_REFRESH_COOLDOWN_MS = 2 * 60 * 1000;
+const SIDEPANEL_ICON_PRELOAD_TS_KEY = 'bb_sidepanel_icon_preload_ts_v1';
+const SIDEPANEL_ICON_PRELOAD_COOLDOWN_MS = 30 * 60 * 1000;
+const SIDEPANEL_FAVICON_WARMUP_TS_KEY = 'bb_sidepanel_favicon_warmup_ts_v1';
+const SIDEPANEL_FAVICON_WARMUP_COOLDOWN_MS = 15 * 60 * 1000;
+const SIDEPANEL_RECOMMEND_SNAPSHOT_KEY = 'bb_sidepanel_recommend_cards_snapshot_v1';
+const SIDEPANEL_RECOMMEND_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const RECOMMEND_POOL_CURSOR_KEY = 'bb_recommend_pool_cursor_v1';
+const RECOMMEND_BATCH_SIZE = 3;
+const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
+const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
+const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
+const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
+const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
+const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
+const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
+const FLIP_HISTORY_STORAGE_KEY = 'flipHistory';
+const HEATMAP_DAILY_INDEX_STORAGE_KEY = 'flipHistoryDailyIndexV1';
+const FLIP_HISTORY_MAX_ITEMS = 12000;
+const FLIP_HISTORY_RETENTION_DAYS = 420;
+const FLIP_HISTORY_DAY_RECORDS_MAX = 300;
+const HEATMAP_BOOKMARK_MAP_CACHE_TTL_MS = 2 * 60 * 1000;
+
 let additionsCacheRestored = false;
+let heatmapBookmarkMapCache = {
+    expiresAt: 0,
+    map: null
+};
 let saveAdditionsCacheTimer = null;
 let browsingHistoryRefreshPromise = null;
 let additionsTreeRefreshInFlight = null;
+
+function readLocalNumber(key, fallback = 0) {
+    try {
+        const value = Number(localStorage.getItem(key));
+        return Number.isFinite(value) ? value : fallback;
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function writeLocalNumber(key, value) {
+    try {
+        localStorage.setItem(key, String(Number(value) || 0));
+    } catch (_) { }
+}
+
+function getAdditionsCacheWriteBackoffUntil() {
+    return readLocalNumber(ADDITIONS_CACHE_BACKOFF_KEY, 0);
+}
+
+function shouldSkipAdditionsCacheWrite() {
+    const backoffUntil = getAdditionsCacheWriteBackoffUntil();
+    return backoffUntil > Date.now();
+}
+
+function markAdditionsCacheWriteBackoff(message = '') {
+    if (!isQuotaExceededErrorMessage(message)) return;
+    const until = Date.now() + ADDITIONS_CACHE_WRITE_BACKOFF_MS;
+    writeLocalNumber(ADDITIONS_CACHE_BACKOFF_KEY, until);
+}
+
+function clearAdditionsCacheWriteBackoff() {
+    writeLocalNumber(ADDITIONS_CACHE_BACKOFF_KEY, 0);
+}
+
+function markAdditionsTreeRefreshTime(ts = Date.now()) {
+    writeLocalNumber(ADDITIONS_TREE_REFRESH_TS_KEY, ts);
+}
+
+function shouldRefreshAdditionsTreeInBackground() {
+    if (!isSidePanelMode) return true;
+    const lastRefreshTs = readLocalNumber(ADDITIONS_TREE_REFRESH_TS_KEY, 0);
+    if (!lastRefreshTs) return true;
+    return (Date.now() - lastRefreshTs) >= SIDEPANEL_TREE_REFRESH_COOLDOWN_MS;
+}
+
+function shouldRunSidePanelPreload(markerKey, cooldownMs) {
+    if (!isSidePanelMode) return true;
+    const now = Date.now();
+    const lastTs = readLocalNumber(markerKey, 0);
+    if (lastTs && (now - lastTs) < cooldownMs) {
+        return false;
+    }
+    writeLocalNumber(markerKey, now);
+    return true;
+}
+
+function shouldRunSidePanelIconPreload() {
+    return shouldRunSidePanelPreload(SIDEPANEL_ICON_PRELOAD_TS_KEY, SIDEPANEL_ICON_PRELOAD_COOLDOWN_MS);
+}
+
+function shouldRunSidePanelFaviconWarmup() {
+    return shouldRunSidePanelPreload(SIDEPANEL_FAVICON_WARMUP_TS_KEY, SIDEPANEL_FAVICON_WARMUP_COOLDOWN_MS);
+}
 
 function readCachedValue(key) {
     return new Promise((resolve) => {
@@ -194,16 +288,23 @@ function buildAdditionsCachePayloadVariant(payload, options = {}) {
 
 function writeCachedValue(key, value) {
     return new Promise(async (resolve) => {
+        const isAdditionsCache = key === DATA_CACHE_KEYS.additions;
+        if (isAdditionsCache && shouldSkipAdditionsCacheWrite()) {
+            resolve({ ok: false, error: 'write_backoff' });
+            return;
+        }
+
         const storageArea = getCacheStorageArea();
         if (storageArea) {
             let writeError = await setCachedValueToStorage(storageArea, key, value);
             if (!writeError) {
+                if (isAdditionsCache) clearAdditionsCacheWriteBackoff();
                 resolve({ ok: true, compact: false });
                 return;
             }
 
             if (
-                key === DATA_CACHE_KEYS.additions
+                isAdditionsCache
                 && value
                 && Array.isArray(value.bookmarks)
                 && isQuotaExceededErrorMessage(writeError)
@@ -214,13 +315,18 @@ function writeCachedValue(key, value) {
                     { label: 'trim-12000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 12000 } },
                     { label: 'trim-8000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 8000 } },
                     { label: 'trim-5000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 5000 } },
-                    { label: 'trim-3000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 3000 } }
+                    { label: 'trim-3000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 3000 } },
+                    { label: 'trim-2000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 2000 } },
+                    { label: 'trim-1000', options: { omitPath: true, omitAncestors: true, maxBookmarks: 1000 } },
+                    { label: 'trim-600', options: { omitPath: true, omitAncestors: true, maxBookmarks: 600 } },
+                    { label: 'trim-300', options: { omitPath: true, omitAncestors: true, maxBookmarks: 300 } }
                 ];
 
                 for (const strategy of fallbackStrategies) {
                     const fallbackPayload = buildAdditionsCachePayloadVariant(value, strategy.options);
                     const fallbackError = await setCachedValueToStorage(storageArea, key, fallbackPayload);
                     if (!fallbackError) {
+                        clearAdditionsCacheWriteBackoff();
                         console.warn(`[Cache] 添加记录缓存超限，已降级保存(${strategy.label}): ${fallbackPayload.bookmarks.length}/${value.bookmarks.length}`);
                         resolve({
                             ok: true,
@@ -235,6 +341,9 @@ function writeCachedValue(key, value) {
                 }
             }
 
+            if (isAdditionsCache) {
+                markAdditionsCacheWriteBackoff(writeError);
+            }
             console.warn('[Cache] 写入失败:', writeError);
             resolve({ ok: false, error: writeError });
             return;
@@ -242,13 +351,18 @@ function writeCachedValue(key, value) {
 
         try {
             localStorage.setItem(key, JSON.stringify(value));
+            if (isAdditionsCache) clearAdditionsCacheWriteBackoff();
             resolve({ ok: true, compact: false });
         } catch (error) {
+            if (isAdditionsCache) {
+                markAdditionsCacheWriteBackoff(error?.message || String(error));
+            }
             console.warn('[Cache] 写入 localStorage 失败:', error);
             resolve({ ok: false, error: error?.message || String(error) });
         }
     });
 }
+
 
 function normalizeBookmarkCacheEntry(entry) {
     if (!entry || !entry.url) return null;
@@ -441,6 +555,31 @@ function scheduleHistoryRefresh({ forceFull = false } = {}) {
     }, 500);
 }
 
+function getRecommendCardsRefreshDebounceMs(changes = null) {
+    const keys = changes && typeof changes === 'object' ? Object.keys(changes) : [];
+
+    const heavySignals = [
+        'recommend_scores_cache',
+        RECOMMEND_POSTPONED_STORAGE_KEY,
+        RECOMMEND_BLOCKED_STORAGE_KEY,
+        'lastBookmarkData',
+        'lastSyncOperations',
+        'lastSyncTime',
+        'bookmarkBulkChangeFlag'
+    ];
+
+    const hasHeavySignal = keys.some(key => heavySignals.includes(key));
+    const base = hasHeavySignal ? 1200 : 900;
+
+    const now = Date.now();
+    const sinceLast = now - lastRecommendCardsRefreshAt;
+    if (sinceLast < 600) {
+        return Math.max(base, 1500);
+    }
+
+    return base;
+}
+
 function handleHistoryVisited(result) {
     if (!result || !result.url) return;
     console.log('[History] onVisited:', result.url, 'title:', result.title);
@@ -463,6 +602,11 @@ async function handleHistoryVisitRemoved(details) {
 let historyRealtimeBound = false;
 let messageListenerRegistered = false;
 let historyPollingTimer = null;
+let bookmarkListenerRegistered = false;
+let storageListenerRegistered = false;
+let lastRecommendCardsRefreshAt = 0;
+let recommendCardsRefreshDebounceMs = 900;
+let lastStorageChanges = null;
 
 function ensureHistoryPolling() {
     if (historyPollingTimer) return;
@@ -1314,6 +1458,15 @@ const i18n = {pageTitle: {
     },navWidgets: {
         'zh_CN': '小组件',
         'en': 'Widgets'
+    },sidePanelTitleWidgets: {
+        'zh_CN': '小组件',
+        'en': 'Widgets'
+    },sidePanelTitleRecommend: {
+        'zh_CN': '书签推荐',
+        'en': 'Bookmark Recommend'
+    },sidePanelTitleAdditions: {
+        'zh_CN': '书签记录',
+        'en': 'Bookmark Records'
     },widgetsViewTitle: {
         'zh_CN': '小组件',
         'en': 'Widgets'
@@ -1335,6 +1488,39 @@ const i18n = {pageTitle: {
     },widgetsRankingRangeToggle: {
         'zh_CN': '切换范围',
         'en': 'Switch range'
+    },widgetsRecommendWidgetTitle: {
+        'zh_CN': '书签推荐',
+        'en': 'Bookmark Recommend'
+    },widgetsAdditionsWeekWidgetTitle: {
+        'zh_CN': '书签添加记录（周）',
+        'en': 'Bookmark Additions (Week)'
+    },widgetsAdditionsWeekWidgetEmpty: {
+        'zh_CN': '暂无本周书签添加记录',
+        'en': 'No additions this week'
+    },widgetsHistoryWeekWidgetTitle: {
+        'zh_CN': '点击记录（周）',
+        'en': 'Click History (Week)'
+    },widgetsHistoryWeekWidgetEmpty: {
+        'zh_CN': '暂无本周点击记录',
+        'en': 'No clicks this week'
+    },widgetsWeekTotal: {
+        'zh_CN': '本周合计 {count} 条',
+        'en': '{count} this week'
+    },widgetsRelatedWidgetTitle: {
+        'zh_CN': '关联记录',
+        'en': 'Related Records'
+    },widgetsRelatedLevel1: {
+        'zh_CN': '一级目录',
+        'en': 'Level 1'
+    },widgetsRelatedLevel2: {
+        'zh_CN': '二级目录',
+        'en': 'Level 2'
+    },widgetsRelatedEmpty: {
+        'zh_CN': '暂无目录记录',
+        'en': 'No folder records'
+    },widgetsCardRefreshText: {
+        'zh_CN': '刷新推荐',
+        'en': 'Refresh Cards'
     },additionsTabReview: {
         'zh_CN': '书签添加记录',
         'en': 'Bookmark additions'
@@ -2106,6 +2292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     localStorage.setItem('lastActiveView', currentView);
+    updatePageHeaderTitle(currentView);
     console.log('[初始化] 视图状态已应用完成');
 
     // [Search Context Boot] 首次加载时同步 SearchContextManager 的 view/tab/subTab。
@@ -2152,12 +2339,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         initAddTrackingBlockBookmarkModal();
     }
 
+    // 侧边栏：先用本地快照秒显推荐卡片，避免二次打开闪烁
+    if (isSidePanelMode) {
+        try {
+            hydrateRecommendCardsFromSnapshotForSidePanel();
+        } catch (_) { }
+    }
+
     // 注册消息监听
     setupRealtimeMessageListener();
 
     // 先加载基础数据
     console.log('[初始化] 加载基础数据...');
-    await loadAllData();
+    if (isSidePanelMode) {
+        await ensureAdditionsCacheLoaded(true);
+        const hasFastCache = additionsCacheRestored && Array.isArray(allBookmarks) && allBookmarks.length > 0;
+        if (hasFastCache) {
+            loadAllData({ skipRender: true }).catch((error) => {
+                console.warn('[初始化] 侧边栏后台刷新失败:', error);
+            });
+            console.log('[初始化] 侧边栏快速模式：使用缓存秒开，后台同步数据');
+        } else {
+            await loadAllData();
+        }
+    } else {
+        await loadAllData();
+    }
+
+    // 侧边栏模式：打开次数计入自动刷新阈值（按侧边栏打开次数而不是主 UI）
+    if (isSidePanelMode) {
+        try {
+            const shouldRefreshFromSidePanelOpen = await checkAndIncrementOpenCount({ source: 'sidepanel' });
+            if (shouldRefreshFromSidePanelOpen) {
+                await refreshRecommendCards(true);
+                try {
+                    lastWidgetsRecommendCardSignature = '';
+                } catch (_) { }
+            }
+        } catch (error) {
+            console.warn('[侧边栏] 处理推荐刷新阈值失败:', error);
+        }
+    }
 
     // 使用智能等待：尝试渲染，如果数据不完整则等待后重试
     // 初始化时强制刷新缓存，确保显示最新数据
@@ -2178,28 +2400,31 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // [Favicon Warmup] Preload favicon memory cache to avoid flicker when switching views
     try {
-        const rawUrls = allBookmarks
-            .map(b => b && b.url)
-            .filter(url => url && !FaviconCache.isInvalidUrl(url));
-        const MAX_WARMUP = 300;
-        const warmUrls = rawUrls.length > MAX_WARMUP ? rawUrls.slice(0, MAX_WARMUP) : rawUrls;
-        if (warmUrls.length) {
-            setTimeout(async () => {
-                try {
-                    await warmupFaviconCache(warmUrls);
-                    warmUrls.forEach((url) => {
-                        try {
-                            const domain = new URL(url).hostname;
-                            const cached = FaviconCache.memoryCache.get(domain);
-                            if (cached && cached !== fallbackIcon) {
-                                updateFaviconImages(url, cached);
-                            }
-                        } catch (_) { }
-                    });
-                } catch (e) {
-                    console.warn('[Favicon预热] 预热失败:', e);
-                }
-            }, 0);
+        const shouldWarmupFavicons = !isSidePanelMode || shouldRunSidePanelFaviconWarmup();
+        if (shouldWarmupFavicons) {
+            const rawUrls = allBookmarks
+                .map(b => b && b.url)
+                .filter(url => url && !FaviconCache.isInvalidUrl(url));
+            const MAX_WARMUP = isSidePanelMode ? 120 : 300;
+            const warmUrls = rawUrls.length > MAX_WARMUP ? rawUrls.slice(0, MAX_WARMUP) : rawUrls;
+            if (warmUrls.length) {
+                setTimeout(async () => {
+                    try {
+                        await warmupFaviconCache(warmUrls);
+                        warmUrls.forEach((url) => {
+                            try {
+                                const domain = new URL(url).hostname;
+                                const cached = FaviconCache.memoryCache.get(domain);
+                                if (cached && cached !== fallbackIcon) {
+                                    updateFaviconImages(url, cached);
+                                }
+                            } catch (_) { }
+                        });
+                    } catch (e) {
+                        console.warn('[Favicon预热] 预热失败:', e);
+                    }
+                }, 0);
+            }
         }
     } catch (_) { }
 
@@ -2222,17 +2447,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 并行预加载其他视图和图标（不阻塞）
-    Promise.all([
-        preloadAllViews(),
-        preloadCommonIcons()
-    ]).then(() => {
+    const preloadTasks = [preloadAllViews()];
+    if (!isSidePanelMode || shouldRunSidePanelIconPreload()) {
+        preloadTasks.push(preloadCommonIcons());
+    }
+
+    Promise.all(preloadTasks).then(() => {
         console.log('[初始化] 所有资源预加载完成');
     }).catch(error => {
         console.error('[初始化] 预加载失败:', error);
     });
 
     // 监听存储变化（实时更新）
-    browserAPI.storage.onChanged.addListener(handleStorageChange);
+    if (!storageListenerRegistered) {
+        browserAPI.storage.onChanged.addListener(handleStorageChange);
+        storageListenerRegistered = true;
+    }
 
     // 监听书签API变化（实时更新书签树视图）
     setupBookmarkListener();
@@ -2335,11 +2565,67 @@ async function loadUserSettings() {
     });
 }
 
+function getViewTitleText(view = currentView) {
+    const safeView = typeof view === 'string' ? view : '';
+    if (safeView === 'widgets') return (i18n.sidePanelTitleWidgets && i18n.sidePanelTitleWidgets[currentLang]) || i18n.navWidgets[currentLang];
+    if (safeView === 'additions') return (i18n.sidePanelTitleAdditions && i18n.sidePanelTitleAdditions[currentLang]) || i18n.navAdditions[currentLang];
+    if (safeView === 'recommend') return (i18n.sidePanelTitleRecommend && i18n.sidePanelTitleRecommend[currentLang]) || i18n.navRecommend[currentLang];
+    return i18n.pageTitle[currentLang];
+}
+
+let sidePanelHeaderTitleAlignRaf = null;
+
+function syncSidePanelHeaderTitleAlignment() {
+    if (!isSidePanelMode) return;
+
+    const header = document.querySelector('.history-header');
+    const headerLeft = document.querySelector('.history-header .header-left');
+    const firstNavIcon = document.querySelector('.sidebar .nav-tabs .nav-tab i');
+    if (!header || !headerLeft || !firstNavIcon) return;
+
+    const headerRect = header.getBoundingClientRect();
+    const iconRect = firstNavIcon.getBoundingClientRect();
+    if (!headerRect || !iconRect) return;
+
+    const iconFontSize = parseFloat(window.getComputedStyle(firstNavIcon).fontSize || '16') || 16;
+    const iconGlyphInset = Math.max(0, (iconRect.width - iconFontSize) / 2);
+    const titleTargetLeft = iconRect.left + iconGlyphInset;
+    const basePaddingLeft = parseFloat(window.getComputedStyle(header).paddingLeft || '0') || 0;
+    const rawOffset = titleTargetLeft - headerRect.left - basePaddingLeft;
+    if (!Number.isFinite(rawOffset)) return;
+
+    const safeOffset = Math.round(Math.max(-16, Math.min(80, rawOffset)));
+    document.documentElement.style.setProperty('--sidepanel-title-align-offset', `${safeOffset}px`);
+}
+
+function scheduleSidePanelHeaderTitleAlignment() {
+    if (!isSidePanelMode) return;
+    if (sidePanelHeaderTitleAlignRaf != null) return;
+
+    sidePanelHeaderTitleAlignRaf = window.requestAnimationFrame(() => {
+        sidePanelHeaderTitleAlignRaf = null;
+        syncSidePanelHeaderTitleAlignment();
+    });
+}
+
+function updatePageHeaderTitle(view = currentView) {
+    const pageTitleEl = document.getElementById('pageTitle');
+    if (!pageTitleEl) return;
+
+    if (isSidePanelMode) {
+        pageTitleEl.textContent = getViewTitleText(view);
+        scheduleSidePanelHeaderTitleAlignment();
+        return;
+    }
+
+    pageTitleEl.textContent = i18n.pageTitle[currentLang];
+}
+
 function applyLanguage() {
     try {
         document.documentElement.lang = currentLang === 'zh_CN' ? 'zh' : 'en';
     } catch (_) { }
-    document.getElementById('pageTitle').textContent = i18n.pageTitle[currentLang];
+    updatePageHeaderTitle(currentView);
     const subtitleEl = document.getElementById('pageSubtitle');
     if (subtitleEl) {
         const subtitleText = (i18n.pageSubtitle && i18n.pageSubtitle[currentLang]) ? i18n.pageSubtitle[currentLang] : '';
@@ -2389,11 +2675,46 @@ function applyLanguage() {
     const widgetsTrackingWidgetEmptyText = document.getElementById('widgetsTrackingWidgetEmptyText');
     if (widgetsTrackingWidgetEmptyText) widgetsTrackingWidgetEmptyText.textContent = i18n.widgetsTrackingWidgetEmpty[currentLang];
 
+    const widgetsRecommendWidgetTitle = document.getElementById('widgetsRecommendWidgetTitle');
+    if (widgetsRecommendWidgetTitle) widgetsRecommendWidgetTitle.textContent = i18n.widgetsRecommendWidgetTitle[currentLang];
+
     const widgetsRankingWidgetTitle = document.getElementById('widgetsRankingWidgetTitle');
     if (widgetsRankingWidgetTitle) widgetsRankingWidgetTitle.textContent = i18n.widgetsRankingWidgetTitle[currentLang];
     const widgetsRankingWidgetEmptyText = document.getElementById('widgetsRankingWidgetEmptyText');
     if (widgetsRankingWidgetEmptyText) widgetsRankingWidgetEmptyText.textContent = i18n.widgetsRankingWidgetEmpty[currentLang];
+
+    const widgetsAdditionsWeekWidgetTitle = document.getElementById('widgetsAdditionsWeekWidgetTitle');
+    if (widgetsAdditionsWeekWidgetTitle) widgetsAdditionsWeekWidgetTitle.textContent = i18n.widgetsAdditionsWeekWidgetTitle[currentLang];
+    const widgetsAdditionsWeekWidgetEmptyText = document.getElementById('widgetsAdditionsWeekWidgetEmptyText');
+    if (widgetsAdditionsWeekWidgetEmptyText) widgetsAdditionsWeekWidgetEmptyText.textContent = i18n.widgetsAdditionsWeekWidgetEmpty[currentLang];
+
+    const widgetsHistoryWeekWidgetTitle = document.getElementById('widgetsHistoryWeekWidgetTitle');
+    if (widgetsHistoryWeekWidgetTitle) widgetsHistoryWeekWidgetTitle.textContent = i18n.widgetsHistoryWeekWidgetTitle[currentLang];
+    const widgetsHistoryWeekWidgetEmptyText = document.getElementById('widgetsHistoryWeekWidgetEmptyText');
+    if (widgetsHistoryWeekWidgetEmptyText) widgetsHistoryWeekWidgetEmptyText.textContent = i18n.widgetsHistoryWeekWidgetEmpty[currentLang];
+
+    const widgetsRelatedWidgetTitle = document.getElementById('widgetsRelatedWidgetTitle');
+    if (widgetsRelatedWidgetTitle) widgetsRelatedWidgetTitle.textContent = i18n.widgetsRelatedWidgetTitle[currentLang];
+    const widgetsRelatedLevel1Btn = document.getElementById('widgetsRelatedLevel1Btn');
+    if (widgetsRelatedLevel1Btn) widgetsRelatedLevel1Btn.textContent = i18n.widgetsRelatedLevel1[currentLang];
+    const widgetsRelatedLevel2Btn = document.getElementById('widgetsRelatedLevel2Btn');
+    if (widgetsRelatedLevel2Btn) widgetsRelatedLevel2Btn.textContent = i18n.widgetsRelatedLevel2[currentLang];
+    const widgetsRelatedEmptyText = document.getElementById('widgetsRelatedEmptyText');
+    if (widgetsRelatedEmptyText) widgetsRelatedEmptyText.textContent = i18n.widgetsRelatedEmpty[currentLang];
+
+    const widgetsCardRefreshText = document.getElementById('widgetsCardRefreshText');
+    if (widgetsCardRefreshText) widgetsCardRefreshText.textContent = i18n.widgetsCardRefreshText[currentLang];
+    const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
+    if (widgetsCardRefreshBtn) widgetsCardRefreshBtn.title = i18n.widgetsCardRefreshText[currentLang];
+
     updateWidgetsRankingRangeToggleLabel();
+    updateWidgetsRelatedDepthButtonsState();
+    try {
+        const maybePromise = updateWidgetsRelatedWidget();
+        if (maybePromise && typeof maybePromise.catch === 'function') {
+            maybePromise.catch(() => { });
+        }
+    } catch (_) { }
 
     const isEn = currentLang === 'en';
 
@@ -2956,6 +3277,7 @@ async function refreshAdditionsDataFromTree(options = {}) {
         rebuildBookmarkUrlSet();
         additionsCacheRestored = true;
         cachedBookmarkTree = bookmarkTree;
+        markAdditionsTreeRefreshTime();
         persistAdditionsCache();
 
         if (renderAfter && currentView === 'additions') {
@@ -2982,10 +3304,14 @@ async function loadAllData(options = {}) {
         const hasCachedBookmarks = additionsCacheRestored && allBookmarks.length > 0;
 
         if (hasCachedBookmarks && !forceRefresh) {
-            console.log('[loadAllData] 命中共享缓存，后台刷新书签树...');
-            refreshAdditionsDataFromTree({ renderAfter: !skipRender }).catch((e) => {
-                console.warn('[loadAllData] 后台刷新书签树失败:', e);
-            });
+            if (shouldRefreshAdditionsTreeInBackground()) {
+                console.log('[loadAllData] 命中共享缓存，后台刷新书签树...');
+                refreshAdditionsDataFromTree({ renderAfter: !skipRender }).catch((e) => {
+                    console.warn('[loadAllData] 后台刷新书签树失败:', e);
+                });
+            } else {
+                console.log('[loadAllData] 命中共享缓存，侧边栏快速模式：跳过短周期重复刷新');
+            }
 
             console.log('[loadAllData] 数据加载完成(缓存):', {
                 书签总数: allBookmarks.length
@@ -3786,6 +4112,7 @@ function initSidebarToggle() {
         const rect = sidebar.getBoundingClientRect();
         const widthPx = rect && rect.width ? `${Math.max(0, Math.round(rect.width))}px` : '0px';
         document.documentElement.style.setProperty('--sidebar-width', widthPx);
+        scheduleSidePanelHeaderTitleAlignment();
     }
 
     function updateWidgetToggleBtn() {
@@ -4388,6 +4715,7 @@ function switchView(view) {
     // 更新全局变量
     currentView = view;
     try { window.currentView = currentView; } catch (_) { }
+    updatePageHeaderTitle(currentView);
 
     // 视图切换时隐藏搜索结果面板并清除搜索缓存（Phase 1 & 2 & 2.5）
     try {
@@ -4492,7 +4820,38 @@ function renderCurrentView() {
 
 let widgetsViewBound = false;
 let widgetsViewRefreshInterval = null;
+let lastWidgetsRecommendCardSignature = '';
+let widgetsRecommendBootstrapAttempted = false;
+let widgetsRelatedFolderDepth = 'level1';
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
+
+function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = currentLang) {
+    const cardSignature = (Array.isArray(cards) ? cards : [])
+        .map((card) => {
+            const id = String(card?.id || '').trim();
+            const priority = Number(card?.priority);
+            const safePriority = Number.isFinite(priority) ? priority.toFixed(4) : 'nan';
+            const forceDue = card?.forceDue === true ? '1' : '0';
+            const forceDueAt = Number.isFinite(Number(card?.forceDueAt))
+                ? Math.floor(Number(card?.forceDueAt))
+                : 0;
+            const forceDueMovedAt = Number.isFinite(Number(card?.forceDueMovedAt))
+                ? Math.floor(Number(card?.forceDueMovedAt))
+                : 0;
+            return [id, safePriority, forceDue, forceDueAt, forceDueMovedAt].join(':');
+        })
+        .join('|');
+
+    const flippedSignature = Array.from(new Set(
+        (Array.isArray(flippedIds) ? flippedIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ))
+        .sort()
+        .join('|');
+
+    return `${cardSignature}::${flippedSignature}::${String(lang || '')}`;
+}
 
 function normalizeWidgetsRankingRange(range) {
     const safe = String(range || '').toLowerCase();
@@ -4500,6 +4859,49 @@ function normalizeWidgetsRankingRange(range) {
         return safe;
     }
     return 'day';
+}
+
+function normalizeWidgetsRelatedDepth(mode) {
+    return mode === 'level2' ? 'level2' : 'level1';
+}
+
+function readWidgetsRelatedFolderDepth() {
+    try {
+        return normalizeWidgetsRelatedDepth(localStorage.getItem('widgetsRelatedFolderDepth') || 'level1');
+    } catch (_) {
+        return 'level1';
+    }
+}
+
+function setWidgetsRelatedFolderDepth(mode, persist = true) {
+    const safe = normalizeWidgetsRelatedDepth(mode);
+    widgetsRelatedFolderDepth = safe;
+    if (persist) {
+        try { localStorage.setItem('widgetsRelatedFolderDepth', safe); } catch (_) { }
+    }
+    updateWidgetsRelatedDepthButtonsState();
+
+    try {
+        const maybePromise = updateWidgetsRelatedWidget();
+        if (maybePromise && typeof maybePromise.catch === 'function') {
+            maybePromise.catch(() => { });
+        }
+    } catch (_) { }
+
+    return safe;
+}
+
+function updateWidgetsRelatedDepthButtonsState() {
+    const level1Btn = document.getElementById('widgetsRelatedLevel1Btn');
+    const level2Btn = document.getElementById('widgetsRelatedLevel2Btn');
+    const safeDepth = normalizeWidgetsRelatedDepth(widgetsRelatedFolderDepth);
+
+    if (level1Btn) {
+        level1Btn.classList.toggle('active', safeDepth === 'level1');
+    }
+    if (level2Btn) {
+        level2Btn.classList.toggle('active', safeDepth === 'level2');
+    }
 }
 
 function getWidgetsRankingRangeConfig(range) {
@@ -4539,6 +4941,160 @@ function getTrackingStateIcon(state) {
     return '🟡';
 }
 
+function getWidgetsCurrentWeekStart() {
+    const now = new Date();
+    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // zh: Monday, en: Sunday
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const currentDay = base.getDay();
+    let diff = currentDay - weekStartDay;
+    if (diff < 0) diff += 7;
+    base.setDate(base.getDate() - diff);
+    base.setHours(0, 0, 0, 0);
+    return base;
+}
+
+function getWidgetsWeekDates() {
+    const start = getWidgetsCurrentWeekStart();
+    const dates = [];
+    for (let i = 0; i < 7; i++) {
+        const day = new Date(start);
+        day.setDate(start.getDate() + i);
+        dates.push(day);
+    }
+    return dates;
+}
+
+function getWidgetsDateKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getWidgetsWeekdayLabel(date) {
+    if (currentLang === 'zh_CN') {
+        const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+        return names[date.getDay()];
+    }
+    return date.toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function formatWidgetsWeekTotal(total) {
+    const tpl = i18n.widgetsWeekTotal
+        ? i18n.widgetsWeekTotal[currentLang]
+        : (currentLang === 'zh_CN' ? '本周合计 {count} 条' : '{count} this week');
+    return tpl.replace('{count}', String(total));
+}
+
+function computeWidgetsWeekDailyCounts(bookmarksByDate) {
+    const weekDates = getWidgetsWeekDates();
+    const dailyCounts = weekDates.map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        const records = bookmarksByDate && bookmarksByDate.get ? (bookmarksByDate.get(dateKey) || []) : [];
+        return {
+            date,
+            label: getWidgetsWeekdayLabel(date),
+            count: Array.isArray(records) ? records.length : 0
+        };
+    });
+
+    const total = dailyCounts.reduce((sum, item) => sum + item.count, 0);
+    return { dailyCounts, total };
+}
+
+function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText) {
+    if (!widgetList) return;
+
+    if (!Array.isArray(dailyCounts) || dailyCounts.length === 0 || total <= 0) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    widgetList.innerHTML = '';
+
+    const daysRow = document.createElement('div');
+    daysRow.className = 'widgets-week-days-row';
+
+    dailyCounts.forEach((item) => {
+        const cell = document.createElement('div');
+        cell.className = 'widgets-week-day-cell';
+
+        const label = document.createElement('span');
+        label.className = 'widgets-week-day-label';
+        label.textContent = item.label;
+
+        const count = document.createElement('span');
+        count.className = 'widgets-week-day-number';
+        count.textContent = `${item.count}`;
+
+        cell.appendChild(label);
+        cell.appendChild(count);
+        daysRow.appendChild(cell);
+    });
+
+    widgetList.appendChild(daysRow);
+
+    const totalEl = document.createElement('div');
+    totalEl.className = 'widgets-week-total';
+    totalEl.textContent = formatWidgetsWeekTotal(total);
+    widgetList.appendChild(totalEl);
+}
+
+async function waitForBookmarkCalendarForWidgets(timeoutMs = 3000) {
+    try {
+        if (typeof initBookmarkCalendar === 'function' && !window.bookmarkCalendarInstance) {
+            initBookmarkCalendar();
+        }
+    } catch (_) { }
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const inst = window.bookmarkCalendarInstance;
+        if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size >= 0) {
+            return inst;
+        }
+        await new Promise(resolve => setTimeout(resolve, 120));
+    }
+    return window.bookmarkCalendarInstance || null;
+}
+
+async function waitForBrowsingCalendarForWidgets(timeoutMs = 3600) {
+    try {
+        await ensureBrowsingClickRankingStats();
+    } catch (_) { }
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const inst = window.browsingHistoryCalendarInstance;
+        if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size >= 0) {
+            return inst;
+        }
+        await new Promise(resolve => setTimeout(resolve, 120));
+    }
+    return window.browsingHistoryCalendarInstance || null;
+}
+
+function focusBookmarkCalendarCurrentWeek() {
+    const calendar = window.bookmarkCalendarInstance;
+    if (!calendar) return;
+
+    const weekStart = getWidgetsCurrentWeekStart();
+    calendar.currentWeekStart = new Date(weekStart);
+    calendar.viewLevel = 'week';
+    if (typeof calendar.render === 'function') {
+        calendar.render();
+    }
+}
+
+function focusBrowsingCalendarCurrentWeek() {
+    const calendar = window.browsingHistoryCalendarInstance;
+    if (!calendar) return;
+
+    const weekStart = getWidgetsCurrentWeekStart();
+    calendar.currentWeekStart = new Date(weekStart);
+    calendar.viewLevel = 'week';
+    if (typeof calendar.render === 'function') {
+        calendar.render();
+    }
+}
+
 function openBookmarkFromWidgets(url, title = '') {
     if (!url) return;
     if (typeof window.openBookmarkNewTab === 'function') {
@@ -4572,6 +5128,199 @@ function navigateToAdditionsRankingFromWidgets() {
             if (rankingTab) rankingTab.click();
         }, 50);
     }, 100);
+}
+
+function navigateToAdditionsReviewWeekFromWidgets() {
+    switchView('additions');
+    setTimeout(() => {
+        const reviewTab = document.getElementById('additionsTabReview');
+        if (reviewTab) reviewTab.click();
+
+        setTimeout(() => {
+            try {
+                if (typeof initBookmarkCalendar === 'function' && !window.bookmarkCalendarInstance) {
+                    initBookmarkCalendar();
+                }
+                focusBookmarkCalendarCurrentWeek();
+            } catch (e) {
+                console.warn('[Widgets] 跳转书签添加记录周视图失败:', e);
+            }
+        }, 80);
+    }, 100);
+}
+
+function navigateToAdditionsHistoryWeekFromWidgets() {
+    switchView('additions');
+    setTimeout(() => {
+        const browsingTab = document.getElementById('additionsTabBrowsing');
+        if (!browsingTab) return;
+        browsingTab.click();
+
+        setTimeout(() => {
+            const historyTab = document.getElementById('browsingTabHistory');
+            if (historyTab) historyTab.click();
+
+            setTimeout(async () => {
+                try {
+                    if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+                        initBrowsingHistoryCalendar();
+                    }
+                    await waitForBrowsingCalendarForWidgets();
+                    focusBrowsingCalendarCurrentWeek();
+                } catch (e) {
+                    console.warn('[Widgets] 跳转点击记录周视图失败:', e);
+                }
+            }, 80);
+        }, 60);
+    }, 100);
+}
+
+function navigateToAdditionsRelatedLevelFromWidgets(level) {
+    const safeDepth = normalizeWidgetsRelatedDepth(level);
+    setWidgetsRelatedFolderDepth(safeDepth, true);
+
+    try {
+        if (typeof setBrowsingRankingFolderDepth === 'function') {
+            setBrowsingRankingFolderDepth(safeDepth, { persist: true, reload: false });
+        }
+    } catch (_) { }
+
+    try {
+        saveBrowsingRankingViewMode('folder');
+        localStorage.setItem('browsingRankingActiveRange', 'week');
+    } catch (_) { }
+
+    switchView('additions');
+    setTimeout(() => {
+        const browsingTab = document.getElementById('additionsTabBrowsing');
+        if (!browsingTab) return;
+        browsingTab.click();
+
+        setTimeout(() => {
+            const rankingTab = document.getElementById('browsingTabRanking');
+            if (rankingTab) rankingTab.click();
+
+            try {
+                if (typeof setBrowsingRankingActiveRange === 'function') {
+                    setBrowsingRankingActiveRange('week');
+                } else {
+                    loadBrowsingClickRanking('week');
+                }
+            } catch (_) { }
+        }, 70);
+    }, 100);
+}
+
+async function getWidgetsRelatedFolderItems(depth = 'level1') {
+    const safeDepth = normalizeWidgetsRelatedDepth(depth);
+    const stats = await ensureBrowsingClickRankingStats();
+    if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
+        return [];
+    }
+
+    try {
+        await getBookmarkUrlsAndTitles();
+    } catch (_) { }
+
+    const sourceItems = getBrowsingRankingItemsForRange('week') || [];
+    if (!Array.isArray(sourceItems) || sourceItems.length === 0) {
+        return [];
+    }
+
+    const folderStats = new Map();
+
+    sourceItems.forEach((item) => {
+        const weekCount = Number(item && item.weekCount ? item.weekCount : 0);
+        if (!weekCount) return;
+
+        const rawPath = (browsingRelatedBookmarkInfo && browsingRelatedBookmarkInfo.get(item.url)
+            ? browsingRelatedBookmarkInfo.get(item.url).folderPath
+            : null) || [];
+
+        let folderPath = Array.isArray(rawPath) ? rawPath.slice() : [];
+        if (safeDepth === 'level1') {
+            folderPath = folderPath.slice(0, 1);
+        } else {
+            folderPath = folderPath.slice(0, 2);
+        }
+
+        if (!folderPath.length) {
+            return;
+        }
+
+        const pathKey = folderPath.join(' / ');
+        if (!folderStats.has(pathKey)) {
+            folderStats.set(pathKey, {
+                path: pathKey,
+                name: folderPath[folderPath.length - 1],
+                count: 0
+            });
+        }
+
+        const entry = folderStats.get(pathKey);
+        entry.count += weekCount;
+    });
+
+    return Array.from(folderStats.values())
+        .sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return String(a.path || '').localeCompare(String(b.path || ''));
+        });
+}
+
+async function updateWidgetsRelatedWidget() {
+    const listEl = document.getElementById('widgetsRelatedList');
+    if (!listEl) return;
+
+    const emptyText = (i18n.widgetsRelatedEmpty && i18n.widgetsRelatedEmpty[currentLang])
+        ? i18n.widgetsRelatedEmpty[currentLang]
+        : (currentLang === 'zh_CN' ? '暂无目录记录' : 'No folder records');
+
+    const safeDepth = normalizeWidgetsRelatedDepth(widgetsRelatedFolderDepth);
+    updateWidgetsRelatedDepthButtonsState();
+
+    try {
+        const folders = await getWidgetsRelatedFolderItems(safeDepth);
+
+        if (!folders.length) {
+            listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            return;
+        }
+
+        listEl.innerHTML = '';
+
+        folders.slice(0, 8).forEach((folder, index) => {
+            const row = document.createElement('div');
+            row.className = 'widgets-related-folder-item';
+
+            const rank = document.createElement('span');
+            rank.className = 'widgets-related-folder-rank';
+            rank.textContent = `${index + 1}`;
+
+            const name = document.createElement('span');
+            name.className = 'widgets-related-folder-name';
+            name.textContent = folder.path || folder.name || '--';
+            name.title = folder.path || folder.name || '--';
+
+            const count = document.createElement('span');
+            count.className = 'widgets-related-folder-count';
+            count.textContent = currentLang === 'zh_CN' ? `${folder.count}次` : `${folder.count}x`;
+
+            row.appendChild(rank);
+            row.appendChild(name);
+            row.appendChild(count);
+
+            row.addEventListener('click', (event) => {
+                event.stopPropagation();
+                navigateToAdditionsRelatedLevelFromWidgets(safeDepth);
+            });
+
+            listEl.appendChild(row);
+        });
+    } catch (error) {
+        console.warn('[Widgets] 更新关联记录小组件失败:', error);
+        listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
 }
 
 async function updateWidgetsTrackingWidget() {
@@ -4762,11 +5511,212 @@ async function updateWidgetsRankingWidget() {
     }
 }
 
+async function updateWidgetsAdditionsWeekWidget() {
+    const widgetList = document.getElementById('widgetsAdditionsWeekWidgetList');
+    if (!widgetList) return;
+
+    const emptyText = (i18n.widgetsAdditionsWeekWidgetEmpty && i18n.widgetsAdditionsWeekWidgetEmpty[currentLang])
+        ? i18n.widgetsAdditionsWeekWidgetEmpty[currentLang]
+        : (currentLang === 'zh_CN' ? '暂无本周书签添加记录' : 'No additions this week');
+
+    try {
+        const calendar = await waitForBookmarkCalendarForWidgets();
+        if (!calendar || !calendar.bookmarksByDate) {
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            return;
+        }
+
+        const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
+        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
+    } catch (error) {
+        console.warn('[Widgets] 更新书签添加周视图小组件失败:', error);
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
+}
+
+async function updateWidgetsHistoryWeekWidget() {
+    const widgetList = document.getElementById('widgetsHistoryWeekWidgetList');
+    if (!widgetList) return;
+
+    const emptyText = (i18n.widgetsHistoryWeekWidgetEmpty && i18n.widgetsHistoryWeekWidgetEmpty[currentLang])
+        ? i18n.widgetsHistoryWeekWidgetEmpty[currentLang]
+        : (currentLang === 'zh_CN' ? '暂无本周点击记录' : 'No clicks this week');
+
+    try {
+        const calendar = await waitForBrowsingCalendarForWidgets();
+        if (!calendar || !calendar.bookmarksByDate) {
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            return;
+        }
+
+        const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
+        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
+    } catch (error) {
+        console.warn('[Widgets] 更新点击记录周视图小组件失败:', error);
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
+}
+
+async function renderWidgetsRecommendCards(options = {}) {
+    const cardsRow = document.getElementById('widgetsCardsRow');
+    if (!cardsRow) return;
+
+    const cards = cardsRow.querySelectorAll('.recommend-card');
+    if (!cards.length) return;
+
+    const force = Boolean(options.force);
+    const allowBootstrap = options.allowBootstrap !== false;
+
+    let currentCards = null;
+    try {
+        currentCards = await getHistoryCurrentCards();
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+    } catch (_) { }
+
+    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && currentCards?.cardIds?.length) {
+        try {
+            const cachedCardDataMap = new Map();
+            if (Array.isArray(currentCards.cardData)) {
+                currentCards.cardData.forEach(data => {
+                    if (data && data.id) cachedCardDataMap.set(data.id, data);
+                });
+            }
+
+            // 侧边栏快速路径：先用已保存卡片秒显，避免打开时闪烁
+            if (cachedCardDataMap.size > 0) {
+                const quickCards = currentCards.cardIds
+                    .map(id => cachedCardDataMap.get(id) || null)
+                    .filter(Boolean)
+                    .map((bookmark) => {
+                        const safeTitle = bookmark.title || bookmark.name || bookmark.url || '';
+                        const safeUrl = bookmark.url || '';
+                        const safeFavicon = bookmark.favicon || bookmark.faviconUrl || null;
+                        const quickPriority = Number(bookmark.priority);
+                        return {
+                            ...bookmark,
+                            title: safeTitle,
+                            name: safeTitle,
+                            url: safeUrl,
+                            favicon: safeFavicon,
+                            faviconUrl: safeFavicon,
+                            priority: Number.isFinite(quickPriority) ? quickPriority : 0.5,
+                            factors: bookmark.factors || {}
+                        };
+                    });
+
+                if (quickCards.length > 0) {
+                    recommendCards = quickCards;
+                    writeRecommendCardsSnapshot(recommendCards, Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []);
+                }
+            }
+
+            if ((!Array.isArray(recommendCards) || recommendCards.length === 0)) {
+                const bookmarks = await getAllBookmarksFlat();
+                const bookmarkMap = new Map(bookmarks.map(b => [b.id, b]));
+                const scoresCache = await getScoresCache();
+                const reviewData = await getReviewData();
+
+                recommendCards = currentCards.cardIds
+                    .map(id => bookmarkMap.get(id) || cachedCardDataMap.get(id) || null)
+                    .filter(Boolean)
+                    .map(bookmark => {
+                        const cached = scoresCache[bookmark.id];
+                        const cachedMeta = cachedCardDataMap.get(bookmark.id);
+                        const safeTitle = bookmark.title || bookmark.name || cachedMeta?.title || '';
+                        const safeUrl = bookmark.url || cachedMeta?.url || '';
+                        const safeFavicon = cachedMeta?.favicon || cachedMeta?.faviconUrl || null;
+                        const reviewStatus = getReviewStatus(bookmark.id, reviewData);
+                        if (cached) {
+                            return {
+                                ...bookmark,
+                                title: safeTitle,
+                                url: safeUrl,
+                                favicon: safeFavicon,
+                                faviconUrl: safeFavicon,
+                                priority: cached.S,
+                                factors: cached,
+                                reviewStatus
+                            };
+                        }
+                        return {
+                            ...bookmark,
+                            title: safeTitle,
+                            url: safeUrl,
+                            favicon: safeFavicon,
+                            faviconUrl: safeFavicon,
+                            priority: 0.5,
+                            factors: {},
+                            reviewStatus
+                        };
+                    });
+
+                if (recommendCards.length > 0) {
+                    writeRecommendCardsSnapshot(recommendCards, Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []);
+                }
+            }
+        } catch (_) { }
+    }
+
+    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && allowBootstrap && !widgetsRecommendBootstrapAttempted) {
+        widgetsRecommendBootstrapAttempted = true;
+        try {
+            await refreshRecommendCards(false);
+            currentCards = await getHistoryCurrentCards();
+        } catch (e) {
+            console.warn('[Widgets] 初始化推荐卡片失败:', e);
+        }
+    }
+
+    const flippedSet = new Set(currentCards?.flippedIds || []);
+    const signature = buildWidgetsRecommendCardSignature(recommendCards, Array.from(flippedSet), currentLang);
+
+    if (!force && signature && signature === lastWidgetsRecommendCardSignature) {
+        return;
+    }
+    lastWidgetsRecommendCardSignature = signature;
+
+    if (!Array.isArray(recommendCards) || recommendCards.length === 0) {
+        cards.forEach((card, index) => {
+            setCardEmpty(card);
+            if (index === 0) {
+                const titleEl = card.querySelector('.card-title');
+                if (titleEl) {
+                    titleEl.textContent = currentLang === 'zh_CN' ? '暂无推荐书签' : 'No recommendation';
+                }
+            }
+        });
+        clearRecommendCardsSnapshot();
+        return;
+    }
+
+    cards.forEach((card, index) => {
+        if (index < recommendCards.length) {
+            const bookmark = recommendCards[index];
+            updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '')));
+        } else {
+            setCardEmpty(card);
+        }
+    });
+
+    try {
+        writeRecommendCardsSnapshot(recommendCards, Array.from(flippedSet));
+    } catch (_) { }
+}
+
 async function updateWidgetsViewData() {
-    await Promise.all([
+    const recommendTask = renderWidgetsRecommendCards();
+    const otherWidgetsTask = Promise.all([
         updateWidgetsTrackingWidget(),
-        updateWidgetsRankingWidget()
+        updateWidgetsRankingWidget(),
+        updateWidgetsAdditionsWeekWidget(),
+        updateWidgetsHistoryWeekWidget(),
+        updateWidgetsRelatedWidget()
     ]);
+
+    await recommendTask;
+    await otherWidgetsTask;
 }
 
 function startWidgetsViewRefresh() {
@@ -4810,11 +5760,19 @@ function initWidgetsView() {
 
     const trackingWidget = document.getElementById('widgetsTrackingWidget');
     const rankingWidget = document.getElementById('widgetsRankingWidget');
+    const additionsWeekWidget = document.getElementById('widgetsAdditionsWeekWidget');
+    const historyWeekWidget = document.getElementById('widgetsHistoryWeekWidget');
     const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
+    const relatedLevel1Btn = document.getElementById('widgetsRelatedLevel1Btn');
+    const relatedLevel2Btn = document.getElementById('widgetsRelatedLevel2Btn');
+    const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
 
-    if (!trackingWidget && !rankingWidget) {
+    if (!trackingWidget && !rankingWidget && !additionsWeekWidget && !historyWeekWidget && !relatedLevel1Btn && !relatedLevel2Btn) {
         return;
     }
+
+    widgetsRelatedFolderDepth = readWidgetsRelatedFolderDepth();
+    updateWidgetsRelatedDepthButtonsState();
 
     if (trackingWidget) {
         trackingWidget.addEventListener('click', (e) => {
@@ -4830,10 +5788,52 @@ function initWidgetsView() {
         });
     }
 
+    if (additionsWeekWidget) {
+        additionsWeekWidget.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            navigateToAdditionsReviewWeekFromWidgets();
+        });
+    }
+
+    if (historyWeekWidget) {
+        historyWeekWidget.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            navigateToAdditionsHistoryWeekFromWidgets();
+        });
+    }
+
     if (rankingRangeBtn) {
         rankingRangeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             cycleWidgetsRankingRange();
+        });
+    }
+
+    if (relatedLevel1Btn) {
+        relatedLevel1Btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setWidgetsRelatedFolderDepth('level1', true);
+        });
+    }
+
+    if (relatedLevel2Btn) {
+        relatedLevel2Btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setWidgetsRelatedFolderDepth('level2', true);
+        });
+    }
+
+    if (widgetsCardRefreshBtn) {
+        widgetsCardRefreshBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                widgetsRecommendBootstrapAttempted = false;
+                await refreshRecommendCards(true);
+                lastWidgetsRecommendCardSignature = '';
+                await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+            } catch (err) {
+                console.warn('[Widgets] 刷新推荐卡片失败:', err);
+            }
         });
     }
 
@@ -5267,22 +6267,64 @@ function preloadHighResFavicons(urls) {
     });
 }
 
+function seedFaviconMemoryFromCardData(cardData = []) {
+    if (!Array.isArray(cardData) || cardData.length === 0) return;
+
+    cardData.forEach((item) => {
+        const icon = item?.favicon || item?.faviconUrl;
+        const url = item?.url;
+        if (!icon || !url || FaviconCache.isInvalidUrl(url)) return;
+
+        try {
+            const domain = new URL(url).hostname;
+            if (!domain) return;
+            FaviconCache.memoryCache.set(domain, icon);
+        } catch (_) { }
+    });
+}
+
 // 设置 favicon（使用现有的 FaviconCache 系统）
-function setHighResFavicon(imgElement, url) {
+function setHighResFavicon(imgElement, url, preferredFavicon = null) {
+    if (!imgElement) return;
+
     if (!url) {
         imgElement.src = fallbackIcon;
+        imgElement.removeAttribute('data-favicon-url');
         return;
     }
 
-    // 使用现有的 getFaviconUrl（会触发异步加载）
-    imgElement.src = getFaviconUrl(url);
+    imgElement.dataset.faviconUrl = url;
+
+    let domain = '';
+    try {
+        domain = new URL(url).hostname;
+    } catch (_) { }
+
+    const hasPreferred = Boolean(preferredFavicon && preferredFavicon !== fallbackIcon);
+    if (hasPreferred) {
+        imgElement.src = preferredFavicon;
+        if (domain) {
+            try { FaviconCache.memoryCache.set(domain, preferredFavicon); } catch (_) { }
+        }
+    }
+
+    const syncIcon = getFaviconUrl(url);
+    if (!hasPreferred) {
+        imgElement.src = syncIcon || fallbackIcon;
+    } else if (syncIcon && syncIcon !== fallbackIcon && syncIcon !== preferredFavicon) {
+        imgElement.src = syncIcon;
+    }
+
+    const canSkipAsync = hasPreferred && domain && FaviconCache.memoryCache.has(domain);
+    if (canSkipAsync) return;
 
     // 异步获取更高质量版本
     getFaviconUrlAsync(url).then(dataUrl => {
+        if (imgElement.dataset.faviconUrl !== url) return;
         if (dataUrl && dataUrl !== fallbackIcon) {
             imgElement.src = dataUrl;
         }
-    });
+    }).catch(() => { });
 }
 
 function normalizeHistoryPageView(view, fallback = 'widgets') {
@@ -5851,8 +6893,228 @@ async function saveSharedRecommendWindowId(windowId) {
 let historyLastSaveTime = 0;
 
 // 在推荐窗口中打开链接
+const RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS = 2200;
+const RECOMMEND_OPEN_TRACKING_VERIFY_INTERVAL_MS = 180;
+const RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS = 1600;
+const RECOMMEND_OPEN_HISTORY_VERIFY_INTERVAL_MS = 220;
+const RECOMMEND_OPEN_HISTORY_VERIFY_GRACE_MS = 6000;
+const recommendOpenInFlightKeys = new Set();
+
+function buildRecommendOpenInFlightKey({ bookmarkId = '', url = '' } = {}) {
+    const id = String(bookmarkId || '').trim();
+    if (id) {
+        return `bookmark:${id}`;
+    }
+
+    const normalizedUrl = normalizeRecommendOpenCheckUrl(url);
+    if (normalizedUrl) {
+        return `url:${normalizedUrl}`;
+    }
+
+    return '';
+}
+
+function normalizeRecommendOpenCheckUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    try {
+        const parsed = new URL(url);
+        parsed.hash = '';
+        return parsed.href;
+    } catch (_) {
+        return String(url || '').trim();
+    }
+}
+
+function buildRecommendOpenComparableUrls(url) {
+    const normalized = normalizeRecommendOpenCheckUrl(url);
+    if (!normalized) return [];
+
+    const values = new Set([normalized]);
+
+    try {
+        const parsed = new URL(normalized);
+        parsed.hash = '';
+        const canonical = parsed.href;
+        values.add(canonical);
+
+        if (canonical.endsWith('/')) {
+            values.add(canonical.slice(0, -1));
+        } else {
+            values.add(`${canonical}/`);
+        }
+    } catch (_) { }
+
+    return Array.from(values)
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+}
+
+function areRecommendOpenUrlsEquivalent(urlA, urlB) {
+    const variantsA = buildRecommendOpenComparableUrls(urlA);
+    if (variantsA.length === 0) return false;
+
+    const setA = new Set(variantsA);
+    const variantsB = buildRecommendOpenComparableUrls(urlB);
+    return variantsB.some(variant => setA.has(variant));
+}
+
+function isRecommendOpenTrackedBySessions(sessions = [], { tabId = null, url = '' } = {}) {
+    const normalizedUrl = normalizeRecommendOpenCheckUrl(url);
+    return (Array.isArray(sessions) ? sessions : []).some((session) => {
+        const sessionTabId = Number(session?.tabId);
+        if (tabId != null && Number.isFinite(sessionTabId) && sessionTabId === Number(tabId)) {
+            return true;
+        }
+
+        if (!normalizedUrl) return false;
+
+        const sessionUrl = normalizeRecommendOpenCheckUrl(session?.url || '');
+        if (!sessionUrl) return false;
+
+        return areRecommendOpenUrlsEquivalent(sessionUrl, normalizedUrl);
+    });
+}
+
+function getRecommendOpenHistoryCandidateUrls(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return [];
+
+    const values = new Set([raw]);
+
+    try {
+        const parsed = new URL(raw);
+        parsed.hash = '';
+        const normalized = parsed.href;
+        values.add(normalized);
+
+        if (normalized.endsWith('/')) {
+            values.add(normalized.slice(0, -1));
+        } else {
+            values.add(`${normalized}/`);
+        }
+    } catch (_) { }
+
+    return Array.from(values).map(item => String(item || '').trim()).filter(Boolean);
+}
+
+async function getRecommendOpenVisitsByUrl(url) {
+    if (!browserAPI?.history?.getVisits || !url) return [];
+
+    try {
+        return await new Promise((resolve) => {
+            browserAPI.history.getVisits({ url }, (results) => {
+                if (browserAPI.runtime?.lastError) {
+                    resolve([]);
+                    return;
+                }
+                resolve(Array.isArray(results) ? results : []);
+            });
+        });
+    } catch (_) {
+        return [];
+    }
+}
+
+async function verifyRecommendOpenTrackedByHistory({ url = '', openedAt = 0, timeoutMs = RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS } = {}) {
+    const candidateUrls = getRecommendOpenHistoryCandidateUrls(url);
+    if (candidateUrls.length === 0 || !browserAPI?.history?.getVisits) return false;
+
+    const safeOpenedAt = Number.isFinite(Number(openedAt)) && Number(openedAt) > 0
+        ? Math.floor(Number(openedAt))
+        : Date.now();
+    const minVisitTime = Math.max(0, safeOpenedAt - RECOMMEND_OPEN_HISTORY_VERIFY_GRACE_MS);
+    const safeTimeout = Math.max(500, Math.floor(Number(timeoutMs) || RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS));
+    const deadline = Date.now() + safeTimeout;
+
+    while (Date.now() <= deadline) {
+        for (const candidateUrl of candidateUrls) {
+            const visits = await getRecommendOpenVisitsByUrl(candidateUrl);
+            if (visits.some((visit) => Number(visit?.visitTime || 0) >= minVisitTime)) {
+                return true;
+            }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, RECOMMEND_OPEN_HISTORY_VERIFY_INTERVAL_MS));
+    }
+
+    return false;
+}
+
+async function verifyRecommendOpenTracked({ tabId = null, url = '', bookmarkId = '', openedAt = 0, timeoutMs = RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS } = {}) {
+    let trackingEnabled = true;
+
+    try {
+        const enabledResponse = await browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' });
+        if (enabledResponse && enabledResponse.success) {
+            trackingEnabled = enabledResponse.enabled !== false;
+        }
+    } catch (_) { }
+
+    // 时间追踪关闭时，保持原行为：允许继续翻牌/复习
+    if (!trackingEnabled) {
+        return true;
+    }
+
+    // 命中时间追踪屏蔽时，不阻断提前复习（仅影响追踪/T值来源）
+    try {
+        const safeBookmarkId = String(bookmarkId || '').trim();
+        const safeUrl = String(url || '').trim();
+        if (safeBookmarkId || safeUrl) {
+            const blockedSets = await getTrackingBlockedSets();
+            const cache = await getTrackingBookmarkCache();
+            const blocked = await isTrackingItemBlocked({
+                bookmarkId: safeBookmarkId || null,
+                url: safeUrl || null
+            }, blockedSets, cache);
+            if (blocked) {
+                return true;
+            }
+        }
+    } catch (_) { }
+
+    const safeTimeout = Math.max(600, Math.floor(Number(timeoutMs) || RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS));
+    const deadline = Date.now() + safeTimeout;
+    let hasReadableTrackingResponse = false;
+
+    while (Date.now() <= deadline) {
+        try {
+            const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
+            const sessions = response && response.success && Array.isArray(response.sessions)
+                ? response.sessions
+                : [];
+
+            if (response && response.success) {
+                hasReadableTrackingResponse = true;
+            }
+
+            if (isRecommendOpenTrackedBySessions(sessions, { tabId, url })) {
+                return true;
+            }
+        } catch (_) { }
+
+        await new Promise(resolve => setTimeout(resolve, RECOMMEND_OPEN_TRACKING_VERIFY_INTERVAL_MS));
+    }
+
+    // 无法读取追踪状态时回退旧行为，避免误伤
+    if (!hasReadableTrackingResponse) {
+        return true;
+    }
+
+    // 追踪会话偶发延迟时，用浏览器历史做一次轻量二次确认
+    const historyConfirmed = await verifyRecommendOpenTrackedByHistory({
+        url,
+        openedAt
+    });
+    if (historyConfirmed) {
+        return true;
+    }
+
+    return false;
+}
+
+// 在推荐窗口中打开链接
 async function openInRecommendWindow(url) {
-    if (!url) return;
+    if (!url) return { success: false, tabId: null };
 
     try {
         // 从storage获取共享的窗口ID
@@ -5874,7 +7136,7 @@ async function openInRecommendWindow(url) {
                     }
                 } catch (_) { }
                 await browserAPI.windows.update(windowId, { focused: true });
-                return;
+                return { success: true, tabId: tab?.id ?? null, windowId, openedAt: Date.now() };
             } catch (e) {
                 // 窗口已关闭，清除保存的ID
                 await saveSharedRecommendWindowId(null);
@@ -5902,9 +7164,22 @@ async function openInRecommendWindow(url) {
         // 保存窗口ID到storage，供多个 history 页面共享
         await saveSharedRecommendWindowId(win.id);
 
+        return { success: true, tabId: win?.tabs?.[0]?.id ?? null, windowId: win?.id ?? null, openedAt: Date.now() };
+
     } catch (error) {
         console.error('[推荐卡片] 打开窗口失败:', error);
-        browserAPI.tabs.create({ url });
+        try {
+            const tab = await browserAPI.tabs.create({ url });
+            try {
+                const tabId = tab?.id ?? null;
+                if (typeof window.reportExtensionBookmarkOpen === 'function' && tabId != null) {
+                    await window.reportExtensionBookmarkOpen({ tabId, url, source: 'recommend_window_fallback' });
+                }
+            } catch (_) { }
+            return { success: true, tabId: tab?.id ?? null, fallback: true, openedAt: Date.now() };
+        } catch (fallbackError) {
+            return { success: false, tabId: null, error: fallbackError?.message || String(fallbackError) };
+        }
     }
 }
 
@@ -5960,6 +7235,7 @@ try {
         if (anchor.classList.contains('tree-bookmark-link')) return;
 
         // 排除超链接区域：如果新增独立处理的区域，请在此处添加排除条件
+        if (anchor.dataset?.skipGlobalOpenFallback === '1' || anchor.closest('[data-skip-global-open-fallback="1"]')) return;
 
         const href = anchor.getAttribute('href') || '';
         if (!href || (!href.startsWith('http://') && !href.startsWith('https://'))) return;
@@ -6317,34 +7593,265 @@ const recommendScoreDebugCache = new Map();
 const recommendScoreDebugInFlight = new Map();
 
 // 跳过和屏蔽数据
-let skippedBookmarks = new Set(); // 本次会话跳过的书签（内存，刷新页面后清空）
-let recommendScoresComputeRetryTimer = null;
-let recommendScoresComputeRetryCount = 0;
+let skippedBookmarks = new Set(); // 已跳过书签（内存镜像 + storage 持久化）
+let postponedExpiryRefreshTimer = null;
+let recommendCardsRefreshFromCacheTimer = null;
+let recommendCardsRefreshInProgress = false;
+let recommendCardsRefreshPending = false;
+let recommendCardsRefreshFromStateTimer = null;
+let recommendCardsStateRefreshInProgress = false;
+let recommendCardsStateRefreshPending = false;
+let recommendScoresEnsureInFlight = false;
+
+function normalizeRecommendSnapshotCard(card) {
+    if (!card || !card.url) return null;
+
+    const priority = Number(card.priority);
+    const forceDueAt = Number(card.forceDueAt || 0);
+    const forceDueMovedAt = Number(card.forceDueMovedAt || 0);
+    return {
+        id: card.id,
+        title: card.title || card.name || card.url || '',
+        name: card.title || card.name || card.url || '',
+        url: card.url,
+        favicon: card.favicon || card.faviconUrl || null,
+        faviconUrl: card.favicon || card.faviconUrl || null,
+        priority: Number.isFinite(priority) ? priority : 0.5,
+        forceDue: card.forceDue === true,
+        forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
+        forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
+    };
+}
+
+function readRecommendCardsSnapshot() {
+    try {
+        const raw = localStorage.getItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
+            return null;
+        }
+
+        const ts = Number(parsed.ts || parsed.timestamp || 0);
+        if (Number.isFinite(ts) && ts > 0 && (Date.now() - ts) > SIDEPANEL_RECOMMEND_SNAPSHOT_MAX_AGE_MS) {
+            return null;
+        }
+
+        const cards = parsed.cards
+            .map(normalizeRecommendSnapshotCard)
+            .filter(Boolean)
+            .slice(0, 3);
+
+        if (!cards.length) return null;
+
+        const flippedIds = Array.isArray(parsed.flippedIds)
+            ? parsed.flippedIds.map(id => String(id))
+            : [];
+
+        return { cards, flippedIds, ts: Number.isFinite(ts) ? ts : Date.now() };
+    } catch (_) {
+        return null;
+    }
+}
+
+function writeRecommendCardsSnapshot(cards = [], flippedIds = []) {
+    try {
+        const safeCards = (Array.isArray(cards) ? cards : [])
+            .map(normalizeRecommendSnapshotCard)
+            .filter(Boolean)
+            .slice(0, 3);
+
+        if (!safeCards.length) return;
+
+        const safeFlipped = Array.from(new Set(
+            (Array.isArray(flippedIds) ? flippedIds : []).map(id => String(id))
+        ));
+
+        localStorage.setItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY, JSON.stringify({
+            ts: Date.now(),
+            cards: safeCards,
+            flippedIds: safeFlipped
+        }));
+    } catch (_) { }
+}
+
+function clearRecommendCardsSnapshot() {
+    try {
+        localStorage.removeItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
+    } catch (_) { }
+}
+
+
+function readRecommendPoolCursor() {
+    return readLocalNumber(RECOMMEND_POOL_CURSOR_KEY, 0);
+}
+
+function writeRecommendPoolCursor(index = 0) {
+    writeLocalNumber(RECOMMEND_POOL_CURSOR_KEY, Math.max(0, Math.floor(Number(index) || 0)));
+}
+
+async function consumeRecommendPoolCursor(poolLength, consumeCount = 0) {
+    const safePoolLength = Math.max(0, Math.floor(Number(poolLength) || 0));
+    const safeConsumeCount = Math.max(0, Math.floor(Number(consumeCount) || 0));
+
+    if (safePoolLength <= 0) {
+        writeRecommendPoolCursor(0);
+        return { success: true, source: 'local-empty', cursorBefore: 0, cursorAfter: 0 };
+    }
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'consumeRecommendPoolCursor',
+            poolLength: safePoolLength,
+            consumeCount: safeConsumeCount
+        });
+
+        if (response && response.success && Number.isFinite(Number(response.cursorBefore))) {
+            const cursorBefore = Number(response.cursorBefore);
+            const cursorAfter = Number.isFinite(Number(response.cursorAfter))
+                ? Number(response.cursorAfter)
+                : ((cursorBefore + safeConsumeCount) % safePoolLength);
+            return { success: true, source: 'background', cursorBefore, cursorAfter };
+        }
+    } catch (_) { }
+
+    const localBefore = ((readRecommendPoolCursor() % safePoolLength) + safePoolLength) % safePoolLength;
+    const localAfter = (localBefore + safeConsumeCount) % safePoolLength;
+    writeRecommendPoolCursor(localAfter);
+    return { success: true, source: 'local', cursorBefore: localBefore, cursorAfter: localAfter };
+}
+
+async function setRecommendPoolCursorShared(poolLength, cursor = 0) {
+    const safePoolLength = Math.max(0, Math.floor(Number(poolLength) || 0));
+    const rawCursor = Math.floor(Number(cursor) || 0);
+    const safeCursor = safePoolLength > 0
+        ? ((rawCursor % safePoolLength) + safePoolLength) % safePoolLength
+        : Math.max(0, rawCursor);
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'setRecommendPoolCursor',
+            poolLength: safePoolLength,
+            cursor: safeCursor
+        });
+
+        if (response && response.success && Number.isFinite(Number(response.cursor))) {
+            return { success: true, source: 'background', cursor: Number(response.cursor) };
+        }
+    } catch (_) { }
+
+    writeRecommendPoolCursor(safeCursor);
+    return { success: true, source: 'local', cursor: safeCursor };
+}
+
+function buildRecommendBatchFromPool(pool = [], startIndex = 0, batchSize = RECOMMEND_BATCH_SIZE) {
+    if (!Array.isArray(pool) || pool.length === 0) return [];
+
+    const size = Math.min(Math.max(1, Math.floor(Number(batchSize) || RECOMMEND_BATCH_SIZE)), pool.length);
+    const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
+    const batch = [];
+
+    for (let step = 0; step < pool.length && batch.length < size; step++) {
+        const idx = (safeStart + step) % pool.length;
+        batch.push(pool[idx]);
+    }
+
+    return batch;
+}
+
+function deriveRecommendStartIndexFromCurrent(pool = [], currentCardIds = [], fallbackCursor = 0) {
+    if (!Array.isArray(pool) || pool.length === 0) return 0;
+
+    const safeFallback = ((Math.floor(Number(fallbackCursor) || 0) % pool.length) + pool.length) % pool.length;
+    const ids = Array.isArray(currentCardIds)
+        ? currentCardIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+
+    if (!ids.length) {
+        return safeFallback;
+    }
+
+    const firstId = ids[0];
+    const firstIndex = pool.findIndex(item => String(item?.id || '').trim() === firstId);
+    if (firstIndex === -1) {
+        return safeFallback;
+    }
+
+    return (firstIndex + ids.length) % pool.length;
+}
+
+function applyRecommendSnapshotToCardRows(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.cards) || snapshot.cards.length === 0) return false;
+
+    const flippedSet = new Set(Array.isArray(snapshot.flippedIds) ? snapshot.flippedIds.map(String) : []);
+    const rowSelectors = ['#widgetsCardsRow', '#cardsRow'];
+    let applied = false;
+
+    rowSelectors.forEach((selector) => {
+        const cardsRow = document.querySelector(selector);
+        if (!cardsRow) return;
+        const cards = cardsRow.querySelectorAll('.recommend-card');
+        if (!cards || !cards.length) return;
+
+        cards.forEach((card, index) => {
+            if (index < snapshot.cards.length) {
+                const bookmark = snapshot.cards[index];
+                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark.id)));
+                applied = true;
+            } else {
+                setCardEmpty(card);
+            }
+        });
+    });
+
+    if (applied) {
+        recommendCards = snapshot.cards.slice();
+        seedFaviconMemoryFromCardData(snapshot.cards);
+
+        lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
+            recommendCards,
+            Array.from(flippedSet),
+            currentLang
+        );
+    }
+
+    return applied;
+}
+
+function hydrateRecommendCardsFromSnapshotForSidePanel() {
+    if (!isSidePanelMode) return false;
+    const snapshot = readRecommendCardsSnapshot();
+    if (!snapshot) return false;
+    return applyRecommendSnapshotToCardRows(snapshot);
+}
 
 // 获取当前显示的卡片状态（本页面共享）
 async function getHistoryCurrentCards() {
     return new Promise((resolve) => {
-        browserAPI.storage.local.get(['historyCurrentCards'], (result) => {
-            resolve(result.historyCurrentCards || null);
+        browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY], (result) => {
+            resolve(result[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null);
         });
     });
 }
 
 // 保存当前显示的卡片状态（本页面共享）
 async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
+    const now = Date.now();
+
     // 标记本次保存时间，防止触发循环刷新
-    historyLastSaveTime = Date.now();
+    historyLastSaveTime = now;
 
     const dataToSave = {
-        historyCurrentCards: {
+        [HISTORY_CURRENT_CARDS_STORAGE_KEY]: {
             cardIds: cardIds,
             flippedIds: flippedIds,
-            timestamp: Date.now()
+            timestamp: now
         }
     };
     // 如果提供了卡片数据（包含url和favicon），也保存它们
     if (cardData && cardData.length > 0) {
-        dataToSave.historyCurrentCards.cardData = cardData;
+        dataToSave[HISTORY_CURRENT_CARDS_STORAGE_KEY].cardData = cardData;
     }
     await browserAPI.storage.local.set(dataToSave);
 }
@@ -6372,7 +7879,10 @@ async function saveCardFaviconsToStorage(bookmarks) {
                     url: bookmark.url,
                     favicon,
                     faviconUrl: favicon, // 兼容旧字段
-                    priority: bookmark.priority || 0
+                    priority: bookmark.priority || 0,
+                    forceDue: bookmark.forceDue === true,
+                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
+                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
                 };
             } catch (e) {
                 return {
@@ -6381,15 +7891,25 @@ async function saveCardFaviconsToStorage(bookmarks) {
                     url: bookmark.url,
                     favicon: null,
                     faviconUrl: null,
-                    priority: bookmark.priority || 0
+                    priority: bookmark.priority || 0,
+                    forceDue: bookmark.forceDue === true,
+                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
+                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
                 };
             }
         }));
 
         // 更新storage中的卡片数据
+        const now = Date.now();
         currentCards.cardData = cardData;
-        historyLastSaveTime = Date.now(); // 防止触发循环刷新
-        await browserAPI.storage.local.set({ historyCurrentCards: currentCards });
+        currentCards.timestamp = now;
+        historyLastSaveTime = now; // 防止触发循环刷新
+        await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: currentCards });
+
+        try {
+            const flippedIds = Array.isArray(currentCards.flippedIds) ? currentCards.flippedIds : [];
+            writeRecommendCardsSnapshot(bookmarks, flippedIds);
+        } catch (_) { }
     } catch (error) {
         // 静默处理错误
     }
@@ -6397,37 +7917,131 @@ async function saveCardFaviconsToStorage(bookmarks) {
 
 // 标记卡片为已勾选，并检查是否全部勾选
 async function markHistoryCardFlipped(bookmarkId) {
+    const normalizedId = String(bookmarkId || '').trim();
+    if (!normalizedId) return false;
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'markHistoryCurrentCardFlippedState',
+            bookmarkId: normalizedId
+        });
+
+        if (response && response.success) {
+            const state = response.historyCurrentCards;
+            const flippedIds = Array.isArray(state?.flippedIds) ? state.flippedIds : [];
+
+            try {
+                const snapshot = readRecommendCardsSnapshot();
+                if (snapshot && Array.isArray(snapshot.cards) && snapshot.cards.length > 0) {
+                    const hasTarget = snapshot.cards.some(card => String(card?.id) === normalizedId);
+                    if (hasTarget) {
+                        writeRecommendCardsSnapshot(snapshot.cards, flippedIds);
+                    }
+                }
+            } catch (_) { }
+
+            if (typeof response.allFlipped === 'boolean') {
+                return response.allFlipped;
+            }
+            if (Array.isArray(state?.cardIds) && state.cardIds.length > 0) {
+                const flippedSet = new Set(flippedIds.map(id => String(id || '')));
+                return state.cardIds.every(id => flippedSet.has(String(id || '')));
+            }
+            return false;
+        }
+    } catch (_) { }
+
     const currentCards = await getHistoryCurrentCards();
     if (!currentCards) return false;
+    if (!Array.isArray(currentCards.flippedIds)) {
+        currentCards.flippedIds = [];
+    }
+    if (!Array.isArray(currentCards.cardIds)) {
+        currentCards.cardIds = [];
+    }
 
     // 添加到已勾选列表
-    if (!currentCards.flippedIds.includes(bookmarkId)) {
-        currentCards.flippedIds.push(bookmarkId);
+    if (!currentCards.flippedIds.includes(normalizedId)) {
+        currentCards.flippedIds.push(normalizedId);
         await saveHistoryCurrentCards(currentCards.cardIds, currentCards.flippedIds);
+
+        try {
+            const snapshot = readRecommendCardsSnapshot();
+            if (snapshot && Array.isArray(snapshot.cards) && snapshot.cards.length > 0) {
+                const hasTarget = snapshot.cards.some(card => String(card?.id) === normalizedId);
+                if (hasTarget) {
+                    writeRecommendCardsSnapshot(snapshot.cards, currentCards.flippedIds);
+                }
+            }
+        } catch (_) { }
     }
 
     // 检查是否全部勾选
-    const allFlipped = currentCards.cardIds.every(id => currentCards.flippedIds.includes(id));
+    const allFlipped = currentCards.cardIds.every(id => currentCards.flippedIds.includes(String(id || '')));
     return allFlipped;
+}
+
+function shouldUseCompactRecommendCardPriority(card) {
+    if (!isSidePanelMode) return false;
+    try {
+        const inWidgets = card?.closest?.('#widgetsCardsRow') || currentView === 'widgets';
+        return Boolean(inWidgets);
+    } catch (_) {
+        return currentView === 'widgets';
+    }
+}
+
+function formatRecommendCardPriority(priority, compact = false) {
+    if (!Number.isFinite(priority)) {
+        return compact ? 'S--' : 'S = --';
+    }
+    return compact
+        ? `S${Number(priority).toFixed(2)}`
+        : `S = ${Number(priority).toFixed(3)}`;
 }
 
 // 更新单个卡片显示
 function updateCardDisplay(card, bookmark, isFlipped = false) {
     card.classList.remove('empty');
+    card.classList.remove('is-opening');
+    card.dataset.opening = '0';
+    card.removeAttribute('aria-busy');
     if (isFlipped) {
         card.classList.add('flipped');
     } else {
         card.classList.remove('flipped');
     }
     card.querySelector('.card-title').textContent = bookmark.title || bookmark.name || bookmark.url;
-    card.querySelector('.card-priority').textContent = `S = ${bookmark.priority.toFixed(3)}`;
+    const priorityEl = card.querySelector('.card-priority');
+    if (priorityEl) {
+        const compactPriority = shouldUseCompactRecommendCardPriority(card);
+        priorityEl.textContent = formatRecommendCardPriority(bookmark.priority, compactPriority);
+    }
     card.dataset.url = bookmark.url;
     card.dataset.bookmarkId = bookmark.id;
+
+    let dueBadge = card.querySelector('.card-due-badge');
+    if (!dueBadge) {
+        dueBadge = document.createElement('span');
+        dueBadge.className = 'card-due-badge';
+        card.appendChild(dueBadge);
+    }
+
+    if (bookmark.forceDue) {
+        card.classList.add('force-due');
+        dueBadge.textContent = currentLang === 'en' ? 'Due' : '到期';
+        dueBadge.style.display = 'inline-flex';
+    } else {
+        card.classList.remove('force-due');
+        dueBadge.textContent = '';
+        dueBadge.style.display = 'none';
+    }
 
     // 设置 favicon
     const favicon = card.querySelector('.card-favicon');
     if (favicon && bookmark.url) {
-        setHighResFavicon(favicon, bookmark.url);
+        const cachedFavicon = bookmark.favicon || bookmark.faviconUrl || null;
+        setHighResFavicon(favicon, bookmark.url, cachedFavicon);
     }
 
     // 诊断面板（右上角）
@@ -6504,14 +8118,66 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         if (e.target.closest('.card-debug-btn')) return;
         if (e.target.closest('.recommend-debug')) return;
 
-        if (bookmark.url) {
+        if (!bookmark.url) return;
+
+        if (card.dataset.opening === '1') {
+            return;
+        }
+
+        const openKey = buildRecommendOpenInFlightKey({
+            bookmarkId: bookmark.id,
+            url: bookmark.url
+        });
+        if (openKey && recommendOpenInFlightKeys.has(openKey)) {
+            return;
+        }
+
+        card.dataset.opening = '1';
+        card.classList.add('is-opening');
+        card.setAttribute('aria-busy', 'true');
+        if (openKey) {
+            recommendOpenInFlightKeys.add(openKey);
+        }
+
+        try {
+            const openResult = await openInRecommendWindow(bookmark.url);
+            if (!openResult || !openResult.success) {
+                const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+
+            const tracked = await verifyRecommendOpenTracked({
+                tabId: openResult.tabId,
+                url: bookmark.url,
+                bookmarkId: bookmark.id,
+                openedAt: openResult.openedAt
+            });
+
+            if (!tracked) {
+                const msg = currentLang === 'en'
+                    ? 'Open not confirmed by tracking, review skipped'
+                    : '未检测到时间追踪记录，本次不计复习';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+
             await markBookmarkFlipped(bookmark.id);
             await recordReview(bookmark.id);
-            await openInRecommendWindow(bookmark.url);
             card.classList.add('flipped');
 
-            // 更新本地卡片勾选状态（storage监听器会自动处理刷新）
-            await markHistoryCardFlipped(bookmark.id);
+            // 更新本地卡片勾选状态（若三张都完成则自动切到下一批）
+            const allCardsFlipped = await markHistoryCardFlipped(bookmark.id);
+            if (allCardsFlipped) {
+                await refreshRecommendCards(true);
+            }
+        } finally {
+            card.dataset.opening = '0';
+            card.classList.remove('is-opening');
+            card.removeAttribute('aria-busy');
+            if (openKey) {
+                recommendOpenInFlightKeys.delete(openKey);
+            }
         }
     };
 
@@ -6531,7 +8197,8 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         btnSkip.onclick = async (e) => {
             e.stopPropagation();
             e.preventDefault();
-            skippedBookmarks.add(bookmark.id);
+
+            await handleRecommendSkip(bookmark);
             await refreshRecommendCards(true);
         };
     }
@@ -6552,12 +8219,27 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
 // 设置卡片为空状态
 function setCardEmpty(card) {
     card.classList.add('empty');
+    card.classList.remove('is-opening');
+    card.dataset.opening = '0';
+    card.removeAttribute('aria-busy');
+    card.classList.remove('force-due');
     card.querySelector('.card-title').textContent = '--';
-    card.querySelector('.card-priority').textContent = 'S = --';
+    const priorityEl = card.querySelector('.card-priority');
+    if (priorityEl) {
+        const compactPriority = shouldUseCompactRecommendCardPriority(card);
+        priorityEl.textContent = formatRecommendCardPriority(Number.NaN, compactPriority);
+    }
     const favicon = card.querySelector('.card-favicon');
     if (favicon) {
         favicon.src = fallbackIcon;
     }
+
+    const dueBadge = card.querySelector('.card-due-badge');
+    if (dueBadge) {
+        dueBadge.textContent = '';
+        dueBadge.style.display = 'none';
+    }
+
     card.onclick = null;
 
     const actions = card.querySelector('.card-actions');
@@ -6618,7 +8300,8 @@ function updateRecommendCardScoreDisplay(bookmarkId, newS) {
     cards.forEach((card) => {
         const priorityEl = card.querySelector('.card-priority');
         if (priorityEl) {
-            priorityEl.textContent = `S = ${newS.toFixed(3)}`;
+            const compactPriority = shouldUseCompactRecommendCardPriority(card);
+            priorityEl.textContent = formatRecommendCardPriority(newS, compactPriority);
         }
     });
 }
@@ -6751,6 +8434,60 @@ function formatRecommendScoreDebugText(debug) {
 let recommendSearchPreviewActive = false;
 let recommendSearchModalItem = null;
 
+async function handleRecommendSearchOpenAndEarlyReview(item, options = {}) {
+    const closeAfterOpen = options.closeAfterOpen === true;
+    const bookmarkId = String(item?.id || item?.bookmarkId || '').trim();
+    const url = String(item?.url || '').trim();
+
+    if (!url) {
+        return { success: false, reason: 'no-url' };
+    }
+
+    const openResult = await openInRecommendWindow(url);
+    if (!openResult || !openResult.success) {
+        const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
+        try { showToast(msg); } catch (_) { }
+        return { success: false, reason: 'open-failed' };
+    }
+
+    const tracked = await verifyRecommendOpenTracked({
+        tabId: openResult.tabId,
+        url,
+        bookmarkId,
+        openedAt: openResult.openedAt
+    });
+
+    if (!tracked) {
+        const msg = currentLang === 'en'
+            ? 'Open not confirmed by tracking, review skipped'
+            : '未检测到时间追踪记录，本次不计复习';
+        try { showToast(msg); } catch (_) { }
+        return { success: false, reason: 'not-tracked' };
+    }
+
+    let updated = false;
+    if (bookmarkId) {
+        const review = await recordReview(bookmarkId);
+        updated = Boolean(review);
+    } else {
+        updated = await requestRecommendScoreUpdate('updateBookmarkScoreByUrl', { url });
+    }
+
+    if (closeAfterOpen) {
+        closeRecommendSearchModal();
+    }
+
+    if (updated) {
+        try {
+            if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
+                window.refreshRecommendSearchIfNeeded();
+            }
+        } catch (_) { }
+    }
+
+    return { success: true, updated };
+}
+
 function closeRecommendSearchModal() {
     const modal = document.getElementById('recommendSearchModal');
     if (!modal) return;
@@ -6787,7 +8524,8 @@ function initRecommendSearchModal() {
             e.preventDefault();
             const item = recommendSearchModalItem;
             if (!item || !item.id) return;
-            skippedBookmarks.add(item.id);
+
+            await handleRecommendSkip(item);
             await refreshRecommendCards(true);
             closeRecommendSearchModal();
         });
@@ -6810,8 +8548,7 @@ function initRecommendSearchModal() {
             e.preventDefault();
             const item = recommendSearchModalItem;
             if (!item || !item.url) return;
-            await openInRecommendWindow(item.url);
-            closeRecommendSearchModal();
+            await handleRecommendSearchOpenAndEarlyReview(item, { closeAfterOpen: true });
         });
     }
 
@@ -6846,7 +8583,8 @@ async function showRecommendSearchResultCard(item) {
         title: item?.title || item?.name || '',
         name: item?.title || item?.name || '',
         url: item?.url || '',
-        priority
+        priority,
+        forceDue: item?.forceDue === true
     };
 
     // 如果搜索结果缺失 URL，尝试从书签 API 回填
@@ -6889,13 +8627,15 @@ async function showRecommendSearchResultCard(item) {
         if (bookmark.url) {
             urlEl.setAttribute('href', bookmark.url);
             urlEl.setAttribute('title', bookmark.url);
-            urlEl.onclick = (e) => {
+            urlEl.setAttribute('data-skip-global-open-fallback', '1');
+            urlEl.onclick = async (e) => {
                 e.preventDefault();
-                openInRecommendWindow(bookmark.url);
+                await handleRecommendSearchOpenAndEarlyReview(bookmark, { closeAfterOpen: false });
             };
         } else {
             urlEl.setAttribute('href', '#');
             urlEl.removeAttribute('title');
+            urlEl.removeAttribute('data-skip-global-open-fallback');
             urlEl.onclick = null;
         }
     }
@@ -6955,11 +8695,11 @@ try {
 // 获取已屏蔽书签
 async function getBlockedBookmarks() {
     try {
-        const result = await browserAPI.storage.local.get('recommend_blocked');
-        return result.recommend_blocked || { bookmarks: [], folders: [], domains: [] };
+        const result = await browserAPI.storage.local.get(RECOMMEND_BLOCKED_STORAGE_KEY);
+        return normalizeBlockedState(result[RECOMMEND_BLOCKED_STORAGE_KEY]);
     } catch (e) {
         console.error('[屏蔽] 获取屏蔽数据失败:', e);
-        return { bookmarks: [], folders: [], domains: [] };
+        return normalizeBlockedState(null);
     }
 }
 
@@ -6975,6 +8715,260 @@ async function requestRecommendScoreUpdate(action, payload) {
         console.warn('[推荐] S值增量更新失败:', e);
         return false;
     }
+}
+
+function normalizeBlockedListIds(list = []) {
+    return Array.from(new Set(
+        (Array.isArray(list) ? list : [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+    ));
+}
+
+function normalizeBlockedDomains(domains = []) {
+    const normalizeBlockedDomain = (domain) => {
+        if (!domain) return '';
+        return String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+    };
+
+    return Array.from(new Set(
+        (Array.isArray(domains) ? domains : [])
+            .map(domain => normalizeBlockedDomain(domain))
+            .filter(Boolean)
+    ));
+}
+
+function normalizeBlockedState(blocked) {
+    const source = blocked && typeof blocked === 'object' ? blocked : {};
+    return {
+        bookmarks: normalizeBlockedListIds(source.bookmarks),
+        folders: normalizeBlockedListIds(source.folders),
+        domains: normalizeBlockedDomains(source.domains)
+    };
+}
+
+function normalizePostponedList(postponed = []) {
+    if (!Array.isArray(postponed)) return [];
+    const byId = new Map();
+
+    for (const item of postponed) {
+        if (!item || item.bookmarkId == null) continue;
+        const bookmarkId = String(item.bookmarkId || '').trim();
+        if (!bookmarkId) continue;
+
+        const normalized = {
+            ...item,
+            bookmarkId
+        };
+
+        if (!byId.has(bookmarkId)) {
+            byId.set(bookmarkId, normalized);
+            continue;
+        }
+
+        const existing = byId.get(bookmarkId);
+        const existingUpdatedAt = Number(existing?.updatedAt || existing?.createdAt || existing?.addedAt || 0);
+        const nextUpdatedAt = Number(normalized?.updatedAt || normalized?.createdAt || normalized?.addedAt || 0);
+        if (nextUpdatedAt >= existingUpdatedAt) {
+            byId.set(bookmarkId, {
+                ...existing,
+                ...normalized,
+                bookmarkId
+            });
+        }
+    }
+
+    return Array.from(byId.values());
+}
+
+async function saveBlockedBookmarks(blockedInput) {
+    const blocked = normalizeBlockedState(blockedInput);
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'setRecommendBlockedState',
+            blocked
+        });
+        if (response && response.success) {
+            return normalizeBlockedState(response.blocked || blocked);
+        }
+    } catch (_) { }
+
+    await browserAPI.storage.local.set({ [RECOMMEND_BLOCKED_STORAGE_KEY]: blocked });
+    return blocked;
+}
+
+async function savePostponedBookmarks(postponedInput) {
+    const postponed = normalizePostponedList(postponedInput);
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'setRecommendPostponedState',
+            postponed
+        });
+        if (response && response.success) {
+            return normalizePostponedList(response.postponed || postponed);
+        }
+    } catch (_) { }
+
+    await browserAPI.storage.local.set({ [RECOMMEND_POSTPONED_STORAGE_KEY]: postponed });
+    return postponed;
+}
+
+async function ensureRecommendScoresReadyForView(reason = '') {
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'ensureRecommendScoresReady',
+            reason
+        });
+        return response || { success: false, ready: false };
+    } catch (e) {
+        return {
+            success: false,
+            ready: false,
+            error: e?.message || String(e)
+        };
+    }
+}
+
+function normalizeSkippedBookmarkIds(ids = []) {
+    const list = Array.from(new Set(
+        (Array.isArray(ids) ? ids : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (list.length <= RECOMMEND_SKIPPED_MAX_ITEMS) {
+        return list;
+    }
+    return list.slice(list.length - RECOMMEND_SKIPPED_MAX_ITEMS);
+}
+
+async function getSkippedBookmarksPersisted() {
+    try {
+        const result = await browserAPI.storage.local.get([RECOMMEND_SKIPPED_STORAGE_KEY]);
+        const list = normalizeSkippedBookmarkIds(result?.[RECOMMEND_SKIPPED_STORAGE_KEY] || []);
+        return list;
+    } catch (e) {
+        console.warn('[跳过] 读取持久化跳过列表失败:', e);
+        return [];
+    }
+}
+
+async function saveSkippedBookmarksPersisted(ids = []) {
+    try {
+        const list = normalizeSkippedBookmarkIds(Array.isArray(ids) ? ids : Array.from(ids || []));
+        await browserAPI.storage.local.set({ [RECOMMEND_SKIPPED_STORAGE_KEY]: list });
+        skippedBookmarks = new Set(list);
+        return list;
+    } catch (e) {
+        console.warn('[跳过] 保存持久化跳过列表失败:', e);
+        return Array.from(skippedBookmarks);
+    }
+}
+
+async function addSkippedBookmarkPersisted(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return false;
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'handleRecommendSkipState',
+            bookmarkId: id
+        });
+        if (response && response.success) {
+            const next = normalizeSkippedBookmarkIds(response.skippedIds || []);
+            skippedBookmarks = new Set(next);
+            return true;
+        }
+    } catch (_) { }
+
+    const current = await getSkippedBookmarksPersisted();
+    const next = current.filter(item => item !== id);
+    next.push(id);
+    await saveSkippedBookmarksPersisted(next);
+    return true;
+}
+
+async function removeSkippedBookmarkPersisted(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return false;
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'removeRecommendSkippedState',
+            bookmarkId: id
+        });
+        if (response && response.success) {
+            const next = normalizeSkippedBookmarkIds(response.skippedIds || []);
+            skippedBookmarks = new Set(next);
+            return true;
+        }
+    } catch (_) { }
+
+    const current = await getSkippedBookmarksPersisted();
+    const next = current.filter(item => item !== id);
+    await saveSkippedBookmarksPersisted(next);
+    skippedBookmarks.delete(id);
+    return true;
+}
+
+async function handleRecommendSkip(bookmark) {
+    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || '').trim();
+    if (!bookmarkId) {
+        return { applied: false, mode: 'none' };
+    }
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'handleRecommendSkipState',
+            bookmarkId
+        });
+
+        if (response && response.success) {
+            const nextSkipped = normalizeSkippedBookmarkIds(response.skippedIds || []);
+            skippedBookmarks = new Set(nextSkipped);
+            return {
+                applied: true,
+                mode: response.mode || (response.dueMoved ? 'due-tail' : 'skip')
+            };
+        }
+    } catch (_) { }
+
+    const movedToTail = await moveForceDueBookmarkToTail(bookmarkId);
+    if (movedToTail) {
+        return { applied: true, mode: 'due-tail' };
+    }
+
+    await addSkippedBookmarkPersisted(bookmarkId);
+    return { applied: true, mode: 'skip' };
+}
+
+async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {}) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+
+    if (ids.length === 0) {
+        return { requested: 0, updated: 0 };
+    }
+
+    const chunkSize = Math.max(20, Math.min(500, Number(options.chunkSize) || 200));
+    let updated = 0;
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        const ok = await requestRecommendScoreUpdate('updateBookmarkScoresByIds', { ids: chunk });
+        if (!ok) {
+            for (const bookmarkId of chunk) {
+                await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
+            }
+        }
+
+        updated += chunk.length;
+        if (i + chunkSize < ids.length) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+    }
+
+    return { requested: ids.length, updated };
 }
 
 // 屏蔽书签（按标题匹配，同名书签一起屏蔽）
@@ -7016,7 +9010,7 @@ async function blockBookmark(bookmarkId) {
             }
         }
 
-        await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        await saveBlockedBookmarks(blocked);
         console.log('[屏蔽] 已屏蔽书签:', targetTitle, '共', blockedCount, '个');
         return true;
     } catch (e) {
@@ -7030,7 +9024,7 @@ async function unblockBookmark(bookmarkId) {
     try {
         const blocked = await getBlockedBookmarks();
         blocked.bookmarks = blocked.bookmarks.filter(id => id !== bookmarkId);
-        await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        await saveBlockedBookmarks(blocked);
         console.log('[屏蔽] 已恢复书签:', bookmarkId);
         // 恢复后触发S值计算（该书签之前没有缓存）
         await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
@@ -7044,11 +9038,100 @@ async function unblockBookmark(bookmarkId) {
 // 获取稍后复习数据
 async function getPostponedBookmarks() {
     try {
-        const result = await browserAPI.storage.local.get('recommend_postponed');
-        return result.recommend_postponed || [];
+        const result = await browserAPI.storage.local.get(RECOMMEND_POSTPONED_STORAGE_KEY);
+        return normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]);
     } catch (e) {
         console.error('[稍后] 获取稍后复习数据失败:', e);
         return [];
+    }
+}
+
+async function moveForceDueBookmarkToTail(bookmarkId) {
+    const normalizedId = String(bookmarkId || '').trim();
+    if (!normalizedId) return false;
+
+    try {
+        const postponed = await getPostponedBookmarks();
+        if (!Array.isArray(postponed) || postponed.length === 0) {
+            return false;
+        }
+
+        const now = Date.now();
+        let maxMovedAt = 0;
+        for (const item of postponed) {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+            if (Number(item.postponeUntil || 0) > now) continue;
+            const movedAt = Number(item.dueQueueMovedAt || 0);
+            if (Number.isFinite(movedAt) && movedAt > maxMovedAt) {
+                maxMovedAt = movedAt;
+            }
+        }
+
+        const target = postponed.find((item) => {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) return false;
+            if (String(item.bookmarkId) !== normalizedId) return false;
+            return Number(item.postponeUntil || 0) <= now;
+        });
+
+        if (!target) {
+            return false;
+        }
+
+        target.dueQueueMovedAt = Math.max(now, maxMovedAt + 1);
+        target.updatedAt = now;
+
+        const nextPostponed = await savePostponedBookmarks(postponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
+        await removeSkippedBookmarkPersisted(normalizedId);
+        return true;
+    } catch (e) {
+        console.warn('[稍后] 待复习队列后移失败:', e);
+        return false;
+    }
+}
+
+async function schedulePostponedExpiryRefresh(postponedInput = null) {
+    try {
+        if (postponedExpiryRefreshTimer) {
+            clearTimeout(postponedExpiryRefreshTimer);
+            postponedExpiryRefreshTimer = null;
+        }
+
+        const postponed = Array.isArray(postponedInput)
+            ? postponedInput
+            : await getPostponedBookmarks();
+
+        const now = Date.now();
+        let nextExpireAt = Number.POSITIVE_INFINITY;
+
+        for (const item of postponed) {
+            if (!item || item.manuallyAdded) continue;
+            const postponeUntil = Number(item.postponeUntil || 0);
+            if (postponeUntil > now && postponeUntil < nextExpireAt) {
+                nextExpireAt = postponeUntil;
+            }
+        }
+
+        if (!Number.isFinite(nextExpireAt)) {
+            return;
+        }
+
+        const delay = Math.max(150, Math.min(nextExpireAt - now + 80, 2147483647));
+        postponedExpiryRefreshTimer = setTimeout(async () => {
+            postponedExpiryRefreshTimer = null;
+            try {
+                await cleanExpiredPostponed();
+                await loadPostponedList();
+                await refreshRecommendCards(true);
+                if (currentView === 'widgets') {
+                    await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                }
+            } catch (error) {
+                console.warn('[稍后] 到期换卡刷新失败:', error);
+            }
+        }, delay);
+    } catch (error) {
+        console.warn('[稍后] 安排到期刷新失败:', error);
     }
 }
 
@@ -7062,18 +9145,21 @@ async function postponeBookmark(bookmarkId, delayMs) {
         if (existing) {
             existing.postponeUntil = now + delayMs;
             existing.postponeCount = (existing.postponeCount || 0) + 1;
+            existing.dueQueueMovedAt = 0;
             existing.updatedAt = now;
         } else {
             postponed.push({
                 bookmarkId,
                 postponeUntil: now + delayMs,
                 postponeCount: 1,
+                dueQueueMovedAt: 0,
                 createdAt: now,
                 updatedAt: now
             });
         }
 
-        await browserAPI.storage.local.set({ recommend_postponed: postponed });
+        const nextPostponed = await savePostponedBookmarks(postponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
         console.log('[稍后] 已推迟书签:', bookmarkId, '延迟:', delayMs / 3600000, '小时');
         return true;
     } catch (e) {
@@ -7089,11 +9175,12 @@ async function cancelPostpone(bookmarkId) {
         const hadManualPostponed = postponed.some(p => p.manuallyAdded);
 
         postponed = postponed.filter(p => p.bookmarkId !== bookmarkId);
-        await browserAPI.storage.local.set({ recommend_postponed: postponed });
+        const nextPostponed = await savePostponedBookmarks(postponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
         console.log('[稍后] 已取消推迟:', bookmarkId);
 
         // 检查取消后是否还有手动添加的待复习
-        const hasManualPostponed = postponed.some(p => p.manuallyAdded);
+        const hasManualPostponed = nextPostponed.some(p => p.manuallyAdded);
 
         // 如果手动待复习从有变无，后续 loadPostponedList 会触发模式切换和全量重算
         // 此时不需要增量更新，避免重复计算
@@ -7115,13 +9202,14 @@ async function cancelPostpone(bookmarkId) {
 async function cleanExpiredPostponed() {
     try {
         let postponed = await getPostponedBookmarks();
-        const now = Date.now();
         const before = postponed.length;
-        postponed = postponed.filter(p => p.postponeUntil > now);
+        postponed = postponed.filter(p => p && p.bookmarkId != null);
+        let nextPostponed = postponed;
         if (postponed.length !== before) {
-            await browserAPI.storage.local.set({ recommend_postponed: postponed });
-            console.log('[稍后] 清理过期记录:', before - postponed.length, '条');
+            nextPostponed = await savePostponedBookmarks(postponed);
+            console.log('[稍后] 清理无效待复习记录:', before - nextPostponed.length, '条');
         }
+        await schedulePostponedExpiryRefresh(nextPostponed);
     } catch (e) {
         console.error('[稍后] 清理过期记录失败:', e);
     }
@@ -7254,13 +9342,36 @@ const DEFAULT_REFRESH_SETTINGS = {
     refreshAfterHours: 0,       // 0=禁用
     refreshAfterDays: 0,        // 0=禁用
     lastRefreshTime: 0,
-    openCountSinceRefresh: 0
+    openCountSinceRefresh: 0,
+    sidePanelOpenCountSinceRefresh: 0
 };
+
+function normalizeRefreshOpenSource(source) {
+    return source === 'sidepanel' ? 'sidepanel' : 'page';
+}
+
+function getRefreshOpenCountField(source) {
+    return normalizeRefreshOpenSource(source) === 'sidepanel'
+        ? 'sidePanelOpenCountSinceRefresh'
+        : 'openCountSinceRefresh';
+}
+
+function getRefreshOpenCount(settings, source) {
+    const field = getRefreshOpenCountField(source);
+    const raw = Number(settings && settings[field]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function setRefreshOpenCount(settings, source, count) {
+    const field = getRefreshOpenCountField(source);
+    const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
+    settings[field] = safeCount;
+}
 
 async function getRefreshSettings() {
     try {
-        const result = await browserAPI.storage.local.get('recommendRefreshSettings');
-        return { ...DEFAULT_REFRESH_SETTINGS, ...result.recommendRefreshSettings };
+        const result = await browserAPI.storage.local.get(RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY);
+        return { ...DEFAULT_REFRESH_SETTINGS, ...result[RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY] };
     } catch (e) {
         console.error('[刷新设置] 读取失败:', e);
         return { ...DEFAULT_REFRESH_SETTINGS };
@@ -7269,7 +9380,7 @@ async function getRefreshSettings() {
 
 async function saveRefreshSettings(settings) {
     try {
-        await browserAPI.storage.local.set({ recommendRefreshSettings: settings });
+        await browserAPI.storage.local.set({ [RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]: settings });
         console.log('[刷新设置] 已保存:', settings);
     } catch (e) {
         console.error('[刷新设置] 保存失败:', e);
@@ -7370,10 +9481,17 @@ function updateRefreshSettingsStatus(settings) {
 
     // 打开次数
     if (settings.refreshEveryNOpens > 0) {
-        const count = settings.openCountSinceRefresh || 0;
-        parts.push(isZh
-            ? `已打开 ${count} / ${settings.refreshEveryNOpens} 次`
-            : `Opened ${count} / ${settings.refreshEveryNOpens} times`);
+        const source = isSidePanelMode ? 'sidepanel' : 'page';
+        const count = getRefreshOpenCount(settings, source);
+        if (source === 'sidepanel') {
+            parts.push(isZh
+                ? `侧边栏已打开 ${count} / ${settings.refreshEveryNOpens} 次`
+                : `Side panel opened ${count} / ${settings.refreshEveryNOpens} times`);
+        } else {
+            parts.push(isZh
+                ? `已打开 ${count} / ${settings.refreshEveryNOpens} 次`
+                : `Opened ${count} / ${settings.refreshEveryNOpens} times`);
+        }
     }
 
     statusEl.textContent = parts.join(' | ');
@@ -7572,7 +9690,7 @@ function initAddDomainModal() {
             const inputVal = searchInput ? searchInput.value.trim() : '';
             if (inputVal && !addBlockDomainSelected.has(inputVal)) {
                 if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(inputVal);
+                    selectedDomains.push(String(inputVal).trim().toLowerCase().replace(/^www\./, ''));
                 }
             }
 
@@ -7637,14 +9755,16 @@ async function loadBlockDomainList() {
     try {
         const allBookmarks = await getAllBookmarksFlat();
         const blocked = await getBlockedBookmarks();
-        const blockedDomains = new Set(blocked.domains);
+        const blockedDomains = new Set((blocked.domains || [])
+            .map(d => String(d || '').trim().toLowerCase().replace(/^www\./, ''))
+            .filter(Boolean));
 
         const domainMap = new Map();
         for (const b of allBookmarks) {
             if (!b.url) continue;
             try {
                 const url = new URL(b.url);
-                const domain = url.hostname;
+                const domain = String(url.hostname || '').trim().toLowerCase().replace(/^www\./, '');
                 if (!domainMap.has(domain)) {
                     domainMap.set(domain, { count: 0 });
                 }
@@ -9365,6 +11485,7 @@ async function confirmAddToPostponed() {
     const postponed = await getPostponedBookmarks();
     const now = Date.now();
     let addedCount = 0;
+    const scoreNeedsUpdateIds = [];
 
     // 处理"全部"选项
     const selectAllCheckbox = document.getElementById('addFolderSelectAll');
@@ -9397,23 +11518,42 @@ async function confirmAddToPostponed() {
                 bookmarkId: id,
                 addedAt: now,
                 postponeUntil: now, // 立即可用，不设置延迟
+                dueQueueMovedAt: 0,
                 manuallyAdded: true, // 标记为手动添加，用于优先级提升
                 groupId: groupInfo?.id || null,
                 groupType: groupInfo?.type || 'single',
                 groupName: groupInfo?.name || null
             });
             addedCount++;
+            scoreNeedsUpdateIds.push(id);
         } else if (!existing.manuallyAdded) {
             // 如果已存在但不是手动添加的，更新为手动添加
             existing.manuallyAdded = true;
             existing.postponeUntil = now;
+            existing.dueQueueMovedAt = 0;
             existing.groupId = groupInfo?.id || null;
             existing.groupType = groupInfo?.type || 'single';
             existing.groupName = groupInfo?.name || null;
+            scoreNeedsUpdateIds.push(id);
         }
     }
 
-    await browserAPI.storage.local.set({ recommend_postponed: postponed });
+    const nextPostponed = await savePostponedBookmarks(postponed);
+    await schedulePostponedExpiryRefresh(nextPostponed);
+
+    if (scoreNeedsUpdateIds.length > 0) {
+        const updatePromise = requestRecommendScoreUpdatesByIds(scoreNeedsUpdateIds, { chunkSize: 200 });
+        if (scoreNeedsUpdateIds.length <= 120) {
+            await updatePromise;
+        } else {
+            updatePromise
+                .then(() => refreshRecommendCards(true))
+                .catch(error => {
+                    console.warn('[添加到待复习] 批量更新S值失败:', error);
+                });
+        }
+    }
+
     console.log(`[添加到待复习] 已添加 ${addedCount} 个书签（手动添加，优先级提升）`);
 
     // 刷新列表（可能触发模式切换和全量重算）
@@ -9481,11 +11621,154 @@ async function getBookmarksFromFolder(folderId, includeSubfolders = true) {
     return bookmarks;
 }
 
+async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
+    try {
+        const [bookmarks, scoresCache, flippedBookmarks, blocked, postponed, currentCards] = await Promise.all([
+            getAllBookmarksFlat(),
+            getScoresCache(),
+            getFlippedBookmarks(),
+            getBlockedBookmarks(),
+            getPostponedBookmarks(),
+            getHistoryCurrentCards()
+        ]);
+
+        if (!Array.isArray(bookmarks) || bookmarks.length === 0) return 0;
+        if (!scoresCache || Object.keys(scoresCache).length === 0) return 0;
+
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+
+        const currentCardIds = new Set((Array.isArray(currentCards?.cardIds) ? currentCards.cardIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const flippedSet = new Set((Array.isArray(flippedBookmarks) ? flippedBookmarks : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const skippedPersisted = await getSkippedBookmarksPersisted();
+        const skippedSet = new Set([
+            ...Array.from(skippedBookmarks),
+            ...skippedPersisted
+        ].map(id => String(id || '').trim()).filter(Boolean));
+        skippedBookmarks = skippedSet;
+        const skippedOrderMap = new Map(
+            skippedPersisted
+                .map((id, index) => [String(id || '').trim(), index])
+                .filter(([id]) => Boolean(id))
+        );
+        const blockedBookmarkSet = new Set((Array.isArray(blocked?.bookmarks) ? blocked.bookmarks : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const blockedFolderSet = new Set((Array.isArray(blocked?.folders) ? blocked.folders : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const blockedDomainSet = new Set((Array.isArray(blocked?.domains) ? blocked.domains : [])
+            .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+            .filter(Boolean));
+
+        const now = Date.now();
+        const postponedSet = new Set(
+            (Array.isArray(postponed) ? postponed : [])
+                .filter(p => p && p.postponeUntil > now && !p.manuallyAdded)
+                .map(p => String(p.bookmarkId || ''))
+                .filter(Boolean)
+        );
+        const forceDueSet = new Set(
+            (Array.isArray(postponed) ? postponed : [])
+                .filter(p => p && !p.manuallyAdded && Number(p.postponeUntil || 0) <= now)
+                .map(p => String(p.bookmarkId || ''))
+                .filter(Boolean)
+        );
+
+        const isInBlockedFolder = (bookmark) => {
+            if (!blockedFolderSet.size) return false;
+            const parentId = String(bookmark?.parentId || '').trim();
+            if (parentId && blockedFolderSet.has(parentId)) return true;
+            const ancestorFolderIds = Array.isArray(bookmark.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
+            for (const folderId of ancestorFolderIds) {
+                const normalizedFolderId = String(folderId || '').trim();
+                if (normalizedFolderId && blockedFolderSet.has(normalizedFolderId)) return true;
+            }
+            return false;
+        };
+
+        const isBlockedDomain = (bookmark) => {
+            if (!blockedDomainSet.size || !bookmark.url) return false;
+            try {
+                const hostname = String(new URL(bookmark.url).hostname || '').trim().toLowerCase().replace(/^www\./, '');
+                return blockedDomainSet.has(hostname);
+            } catch (_) {
+                return false;
+            }
+        };
+
+        const compareCandidatePriorityWithSkip = (a, b) => {
+            const aId = String(a?.id || '');
+            const bId = String(b?.id || '');
+            const aSkipped = skippedSet.has(aId) && !forceDueSet.has(aId);
+            const bSkipped = skippedSet.has(bId) && !forceDueSet.has(bId);
+
+            if (aSkipped !== bSkipped) {
+                return aSkipped ? 1 : -1;
+            }
+
+            if (aSkipped && bSkipped) {
+                const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+                const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+                if (aOrder !== bOrder) {
+                    return aOrder - bOrder;
+                }
+            }
+
+            return compareRecommendPriority(a, b);
+        };
+
+        const candidates = bookmarks
+            .filter((bookmark) => {
+                const bookmarkId = String(bookmark?.id || '');
+                const forceDue = forceDueSet.has(bookmarkId);
+                if (!bookmark || !bookmark.url) return false;
+                if (currentCardIds.has(bookmarkId)) return false;
+                if (!forceDue && flippedSet.has(bookmarkId)) return false;
+                if (blockedBookmarkSet.has(bookmarkId)) return false;
+                if (isInBlockedFolder(bookmark)) return false;
+                if (isBlockedDomain(bookmark)) return false;
+                if (!forceDue && postponedSet.has(bookmarkId)) return false;
+                return true;
+            })
+            .map((bookmark) => {
+                const cached = scoresCache[bookmark.id];
+                return {
+                    ...bookmark,
+                    priority: cached && Number.isFinite(cached.S) ? cached.S : 0.5
+                };
+            })
+            .sort(compareCandidatePriorityWithSkip)
+            .slice(0, Math.max(3, limit));
+
+        const urlsToPreload = candidates.map(item => item.url).filter(Boolean);
+        if (urlsToPreload.length === 0) return 0;
+
+        preloadHighResFavicons(urlsToPreload);
+        return urlsToPreload.length;
+    } catch (error) {
+        console.warn('[自动刷新] 预加载下一批推荐 favicon 失败:', error);
+        return 0;
+    }
+}
+
 async function loadRecommendData() {
     console.log('[书签推荐] 加载推荐数据');
 
-    // 检查是否需要自动刷新（基于打开次数或时间）
-    const shouldAutoRefresh = await checkAndIncrementOpenCount();
+    let shouldAutoRefresh = false;
+
+    // 侧边栏模式下，打开次数在页面初始化时统计，避免每次切到推荐页重复计数
+    if (!isSidePanelMode) {
+        shouldAutoRefresh = await checkAndIncrementOpenCount({ source: 'page' });
+    } else {
+        const settings = await getRefreshSettings();
+        updateRefreshSettingsStatus(settings);
+    }
 
     // 根据检查结果决定是否强制刷新
     await refreshRecommendCards(shouldAutoRefresh);
@@ -9501,19 +11784,50 @@ async function loadRecommendData() {
 }
 
 // 检查并增加打开次数，返回是否需要自动刷新
-async function checkAndIncrementOpenCount() {
+async function checkAndIncrementOpenCount(options = {}) {
+    const source = normalizeRefreshOpenSource(options.source);
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'recordRecommendViewOpen',
+            source
+        });
+
+        if (response && response.success) {
+            const settings = { ...DEFAULT_REFRESH_SETTINGS, ...(response.settings || {}) };
+            const shouldRefresh = response.shouldRefresh === true;
+            const shouldPreloadCandidates = response.shouldPreloadCandidates === true;
+
+            updateRefreshSettingsStatus(settings);
+
+            if (shouldPreloadCandidates) {
+                setTimeout(async () => {
+                    try {
+                        const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
+                        if (preloadedCount > 0) {
+                            console.log('[自动刷新] 已预加载下一批推荐图标:', preloadedCount);
+                        }
+                    } catch (_) { }
+                }, 0);
+            }
+
+            return shouldRefresh;
+        }
+    } catch (_) { }
+
     try {
         const settings = await getRefreshSettings();
         const now = Date.now();
         let shouldRefresh = false;
 
-        // 增加打开次数
-        settings.openCountSinceRefresh = (settings.openCountSinceRefresh || 0) + 1;
-        console.log('[自动刷新] 打开次数:', settings.openCountSinceRefresh);
+        // 增加打开次数（按来源分别统计）
+        const nextCount = getRefreshOpenCount(settings, source) + 1;
+        setRefreshOpenCount(settings, source, nextCount);
+        console.log(`[自动刷新] ${source === 'sidepanel' ? '侧边栏打开' : '页面打开'}次数:`, nextCount);
 
         // 检查是否达到刷新条件
         // 1. 每N次打开刷新
-        if (settings.refreshEveryNOpens > 0 && settings.openCountSinceRefresh >= settings.refreshEveryNOpens) {
+        if (settings.refreshEveryNOpens > 0 && nextCount >= settings.refreshEveryNOpens) {
             console.log('[自动刷新] 达到打开次数阈值，触发刷新');
             shouldRefresh = true;
         }
@@ -9536,11 +11850,28 @@ async function checkAndIncrementOpenCount() {
             }
         }
 
+        // 达到阈值前一次（例如阈值=3时第2次）预加载下一批图标，减少刷新卡顿
+        const shouldPreloadCandidates = !shouldRefresh
+            && settings.refreshEveryNOpens > 1
+            && nextCount === settings.refreshEveryNOpens - 1;
+
         // 保存更新后的设置
         await saveRefreshSettings(settings);
 
         // 更新状态显示
         updateRefreshSettingsStatus(settings);
+
+        // 非阻塞预加载：避免侧边栏打开时等待耗时筛选
+        if (shouldPreloadCandidates) {
+            setTimeout(async () => {
+                try {
+                    const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
+                    if (preloadedCount > 0) {
+                        console.log('[自动刷新] 已预加载下一批推荐图标:', preloadedCount);
+                    }
+                } catch (_) { }
+            }, 0);
+        }
 
         return shouldRefresh;
     } catch (e) {
@@ -9558,6 +11889,7 @@ async function loadPostponedList() {
 
     try {
         const postponed = await getPostponedBookmarks();
+        await schedulePostponedExpiryRefresh(postponed);
         const now = Date.now();
 
         // 过滤：手动添加的 或 未到期的
@@ -9767,9 +12099,31 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
         item.onclick = async (e) => {
             if (e.target.closest('.postponed-item-btn')) return;
             console.log('[提前复习]', bookmark.id, bookmark.title);
+
+            const openResult = await openInRecommendWindow(bookmark.url);
+            if (!openResult || !openResult.success) {
+                const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+
+            const tracked = await verifyRecommendOpenTracked({
+                tabId: openResult.tabId,
+                url: bookmark.url,
+                bookmarkId: bookmark.id,
+                openedAt: openResult.openedAt
+            });
+
+            if (!tracked) {
+                const msg = currentLang === 'en'
+                    ? 'Open not confirmed by tracking, review skipped'
+                    : '未检测到时间追踪记录，本次不计复习';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+
             await cancelPostpone(p.bookmarkId);
             await recordReview(p.bookmarkId);
-            await openInRecommendWindow(bookmark.url);
             await loadPostponedList();
         };
 
@@ -9995,7 +12349,7 @@ async function blockFolder(folderId) {
         const blocked = await getBlockedBookmarks();
         if (!blocked.folders.includes(folderId)) {
             blocked.folders.push(folderId);
-            await browserAPI.storage.local.set({ recommend_blocked: blocked });
+            await saveBlockedBookmarks(blocked);
         }
         return true;
     } catch (e) {
@@ -10007,7 +12361,7 @@ async function unblockFolder(folderId) {
     try {
         const blocked = await getBlockedBookmarks();
         blocked.folders = blocked.folders.filter(id => id !== folderId);
-        await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        await saveBlockedBookmarks(blocked);
         await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderId });
         return true;
     } catch (e) {
@@ -10018,10 +12372,13 @@ async function unblockFolder(folderId) {
 // 屏蔽/恢复域名
 async function blockDomain(domain) {
     try {
+        const normalized = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+        if (!normalized) return false;
+
         const blocked = await getBlockedBookmarks();
-        if (!blocked.domains.includes(domain)) {
-            blocked.domains.push(domain);
-            await browserAPI.storage.local.set({ recommend_blocked: blocked });
+        if (!blocked.domains.includes(normalized)) {
+            blocked.domains.push(normalized);
+            await saveBlockedBookmarks(blocked);
         }
         return true;
     } catch (e) {
@@ -10031,10 +12388,13 @@ async function blockDomain(domain) {
 
 async function unblockDomain(domain) {
     try {
+        const normalized = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+        if (!normalized) return false;
+
         const blocked = await getBlockedBookmarks();
-        blocked.domains = blocked.domains.filter(d => d !== domain);
-        await browserAPI.storage.local.set({ recommend_blocked: blocked });
-        await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain });
+        blocked.domains = blocked.domains.filter(d => d !== normalized);
+        await saveBlockedBookmarks(blocked);
+        await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain: normalized });
         return true;
     } catch (e) {
         return false;
@@ -10099,21 +12459,23 @@ async function cleanupStorageQuota() {
     try {
         // 1. 清理超过1000条的已翻阅记录
         const result = await new Promise(resolve => {
-            browserAPI.storage.local.get(['flippedBookmarks'], resolve);
+            browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY], resolve);
         });
-        if (result.flippedBookmarks && result.flippedBookmarks.length > 1000) {
-            const trimmed = result.flippedBookmarks.slice(-1000);
-            await browserAPI.storage.local.set({ flippedBookmarks: trimmed });
-            console.log('[清理] 已翻阅记录从', result.flippedBookmarks.length, '条缩减到', trimmed.length, '条');
+        const flipped = Array.isArray(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY])
+            ? result[FLIPPED_BOOKMARKS_STORAGE_KEY]
+            : [];
+        if (flipped.length > 1000) {
+            const trimmed = flipped.slice(-1000);
+            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: trimmed });
+            console.log('[清理] 已翻阅记录从', flipped.length, '条缩减到', trimmed.length, '条');
         }
 
-        // 2. 清理过期的稍后复习记录（7天前）
+        // 2. 清理无效的稍后复习记录（保留到期待复习，直到用户复习/取消）
         const postponed = await getPostponedBookmarks();
-        const now = Date.now();
-        const validPostponed = postponed.filter(p => p.manuallyAdded || p.postponeUntil > now - 7 * 24 * 60 * 60 * 1000);
+        const validPostponed = postponed.filter(p => p && p.bookmarkId != null);
         if (validPostponed.length < postponed.length) {
-            await browserAPI.storage.local.set({ recommend_postponed: validPostponed });
-            console.log('[清理] 过期稍后复习记录已清理:', postponed.length - validPostponed.length, '条');
+            await savePostponedBookmarks(validPostponed);
+            console.log('[清理] 无效稍后复习记录已清理:', postponed.length - validPostponed.length, '条');
         }
 
     } catch (e) {
@@ -10373,24 +12735,50 @@ async function getReviewData() {
 
 // 记录一次复习
 async function recordReview(bookmarkId) {
+    const normalizedId = String(bookmarkId || '').trim();
+    if (!normalizedId) return null;
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'recordRecommendReviewState',
+            bookmarkId: normalizedId
+        });
+
+        if (response && response.success && response.review) {
+            const nextPostponed = normalizePostponedList(response.postponed || []);
+            await schedulePostponedExpiryRefresh(nextPostponed);
+
+            const nextSkipped = normalizeSkippedBookmarkIds(response.skippedIds || []);
+            skippedBookmarks = new Set(nextSkipped);
+
+            console.log('[复习] 已记录复习:', normalizedId, '下次间隔:', response.review.interval, '天');
+            return response.review;
+        }
+    } catch (_) { }
+
     try {
         const reviews = await getReviewData();
-        const existing = reviews[bookmarkId];
+        const existing = reviews[normalizedId];
         const now = Date.now();
 
-        // 如果是手动添加的书签，复习后清除标记
+        // 复习完成后：从待复习池移出（含手动插队/延后到期）
         const postponed = await getPostponedBookmarks();
-        const postponeInfo = postponed.find(p => p.bookmarkId === bookmarkId);
-        if (postponeInfo && postponeInfo.manuallyAdded) {
-            postponeInfo.manuallyAdded = false;
-            await browserAPI.storage.local.set({ recommend_postponed: postponed });
-            console.log('[复习] 已清除手动添加标记:', bookmarkId);
+        const postponeInfo = postponed.find(p => String(p?.bookmarkId || '') === normalizedId);
+        if (postponeInfo) {
+            const nextPostponed = await savePostponedBookmarks(
+                postponed.filter(p => String(p?.bookmarkId || '') !== normalizedId)
+            );
+            await schedulePostponedExpiryRefresh(nextPostponed);
+            console.log('[复习] 已移出待复习队列:', normalizedId);
         }
+
+        // 复习完成后，清除“已跳过”状态（允许后续再次进入推荐）
+        await removeSkippedBookmarkPersisted(normalizedId);
 
         if (existing) {
             // 简化版SM-2：每次复习间隔翻倍，最大30天
             const newInterval = Math.min(existing.interval * 2, 30);
-            reviews[bookmarkId] = {
+            reviews[normalizedId] = {
                 lastReview: now,
                 interval: newInterval,
                 reviewCount: existing.reviewCount + 1,
@@ -10398,7 +12786,7 @@ async function recordReview(bookmarkId) {
             };
         } else {
             // 首次复习，间隔1天
-            reviews[bookmarkId] = {
+            reviews[normalizedId] = {
                 lastReview: now,
                 interval: 1,
                 reviewCount: 1,
@@ -10407,12 +12795,12 @@ async function recordReview(bookmarkId) {
         }
 
         await browserAPI.storage.local.set({ recommend_reviews: reviews });
-        console.log('[复习] 已记录复习:', bookmarkId, '下次间隔:', reviews[bookmarkId].interval, '天');
+        console.log('[复习] 已记录复习:', normalizedId, '下次间隔:', reviews[normalizedId].interval, '天');
 
         // R因子变化，发消息给background.js更新S值
-        browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId });
+        browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId: normalizedId });
 
-        return reviews[bookmarkId];
+        return reviews[normalizedId];
     } catch (e) {
         console.error('[复习] 记录复习失败:', e);
         return null;
@@ -10502,6 +12890,12 @@ function stopTrackingRefresh() {
 }
 
 function compareRecommendPriority(a, b) {
+    const aTemplate = a?.scoreTemplate === true;
+    const bTemplate = b?.scoreTemplate === true;
+    if (aTemplate !== bTemplate) {
+        return aTemplate ? 1 : -1;
+    }
+
     const diff = (b?.priority ?? 0) - (a?.priority ?? 0);
     if (Math.abs(diff) >= 0.01) return diff;
     const bAdded = Number(b?.dateAdded || 0);
@@ -10517,34 +12911,45 @@ function compareRecommendPriority(a, b) {
 // 获取已翻过的书签ID列表
 async function getFlippedBookmarks() {
     return new Promise((resolve) => {
-        browserAPI.storage.local.get(['flippedBookmarks'], (result) => {
-            resolve(result.flippedBookmarks || []);
+        browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY], (result) => {
+            resolve(result[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
         });
     });
 }
 
 // 标记书签为已翻过，并记录翻牌时间
 async function markBookmarkFlipped(bookmarkId) {
-    console.log('[翻牌] 标记书签:', bookmarkId);
+    const normalizedId = String(bookmarkId || '').trim();
+    if (!normalizedId) return;
 
-    const flipped = await getFlippedBookmarks();
-    if (!flipped.includes(bookmarkId)) {
-        flipped.push(bookmarkId);
-        await browserAPI.storage.local.set({ flippedBookmarks: flipped });
-        console.log('[翻牌] flippedBookmarks 已更新:', flipped.length, '个');
+    console.log('[翻牌] 标记书签:', normalizedId);
+
+    let flippedCount = null;
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'appendRecommendFlippedBookmark',
+            bookmarkId: normalizedId
+        });
+        if (response && response.success) {
+            flippedCount = Array.isArray(response.flippedIds) ? response.flippedIds.length : null;
+        }
+    } catch (_) { }
+
+    if (flippedCount == null) {
+        const flipped = await getFlippedBookmarks();
+        if (!flipped.includes(normalizedId)) {
+            flipped.push(normalizedId);
+            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: flipped });
+        }
+        flippedCount = flipped.length;
     }
+    console.log('[翻牌] flippedBookmarks 已更新:', flippedCount, '个');
 
-    // 记录翻牌时间（用于热力图）
-    const result = await new Promise(resolve => {
-        browserAPI.storage.local.get(['flipHistory'], resolve);
-    });
-    const flipHistory = result.flipHistory || [];
-    flipHistory.push({
-        bookmarkId,
-        timestamp: Date.now()
-    });
-    await browserAPI.storage.local.set({ flipHistory });
-    console.log('[翻牌] flipHistory 已更新:', flipHistory.length, '条记录');
+    // 记录翻牌时间（用于热力图，写入固定日索引）
+    const flipHistoryCount = await appendFlipHistoryRecord(normalizedId, Date.now());
+    if (flipHistoryCount >= 0) {
+        console.log('[翻牌] flipHistory 已更新:', flipHistoryCount, '条记录');
+    }
 
     // 立即刷新热力图
     if (currentView === 'recommend') {
@@ -10561,61 +12966,63 @@ async function refreshRecommendCards(force = false) {
     // 清除所有卡片的 flipped 状态
     cards.forEach(card => card.classList.remove('flipped'));
 
+    if (isSidePanelMode && !force) {
+        try {
+            const snapshot = readRecommendCardsSnapshot();
+            if (snapshot) {
+                applyRecommendSnapshotToCardRows(snapshot);
+            }
+        } catch (_) { }
+    }
+
     try {
         // 复用共享缓存，避免每次推荐刷新都全量 getTree
         const bookmarks = await getAllBookmarksFlat();
         const bookmarkMap = new Map(bookmarks.map(b => [b.id, b]));
 
-        // 一次性获取所有缓存的S值
+        // 一次性获取已计算好的 S 值缓存（页面内不触发重算）
         let scoresCache = await getScoresCache();
 
-        // 如果S值缓存为空，请求background.js全量计算
         if (Object.keys(scoresCache).length === 0 && bookmarks.length > 0) {
-            console.log('[书签推荐] S值缓存为空，请求background计算...');
-            const computed = await new Promise(resolve => {
-                browserAPI.runtime.sendMessage({ action: 'computeBookmarkScores' }, (response) => {
-                    if (browserAPI.runtime.lastError) return resolve(false);
-                    resolve(!!(response?.computed || response?.success));
-                });
-            });
-
-            if (!computed) {
-                recommendScoresComputeRetryCount += 1;
-                if (recommendScoresComputeRetryCount <= 8) {
-                    if (recommendScoresComputeRetryTimer) clearTimeout(recommendScoresComputeRetryTimer);
-                    recommendScoresComputeRetryTimer = setTimeout(() => {
-                        recommendScoresComputeRetryTimer = null;
-                        refreshRecommendCards(true);
-                    }, 1500);
-                }
-                // 计算尚未完成：保持 UI 稳定，避免空白/闪烁
-                cards.forEach((card, index) => {
-                    card.classList.add('empty');
-                    const titleEl = card.querySelector('.card-title');
-                    const priorityEl = card.querySelector('.card-priority');
-                    if (titleEl) {
-                        titleEl.textContent = index === 0
-                            ? (currentLang === 'en' ? 'Computing...' : '计算中...')
-                            : '--';
-                    }
-                    if (priorityEl) priorityEl.textContent = '';
-                    card.onclick = null;
-                });
-                return;
+            if (!recommendScoresEnsureInFlight) {
+                recommendScoresEnsureInFlight = true;
+                ensureRecommendScoresReadyForView(`${currentView || 'unknown'}:${isSidePanelMode ? 'sidepanel' : 'page'}`)
+                    .then((readiness) => {
+                        if (readiness?.ready) {
+                            console.info('[书签推荐] S值缓存已通过后台快速恢复就绪:', readiness?.mode || 'unknown');
+                        } else {
+                            console.info('[书签推荐] S值缓存暂未就绪，保持快照展示并等待后台恢复:', readiness?.mode || 'pending');
+                        }
+                    })
+                    .catch(() => { })
+                    .finally(() => {
+                        recommendScoresEnsureInFlight = false;
+                    });
             }
-
-            recommendScoresComputeRetryCount = 0;
-            scoresCache = await getScoresCache();
         }
 
         // 检查是否有已保存的卡片状态（供本页面复用）
         const currentCards = await getHistoryCurrentCards();
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
         const postponed = await getPostponedBookmarks();
         const reviewData = await getReviewData();
+        const restoreForceDueMap = new Map();
+        const restoreNow = Date.now();
+        for (const item of postponed) {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+            if (Number(item.postponeUntil || 0) <= restoreNow) {
+                restoreForceDueMap.set(String(item.bookmarkId), item);
+            }
+        }
 
         // 如果有保存的卡片且不是全部勾选且不是强制刷新，则显示保存的卡片
         if (currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
-            const allFlipped = currentCards.cardIds.every(id => currentCards.flippedIds.includes(id));
+            const normalizedFlipped = Array.isArray(currentCards.flippedIds)
+                ? currentCards.flippedIds.map(id => String(id || ''))
+                : [];
+            const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
 
             if (!allFlipped) {
                 // 恢复保存的卡片，直接使用缓存（支持 cardData 回填 title/url）
@@ -10633,52 +13040,114 @@ async function refreshRecommendCards(force = false) {
                 recommendCards = savedBookmarks.map(bookmark => {
                     const cached = scoresCache[bookmark.id];
                     const cachedMeta = cachedCardDataMap.get(bookmark.id);
+                    const restoreForceDueInfo = restoreForceDueMap.get(String(bookmark?.id || ''));
                     const safeTitle = bookmark.title || bookmark.name || cachedMeta?.title || '';
                     const safeUrl = bookmark.url || cachedMeta?.url || '';
+                    const safeFavicon = cachedMeta?.favicon || cachedMeta?.faviconUrl || null;
                     const reviewStatus = getReviewStatus(bookmark.id, reviewData);
                     if (cached) {
-                        return { ...bookmark, title: safeTitle, url: safeUrl, priority: cached.S, factors: cached, reviewStatus };
+                        return {
+                            ...bookmark,
+                            title: safeTitle,
+                            url: safeUrl,
+                            favicon: safeFavicon,
+                            faviconUrl: safeFavicon,
+                            priority: cached.S,
+                            factors: cached,
+                            reviewStatus,
+                            forceDue: !!restoreForceDueInfo,
+                            forceDueAt: Number(restoreForceDueInfo?.postponeUntil || 0),
+                            forceDueMovedAt: Number(restoreForceDueInfo?.dueQueueMovedAt || 0)
+                        };
                     }
                     // 缓存不存在时返回默认值
-                    return { ...bookmark, title: safeTitle, url: safeUrl, priority: 0.5, factors: {}, reviewStatus };
+                    return {
+                        ...bookmark,
+                        title: safeTitle,
+                        url: safeUrl,
+                        favicon: safeFavicon,
+                        faviconUrl: safeFavicon,
+                        priority: 0.5,
+                        factors: {},
+                        reviewStatus,
+                        forceDue: !!restoreForceDueInfo,
+                        forceDueAt: Number(restoreForceDueInfo?.postponeUntil || 0),
+                        forceDueMovedAt: Number(restoreForceDueInfo?.dueQueueMovedAt || 0)
+                    };
                 });
 
                 // 更新卡片显示
                 cards.forEach((card, index) => {
                     if (index < recommendCards.length) {
                         const bookmark = recommendCards[index];
-                        updateCardDisplay(card, bookmark, currentCards.flippedIds.includes(bookmark.id));
+                        updateCardDisplay(card, bookmark, normalizedFlipped.includes(String(bookmark?.id || '')));
                     } else {
                         setCardEmpty(card);
                     }
                 });
+
+                try {
+                    writeRecommendCardsSnapshot(recommendCards, normalizedFlipped);
+                } catch (_) { }
                 return;
             }
         }
 
         // 获取已翻过的书签
         const flippedBookmarks = await getFlippedBookmarks();
-        const flippedSet = new Set(flippedBookmarks);
+        const flippedSet = new Set((Array.isArray(flippedBookmarks) ? flippedBookmarks : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const skippedPersisted = await getSkippedBookmarksPersisted();
+        const skippedSet = new Set([
+            ...Array.from(skippedBookmarks),
+            ...skippedPersisted
+        ].map(id => String(id || '').trim()).filter(Boolean));
+        skippedBookmarks = skippedSet;
+        const skippedOrderMap = new Map(
+            skippedPersisted
+                .map((id, index) => [String(id || '').trim(), index])
+                .filter(([id]) => Boolean(id))
+        );
 
         // 获取已屏蔽的书签、文件夹、域名
         const blocked = await getBlockedBookmarks();
-        const blockedBookmarkSet = new Set(blocked.bookmarks);
-        const blockedFolderSet = new Set(blocked.folders);
-        const blockedDomainSet = new Set(blocked.domains);
+        const blockedBookmarkSet = new Set((Array.isArray(blocked.bookmarks) ? blocked.bookmarks : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const blockedFolderSet = new Set((Array.isArray(blocked.folders) ? blocked.folders : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean));
+        const blockedDomainSet = new Set((Array.isArray(blocked.domains) ? blocked.domains : [])
+            .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+            .filter(Boolean));
 
-        // 获取稍后复习的书签（未到期的，但手动添加的不排除）
+        // 稍后复习拆分：
+        // 1) 未到期：从候选池排除
+        // 2) 已到期：强制插队展示，直到复习后移出
         const now = Date.now();
-        const postponedSet = new Set(
-            postponed.filter(p => p.postponeUntil > now && !p.manuallyAdded).map(p => p.bookmarkId)
-        );
+        const postponedWaitingSet = new Set();
+        const forceDuePostponedMap = new Map();
+        for (const item of postponed) {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+            const bookmarkId = String(item.bookmarkId);
+            const postponeUntil = Number(item.postponeUntil || 0);
+            if (postponeUntil > now) {
+                postponedWaitingSet.add(bookmarkId);
+            } else {
+                forceDuePostponedMap.set(bookmarkId, item);
+            }
+        }
 
         // 检查书签是否在屏蔽的文件夹中
         const isInBlockedFolder = (bookmark) => {
             if (blockedFolderSet.size === 0) return false;
-            if (bookmark.parentId && blockedFolderSet.has(bookmark.parentId)) return true;
+            const parentId = String(bookmark?.parentId || '').trim();
+            if (parentId && blockedFolderSet.has(parentId)) return true;
             const ancestorFolderIds = bookmark.ancestorFolderIds || [];
             for (const folderId of ancestorFolderIds) {
-                if (blockedFolderSet.has(folderId)) return true;
+                const normalizedFolderId = String(folderId || '').trim();
+                if (normalizedFolderId && blockedFolderSet.has(normalizedFolderId)) return true;
             }
             return false;
         };
@@ -10688,38 +13157,35 @@ async function refreshRecommendCards(force = false) {
             if (blockedDomainSet.size === 0 || !bookmark.url) return false;
             try {
                 const url = new URL(bookmark.url);
-                return blockedDomainSet.has(url.hostname);
+                const hostname = String(url.hostname || '').trim().toLowerCase().replace(/^www\./, '');
+                return blockedDomainSet.has(hostname);
             } catch {
                 return false;
             }
         };
 
-        // 基础过滤：已翻过、已跳过、已屏蔽、稀后复习
-        const baseFilter = (b) =>
-            !flippedSet.has(b.id) &&
-            !skippedBookmarks.has(b.id) &&
-            !blockedBookmarkSet.has(b.id) &&
-            !isInBlockedFolder(b) &&
-            !isBlockedDomain(b) &&
-            !postponedSet.has(b.id);
+        // 基础过滤：
+        // - 普通书签：走正常过滤（不因 skip 被移除，skip 只影响排序）
+        // - 到期待复习书签：忽略“已翻过”过滤，强制进入候选池
+        // - 到期待复习书签：忽略“已跳过”过滤，保持插队权限（跳过仅用于队尾轮转）
+        const baseFilter = (b) => {
+            const bookmarkId = String(b?.id || '');
+            const forceDue = forceDuePostponedMap.has(bookmarkId);
 
-        // 刷新时跳过当前显示的卡片（force=true时）
-        const currentCardIds = new Set(
-            force && currentCards?.cardIds ? currentCards.cardIds : []
-        );
+            if (!forceDue && flippedSet.has(bookmarkId)) return false;
+            if (blockedBookmarkSet.has(bookmarkId)) return false;
+            if (isInBlockedFolder(b)) return false;
+            if (isBlockedDomain(b)) return false;
+            if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
+            return true;
+        };
 
-        // 先尝试排除当前卡片
-        let availableBookmarks = bookmarks.filter(b =>
-            baseFilter(b) && !currentCardIds.has(b.id)
-        );
+        const baseCandidateBookmarks = bookmarks.filter(baseFilter);
 
-        // 如果排除后不足3个，则不排除当前卡片
-        if (availableBookmarks.length < 3 && currentCardIds.size > 0) {
-            availableBookmarks = bookmarks.filter(baseFilter);
-        }
-
-        if (availableBookmarks.length === 0) {
+        if (baseCandidateBookmarks.length === 0) {
             await saveHistoryCurrentCards([], []);
+            clearRecommendCardsSnapshot();
+            await setRecommendPoolCursorShared(0, 0);
             cards.forEach((card) => {
                 card.classList.add('empty');
                 card.querySelector('.card-title').textContent =
@@ -10730,28 +13196,148 @@ async function refreshRecommendCards(force = false) {
             return;
         }
 
-        // 从缓存读取所有可用书签的S值，直接排序取top3
-        // S值通过增量更新机制保持最新，或在手动刷新时全量重算
-        const bookmarksWithPriority = availableBookmarks.map(b => {
+        // 从缓存读取候选池的 S 值，不重算，只排序后按批次取
+        const sortedPool = baseCandidateBookmarks.map(b => {
+            const bookmarkId = String(b?.id || '');
+            const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
             const cached = scoresCache[b.id];
             const reviewStatus = getReviewStatus(b.id, reviewData);
             if (cached) {
-                return { ...b, priority: cached.S, factors: cached, reviewStatus };
+                return {
+                    ...b,
+                    priority: cached.S,
+                    factors: cached,
+                    reviewStatus,
+                    scoreTemplate: cached?._template === true,
+                    forceDue: !!forceDueInfo,
+                    forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
+                    forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+                };
             }
-            // 缓存不存在时返回默认值（新书签或首次使用）
-            return { ...b, priority: 0.5, factors: {}, reviewStatus };
+            return {
+                ...b,
+                priority: 0.5,
+                factors: {},
+                reviewStatus,
+                forceDue: !!forceDueInfo,
+                forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
+                forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+            };
         });
 
-        // 按优先级排序（高优先级在前），S值相近时使用稳定规则
-        bookmarksWithPriority.sort(compareRecommendPriority);
-        recommendCards = bookmarksWithPriority.slice(0, 3);
+        // S 值池排序（高 -> 低）
+        sortedPool.sort(compareRecommendPriority);
+
+        const forceDuePool = sortedPool
+            .filter(item => item.forceDue)
+            .sort((a, b) => {
+                const aMovedAt = Number(a.forceDueMovedAt || 0);
+                const bMovedAt = Number(b.forceDueMovedAt || 0);
+                const aMoved = aMovedAt > 0;
+                const bMoved = bMovedAt > 0;
+
+                if (aMoved !== bMoved) {
+                    return aMoved ? 1 : -1;
+                }
+
+                if (aMoved && bMoved && aMovedAt !== bMovedAt) {
+                    return aMovedAt - bMovedAt;
+                }
+
+                const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
+                if (dueDiff !== 0) return dueDiff;
+                return compareRecommendPriority(a, b);
+            });
+        const compareNormalPoolPriorityWithSkip = (a, b) => {
+            const aId = String(a?.id || '');
+            const bId = String(b?.id || '');
+            const aSkipped = skippedSet.has(aId);
+            const bSkipped = skippedSet.has(bId);
+
+            if (aSkipped !== bSkipped) {
+                return aSkipped ? 1 : -1;
+            }
+
+            if (aSkipped && bSkipped) {
+                const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+                const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+                if (aOrder !== bOrder) {
+                    return aOrder - bOrder;
+                }
+            }
+
+            return compareRecommendPriority(a, b);
+        };
+
+        const normalPool = sortedPool
+            .filter(item => !item.forceDue)
+            .sort(compareNormalPoolPriorityWithSkip);
+
+        const currentCardIds = Array.isArray(currentCards?.cardIds)
+            ? currentCards.cardIds.map(id => String(id))
+            : [];
+        const currentNormalCardIds = currentCardIds.filter(id =>
+            normalPool.some(item => String(item?.id || '') === id)
+        );
+        const currentAllFlipped = currentCardIds.length > 0
+            && currentCardIds.every(id => flippedSet.has(id));
+
+        const forceDueBatch = forceDuePool.slice(0, RECOMMEND_BATCH_SIZE);
+        const normalSlots = Math.max(0, RECOMMEND_BATCH_SIZE - forceDueBatch.length);
+        const expectedNormalBatchLen = normalSlots > 0 ? Math.min(normalSlots, normalPool.length) : 0;
+
+        const shouldRotateByCurrent = (force || currentAllFlipped) && currentNormalCardIds.length > 0;
+        let startIndex = 0;
+        let cursorMeta = { success: true, source: 'local-empty', cursorBefore: 0, cursorAfter: 0 };
+
+        if (normalPool.length > 0) {
+            if (shouldRotateByCurrent) {
+                const storedCursor = readRecommendPoolCursor();
+                startIndex = deriveRecommendStartIndexFromCurrent(normalPool, currentNormalCardIds, storedCursor);
+            } else {
+                cursorMeta = await consumeRecommendPoolCursor(normalPool.length, expectedNormalBatchLen);
+                startIndex = Number.isFinite(Number(cursorMeta.cursorBefore))
+                    ? Number(cursorMeta.cursorBefore)
+                    : 0;
+            }
+        }
+
+        const normalBatch = normalSlots > 0
+            ? buildRecommendBatchFromPool(normalPool, startIndex, normalSlots)
+            : [];
+        recommendCards = [...forceDueBatch, ...normalBatch].slice(0, RECOMMEND_BATCH_SIZE);
+
+        const nextCursor = normalPool.length > 0
+            ? (startIndex + normalBatch.length) % normalPool.length
+            : 0;
+
+        if (shouldRotateByCurrent) {
+            await setRecommendPoolCursorShared(normalPool.length, nextCursor);
+        } else if (cursorMeta.source !== 'background') {
+            // 非后台原子路径下，兜底保持本地游标一致
+            writeRecommendPoolCursor(nextCursor);
+        }
+
+        if (force) {
+            console.log(
+                '[推荐轮换] 池总数:', sortedPool.length,
+                '强制到期数:', forceDuePool.length,
+                '普通池起点:', startIndex,
+                '普通池下一起点:', nextCursor,
+                '游标来源:', shouldRotateByCurrent ? 'derived' : (cursorMeta.source || 'local')
+            );
+        }
+
+        try {
+            writeRecommendCardsSnapshot(recommendCards, []);
+        } catch (_) { }
 
         // 保存新的卡片状态
         const newCardIds = recommendCards.map(b => b.id);
         await saveHistoryCurrentCards(newCardIds, []);
 
         // 预加载当前3个 + 下一批6个的 favicon（并行）
-        const urlsToPreload = bookmarksWithPriority.slice(0, 9).map(b => b.url).filter(Boolean);
+        const urlsToPreload = sortedPool.slice(0, 9).map(b => b.url).filter(Boolean);
         preloadHighResFavicons(urlsToPreload);
 
         // 异步保存favicon URLs到storage（供本页面复用，不阻塞UI）
@@ -10769,10 +13355,23 @@ async function refreshRecommendCards(force = false) {
 
         // 更新刷新时间（手动刷新时）
         if (force) {
-            const settings = await getRefreshSettings();
-            settings.lastRefreshTime = Date.now();
-            settings.openCountSinceRefresh = 0;
-            await saveRefreshSettings(settings);
+            let marked = false;
+            try {
+                const response = await browserAPI.runtime.sendMessage({ action: 'markRecommendRefreshExecuted' });
+                if (response && response.success && response.settings) {
+                    updateRefreshSettingsStatus({ ...DEFAULT_REFRESH_SETTINGS, ...response.settings });
+                    marked = true;
+                }
+            } catch (_) { }
+
+            if (!marked) {
+                const settings = await getRefreshSettings();
+                settings.lastRefreshTime = Date.now();
+                settings.openCountSinceRefresh = 0;
+                settings.sidePanelOpenCountSinceRefresh = 0;
+                await saveRefreshSettings(settings);
+                updateRefreshSettingsStatus(settings);
+            }
             console.log('[刷新] 已更新刷新时间');
         }
 
@@ -11188,48 +13787,279 @@ function initFastTooltips() {
 // 复习热力图 (GitHub 风格，当前月份在左)
 // =============================================================================
 
+function getLocalDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function normalizeHeatmapBookmarkCounts(byBookmark = {}) {
+    const normalized = {};
+    const source = (byBookmark && typeof byBookmark === 'object') ? byBookmark : {};
+
+    Object.entries(source).forEach(([bookmarkId, count]) => {
+        const id = String(bookmarkId || '').trim();
+        const value = Number(count);
+        if (!id || !Number.isFinite(value) || value <= 0) return;
+        normalized[id] = Math.max(1, Math.floor(value));
+    });
+
+    return normalized;
+}
+
+function normalizeHeatmapDayRecords(records = []) {
+    return (Array.isArray(records) ? records : [])
+        .map((item) => {
+            const bookmarkId = String(item?.bookmarkId || '').trim();
+            const timestamp = Number(item?.timestamp || 0);
+            if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+                return null;
+            }
+            return { bookmarkId, timestamp };
+        })
+        .filter(Boolean)
+        .slice(-FLIP_HISTORY_DAY_RECORDS_MAX);
+}
+
+function normalizeHeatmapDayEntry(entry) {
+    const source = entry && typeof entry === 'object' ? entry : {};
+    const records = normalizeHeatmapDayRecords(source.records || []);
+    const byBookmark = normalizeHeatmapBookmarkCounts(source.byBookmark || {});
+
+    if (Object.keys(byBookmark).length === 0 && records.length > 0) {
+        records.forEach((record) => {
+            byBookmark[record.bookmarkId] = (byBookmark[record.bookmarkId] || 0) + 1;
+        });
+    }
+
+    const rawCount = Number(source.count);
+    const count = Number.isFinite(rawCount) && rawCount >= records.length
+        ? Math.floor(rawCount)
+        : records.length;
+
+    return {
+        count: Math.max(0, count),
+        byBookmark,
+        records
+    };
+}
+
+function normalizeHeatmapDailyIndex(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const sourceDays = source.days && typeof source.days === 'object' ? source.days : {};
+    const days = {};
+
+    Object.entries(sourceDays).forEach(([dateKey, value]) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+        days[dateKey] = normalizeHeatmapDayEntry(value);
+    });
+
+    return {
+        version: 1,
+        updatedAt: Number.isFinite(Number(source.updatedAt)) ? Number(source.updatedAt) : 0,
+        days
+    };
+}
+
+function pruneHeatmapDailyIndex(index) {
+    if (!index || typeof index !== 'object' || !index.days || typeof index.days !== 'object') return index;
+
+    const cutoff = new Date();
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() - FLIP_HISTORY_RETENTION_DAYS);
+    const cutoffKey = getLocalDateKey(cutoff);
+
+    Object.keys(index.days).forEach((dateKey) => {
+        if (dateKey < cutoffKey) {
+            delete index.days[dateKey];
+        }
+    });
+
+    return index;
+}
+
+function appendFlipEventToHeatmapIndex(index, event) {
+    const normalized = normalizeHeatmapDailyIndex(index);
+    const bookmarkId = String(event?.bookmarkId || '').trim();
+    const timestamp = Number(event?.timestamp || 0);
+
+    if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return normalized;
+    }
+
+    const dateKey = getLocalDateKey(new Date(timestamp));
+    const day = normalizeHeatmapDayEntry(normalized.days[dateKey]);
+
+    day.count += 1;
+    day.byBookmark[bookmarkId] = (day.byBookmark[bookmarkId] || 0) + 1;
+
+    day.records.push({ bookmarkId, timestamp });
+    if (day.records.length > FLIP_HISTORY_DAY_RECORDS_MAX) {
+        day.records = day.records.slice(day.records.length - FLIP_HISTORY_DAY_RECORDS_MAX);
+    }
+
+    normalized.days[dateKey] = day;
+    normalized.updatedAt = Date.now();
+
+    return pruneHeatmapDailyIndex(normalized);
+}
+
+function buildHeatmapDailyIndexFromFlipHistory(flipHistory = []) {
+    let index = normalizeHeatmapDailyIndex(null);
+
+    for (const flip of (Array.isArray(flipHistory) ? flipHistory : [])) {
+        index = appendFlipEventToHeatmapIndex(index, {
+            bookmarkId: String(flip?.bookmarkId || '').trim(),
+            timestamp: Number(flip?.timestamp || 0)
+        });
+    }
+
+    return pruneHeatmapDailyIndex(index);
+}
+
+async function getHeatmapDailyIndex(options = {}) {
+    const allowRebuild = options.allowRebuild !== false;
+
+    try {
+        const result = await browserAPI.storage.local.get([HEATMAP_DAILY_INDEX_STORAGE_KEY, FLIP_HISTORY_STORAGE_KEY]);
+        const existing = normalizeHeatmapDailyIndex(result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY]);
+        const normalized = pruneHeatmapDailyIndex(existing);
+
+        let index = normalized;
+        let changed = false;
+
+        if (allowRebuild && Object.keys(index.days).length === 0) {
+            const flipHistory = Array.isArray(result?.[FLIP_HISTORY_STORAGE_KEY])
+                ? result[FLIP_HISTORY_STORAGE_KEY]
+                : [];
+
+            if (flipHistory.length > 0) {
+                index = buildHeatmapDailyIndexFromFlipHistory(flipHistory);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            await browserAPI.storage.local.set({ [HEATMAP_DAILY_INDEX_STORAGE_KEY]: index });
+        }
+
+        return index;
+    } catch (error) {
+        console.warn('[热力图] 获取日索引失败:', error);
+        return normalizeHeatmapDailyIndex(null);
+    }
+}
+
+function buildHeatmapDailyCounts(index) {
+    const dailyCounts = new Map();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const daysToShow = 52 * 7 + today.getDay();
+    for (let i = daysToShow - 1; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const key = getLocalDateKey(date);
+        dailyCounts.set(key, 0);
+    }
+
+    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
+    Object.entries(sourceDays).forEach(([dateKey, day]) => {
+        if (!dailyCounts.has(dateKey)) return;
+        const count = Number(day?.count || 0);
+        dailyCounts.set(dateKey, Number.isFinite(count) && count > 0 ? Math.floor(count) : 0);
+    });
+
+    return dailyCounts;
+}
+
+function collectMonthBookmarkCountsFromHeatmapIndex(index, year, month) {
+    const stats = new Map();
+    const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+
+    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
+    Object.entries(sourceDays).forEach(([dateKey, day]) => {
+        if (!dateKey.startsWith(monthPrefix)) return;
+
+        const byBookmark = day?.byBookmark && typeof day.byBookmark === 'object'
+            ? day.byBookmark
+            : {};
+
+        Object.entries(byBookmark).forEach(([bookmarkId, count]) => {
+            const id = String(bookmarkId || '').trim();
+            const value = Number(count);
+            if (!id || !Number.isFinite(value) || value <= 0) return;
+
+            if (!stats.has(id)) {
+                stats.set(id, { count: 0 });
+            }
+            stats.get(id).count += Math.floor(value);
+        });
+    });
+
+    return stats;
+}
+
+async function appendFlipHistoryRecord(bookmarkId, timestamp = Date.now()) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return -1;
+
+    const safeTimestamp = Number.isFinite(Number(timestamp)) && Number(timestamp) > 0
+        ? Math.floor(Number(timestamp))
+        : Date.now();
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'appendRecommendFlipHistoryRecord',
+            bookmarkId: id,
+            timestamp: safeTimestamp
+        });
+        if (response && response.success) {
+            const count = Number(response.count);
+            return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+        }
+    } catch (_) { }
+
+    try {
+        const result = await browserAPI.storage.local.get([FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY]);
+        const flipHistory = Array.isArray(result?.[FLIP_HISTORY_STORAGE_KEY])
+            ? result[FLIP_HISTORY_STORAGE_KEY]
+            : [];
+
+        flipHistory.push({
+            bookmarkId: id,
+            timestamp: safeTimestamp
+        });
+
+        const trimmed = flipHistory.length > FLIP_HISTORY_MAX_ITEMS
+            ? flipHistory.slice(flipHistory.length - FLIP_HISTORY_MAX_ITEMS)
+            : flipHistory;
+
+        const nextIndex = appendFlipEventToHeatmapIndex(
+            result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY],
+            { bookmarkId: id, timestamp: safeTimestamp }
+        );
+
+        await browserAPI.storage.local.set({
+            [FLIP_HISTORY_STORAGE_KEY]: trimmed,
+            [HEATMAP_DAILY_INDEX_STORAGE_KEY]: nextIndex
+        });
+
+        return trimmed.length;
+    } catch (error) {
+        console.warn('[热力图] 写入翻牌记录失败:', error);
+        return -1;
+    }
+}
+
 async function loadHeatmapData() {
     const container = document.getElementById('heatmapContainer');
     if (!container) return;
 
     try {
-        // 从 storage 获取翻牌历史记录
-        const result = await new Promise(resolve => {
-            browserAPI.storage.local.get(['flipHistory'], resolve);
-        });
-        const flipHistory = result.flipHistory || [];
-
-        // 按日期统计翻牌次数
-        const dailyCounts = new Map();
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // 辅助函数：获取本地日期字符串 (YYYY-MM-DD)
-        const getLocalDateKey = (d) => {
-            const year = d.getFullYear();
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
-
-        // 初始化最近 52 周 + 本周的天数
-        const daysToShow = 52 * 7 + today.getDay();
-        for (let i = daysToShow - 1; i >= 0; i--) {
-            const date = new Date(today);
-            date.setDate(date.getDate() - i);
-            const key = getLocalDateKey(date);
-            dailyCounts.set(key, 0);
-        }
-
-        // 统计每天的翻牌次数
-        for (const flip of flipHistory) {
-            if (!flip.timestamp) continue;
-            const date = new Date(flip.timestamp);
-            const key = getLocalDateKey(date);
-            if (dailyCounts.has(key)) {
-                dailyCounts.set(key, (dailyCounts.get(key) || 0) + 1);
-            }
-        }
+        const index = await getHeatmapDailyIndex({ allowRebuild: true });
+        const dailyCounts = buildHeatmapDailyCounts(index);
 
         // 渲染热力图（反转顺序，当前月份在左）
         renderHeatmap(container, dailyCounts);
@@ -11568,46 +14398,62 @@ function showHeatmapLevelHelp(anchorBtn) {
     setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
+async function getHeatmapDetailBookmarkMap() {
+    const now = Date.now();
+    if (heatmapBookmarkMapCache.map instanceof Map && now < Number(heatmapBookmarkMapCache.expiresAt || 0)) {
+        return heatmapBookmarkMapCache.map;
+    }
+
+    const nextMap = new Map();
+    try {
+        const bookmarks = await getAllBookmarksFlat();
+        bookmarks.forEach((item) => {
+            const id = String(item?.id || '').trim();
+            if (!id || !item?.url) return;
+            nextMap.set(id, item);
+        });
+    } catch (e) {
+        console.warn('[热力图] 获取书签失败:', e);
+    }
+
+    heatmapBookmarkMapCache = {
+        expiresAt: now + HEATMAP_BOOKMARK_MAP_CACHE_TTL_MS,
+        map: nextMap
+    };
+
+    return nextMap;
+}
+
+function invalidateHeatmapDetailBookmarkMapCache() {
+    heatmapBookmarkMapCache = {
+        expiresAt: 0,
+        map: null
+    };
+}
+
 // 显示热力图日期详情（二级UI）
 async function showHeatmapDateDetail(dateStr) {
     const isEn = currentLang === 'en';
     const container = document.getElementById('heatmapContainer');
     if (!container) return;
 
-    // 获取翻牌历史
-    const result = await new Promise(resolve => {
-        browserAPI.storage.local.get(['flipHistory'], resolve);
-    });
-    const flipHistory = result.flipHistory || [];
+    const index = await getHeatmapDailyIndex({ allowRebuild: true });
+    const dayEntry = normalizeHeatmapDayEntry(index?.days?.[dateStr]);
+    const dayRecords = Array.isArray(dayEntry.records)
+        ? dayEntry.records.slice().sort((a, b) => b.timestamp - a.timestamp)
+        : [];
+    const totalCount = Math.max(dayRecords.length, Number(dayEntry.count || 0));
 
-    // 筛选当天的记录
-    const dayRecords = flipHistory.filter(flip => {
-        if (!flip.timestamp) return false;
-        const date = new Date(flip.timestamp);
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}` === dateStr;
-    });
-
-    // 获取书签信息
-    const bookmarkMap = new Map();
-    try {
-        const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
-        const flatten = (nodes) => {
-            for (const node of nodes) {
-                if (node.url) bookmarkMap.set(node.id, node);
-                if (node.children) flatten(node.children);
-            }
-        };
-        flatten(tree);
-    } catch (e) {
-        console.warn('[热力图] 获取书签失败:', e);
-    }
+    // 获取书签信息（短TTL缓存，避免重复全量遍历）
+    const bookmarkMap = await getHeatmapDetailBookmarkMap();
 
     // 格式化日期
     const [year, month, day] = dateStr.split('-').map(Number);
     const dateLabel = isEn ? `${month}/${day}/${year}` : `${year}年${month}月${day}日`;
+
+    const truncatedHint = totalCount > dayRecords.length
+        ? `<div class="heatmap-detail-empty">${isEn ? `Showing latest ${dayRecords.length} records` : `仅显示最近 ${dayRecords.length} 条记录`}</div>`
+        : '';
 
     // 生成详情HTML
     let html = `
@@ -11618,19 +14464,17 @@ async function showHeatmapDateDetail(dateStr) {
                     <span>${isEn ? 'Back' : '返回'}</span>
                 </button>
                 <span class="heatmap-detail-title">${dateLabel}</span>
-                <span class="heatmap-detail-count">${dayRecords.length} ${isEn ? 'reviews' : '次复习'}</span>
+                <span class="heatmap-detail-count">${totalCount} ${isEn ? 'reviews' : '次复习'}</span>
             </div>
             <div class="heatmap-detail-list">
+                ${truncatedHint}
     `;
 
     if (dayRecords.length === 0) {
         html += `<div class="heatmap-detail-empty">${isEn ? 'No reviews on this day' : '当天没有复习记录'}</div>`;
     } else {
-        // 按时间倒序排列
-        dayRecords.sort((a, b) => b.timestamp - a.timestamp);
-
         for (const record of dayRecords) {
-            const bookmark = bookmarkMap.get(record.bookmarkId);
+            const bookmark = bookmarkMap.get(String(record.bookmarkId || ''));
             const time = new Date(record.timestamp);
             const timeStr = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
 
@@ -11685,52 +14529,24 @@ async function showHeatmapMonthDetail(year, month) {
     const container = document.getElementById('heatmapContainer');
     if (!container) return;
 
-    // 获取翻牌历史
-    const result = await new Promise(resolve => {
-        browserAPI.storage.local.get(['flipHistory'], resolve);
-    });
-    const flipHistory = result.flipHistory || [];
+    const index = await getHeatmapDailyIndex({ allowRebuild: true });
 
-    // 筛选当月的记录，按书签ID统计次数
-    const bookmarkCountMap = new Map(); // bookmarkId -> { count, lastTime }
-    for (const flip of flipHistory) {
-        if (!flip.timestamp || !flip.bookmarkId) continue;
-        const date = new Date(flip.timestamp);
-        if (date.getFullYear() === year && date.getMonth() + 1 === month) {
-            if (!bookmarkCountMap.has(flip.bookmarkId)) {
-                bookmarkCountMap.set(flip.bookmarkId, { count: 0, lastTime: 0 });
-            }
-            const stat = bookmarkCountMap.get(flip.bookmarkId);
-            stat.count++;
-            if (flip.timestamp > stat.lastTime) stat.lastTime = flip.timestamp;
-        }
-    }
+    // 按书签ID统计当月次数
+    const bookmarkCountMap = collectMonthBookmarkCountsFromHeatmapIndex(index, year, month);
 
-    // 获取书签信息
-    const bookmarkMap = new Map();
-    try {
-        const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
-        const flatten = (nodes) => {
-            for (const node of nodes) {
-                if (node.url) bookmarkMap.set(node.id, node);
-                if (node.children) flatten(node.children);
-            }
-        };
-        flatten(tree);
-    } catch (e) {
-        console.warn('[热力图] 获取书签失败:', e);
-    }
+    // 获取书签信息（短TTL缓存，避免重复全量遍历）
+    const bookmarkMap = await getHeatmapDetailBookmarkMap();
 
     const monthNames = isEn ?
         ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] :
         ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     const monthLabel = isEn ? `${monthNames[month - 1]} ${year}` : `${year}年${monthNames[month - 1]}`;
 
-    const totalCount = Array.from(bookmarkCountMap.values()).reduce((sum, s) => sum + s.count, 0);
+    const totalCount = Array.from(bookmarkCountMap.values()).reduce((sum, s) => sum + (Number(s?.count || 0)), 0);
 
     // 按复习次数排序
     const sortedBookmarks = Array.from(bookmarkCountMap.entries())
-        .sort((a, b) => b[1].count - a[1].count);
+        .sort((a, b) => Number(b?.[1]?.count || 0) - Number(a?.[1]?.count || 0));
 
     // 生成详情HTML
     let html = `
@@ -11752,7 +14568,7 @@ async function showHeatmapMonthDetail(year, month) {
         let rank = 0;
         for (const [bookmarkId, stat] of sortedBookmarks) {
             rank++;
-            const bookmark = bookmarkMap.get(bookmarkId);
+            const bookmark = bookmarkMap.get(String(bookmarkId || ''));
 
             if (bookmark) {
                 html += `
@@ -13003,6 +15819,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
     }
 
     const searchTokens = Array.isArray(options.searchTokens) ? options.searchTokens : null;
+    const folderDepthMode = normalizeBrowsingRankingFolderDepth(browsingRankingFolderDepth);
 
     // 按文件夹聚合统计
     const folderStats = new Map(); // folderPath -> { count, items: [] }
@@ -13015,15 +15832,21 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
             folderPath = browsingRelatedBookmarkInfo.get(item.url).folderPath || [];
         }
 
-        // 使用完整的文件夹路径作为分组键（精确到最后一级文件夹）
-        const folderKey = folderPath.length > 0 ? folderPath.join(' / ') : (isZh ? '未分类' : 'Uncategorized');
-        const folderName = folderPath.length > 0 ? folderPath[folderPath.length - 1] : folderKey;
+        let groupedFolderPath = Array.isArray(folderPath) ? folderPath.slice() : [];
+        if (folderDepthMode === 'level1') {
+            groupedFolderPath = groupedFolderPath.slice(0, 1);
+        } else if (folderDepthMode === 'level2') {
+            groupedFolderPath = groupedFolderPath.slice(0, 2);
+        }
+
+        const folderKey = groupedFolderPath.length > 0 ? groupedFolderPath.join(' / ') : (isZh ? '未分类' : 'Uncategorized');
+        const folderName = groupedFolderPath.length > 0 ? groupedFolderPath[groupedFolderPath.length - 1] : folderKey;
 
         if (!folderStats.has(folderKey)) {
             folderStats.set(folderKey, {
                 name: folderName,
                 fullPath: folderKey,
-                folderPath: folderPath,
+                folderPath: groupedFolderPath,
                 count: 0,
                 items: []
             });
@@ -13037,7 +15860,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
                         range === 'all' ? item.allCount : item.monthCount
         );
         folderData.count += itemCount;
-        folderData.items.push({ ...item, count: itemCount, folderPath });
+        folderData.items.push({ ...item, count: itemCount, folderPath: groupedFolderPath });
     });
 
     // 按点击次数排序文件夹
@@ -14475,8 +17298,79 @@ function updateLanguageDependentUI() {
 // 实时更新
 // =============================================================================
 
+function scheduleRecommendCardsRefreshFromCacheChange() {
+    recommendCardsRefreshDebounceMs = getRecommendCardsRefreshDebounceMs(lastStorageChanges);
+
+    if (recommendCardsRefreshFromCacheTimer) {
+        clearTimeout(recommendCardsRefreshFromCacheTimer);
+    }
+
+    recommendCardsRefreshFromCacheTimer = setTimeout(async () => {
+        recommendCardsRefreshFromCacheTimer = null;
+
+        if (recommendCardsRefreshInProgress) {
+            recommendCardsRefreshPending = true;
+            return;
+        }
+
+        recommendCardsRefreshInProgress = true;
+        lastRecommendCardsRefreshAt = Date.now();
+        try {
+            if (currentView === 'recommend') {
+                await refreshRecommendCards(true);
+            } else if (currentView === 'widgets') {
+                await refreshRecommendCards(true);
+                await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+            }
+        } catch (error) {
+            console.warn('[存储监听] 推荐卡片增量刷新失败:', error);
+        } finally {
+            recommendCardsRefreshInProgress = false;
+            if (recommendCardsRefreshPending) {
+                recommendCardsRefreshPending = false;
+                scheduleRecommendCardsRefreshFromCacheChange();
+            }
+        }
+    }, Math.max(600, Math.min(recommendCardsRefreshDebounceMs, 2500)));
+}
+
+function scheduleRecommendCardsRefreshFromStateSync() {
+    if (recommendCardsRefreshFromStateTimer) {
+        clearTimeout(recommendCardsRefreshFromStateTimer);
+    }
+
+    recommendCardsRefreshFromStateTimer = setTimeout(async () => {
+        recommendCardsRefreshFromStateTimer = null;
+
+        if (recommendCardsStateRefreshInProgress) {
+            recommendCardsStateRefreshPending = true;
+            return;
+        }
+
+        recommendCardsStateRefreshInProgress = true;
+        try {
+            if (currentView === 'recommend') {
+                await refreshRecommendCards(false);
+            } else if (currentView === 'widgets') {
+                await refreshRecommendCards(false);
+                await renderWidgetsRecommendCards({ force: false, allowBootstrap: false });
+            }
+        } catch (error) {
+            console.warn('[存储监听] 推荐状态同步刷新失败:', error);
+        } finally {
+            recommendCardsStateRefreshInProgress = false;
+            if (recommendCardsStateRefreshPending) {
+                recommendCardsStateRefreshPending = false;
+                scheduleRecommendCardsRefreshFromStateSync();
+            }
+        }
+    }, 280);
+}
+
 function handleStorageChange(changes, namespace) {
     if (namespace !== 'local') return;
+
+    lastStorageChanges = changes;
 
     console.log('[存储监听] 检测到变化:', Object.keys(changes));
 
@@ -14489,6 +17383,7 @@ function handleStorageChange(changes, namespace) {
             }
         } catch (_) { }
 
+        invalidateHeatmapDetailBookmarkMapCache();
         loadAllData({ skipRender: true, forceRefresh: true }).then(() => {
             renderCurrentView();
         }).catch((e) => {
@@ -14506,6 +17401,43 @@ function handleStorageChange(changes, namespace) {
                 window.refreshRecommendSearchIfNeeded();
             }
         } catch (_) { }
+
+        // S值增量变化优先走状态同步刷新，避免当前三卡频繁重排
+        scheduleRecommendCardsRefreshFromStateSync();
+    }
+
+    // 跳过列表变化（跨实例同步）
+    if (changes[RECOMMEND_SKIPPED_STORAGE_KEY]) {
+        const nextSkipped = normalizeSkippedBookmarkIds(changes[RECOMMEND_SKIPPED_STORAGE_KEY]?.newValue || []);
+        skippedBookmarks = new Set(nextSkipped);
+        scheduleRecommendCardsRefreshFromCacheChange();
+    }
+
+    // 屏蔽与待复习变化（跨实例同步）
+    if (changes[RECOMMEND_BLOCKED_STORAGE_KEY] || changes[RECOMMEND_POSTPONED_STORAGE_KEY]) {
+        scheduleRecommendCardsRefreshFromCacheChange();
+
+        if (changes[RECOMMEND_POSTPONED_STORAGE_KEY]) {
+            const postponed = normalizePostponedList(changes[RECOMMEND_POSTPONED_STORAGE_KEY]?.newValue || []);
+            schedulePostponedExpiryRefresh(postponed).catch(() => { });
+        }
+    }
+
+    // 翻牌集合变化（跨实例同步）
+    if (changes[FLIPPED_BOOKMARKS_STORAGE_KEY]) {
+        scheduleRecommendCardsRefreshFromStateSync();
+    }
+
+    // 当前三卡变化（跨实例同步）
+    if (changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]) {
+        const changedTs = Number(changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.timestamp || 0);
+        const isSelfWrite = historyLastSaveTime > 0
+            && changedTs > 0
+            && changedTs === historyLastSaveTime;
+
+        if (!isSelfWrite) {
+            scheduleRecommendCardsRefreshFromStateSync();
+        }
     }
 
     // 主题变化（只在没有覆盖设置时跟随主UI）
@@ -14552,8 +17484,8 @@ function handleStorageChange(changes, namespace) {
         refreshBrowsingRelatedHistory();
     }
 
-    // 翻牌历史变化（用于实时刷新热力图）
-    if (changes.flipHistory && currentView === 'recommend') {
+    // 翻牌热力图数据变化（用于实时刷新热力图）
+    if ((changes[FLIP_HISTORY_STORAGE_KEY] || changes[HEATMAP_DAILY_INDEX_STORAGE_KEY]) && currentView === 'recommend') {
         loadHeatmapData();
     }
 }
@@ -14564,6 +17496,11 @@ function handleStorageChange(changes, namespace) {
 // =============================================================================
 
 function setupBookmarkListener() {
+    if (bookmarkListenerRegistered) {
+        console.log('[书签监听] 已注册，跳过重复绑定');
+        return;
+    }
+
     if (!browserAPI.bookmarks) {
         console.warn('[书签监听] 书签API不可用');
         return;
@@ -14572,7 +17509,7 @@ function setupBookmarkListener() {
     console.log('[书签监听] 设置书签API监听器');
 
     // 书签创建
-browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
+    browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
         console.log('[书签监听] 书签创建:', bookmark.title);
         try {
             addBookmarkToAdditionsCache(bookmark);
@@ -14587,7 +17524,7 @@ browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
     });
 
     // 书签删除
-browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
+    browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
         console.log('[书签监听] 书签删除:', id);
         try {
             removeBookmarkFromAdditionsCache(id);
@@ -14610,7 +17547,7 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     });
 
     // 书签修改
-browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+    browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
         console.log('[书签监听] 书签修改:', changeInfo);
         try {
             updateBookmarkInAdditionsCache(id, changeInfo);
@@ -14637,7 +17574,7 @@ browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
     });
 
     // 书签移动
-browserAPI.bookmarks.onMoved.addListener(async (id, moveInfo) => {
+    browserAPI.bookmarks.onMoved.addListener(async (id, moveInfo) => {
         console.log('[书签监听] 书签移动:', id);
 
         try {
@@ -14647,6 +17584,8 @@ browserAPI.bookmarks.onMoved.addListener(async (id, moveInfo) => {
             console.warn('[书签监听] onMoved 处理异常:', e);
         }
     });
+
+    bookmarkListenerRegistered = true;
 }
 
 // =============================================================================
@@ -15553,6 +18492,7 @@ function formatRelativeTime(date) {
 let browsingRankingTimeFilter = null; // { type: 'hour'|'day'|'week'|'month', value: number|Date }
 let browsingRankingCurrentRange = 'month'; // 当前选中的时间范围
 let browsingRankingViewMode = 'bookmark'; // 'bookmark' 或 'folder'
+let browsingRankingFolderDepth = 'full'; // 'full' | 'level1' | 'level2'
 
 // Phase 4.7: 点击排行搜索筛选状态
 let browsingRankingSearchQuery = '';
@@ -15781,6 +18721,49 @@ function setExitSearchFilterVisible(visible) {
     btn.style.display = visible ? 'inline-flex' : 'none';
 }
 
+function normalizeBrowsingRankingFolderDepth(mode) {
+    const safe = String(mode || '').toLowerCase();
+    if (safe === 'level1' || safe === 'level2' || safe === 'full') {
+        return safe;
+    }
+    return 'full';
+}
+
+function initBrowsingRankingFolderDepth() {
+    try {
+        const saved = localStorage.getItem('browsingRankingFolderDepth');
+        browsingRankingFolderDepth = normalizeBrowsingRankingFolderDepth(saved || 'full');
+    } catch (e) {
+        browsingRankingFolderDepth = 'full';
+        console.warn('[BrowsingRanking] 无法读取目录层级:', e);
+    }
+    return browsingRankingFolderDepth;
+}
+
+function setBrowsingRankingFolderDepth(mode, options = {}) {
+    const safe = normalizeBrowsingRankingFolderDepth(mode);
+    const persist = options.persist !== false;
+    const reload = options.reload === true;
+
+    browsingRankingFolderDepth = safe;
+
+    if (persist) {
+        try {
+            localStorage.setItem('browsingRankingFolderDepth', safe);
+        } catch (e) {
+            console.warn('[BrowsingRanking] 无法保存目录层级:', e);
+        }
+    }
+
+    if (reload) {
+        try {
+            loadBrowsingClickRanking(browsingRankingCurrentRange || 'month');
+        } catch (_) { }
+    }
+
+    return safe;
+}
+
 // 初始化视图模式（从localStorage读取）
 function initBrowsingRankingViewMode() {
     try {
@@ -15791,6 +18774,8 @@ function initBrowsingRankingViewMode() {
     } catch (e) {
         console.warn('[BrowsingRanking] 无法读取视图模式:', e);
     }
+
+    initBrowsingRankingFolderDepth();
 }
 
 // 保存视图模式

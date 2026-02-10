@@ -816,10 +816,98 @@
             </div>
 
             <div id="widgetsView" class="view">
-                <div class="view-header widgets-view-header">
-                    <h2 id="widgetsViewTitle">小组件</h2>
-                </div>
                 <div class="widgets-grid">
+                    <div class="time-tracking-widget widgets-widget-card widgets-recommend-widget" id="widgetsRecommendWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-lightbulb"></i>
+                            <span id="widgetsRecommendWidgetTitle">书签推荐</span>
+                            <button id="widgetsCardRefreshBtn" class="widget-header-action-btn widgets-card-refresh-btn" type="button" title="刷新推荐">
+                                <i class="fas fa-sync-alt"></i>
+                                <span id="widgetsCardRefreshText">刷新推荐</span>
+                            </button>
+                        </div>
+                        <div class="cards-row widgets-cards-row" id="widgetsCardsRow">
+                            <div class="recommend-card" data-index="0">
+                                <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                    <i class="fas fa-info-circle"></i>
+                                </button>
+                                <div class="recommend-debug" aria-hidden="true">
+                                    <div class="recommend-debug-header">
+                                        <span>诊断</span>
+                                        <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                    <div class="recommend-debug-body">
+                                        <pre class="recommend-debug-pre">--</pre>
+                                    </div>
+                                </div>
+                                <img class="card-favicon" src="" alt="">
+                                <div class="card-title">--</div>
+                                <div class="card-footer">
+                                    <span class="card-priority">S = --</span>
+                                    <div class="card-actions">
+                                        <button class="card-btn card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+                                        <button class="card-btn card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+                                        <button class="card-btn card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="recommend-card" data-index="1">
+                                <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                    <i class="fas fa-info-circle"></i>
+                                </button>
+                                <div class="recommend-debug" aria-hidden="true">
+                                    <div class="recommend-debug-header">
+                                        <span>诊断</span>
+                                        <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                    <div class="recommend-debug-body">
+                                        <pre class="recommend-debug-pre">--</pre>
+                                    </div>
+                                </div>
+                                <img class="card-favicon" src="" alt="">
+                                <div class="card-title">--</div>
+                                <div class="card-footer">
+                                    <span class="card-priority">S = --</span>
+                                    <div class="card-actions">
+                                        <button class="card-btn card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+                                        <button class="card-btn card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+                                        <button class="card-btn card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="recommend-card" data-index="2">
+                                <button class="card-debug-btn" title="诊断" aria-label="诊断">
+                                    <i class="fas fa-info-circle"></i>
+                                </button>
+                                <div class="recommend-debug" aria-hidden="true">
+                                    <div class="recommend-debug-header">
+                                        <span>诊断</span>
+                                        <button class="recommend-debug-close-btn" title="关闭" aria-label="关闭">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                    <div class="recommend-debug-body">
+                                        <pre class="recommend-debug-pre">--</pre>
+                                    </div>
+                                </div>
+                                <img class="card-favicon" src="" alt="">
+                                <div class="card-title">--</div>
+                                <div class="card-footer">
+                                    <span class="card-priority">S = --</span>
+                                    <div class="card-actions">
+                                        <button class="card-btn card-btn-block" title="屏蔽"><i class="fas fa-ban"></i></button>
+                                        <button class="card-btn card-btn-later" title="待复习"><i class="fas fa-clock"></i></button>
+                                        <button class="card-btn card-btn-skip" title="跳过"><i class="fas fa-forward"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="time-tracking-widget widgets-widget-card" id="widgetsTrackingWidget">
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-stopwatch"></i>
@@ -841,6 +929,46 @@
                         <div class="time-tracking-widget-list" id="widgetsRankingWidgetList">
                             <div class="time-tracking-widget-empty">
                                 <span id="widgetsRankingWidgetEmptyText">暂无点击记录</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="time-tracking-widget widgets-widget-card" id="widgetsAdditionsWeekWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-calendar-plus"></i>
+                            <span id="widgetsAdditionsWeekWidgetTitle">书签添加记录（周）</span>
+                        </div>
+                        <div class="time-tracking-widget-list widgets-week-summary" id="widgetsAdditionsWeekWidgetList">
+                            <div class="time-tracking-widget-empty">
+                                <span id="widgetsAdditionsWeekWidgetEmptyText">暂无本周书签添加记录</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="time-tracking-widget widgets-widget-card" id="widgetsHistoryWeekWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-calendar-week"></i>
+                            <span id="widgetsHistoryWeekWidgetTitle">点击记录（周）</span>
+                        </div>
+                        <div class="time-tracking-widget-list widgets-week-summary" id="widgetsHistoryWeekWidgetList">
+                            <div class="time-tracking-widget-empty">
+                                <span id="widgetsHistoryWeekWidgetEmptyText">暂无本周点击记录</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="time-tracking-widget widgets-widget-card widgets-related-widget" id="widgetsRelatedWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-project-diagram"></i>
+                            <span id="widgetsRelatedWidgetTitle">关联记录</span>
+                        </div>
+                        <div class="widgets-related-actions">
+                            <button id="widgetsRelatedLevel1Btn" class="widgets-related-action-btn" type="button">一级目录</button>
+                            <button id="widgetsRelatedLevel2Btn" class="widgets-related-action-btn" type="button">二级目录</button>
+                        </div>
+                        <div class="time-tracking-widget-list widgets-related-list" id="widgetsRelatedList">
+                            <div class="time-tracking-widget-empty">
+                                <span id="widgetsRelatedEmptyText">暂无目录记录</span>
                             </div>
                         </div>
                     </div>

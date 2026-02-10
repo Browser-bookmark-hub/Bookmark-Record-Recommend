@@ -1051,13 +1051,22 @@ let scheduledRecomputeTimer = null;
 let lastBulkReason = '';
 let bookmarkBulkHasRemoval = false;
 let scoreCacheMode = null;
+let pendingTemplateRefineIds = new Set();
+let templateRefineTimer = null;
+let templateRefineRunning = false;
+let recommendStateMutationChains = new Map();
+let bulkTemplateRecoveryTimer = null;
+let recommendScoresReadyPromise = null;
+let removedRecommendPruneTimer = null;
+let pendingRemovedBookmarkIds = new Set();
+let pendingRemovedFolderIds = new Set();
 
 const BOOKMARK_BULK_WINDOW_MS = 800;
 const BOOKMARK_BULK_THRESHOLD = 8;
 const BOOKMARK_BULK_QUIET_MS = 5000;
 
 const SCORE_ALGO_VERSION_KEY = 'recommend_scores_algo_version';
-const SCORE_ALGO_VERSION = 6;
+const SCORE_ALGO_VERSION = 6.2;
 
 const SCORE_CACHE_MODE_KEY = 'recommend_scores_cache_mode';
 const SCORE_CACHE_MODE_FULL = 'full';
@@ -1066,6 +1075,37 @@ const SCORE_CACHE_COMPACT_THRESHOLD = 8000;
 
 const SCORE_BOOTSTRAP_THRESHOLD = 1200;
 const SCORE_BOOTSTRAP_LIMIT = 600;
+const SCORE_INCREMENTAL_BATCH_SIZE = 180;
+const SCORE_TEMPLATE_BATCH_THRESHOLD = 800;
+const SCORE_TEMPLATE_DEFAULT_S = 0.5;
+const SCORE_TEMPLATE_REFINE_DEBOUNCE_MS = 400;
+const SCORE_TEMPLATE_REFINE_BATCH_SIZE = 360;
+const BULK_TEMPLATE_RECOVERY_DEBOUNCE_MS = 1200;
+const REMOVED_RECOMMEND_PRUNE_DEBOUNCE_MS = 900;
+
+const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
+const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
+const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
+const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
+const RECOMMEND_STATE_MUTATION_CHANNEL = 'recommend_state_mutation_v1';
+const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
+const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
+const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
+const RECOMMEND_POOL_CURSOR_STORAGE_KEY = 'bb_recommend_pool_cursor_v1';
+const FLIP_HISTORY_STORAGE_KEY = 'flipHistory';
+const HEATMAP_DAILY_INDEX_STORAGE_KEY = 'flipHistoryDailyIndexV1';
+const FLIP_HISTORY_MAX_ITEMS = 12000;
+const FLIP_HISTORY_RETENTION_DAYS = 420;
+const FLIP_HISTORY_DAY_RECORDS_MAX = 300;
+
+const DEFAULT_REFRESH_SETTINGS = {
+  refreshEveryNOpens: 3,
+  refreshAfterHours: 0,
+  refreshAfterDays: 0,
+  lastRefreshTime: 0,
+  openCountSinceRefresh: 0,
+  sidePanelOpenCountSinceRefresh: 0
+};
 
 // Tracking cold-start fairness
 const TRACKING_WARMUP_MIN_MS = 30 * 60 * 1000; // 30 minutes
@@ -1088,7 +1128,7 @@ async function invalidateRecommendCaches(reason = '') {
 
   // 推荐卡片状态依赖 bookmarkId：批量导入/删除/移动后可能大量失效
   try {
-    await browserAPI.storage.local.remove(['historyCurrentCards']);
+    await browserAPI.storage.local.remove([HISTORY_CURRENT_CARDS_STORAGE_KEY, RECOMMEND_POOL_CURSOR_STORAGE_KEY]);
   } catch (_) { }
 }
 
@@ -1102,6 +1142,999 @@ async function ensureScoreAlgoVersion() {
 }
 
 ensureScoreAlgoVersion().catch(() => { });
+
+function runSerializedRecommendStateMutation(channel, task) {
+  const key = String(channel || RECOMMEND_STATE_MUTATION_CHANNEL);
+  const prev = recommendStateMutationChains.get(key) || Promise.resolve();
+  const next = prev
+    .catch(() => { })
+    .then(async () => task());
+
+  recommendStateMutationChains.set(key, next);
+
+  next.finally(() => {
+    if (recommendStateMutationChains.get(key) === next) {
+      recommendStateMutationChains.delete(key);
+    }
+  });
+
+  return next;
+}
+
+function normalizeRecommendSkippedIds(ids = []) {
+  const list = Array.from(new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean)
+  ));
+
+  if (list.length <= RECOMMEND_SKIPPED_MAX_ITEMS) {
+    return list;
+  }
+  return list.slice(list.length - RECOMMEND_SKIPPED_MAX_ITEMS);
+}
+
+async function getRecommendSkippedIds() {
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_SKIPPED_STORAGE_KEY]);
+    return normalizeRecommendSkippedIds(result?.[RECOMMEND_SKIPPED_STORAGE_KEY] || []);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getRecommendPostponedList() {
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_POSTPONED_STORAGE_KEY]);
+    return Array.isArray(result?.[RECOMMEND_POSTPONED_STORAGE_KEY])
+      ? result[RECOMMEND_POSTPONED_STORAGE_KEY]
+      : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function normalizeRecommendBlockedState(blocked) {
+  const source = blocked && typeof blocked === 'object' ? blocked : {};
+
+  const normalizeIdList = (list) => Array.from(new Set(
+    (Array.isArray(list) ? list : [])
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  ));
+
+  const normalizeDomainList = (list) => Array.from(new Set(
+    (Array.isArray(list) ? list : [])
+      .map(item => normalizeBlockedDomain(item))
+      .filter(Boolean)
+  ));
+
+  return {
+    bookmarks: normalizeIdList(source.bookmarks),
+    folders: normalizeIdList(source.folders),
+    domains: normalizeDomainList(source.domains)
+  };
+}
+
+function normalizeRecommendPostponedList(list) {
+  if (!Array.isArray(list)) return [];
+
+  const byBookmarkId = new Map();
+  for (const item of list) {
+    if (!item || item.bookmarkId == null) continue;
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (!bookmarkId) continue;
+
+    const normalized = {
+      ...item,
+      bookmarkId
+    };
+
+    if (!byBookmarkId.has(bookmarkId)) {
+      byBookmarkId.set(bookmarkId, normalized);
+      continue;
+    }
+
+    const existing = byBookmarkId.get(bookmarkId);
+    const existingUpdatedAt = Number(existing?.updatedAt || existing?.createdAt || existing?.addedAt || 0);
+    const nextUpdatedAt = Number(normalized?.updatedAt || normalized?.createdAt || normalized?.addedAt || 0);
+
+    if (nextUpdatedAt >= existingUpdatedAt) {
+      byBookmarkId.set(bookmarkId, {
+        ...existing,
+        ...normalized,
+        bookmarkId
+      });
+    }
+  }
+
+  return Array.from(byBookmarkId.values());
+}
+
+async function getRecommendBlockedState() {
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_BLOCKED_STORAGE_KEY]);
+    return normalizeRecommendBlockedState(result?.[RECOMMEND_BLOCKED_STORAGE_KEY]);
+  } catch (_) {
+    return normalizeRecommendBlockedState(null);
+  }
+}
+
+async function setRecommendBlockedState(blocked) {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const next = normalizeRecommendBlockedState(blocked);
+    await browserAPI.storage.local.set({
+      [RECOMMEND_BLOCKED_STORAGE_KEY]: next
+    });
+    return {
+      success: true,
+      blocked: next
+    };
+  });
+}
+
+async function setRecommendPostponedState(postponed) {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const next = normalizeRecommendPostponedList(postponed);
+    await browserAPI.storage.local.set({
+      [RECOMMEND_POSTPONED_STORAGE_KEY]: next
+    });
+    return {
+      success: true,
+      postponed: next,
+      count: next.length
+    };
+  });
+}
+
+async function getAllBookmarkUrlIdsForScore() {
+  if (!browserAPI?.bookmarks?.getTree) return [];
+
+  try {
+    const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+    const ids = [];
+
+    const traverse = (nodes) => {
+      if (!Array.isArray(nodes)) return;
+      for (const node of nodes) {
+        if (node?.url && node?.id != null) {
+          ids.push(String(node.id));
+        }
+        if (Array.isArray(node?.children) && node.children.length > 0) {
+          traverse(node.children);
+        }
+      }
+    };
+
+    traverse(tree);
+    return normalizeBookmarkIdList(ids);
+  } catch (e) {
+    console.warn('[S-score] collect bookmark ids failed:', e);
+    return [];
+  }
+}
+
+async function handleRecommendSkipState(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, mode: 'none', skippedIds: [] };
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const [rawSkipped, rawPostponed] = await Promise.all([
+      getRecommendSkippedIds(),
+      getRecommendPostponedList()
+    ]);
+
+    const skipped = normalizeRecommendSkippedIds(rawSkipped);
+    const postponed = normalizeRecommendPostponedList(rawPostponed);
+    const now = Date.now();
+
+    let maxMovedAt = 0;
+    for (const item of postponed) {
+      if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+      if (Number(item.postponeUntil || 0) > now) continue;
+      const movedAt = Number(item.dueQueueMovedAt || 0);
+      if (Number.isFinite(movedAt) && movedAt > maxMovedAt) {
+        maxMovedAt = movedAt;
+      }
+    }
+
+    const target = postponed.find((item) => {
+      if (!item || item.bookmarkId == null || item.manuallyAdded) return false;
+      if (String(item.bookmarkId || '').trim() !== id) return false;
+      return Number(item.postponeUntil || 0) <= now;
+    });
+
+    if (target) {
+      target.dueQueueMovedAt = Math.max(now, maxMovedAt + 1);
+      target.updatedAt = now;
+
+      const nextSkipped = skipped.filter(item => item !== id);
+      await browserAPI.storage.local.set({
+        [RECOMMEND_POSTPONED_STORAGE_KEY]: postponed,
+        [RECOMMEND_SKIPPED_STORAGE_KEY]: normalizeRecommendSkippedIds(nextSkipped)
+      });
+
+      return {
+        success: true,
+        mode: 'due-tail',
+        skippedIds: normalizeRecommendSkippedIds(nextSkipped),
+        dueMoved: true
+      };
+    }
+
+    const nextSkipped = skipped.filter(item => item !== id);
+    nextSkipped.push(id);
+    const normalized = normalizeRecommendSkippedIds(nextSkipped);
+
+    await browserAPI.storage.local.set({
+      [RECOMMEND_SKIPPED_STORAGE_KEY]: normalized
+    });
+
+    return {
+      success: true,
+      mode: 'skip',
+      skippedIds: normalized,
+      dueMoved: false
+    };
+  });
+}
+
+async function removeRecommendSkippedState(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, skippedIds: [] };
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const current = await getRecommendSkippedIds();
+    const next = normalizeRecommendSkippedIds(current.filter(item => item !== id));
+    await browserAPI.storage.local.set({ [RECOMMEND_SKIPPED_STORAGE_KEY]: next });
+    return { success: true, skippedIds: next };
+  });
+}
+
+function normalizeRefreshOpenSource(source) {
+  return source === 'sidepanel' ? 'sidepanel' : 'page';
+}
+
+function getRefreshOpenCountField(source) {
+  return normalizeRefreshOpenSource(source) === 'sidepanel'
+    ? 'sidePanelOpenCountSinceRefresh'
+    : 'openCountSinceRefresh';
+}
+
+function getRefreshOpenCount(settings, source) {
+  const field = getRefreshOpenCountField(source);
+  const raw = Number(settings && settings[field]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function setRefreshOpenCount(settings, source, count) {
+  const field = getRefreshOpenCountField(source);
+  const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
+  settings[field] = safeCount;
+}
+
+async function getRecommendRefreshSettings() {
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]);
+    return {
+      ...DEFAULT_REFRESH_SETTINGS,
+      ...(result?.[RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY] || {})
+    };
+  } catch (_) {
+    return { ...DEFAULT_REFRESH_SETTINGS };
+  }
+}
+
+async function saveRecommendRefreshSettings(settings) {
+  await browserAPI.storage.local.set({ [RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]: settings });
+}
+
+async function recordRecommendViewOpenState(source) {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const safeSource = normalizeRefreshOpenSource(source);
+    const settings = await getRecommendRefreshSettings();
+    const now = Date.now();
+
+    const nextCount = getRefreshOpenCount(settings, safeSource) + 1;
+    setRefreshOpenCount(settings, safeSource, nextCount);
+
+    let shouldRefresh = false;
+    if (settings.refreshEveryNOpens > 0 && nextCount >= settings.refreshEveryNOpens) {
+      shouldRefresh = true;
+    }
+
+    if (!shouldRefresh && settings.refreshAfterHours > 0 && settings.lastRefreshTime > 0) {
+      const hoursSinceRefresh = (now - settings.lastRefreshTime) / (1000 * 60 * 60);
+      if (hoursSinceRefresh >= settings.refreshAfterHours) {
+        shouldRefresh = true;
+      }
+    }
+
+    if (!shouldRefresh && settings.refreshAfterDays > 0 && settings.lastRefreshTime > 0) {
+      const daysSinceRefresh = (now - settings.lastRefreshTime) / (1000 * 60 * 60 * 24);
+      if (daysSinceRefresh >= settings.refreshAfterDays) {
+        shouldRefresh = true;
+      }
+    }
+
+    const shouldPreloadCandidates = !shouldRefresh
+      && settings.refreshEveryNOpens > 1
+      && nextCount === settings.refreshEveryNOpens - 1;
+
+    await saveRecommendRefreshSettings(settings);
+
+    return {
+      success: true,
+      source: safeSource,
+      openCount: nextCount,
+      shouldRefresh,
+      shouldPreloadCandidates,
+      settings
+    };
+  });
+}
+
+async function markRecommendRefreshExecutedState() {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const settings = await getRecommendRefreshSettings();
+    settings.lastRefreshTime = Date.now();
+    settings.openCountSinceRefresh = 0;
+    settings.sidePanelOpenCountSinceRefresh = 0;
+    await saveRecommendRefreshSettings(settings);
+    return { success: true, settings };
+  });
+}
+
+async function appendRecommendFlippedBookmarkState(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, flippedIds: [] };
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
+    const current = Array.isArray(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY])
+      ? result[FLIPPED_BOOKMARKS_STORAGE_KEY]
+      : [];
+    const normalized = normalizeBookmarkIdList(current);
+    if (!normalized.includes(id)) {
+      normalized.push(id);
+      await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: normalized });
+    }
+    return { success: true, flippedIds: normalized };
+  });
+}
+
+async function markHistoryCurrentCardFlippedState(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, allFlipped: false, historyCurrentCards: null };
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const result = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+    const current = result?.[HISTORY_CURRENT_CARDS_STORAGE_KEY];
+    if (!current || typeof current !== 'object') {
+      return { success: true, allFlipped: false, historyCurrentCards: null };
+    }
+
+    const cardIds = normalizeBookmarkIdList(Array.isArray(current.cardIds) ? current.cardIds : []);
+    if (cardIds.length === 0 || !cardIds.includes(id)) {
+      return {
+        success: true,
+        allFlipped: false,
+        historyCurrentCards: {
+          ...current,
+          cardIds,
+          flippedIds: normalizeBookmarkIdList(Array.isArray(current.flippedIds) ? current.flippedIds : [])
+        }
+      };
+    }
+
+    const flippedIds = normalizeBookmarkIdList(Array.isArray(current.flippedIds) ? current.flippedIds : []);
+    if (!flippedIds.includes(id)) {
+      flippedIds.push(id);
+    }
+
+    const next = {
+      ...current,
+      cardIds,
+      flippedIds,
+      timestamp: Date.now()
+    };
+    await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: next });
+
+    const allFlipped = cardIds.length > 0 && cardIds.every(cardId => flippedIds.includes(cardId));
+    return { success: true, allFlipped, historyCurrentCards: next };
+  });
+}
+
+function normalizeRecommendPoolLength(poolLength) {
+  const value = Number(poolLength);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+
+function normalizeRecommendPoolCursorValue(cursor, poolLength = 0) {
+  const raw = Number(cursor);
+  const safeRaw = Number.isFinite(raw) ? Math.floor(raw) : 0;
+  const safePoolLength = normalizeRecommendPoolLength(poolLength);
+
+  if (safePoolLength <= 0) {
+    return Math.max(0, safeRaw);
+  }
+
+  return ((safeRaw % safePoolLength) + safePoolLength) % safePoolLength;
+}
+
+async function consumeRecommendPoolCursorState(poolLength, consumeCount = 0) {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const safePoolLength = normalizeRecommendPoolLength(poolLength);
+    const safeConsumeCount = Math.max(0, Math.floor(Number(consumeCount) || 0));
+
+    if (safePoolLength <= 0) {
+      await browserAPI.storage.local.set({ [RECOMMEND_POOL_CURSOR_STORAGE_KEY]: 0 });
+      return {
+        success: true,
+        poolLength: 0,
+        consumeCount: safeConsumeCount,
+        cursorBefore: 0,
+        cursorAfter: 0
+      };
+    }
+
+    const result = await browserAPI.storage.local.get([RECOMMEND_POOL_CURSOR_STORAGE_KEY]);
+    const currentCursor = normalizeRecommendPoolCursorValue(result?.[RECOMMEND_POOL_CURSOR_STORAGE_KEY], safePoolLength);
+    const nextCursor = (currentCursor + safeConsumeCount) % safePoolLength;
+
+    await browserAPI.storage.local.set({ [RECOMMEND_POOL_CURSOR_STORAGE_KEY]: nextCursor });
+
+    return {
+      success: true,
+      poolLength: safePoolLength,
+      consumeCount: safeConsumeCount,
+      cursorBefore: currentCursor,
+      cursorAfter: nextCursor
+    };
+  });
+}
+
+async function setRecommendPoolCursorState(poolLength, cursor = 0) {
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const safePoolLength = normalizeRecommendPoolLength(poolLength);
+    const normalizedCursor = normalizeRecommendPoolCursorValue(cursor, safePoolLength);
+
+    await browserAPI.storage.local.set({ [RECOMMEND_POOL_CURSOR_STORAGE_KEY]: normalizedCursor });
+
+    return {
+      success: true,
+      poolLength: safePoolLength,
+      cursor: normalizedCursor
+    };
+  });
+}
+
+function getLocalDateKey(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeHeatmapBookmarkCounts(counts = {}) {
+  const source = counts && typeof counts === 'object' ? counts : {};
+  const normalized = {};
+
+  Object.entries(source).forEach(([bookmarkId, count]) => {
+    const id = String(bookmarkId || '').trim();
+    const value = Number(count);
+    if (!id || !Number.isFinite(value) || value <= 0) return;
+    normalized[id] = Math.max(1, Math.floor(value));
+  });
+
+  return normalized;
+}
+
+function normalizeHeatmapDayRecords(records = []) {
+  return (Array.isArray(records) ? records : [])
+    .map((item) => {
+      const bookmarkId = String(item?.bookmarkId || '').trim();
+      const timestamp = Number(item?.timestamp || 0);
+      if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return null;
+      }
+      return { bookmarkId, timestamp };
+    })
+    .filter(Boolean)
+    .slice(-FLIP_HISTORY_DAY_RECORDS_MAX);
+}
+
+function normalizeHeatmapDayEntry(entry) {
+  const source = entry && typeof entry === 'object' ? entry : {};
+  const records = normalizeHeatmapDayRecords(source.records || []);
+  const byBookmark = normalizeHeatmapBookmarkCounts(source.byBookmark || {});
+
+  if (Object.keys(byBookmark).length === 0 && records.length > 0) {
+    records.forEach((record) => {
+      byBookmark[record.bookmarkId] = (byBookmark[record.bookmarkId] || 0) + 1;
+    });
+  }
+
+  const rawCount = Number(source.count);
+  const count = Number.isFinite(rawCount) && rawCount >= records.length
+    ? Math.floor(rawCount)
+    : records.length;
+
+  return {
+    count: Math.max(0, count),
+    byBookmark,
+    records
+  };
+}
+
+function normalizeHeatmapDailyIndex(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const sourceDays = source.days && typeof source.days === 'object' ? source.days : {};
+  const days = {};
+
+  Object.entries(sourceDays).forEach(([dateKey, value]) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+    days[dateKey] = normalizeHeatmapDayEntry(value);
+  });
+
+  return {
+    version: 1,
+    updatedAt: Number.isFinite(Number(source.updatedAt)) ? Number(source.updatedAt) : 0,
+    days
+  };
+}
+
+function pruneHeatmapDailyIndex(index) {
+  if (!index || typeof index !== 'object' || !index.days || typeof index.days !== 'object') return index;
+
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - FLIP_HISTORY_RETENTION_DAYS);
+  const cutoffKey = getLocalDateKey(cutoff);
+
+  Object.keys(index.days).forEach((dateKey) => {
+    if (dateKey < cutoffKey) {
+      delete index.days[dateKey];
+    }
+  });
+
+  return index;
+}
+
+function appendFlipEventToHeatmapIndex(index, event) {
+  const normalized = normalizeHeatmapDailyIndex(index);
+  const bookmarkId = String(event?.bookmarkId || '').trim();
+  const timestamp = Number(event?.timestamp || 0);
+
+  if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return normalized;
+  }
+
+  const dateKey = getLocalDateKey(new Date(timestamp));
+  const day = normalizeHeatmapDayEntry(normalized.days[dateKey]);
+
+  day.count += 1;
+  day.byBookmark[bookmarkId] = (day.byBookmark[bookmarkId] || 0) + 1;
+
+  day.records.push({ bookmarkId, timestamp });
+  if (day.records.length > FLIP_HISTORY_DAY_RECORDS_MAX) {
+    day.records = day.records.slice(day.records.length - FLIP_HISTORY_DAY_RECORDS_MAX);
+  }
+
+  normalized.days[dateKey] = day;
+  normalized.updatedAt = Date.now();
+
+  return pruneHeatmapDailyIndex(normalized);
+}
+
+function normalizeFlipHistoryRecords(records = []) {
+  return (Array.isArray(records) ? records : [])
+    .map((item) => {
+      const bookmarkId = String(item?.bookmarkId || '').trim();
+      const timestamp = Number(item?.timestamp || 0);
+      if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return null;
+      }
+      return { bookmarkId, timestamp: Math.floor(timestamp) };
+    })
+    .filter(Boolean)
+    .slice(-FLIP_HISTORY_MAX_ITEMS);
+}
+
+async function appendRecommendFlipHistoryRecordState(bookmarkId, timestamp = Date.now()) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, count: -1 };
+  }
+
+  const safeTimestamp = Number.isFinite(Number(timestamp)) && Number(timestamp) > 0
+    ? Math.floor(Number(timestamp))
+    : Date.now();
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const result = await browserAPI.storage.local.get([FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY]);
+    const flipHistory = normalizeFlipHistoryRecords(result?.[FLIP_HISTORY_STORAGE_KEY]);
+
+    flipHistory.push({
+      bookmarkId: id,
+      timestamp: safeTimestamp
+    });
+
+    const trimmed = flipHistory.length > FLIP_HISTORY_MAX_ITEMS
+      ? flipHistory.slice(flipHistory.length - FLIP_HISTORY_MAX_ITEMS)
+      : flipHistory;
+
+    const nextIndex = appendFlipEventToHeatmapIndex(
+      result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY],
+      { bookmarkId: id, timestamp: safeTimestamp }
+    );
+
+    await browserAPI.storage.local.set({
+      [FLIP_HISTORY_STORAGE_KEY]: trimmed,
+      [HEATMAP_DAILY_INDEX_STORAGE_KEY]: nextIndex
+    });
+
+    return {
+      success: true,
+      count: trimmed.length,
+      indexUpdatedAt: Number(nextIndex?.updatedAt || 0)
+    };
+  });
+}
+
+function normalizeRecommendReviewState(reviews) {
+  if (!reviews || typeof reviews !== 'object') return {};
+  return { ...reviews };
+}
+
+async function recordRecommendReviewState(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) {
+    return { success: false, review: null, postponed: [], skippedIds: [] };
+  }
+
+  const state = await runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const [reviewResult, rawPostponed, rawSkipped] = await Promise.all([
+      browserAPI.storage.local.get(['recommend_reviews']),
+      getRecommendPostponedList(),
+      getRecommendSkippedIds()
+    ]);
+
+    const reviews = normalizeRecommendReviewState(reviewResult?.recommend_reviews);
+    const postponed = normalizeRecommendPostponedList(rawPostponed);
+    const skippedIds = normalizeRecommendSkippedIds(rawSkipped);
+    const now = Date.now();
+
+    const nextPostponed = postponed.filter((item) => String(item?.bookmarkId || '').trim() !== id);
+    const nextSkippedIds = normalizeRecommendSkippedIds(skippedIds.filter((item) => item !== id));
+
+    const existing = reviews[id] && typeof reviews[id] === 'object' ? reviews[id] : null;
+    const existingInterval = Number(existing?.interval);
+    const baseInterval = Number.isFinite(existingInterval) && existingInterval > 0
+      ? Math.floor(existingInterval)
+      : 1;
+    const existingReviewCount = Number(existing?.reviewCount);
+    const baseReviewCount = Number.isFinite(existingReviewCount) && existingReviewCount > 0
+      ? Math.floor(existingReviewCount)
+      : 0;
+
+    const nextInterval = existing ? Math.min(baseInterval * 2, 30) : 1;
+    const nextReview = {
+      lastReview: now,
+      interval: nextInterval,
+      reviewCount: baseReviewCount + 1,
+      nextReview: now + nextInterval * 24 * 60 * 60 * 1000
+    };
+
+    reviews[id] = nextReview;
+
+    await browserAPI.storage.local.set({
+      recommend_reviews: reviews,
+      [RECOMMEND_POSTPONED_STORAGE_KEY]: nextPostponed,
+      [RECOMMEND_SKIPPED_STORAGE_KEY]: nextSkippedIds
+    });
+
+    return {
+      success: true,
+      review: nextReview,
+      postponed: nextPostponed,
+      skippedIds: nextSkippedIds
+    };
+  });
+
+  await updateSingleBookmarkScore(id);
+
+  return state;
+}
+
+function collectRemovedNodeIds(node, bookmarkIdSet, folderIdSet) {
+  if (!node || typeof node !== 'object') return;
+
+  const nodeId = String(node.id || '').trim();
+  if (node.url) {
+    if (nodeId) bookmarkIdSet.add(nodeId);
+  } else {
+    if (nodeId) folderIdSet.add(nodeId);
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        collectRemovedNodeIds(child, bookmarkIdSet, folderIdSet);
+      }
+    }
+  }
+}
+
+function queueRemovedRecommendStatePrune({ bookmarkIds = [], folderIds = [] } = {}) {
+  const normalizedBookmarks = normalizeBookmarkIdList(bookmarkIds);
+  const normalizedFolders = normalizeBookmarkIdList(folderIds);
+
+  normalizedBookmarks.forEach((id) => pendingRemovedBookmarkIds.add(id));
+  normalizedFolders.forEach((id) => pendingRemovedFolderIds.add(id));
+
+  if (pendingRemovedBookmarkIds.size === 0 && pendingRemovedFolderIds.size === 0) {
+    return;
+  }
+
+  if (removedRecommendPruneTimer) {
+    clearTimeout(removedRecommendPruneTimer);
+  }
+
+  removedRecommendPruneTimer = setTimeout(() => {
+    removedRecommendPruneTimer = null;
+    runRemovedRecommendStatePrune().catch((e) => {
+      console.warn('[Recommend] prune removed state failed:', e);
+    });
+  }, REMOVED_RECOMMEND_PRUNE_DEBOUNCE_MS);
+}
+
+async function runRemovedRecommendStatePrune() {
+  const removedBookmarkIds = normalizeBookmarkIdList(Array.from(pendingRemovedBookmarkIds));
+  const removedFolderIds = normalizeBookmarkIdList(Array.from(pendingRemovedFolderIds));
+  pendingRemovedBookmarkIds.clear();
+  pendingRemovedFolderIds.clear();
+
+  if (removedBookmarkIds.length === 0 && removedFolderIds.length === 0) {
+    return;
+  }
+
+  const removedBookmarkSet = new Set(removedBookmarkIds);
+  const removedFolderSet = new Set(removedFolderIds);
+
+  await runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const [rawSkipped, rawPostponed, rawBlocked, rawCache, historyCardsResult] = await Promise.all([
+      getRecommendSkippedIds(),
+      getRecommendPostponedList(),
+      getRecommendBlockedState(),
+      getScoresCache(),
+      browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
+    ]);
+
+    const updates = {};
+
+    const nextSkipped = normalizeRecommendSkippedIds(
+      rawSkipped.filter(id => !removedBookmarkSet.has(String(id || '').trim()))
+    );
+    if (nextSkipped.length !== rawSkipped.length) {
+      updates[RECOMMEND_SKIPPED_STORAGE_KEY] = nextSkipped;
+    }
+
+    const normalizedPostponed = normalizeRecommendPostponedList(rawPostponed || []);
+    const nextPostponed = normalizedPostponed.filter((item) => {
+      const bookmarkId = String(item?.bookmarkId || '').trim();
+      return bookmarkId && !removedBookmarkSet.has(bookmarkId);
+    });
+    if (nextPostponed.length !== normalizedPostponed.length) {
+      updates[RECOMMEND_POSTPONED_STORAGE_KEY] = nextPostponed;
+    }
+
+    const blocked = normalizeRecommendBlockedState(rawBlocked);
+    const nextBlocked = {
+      bookmarks: blocked.bookmarks.filter(id => !removedBookmarkSet.has(String(id || '').trim())),
+      folders: blocked.folders.filter(id => !removedFolderSet.has(String(id || '').trim())),
+      domains: blocked.domains.slice()
+    };
+
+    if (
+      nextBlocked.bookmarks.length !== blocked.bookmarks.length
+      || nextBlocked.folders.length !== blocked.folders.length
+    ) {
+      updates[RECOMMEND_BLOCKED_STORAGE_KEY] = nextBlocked;
+    }
+
+    const cache = rawCache && typeof rawCache === 'object' ? { ...rawCache } : {};
+    let cacheChanged = false;
+    for (const bookmarkId of removedBookmarkSet) {
+      if (Object.prototype.hasOwnProperty.call(cache, bookmarkId)) {
+        delete cache[bookmarkId];
+        cacheChanged = true;
+      }
+    }
+    if (cacheChanged) {
+      updates.recommend_scores_cache = cache;
+      updates.recommend_scores_time = Date.now();
+    }
+
+    const historyCurrentCards = historyCardsResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY];
+    if (historyCurrentCards && typeof historyCurrentCards === 'object') {
+      const cardIds = Array.isArray(historyCurrentCards.cardIds)
+        ? historyCurrentCards.cardIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+      const flippedIds = Array.isArray(historyCurrentCards.flippedIds)
+        ? historyCurrentCards.flippedIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+      const cardData = Array.isArray(historyCurrentCards.cardData)
+        ? historyCurrentCards.cardData.filter(item => !removedBookmarkSet.has(String(item?.id || '').trim()))
+        : undefined;
+
+      const nextCardIds = cardIds.filter(id => !removedBookmarkSet.has(id));
+      const nextFlippedIds = flippedIds.filter(id => !removedBookmarkSet.has(id));
+
+      if (
+        nextCardIds.length !== cardIds.length
+        || nextFlippedIds.length !== flippedIds.length
+        || (Array.isArray(cardData) && cardData.length !== (Array.isArray(historyCurrentCards.cardData) ? historyCurrentCards.cardData.length : 0))
+      ) {
+        updates[HISTORY_CURRENT_CARDS_STORAGE_KEY] = {
+          ...historyCurrentCards,
+          cardIds: nextCardIds,
+          flippedIds: nextFlippedIds,
+          ...(Array.isArray(cardData) ? { cardData } : {}),
+          timestamp: Date.now()
+        };
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await browserAPI.storage.local.set(updates);
+    }
+  });
+}
+
+async function scheduleBulkTemplateRecovery(reason = '') {
+  if (bulkTemplateRecoveryTimer) {
+    clearTimeout(bulkTemplateRecoveryTimer);
+  }
+
+  bulkTemplateRecoveryTimer = setTimeout(async () => {
+    bulkTemplateRecoveryTimer = null;
+
+    if (isBookmarkImporting || isBookmarkBulkChanging) {
+      scheduleBulkTemplateRecovery(reason);
+      return;
+    }
+
+    if (isComputingScores) {
+      scheduleBulkTemplateRecovery(reason);
+      return;
+    }
+
+    try {
+      const ids = await getAllBookmarkUrlIdsForScore();
+      if (!Array.isArray(ids) || ids.length === 0) {
+        await browserAPI.storage.local.set({
+          recommendScoresStaleMeta: { staleAt: 0, reason: `bulk-template:${reason || 'none'}:empty` }
+        });
+        return;
+      }
+
+      if (ids.length >= SCORE_TEMPLATE_BATCH_THRESHOLD) {
+        await applyTemplateScoresByIds(ids);
+        queueTemplateScoreRefine(ids);
+      } else {
+        await updateBookmarkScoresByIds(ids);
+      }
+
+      await browserAPI.storage.local.set({
+        recommendScoresStaleMeta: { staleAt: 0, reason: `bulk-template:${reason || 'none'}` }
+      });
+    } catch (e) {
+      console.warn('[S-score] bulk template recovery failed:', e);
+    }
+  }, BULK_TEMPLATE_RECOVERY_DEBOUNCE_MS);
+}
+
+async function ensureRecommendScoresReady(options = {}) {
+  if (recommendScoresReadyPromise) {
+    return recommendScoresReadyPromise;
+  }
+
+  const reason = String(options?.reason || 'unknown');
+
+  recommendScoresReadyPromise = (async () => {
+    try {
+      const existingCache = await getScoresCache();
+      const existingCount = Object.keys(existingCache || {}).length;
+      if (existingCount > 0) {
+        return {
+          success: true,
+          ready: true,
+          mode: 'existing',
+          cacheCount: existingCount
+        };
+      }
+
+      if (isBookmarkImporting || isBookmarkBulkChanging) {
+        return {
+          success: true,
+          ready: false,
+          mode: 'bulk-pending',
+          cacheCount: existingCount
+        };
+      }
+
+      if (isComputingScores || templateRefineRunning) {
+        return {
+          success: true,
+          ready: false,
+          mode: 'computing',
+          cacheCount: existingCount
+        };
+      }
+
+      const ids = await getAllBookmarkUrlIdsForScore();
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return {
+          success: true,
+          ready: true,
+          mode: 'empty-tree',
+          cacheCount: 0,
+          bookmarkCount: 0
+        };
+      }
+
+      if (ids.length >= SCORE_TEMPLATE_BATCH_THRESHOLD) {
+        await applyTemplateScoresByIds(ids);
+        queueTemplateScoreRefine(ids);
+      } else {
+        await updateBookmarkScoresByIds(ids);
+      }
+
+      const nextCache = await getScoresCache();
+      const nextCount = Object.keys(nextCache || {}).length;
+
+      try {
+        await browserAPI.storage.local.set({
+          recommendScoresStaleMeta: {
+            staleAt: 0,
+            reason: `ensure-ready:${reason}`
+          }
+        });
+      } catch (_) { }
+
+      return {
+        success: true,
+        ready: nextCount > 0,
+        mode: ids.length >= SCORE_TEMPLATE_BATCH_THRESHOLD ? 'template' : 'incremental',
+        cacheCount: nextCount,
+        bookmarkCount: ids.length
+      };
+    } catch (e) {
+      console.warn('[S-score] ensure-ready failed:', e);
+      return {
+        success: false,
+        ready: false,
+        error: e?.message || String(e)
+      };
+    }
+  })();
+
+  recommendScoresReadyPromise.finally(() => {
+    if (recommendScoresReadyPromise) {
+      recommendScoresReadyPromise = null;
+    }
+  });
+
+  return recommendScoresReadyPromise;
+}
 
 function scheduleBookmarkBulkExit() {
   if (bookmarkBulkExitTimer) {
@@ -1171,8 +2204,8 @@ async function exitBookmarkBulkChangeMode() {
 
   // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
   const reason = String(lastBulkReason || '');
-  if (!reason.startsWith('import') && !bookmarkBulkHasRemoval) {
-    scheduleRecomputeAllScoresSoon('bulk-exit', { forceFull: true });
+  if (!reason.startsWith('import')) {
+    await scheduleBulkTemplateRecovery(`bulk-exit:${reason || 'unknown'}`);
   }
   bookmarkBulkHasRemoval = false;
 }
@@ -1399,16 +2432,31 @@ async function saveScoresCache(cache) {
     if (error.message && error.message.includes('QUOTA')) {
       console.warn('[S-score] storage quota reached, cleaning...');
       try {
-        const keysToCheck = ['flippedBookmarks', 'thumbnailCache', 'recommend_postponed'];
+        const keysToCheck = [FLIPPED_BOOKMARKS_STORAGE_KEY, 'thumbnailCache', RECOMMEND_POSTPONED_STORAGE_KEY];
         const data = await browserAPI.storage.local.get(keysToCheck);
 
-        if (data.flippedBookmarks) {
-          const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-          const filtered = {};
-          for (const [id, time] of Object.entries(data.flippedBookmarks)) {
-            if (time > oneWeekAgo) filtered[id] = time;
+        if (data[FLIPPED_BOOKMARKS_STORAGE_KEY]) {
+          const raw = data[FLIPPED_BOOKMARKS_STORAGE_KEY];
+          let normalized = [];
+
+          if (Array.isArray(raw)) {
+            normalized = raw
+              .map(id => String(id || '').trim())
+              .filter(Boolean);
+          } else if (raw && typeof raw === 'object') {
+            const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            normalized = Object.entries(raw)
+              .filter(([, time]) => Number(time) > oneWeekAgo)
+              .sort((a, b) => Number(a[1]) - Number(b[1]))
+              .map(([id]) => String(id || '').trim())
+              .filter(Boolean);
           }
-          await browserAPI.storage.local.set({ flippedBookmarks: filtered });
+
+          if (normalized.length > 1000) {
+            normalized = normalized.slice(normalized.length - 1000);
+          }
+
+          await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: normalized });
         }
 
         if (data.thumbnailCache) {
@@ -2103,18 +3151,214 @@ async function getBookmarkIdsByDomains(domains) {
   return [...new Set(ids)];
 }
 
-async function updateBookmarkScoresByIds(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return 0;
-  const unique = Array.from(new Set(ids.map(id => String(id)).filter(Boolean)));
-  let updated = 0;
-  for (const id of unique) {
-    await updateSingleBookmarkScore(id);
-    updated += 1;
-    if (updated % 25 === 0) {
+function normalizeBookmarkIdList(ids) {
+  return Array.from(new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+async function getBookmarksByIdsForScore(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  if (unique.length === 0 || !browserAPI?.bookmarks?.get) return [];
+
+  const result = [];
+  const chunkSize = 300;
+
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    const chunkBookmarks = await new Promise((resolve) => {
+      try {
+        browserAPI.bookmarks.get(chunk, (items) => {
+          if (browserAPI.runtime?.lastError) {
+            resolve([]);
+            return;
+          }
+          resolve(Array.isArray(items) ? items : []);
+        });
+      } catch (_) {
+        resolve([]);
+      }
+    });
+
+    for (const item of chunkBookmarks) {
+      if (item && item.url) {
+        result.push(item);
+      }
+    }
+
+    if (i + chunkSize < unique.length) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
+
+  return result;
+}
+
+async function recomputeScoresForBookmarkIds(ids, options = {}) {
+  if (isBookmarkImporting || isBookmarkBulkChanging || isComputingScores) return 0;
+
+  const unique = normalizeBookmarkIdList(ids);
+  if (unique.length === 0) return 0;
+
+  const bookmarks = await getBookmarksByIdsForScore(unique);
+  if (bookmarks.length === 0) return 0;
+
+  const [historyStats, config, trackingData, postponedList, reviewData, mode, cache] = await Promise.all([
+    getBatchHistoryDataWithTitle(),
+    getFormulaConfig(),
+    getTrackingDataForScore(),
+    getPostponedBookmarksForScore(),
+    getReviewDataForScore(),
+    getScoreCacheMode(),
+    getScoresCache()
+  ]);
+
+  const batchSize = Math.max(40, Number(options.batchSize) || SCORE_INCREMENTAL_BATCH_SIZE);
+  const flushByBatch = options.flushByBatch === true;
+  const flushEveryBatches = Math.max(1, Number(options.flushEveryBatches) || 2);
+  let updated = 0;
+  let processedBatches = 0;
+
+  for (let i = 0; i < bookmarks.length; i += batchSize) {
+    const batch = bookmarks.slice(i, i + batchSize);
+    for (const bookmark of batch) {
+      const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+      cache[String(bookmark.id)] = mode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+      updated += 1;
+    }
+
+    processedBatches += 1;
+
+    if (flushByBatch && (processedBatches % flushEveryBatches === 0 || i + batchSize >= bookmarks.length)) {
+      await saveScoresCache(cache);
+    }
+
+    if (i + batchSize < bookmarks.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  if (!flushByBatch) {
+    await saveScoresCache(cache);
+  }
+
   return updated;
+}
+
+async function applyTemplateScoresByIds(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  if (unique.length === 0) return 0;
+
+  const [mode, cache] = await Promise.all([
+    getScoreCacheMode(),
+    getScoresCache()
+  ]);
+
+  let updated = 0;
+  for (const id of unique) {
+    const existing = cache[id];
+    const fallbackS = Number.isFinite(existing?.S) ? existing.S : SCORE_TEMPLATE_DEFAULT_S;
+
+    if (mode === SCORE_CACHE_MODE_FULL) {
+      cache[id] = {
+        S: fallbackS,
+        F: Number.isFinite(existing?.F) ? existing.F : SCORE_TEMPLATE_DEFAULT_S,
+        C: Number.isFinite(existing?.C) ? existing.C : SCORE_TEMPLATE_DEFAULT_S,
+        T: Number.isFinite(existing?.T) ? existing.T : SCORE_TEMPLATE_DEFAULT_S,
+        D: Number.isFinite(existing?.D) ? existing.D : SCORE_TEMPLATE_DEFAULT_S,
+        L: Number.isFinite(existing?.L) ? existing.L : 0,
+        R: Number.isFinite(existing?.R) ? existing.R : 1,
+        _template: true
+      };
+    } else {
+      cache[id] = { S: fallbackS, _template: true };
+    }
+    updated += 1;
+  }
+
+  await saveScoresCache(cache);
+  return updated;
+}
+
+function queueTemplateScoreRefine(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  unique.forEach(id => pendingTemplateRefineIds.add(id));
+
+  if (pendingTemplateRefineIds.size === 0) {
+    return;
+  }
+
+  if (templateRefineTimer) {
+    clearTimeout(templateRefineTimer);
+  }
+
+  templateRefineTimer = setTimeout(() => {
+    templateRefineTimer = null;
+    runTemplateScoreRefine().catch((e) => {
+      console.warn('[S-score] template refine failed:', e);
+    });
+  }, SCORE_TEMPLATE_REFINE_DEBOUNCE_MS);
+}
+
+async function runTemplateScoreRefine() {
+  if (templateRefineRunning) {
+    if (pendingTemplateRefineIds.size > 0) {
+      queueTemplateScoreRefine([]);
+    }
+    return;
+  }
+
+  if (isBookmarkImporting || isBookmarkBulkChanging || isComputingScores) {
+    if (pendingTemplateRefineIds.size > 0) {
+      queueTemplateScoreRefine([]);
+    }
+    return;
+  }
+
+  const ids = Array.from(pendingTemplateRefineIds);
+  pendingTemplateRefineIds.clear();
+  if (ids.length === 0) return;
+
+  templateRefineRunning = true;
+  try {
+    await recomputeScoresForBookmarkIds(ids, {
+      batchSize: SCORE_TEMPLATE_REFINE_BATCH_SIZE,
+      flushByBatch: true,
+      flushEveryBatches: 2
+    });
+  } finally {
+    templateRefineRunning = false;
+    if (pendingTemplateRefineIds.size > 0) {
+      queueTemplateScoreRefine([]);
+    }
+  }
+}
+
+async function updateBookmarkScoresByIds(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  if (unique.length === 0) return 0;
+
+  if (unique.length <= 3) {
+    let updated = 0;
+    for (const id of unique) {
+      await updateSingleBookmarkScore(id);
+      updated += 1;
+    }
+    return updated;
+  }
+
+  if (unique.length >= SCORE_TEMPLATE_BATCH_THRESHOLD) {
+    const templated = await applyTemplateScoresByIds(unique);
+    queueTemplateScoreRefine(unique);
+    return templated;
+  }
+
+  return recomputeScoresForBookmarkIds(unique, {
+    batchSize: SCORE_INCREMENTAL_BATCH_SIZE,
+    flushByBatch: false
+  });
 }
 
 let pendingUrlUpdates = new Set();
@@ -2194,16 +3438,33 @@ browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
   }
 });
 
-browserAPI.bookmarks.onRemoved.addListener(async (id) => {
+browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   noteBookmarkEventForBulkGuard('removed');
+
+  const removedBookmarkSet = new Set();
+  const removedFolderSet = new Set();
+
+  if (removeInfo && removeInfo.node) {
+    collectRemovedNodeIds(removeInfo.node, removedBookmarkSet, removedFolderSet);
+  }
+
+  const normalizedId = String(id || '').trim();
+  if (normalizedId && removedBookmarkSet.size === 0 && removedFolderSet.size === 0) {
+    removedBookmarkSet.add(normalizedId);
+    removedFolderSet.add(normalizedId);
+  }
+
+  for (const bookmarkId of removedBookmarkSet) {
+    removeBookmarkFromUrlIndex(bookmarkId);
+  }
+
+  queueRemovedRecommendStatePrune({
+    bookmarkIds: Array.from(removedBookmarkSet),
+    folderIds: Array.from(removedFolderSet)
+  });
+
   if (isBookmarkImporting || isBookmarkBulkChanging) {
     return;
-  }
-  removeBookmarkFromUrlIndex(id);
-  const cache = await getScoresCache();
-  if (cache[id]) {
-    delete cache[id];
-    await saveScoresCache(cache);
   }
 });
 
@@ -2469,6 +3730,102 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (action === 'recordRecommendViewOpen') {
+    (async () => {
+      try {
+        const result = await recordRecommendViewOpenState(message.source);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'markRecommendRefreshExecuted') {
+    (async () => {
+      try {
+        const result = await markRecommendRefreshExecutedState();
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'appendRecommendFlippedBookmark') {
+    (async () => {
+      try {
+        const result = await appendRecommendFlippedBookmarkState(message.bookmarkId);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'markHistoryCurrentCardFlippedState') {
+    (async () => {
+      try {
+        const result = await markHistoryCurrentCardFlippedState(message.bookmarkId);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'consumeRecommendPoolCursor') {
+    (async () => {
+      try {
+        const result = await consumeRecommendPoolCursorState(message.poolLength, message.consumeCount);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'setRecommendPoolCursor') {
+    (async () => {
+      try {
+        const result = await setRecommendPoolCursorState(message.poolLength, message.cursor);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'appendRecommendFlipHistoryRecord') {
+    (async () => {
+      try {
+        const result = await appendRecommendFlipHistoryRecordState(message.bookmarkId, message.timestamp);
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'recordRecommendReviewState') {
+    (async () => {
+      try {
+        const result = await recordRecommendReviewState(message.bookmarkId);
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (action === 'computeBookmarkScores') {
     (async () => {
       try {
@@ -2489,6 +3846,21 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await updateSingleBookmarkScore(message.bookmarkId);
         }
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'updateBookmarkScoresByIds') {
+    (async () => {
+      try {
+        const ids = Array.isArray(message.ids)
+          ? message.ids
+          : (message.bookmarkId ? [message.bookmarkId] : []);
+        const updated = await updateBookmarkScoresByIds(ids);
+        sendResponse({ success: true, updated, total: ids.length });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -2531,6 +3903,66 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await scheduleScoreUpdateByUrl(message.url);
         }
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'setRecommendBlockedState') {
+    (async () => {
+      try {
+        const result = await setRecommendBlockedState(message.blocked);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'setRecommendPostponedState') {
+    (async () => {
+      try {
+        const result = await setRecommendPostponedState(message.postponed);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'ensureRecommendScoresReady') {
+    (async () => {
+      try {
+        const result = await ensureRecommendScoresReady({ reason: message.reason || '' });
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, ready: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'handleRecommendSkipState') {
+    (async () => {
+      try {
+        const result = await handleRecommendSkipState(message.bookmarkId);
+        sendResponse({ success: true, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'removeRecommendSkippedState') {
+    (async () => {
+      try {
+        const result = await removeRecommendSkippedState(message.bookmarkId);
+        sendResponse({ success: true, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
