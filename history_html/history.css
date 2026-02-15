@@ -183,6 +183,7 @@ body {
 }
 
 .header-title-row {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -205,6 +206,220 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.widgets-smart-sort-toggle {
+    display: none !important;
+    margin-left: 2px;
+}
+
+.widgets-smart-sort-toggle.show {
+    display: inline-flex !important;
+}
+
+.widgets-smart-sort-toggle.smart-enabled {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.widgets-smart-sort-toggle.panel-open {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+}
+
+.widgets-sort-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 220;
+    width: 236px;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-lg);
+}
+
+.widgets-sort-panel[hidden] {
+    display: none !important;
+}
+
+.widgets-sort-info-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    left: auto;
+    z-index: 260;
+    width: 248px;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-lg);
+}
+
+.widgets-sort-info-panel[hidden] {
+    display: none !important;
+}
+
+.widgets-sort-info-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.widgets-sort-info-line {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.widgets-sort-info-line+.widgets-sort-info-line {
+    margin-top: 5px;
+}
+
+.widgets-sort-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.widgets-sort-smart-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.widgets-sort-smart-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.widgets-sort-smart-row input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent-primary);
+}
+
+.widgets-sort-inline-info-btn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin-left: 1px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex: 0 0 auto;
+}
+
+.widgets-sort-inline-info-btn i {
+    font-size: 12px;
+    line-height: 1;
+}
+
+.widgets-sort-inline-info-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.widgets-sort-inline-info-btn.panel-open {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.widgets-sort-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.widgets-sort-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 30px;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.widgets-sort-item.is-moving {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.30);
+    background: rgba(var(--accent-primary-rgb), 0.08);
+}
+
+.widgets-sort-item-name {
+    min-width: 0;
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.widgets-sort-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.widgets-sort-move-btn {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.widgets-sort-move-btn i {
+    font-size: 12px;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.widgets-sort-move-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.widgets-sort-move-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none;
 }
 
 .header-subtitle {
@@ -745,6 +960,52 @@ html.side-panel-mode .header-left h1 {
     font-size: 16px;
     line-height: 1.25;
 }
+
+html.side-panel-mode .widgets-sort-panel {
+    width: 210px;
+    padding: 8px;
+}
+
+html.side-panel-mode .widgets-sort-info-panel {
+    right: 0;
+    left: auto;
+    width: 220px;
+    padding: 8px;
+}
+
+html.side-panel-mode .widgets-sort-panel-title,
+html.side-panel-mode .widgets-sort-smart-row,
+html.side-panel-mode .widgets-sort-smart-label,
+html.side-panel-mode .widgets-sort-item-name,
+html.side-panel-mode .widgets-sort-info-title,
+html.side-panel-mode .widgets-sort-info-line {
+    font-size: 11px;
+}
+
+html.side-panel-mode .widgets-sort-item {
+    min-height: 24px;
+    padding: 3px 5px;
+}
+
+html.side-panel-mode .widgets-sort-move-btn {
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+}
+
+html.side-panel-mode .widgets-sort-move-btn i {
+    font-size: 10px;
+}
+
+html.side-panel-mode .widgets-sort-inline-info-btn {
+    width: 20px;
+    height: 20px;
+}
+
+html.side-panel-mode .widgets-sort-inline-info-btn i {
+    font-size: 10px;
+}
+
 
 html.side-panel-mode .tool-buttons .settings-btn {
     display: inline-flex;
@@ -2037,7 +2298,7 @@ html.sidebar-state-hidden #sidebar {
 }
 
 .widgets-recommend-widget {
-    grid-column: 1 / -1;
+    grid-column: auto;
     min-height: auto;
 }
 
@@ -2312,9 +2573,9 @@ html.sidebar-state-hidden #sidebar {
 .widgets-related-level2-row {
     display: flex;
     flex-wrap: wrap;
-    column-gap: clamp(8px, 2.2vw, 16px);
-    row-gap: 6px;
-    margin-top: 4px;
+    column-gap: clamp(10px, 2.6vw, 22px);
+    row-gap: 8px;
+    margin-top: 6px;
 }
 
 .widgets-related-level1-row .widgets-related-primary-item {
@@ -2346,16 +2607,17 @@ html.sidebar-state-hidden #sidebar {
 
 #widgetsRelatedWidget .widgets-related-folder-item {
     min-width: 0;
-    padding: 4px 9px;
-    min-height: 24px;
+    padding: 5px 11px;
+    min-height: 26px;
     font-size: 10px;
     line-height: 1.1;
 }
 
 #widgetsRelatedWidget .widgets-related-secondary-item {
-    min-width: 78px;
-    padding-left: 12px;
-    padding-right: 12px;
+    min-width: clamp(92px, 28%, 150px);
+    max-width: 100%;
+    padding-left: 14px;
+    padding-right: 14px;
     justify-content: center;
 }
 
@@ -2493,15 +2755,15 @@ html.side-panel-mode .widgets-related-level2-row {
 }
 
 html.side-panel-mode #widgetsRelatedWidget .widgets-related-folder-item {
-    padding: 3px 7px;
-    min-height: 20px;
+    padding: 4px 8px;
+    min-height: 22px;
     font-size: 9px;
 }
 
 html.side-panel-mode #widgetsRelatedWidget .widgets-related-secondary-item {
-    min-width: 64px;
-    padding-left: 10px;
-    padding-right: 10px;
+    min-width: clamp(72px, 34%, 118px);
+    padding-left: 11px;
+    padding-right: 11px;
 }
 
 html.side-panel-mode .widgets-related-level1-row .widgets-related-primary-item {
@@ -2555,11 +2817,25 @@ html.side-panel-mode .widgets-cards-row .card-debug-btn i {
     html:not(.side-panel-mode) .widgets-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    html:not(.side-panel-mode) .widgets-grid>.widgets-recommend-widget,
+    html:not(.side-panel-mode) .widgets-grid>.widgets-related-widget {
+        grid-column: auto !important;
+        width: 100%;
+        max-width: 100%;
+    }
 }
 
 @media (min-width: 760px) {
     html.side-panel-mode .widgets-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    html.side-panel-mode .widgets-grid>.widgets-recommend-widget,
+    html.side-panel-mode .widgets-grid>.widgets-related-widget {
+        grid-column: auto !important;
+        width: 100%;
+        max-width: 100%;
     }
 }
 

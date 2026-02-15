@@ -1521,6 +1521,39 @@ const i18n = {pageTitle: {
     },widgetsCardRefreshText: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh Cards'
+    },widgetsSmartSortToggle: {
+        'zh_CN': '智能排序',
+        'en': 'Smart Sort'
+    },widgetsSmartSortEnabled: {
+        'zh_CN': '智能排序：开启',
+        'en': 'Smart Sort: On'
+    },widgetsSmartSortDisabled: {
+        'zh_CN': '智能排序：关闭',
+        'en': 'Smart Sort: Off'
+    },widgetsSortPanelTitle: {
+        'zh_CN': '小组件排序',
+        'en': 'Widget Order'
+    },widgetsSortMoveUp: {
+        'zh_CN': '上移',
+        'en': 'Move Up'
+    },widgetsSortMoveDown: {
+        'zh_CN': '下移',
+        'en': 'Move Down'
+    },widgetsSmartSortInfoBtn: {
+        'zh_CN': '智能排序说明',
+        'en': 'Smart Sort Help'
+    },widgetsSortInfoPanelTitle: {
+        'zh_CN': '智能排序说明',
+        'en': 'How Smart Sort Works'
+    },widgetsSortInfoLine1: {
+        'zh_CN': '书签推荐固定在最上方。',
+        'en': 'Bookmark Recommend stays at the top.'
+    },widgetsSortInfoLine2: {
+        'zh_CN': '其余小组件会根据数据变化自动上浮。',
+        'en': 'Other widgets move up when data changes.'
+    },widgetsSortInfoLine3: {
+        'zh_CN': '关闭智能排序后，顺序按手动排序结果展示。',
+        'en': 'When smart sort is off, manual order is used.'
     },additionsTabReview: {
         'zh_CN': '书签添加记录',
         'en': 'Bookmark additions'
@@ -2615,10 +2648,12 @@ function updatePageHeaderTitle(view = currentView) {
     if (isSidePanelMode) {
         pageTitleEl.textContent = getViewTitleText(view);
         scheduleSidePanelHeaderTitleAlignment();
+        updateWidgetsSmartSortToggleUI(view);
         return;
     }
 
     pageTitleEl.textContent = i18n.pageTitle[currentLang];
+    updateWidgetsSmartSortToggleUI(view);
 }
 
 function applyLanguage() {
@@ -2708,6 +2743,7 @@ function applyLanguage() {
     if (widgetsCardRefreshBtn) widgetsCardRefreshBtn.title = i18n.widgetsCardRefreshText[currentLang];
 
     updateWidgetsRankingRangeToggleLabel();
+    updateWidgetsSmartSortToggleUI(currentView);
     updateWidgetsRelatedDepthButtonsState();
     try {
         const maybePromise = updateWidgetsRelatedWidget();
@@ -4899,6 +4935,20 @@ let widgetsRelatedPrimaryRange = 'day';
 let widgetsRelatedSecondaryAvailable = true;
 let widgetsRelatedActiveSecondaryKey = '';
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
+const WIDGETS_SMART_SORT_WIDGET_IDS = [
+    'widgetsTrackingWidget',
+    'widgetsRankingWidget',
+    'widgetsAdditionsWeekWidget',
+    'widgetsHistoryWeekWidget',
+    'widgetsRelatedWidget'
+];
+const widgetsSmartSortSignalById = Object.create(null);
+const widgetsSmartSortChangedAtById = Object.create(null);
+let widgetsSmartSortEnabled = readWidgetsSmartSortEnabled();
+let widgetsSortOrder = readWidgetsSortOrder();
+let widgetsSortMovingWidgetId = '';
+let widgetsSortMoveHighlightTimer = null;
+let widgetsSortInfoHoverHideTimer = null;
 
 function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = currentLang) {
     const cardSignature = (Array.isArray(cards) ? cards : [])
@@ -4965,6 +5015,474 @@ function readWidgetsRelatedPrimaryRange() {
         );
     } catch (_) {
         return 'day';
+    }
+}
+
+function getWidgetsSmartSortStorageKey() {
+    return isSidePanelMode ? 'widgetsSmartSortEnabled__sidepanel' : 'widgetsSmartSortEnabled';
+}
+
+function getWidgetsSortOrderStorageKey() {
+    return isSidePanelMode ? 'widgetsSortOrder__sidepanel' : 'widgetsSortOrder';
+}
+
+function normalizeWidgetsSortOrder(orderLike) {
+    const defaultOrder = WIDGETS_SMART_SORT_WIDGET_IDS.slice();
+    if (!Array.isArray(orderLike)) return defaultOrder;
+
+    const seen = new Set();
+    const normalized = [];
+    orderLike.forEach((id) => {
+        const safeId = String(id || '').trim();
+        if (!WIDGETS_SMART_SORT_WIDGET_IDS.includes(safeId)) return;
+        if (seen.has(safeId)) return;
+        seen.add(safeId);
+        normalized.push(safeId);
+    });
+
+    defaultOrder.forEach((id) => {
+        if (seen.has(id)) return;
+        normalized.push(id);
+    });
+
+    return normalized;
+}
+
+function readWidgetsSmartSortEnabled() {
+    try {
+        const raw = localStorage.getItem(getWidgetsSmartSortStorageKey());
+        if (raw == null) return true;
+        return raw !== 'false';
+    } catch (_) {
+        return true;
+    }
+}
+
+function readWidgetsSortOrder() {
+    try {
+        const raw = localStorage.getItem(getWidgetsSortOrderStorageKey());
+        if (!raw) return WIDGETS_SMART_SORT_WIDGET_IDS.slice();
+        const parsed = JSON.parse(raw);
+        return normalizeWidgetsSortOrder(parsed);
+    } catch (_) {
+        return WIDGETS_SMART_SORT_WIDGET_IDS.slice();
+    }
+}
+
+function writeWidgetsSmartSortEnabled(enabled) {
+    widgetsSmartSortEnabled = enabled === true;
+    try {
+        localStorage.setItem(getWidgetsSmartSortStorageKey(), widgetsSmartSortEnabled ? 'true' : 'false');
+    } catch (_) { }
+}
+
+function writeWidgetsSortOrder(order) {
+    widgetsSortOrder = normalizeWidgetsSortOrder(order);
+    try {
+        localStorage.setItem(getWidgetsSortOrderStorageKey(), JSON.stringify(widgetsSortOrder));
+    } catch (_) { }
+}
+
+function normalizeWidgetsSmartSortText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function getWidgetsSortWidgetLabel(widgetId) {
+    if (widgetId === 'widgetsTrackingWidget') return i18n.widgetsTrackingWidgetTitle[currentLang];
+    if (widgetId === 'widgetsRankingWidget') return i18n.widgetsRankingWidgetTitle[currentLang];
+    if (widgetId === 'widgetsAdditionsWeekWidget') return i18n.widgetsAdditionsWeekWidgetTitle[currentLang];
+    if (widgetId === 'widgetsHistoryWeekWidget') return i18n.widgetsHistoryWeekWidgetTitle[currentLang];
+    if (widgetId === 'widgetsRelatedWidget') return i18n.widgetsRelatedWidgetTitle[currentLang];
+    return widgetId;
+}
+
+function getWidgetsSmartSortSignal(widgetId) {
+    const widgetEl = document.getElementById(widgetId);
+    const listEl = widgetEl ? widgetEl.querySelector('.time-tracking-widget-list') : null;
+    if (!widgetEl || !listEl) {
+        return { signature: `missing:${widgetId}`, hasData: false, activity: 0 };
+    }
+
+    const hasEmptyNode = Boolean(listEl.querySelector('.time-tracking-widget-empty'));
+
+    if (widgetId === 'widgetsTrackingWidget') {
+        const rows = Array.from(listEl.querySelectorAll('.time-tracking-widget-item'));
+        const titleSig = rows.map((row) => normalizeWidgetsSmartSortText(row.querySelector('.item-title')?.textContent)).join('|');
+        const stateSig = rows.map((row) => normalizeWidgetsSmartSortText(row.querySelector('.item-state')?.textContent)).join('|');
+        return {
+            signature: rows.length > 0 ? `${titleSig}::${stateSig}::${rows.length}` : `empty:${widgetId}`,
+            hasData: rows.length > 0 && !hasEmptyNode,
+            activity: rows.length
+        };
+    }
+
+    if (widgetId === 'widgetsRankingWidget') {
+        const rows = Array.from(listEl.querySelectorAll('.time-tracking-widget-item.ranking-item'));
+        const rowSig = rows.map((row) => {
+            const title = normalizeWidgetsSmartSortText(row.querySelector('.item-title')?.textContent);
+            const count = normalizeWidgetsSmartSortText(row.querySelector('.item-time')?.textContent);
+            return `${title}:${count}`;
+        }).join('|');
+        const activity = rows.reduce((sum, row) => {
+            const num = Number.parseInt(normalizeWidgetsSmartSortText(row.querySelector('.item-time')?.textContent), 10);
+            return sum + (Number.isFinite(num) ? num : 0);
+        }, 0);
+        const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || 'day');
+        return {
+            signature: rows.length > 0 ? `${range}::${rowSig}` : `empty:${widgetId}:${range}`,
+            hasData: rows.length > 0 && !hasEmptyNode,
+            activity
+        };
+    }
+
+    if (widgetId === 'widgetsAdditionsWeekWidget' || widgetId === 'widgetsHistoryWeekWidget') {
+        const nums = Array.from(listEl.querySelectorAll('.widgets-week-day-number'))
+            .map((node) => Number.parseInt(normalizeWidgetsSmartSortText(node.textContent), 10))
+            .map((num) => (Number.isFinite(num) ? num : 0));
+        const activity = nums.reduce((sum, num) => sum + num, 0);
+        return {
+            signature: nums.length > 0 ? nums.join(',') : `empty:${widgetId}`,
+            hasData: activity > 0 && !hasEmptyNode,
+            activity
+        };
+    }
+
+    if (widgetId === 'widgetsRelatedWidget') {
+        const primary = Array.from(listEl.querySelectorAll('.widgets-related-level1-row .widgets-related-folder-name'))
+            .map((node) => normalizeWidgetsSmartSortText(node.textContent));
+        const secondary = Array.from(listEl.querySelectorAll('.widgets-related-level2-row .widgets-related-folder-name'))
+            .map((node) => normalizeWidgetsSmartSortText(node.textContent));
+        const selected = normalizeWidgetsSmartSortText(
+            listEl.querySelector('.widgets-related-secondary-item.is-selected .widgets-related-folder-name')?.textContent
+        );
+        const signature = `range:${normalizeWidgetsRelatedRange(widgetsRelatedPrimaryRange)}::p:${primary.join('|')}::s:${secondary.join('|')}::sel:${selected}`;
+        return {
+            signature: primary.length > 0 ? signature : `empty:${widgetId}`,
+            hasData: primary.length > 0 && !hasEmptyNode,
+            activity: secondary.length > 0 ? secondary.length : primary.length
+        };
+    }
+
+    const text = normalizeWidgetsSmartSortText(listEl.textContent || '');
+    const nums = (text.match(/\d+/g) || []).map((part) => Number.parseInt(part, 10)).filter(Number.isFinite);
+    return {
+        signature: text || `empty:${widgetId}`,
+        hasData: !hasEmptyNode && text.length > 0,
+        activity: nums.reduce((sum, num) => sum + num, 0)
+    };
+}
+
+function renderWidgetsSortPanelList() {
+    const listEl = document.getElementById('widgetsSortList');
+    if (!listEl) return;
+
+    const moveUpText = i18n.widgetsSortMoveUp[currentLang];
+    const moveDownText = i18n.widgetsSortMoveDown[currentLang];
+
+    widgetsSortOrder = normalizeWidgetsSortOrder(widgetsSortOrder);
+    listEl.innerHTML = '';
+
+    widgetsSortOrder.forEach((widgetId, index) => {
+        const row = document.createElement('div');
+        row.className = 'widgets-sort-item';
+        row.dataset.widgetId = widgetId;
+        row.classList.toggle('is-moving', widgetId === widgetsSortMovingWidgetId);
+
+        const name = document.createElement('span');
+        name.className = 'widgets-sort-item-name';
+        name.textContent = getWidgetsSortWidgetLabel(widgetId);
+        name.title = name.textContent;
+
+        const actions = document.createElement('div');
+        actions.className = 'widgets-sort-item-actions';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'widgets-sort-move-btn';
+        upBtn.dataset.direction = 'up';
+        upBtn.innerHTML = '<i class="fas fa-arrow-up" aria-hidden="true"></i>';
+        upBtn.title = moveUpText;
+        upBtn.setAttribute('aria-label', moveUpText);
+        upBtn.disabled = index === 0;
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.className = 'widgets-sort-move-btn';
+        downBtn.dataset.direction = 'down';
+        downBtn.innerHTML = '<i class="fas fa-arrow-down" aria-hidden="true"></i>';
+        downBtn.title = moveDownText;
+        downBtn.setAttribute('aria-label', moveDownText);
+        downBtn.disabled = index === widgetsSortOrder.length - 1;
+
+        actions.appendChild(upBtn);
+        actions.appendChild(downBtn);
+        row.appendChild(name);
+        row.appendChild(actions);
+        listEl.appendChild(row);
+    });
+}
+
+function moveWidgetsSortOrder(widgetId, direction) {
+    const safeId = String(widgetId || '').trim();
+    if (!safeId) return;
+
+    const order = normalizeWidgetsSortOrder(widgetsSortOrder);
+    const index = order.indexOf(safeId);
+    if (index < 0) return;
+
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= order.length) return;
+
+    const temp = order[index];
+    order[index] = order[target];
+    order[target] = temp;
+
+    widgetsSortMovingWidgetId = safeId;
+    if (widgetsSortMoveHighlightTimer) {
+        clearTimeout(widgetsSortMoveHighlightTimer);
+        widgetsSortMoveHighlightTimer = null;
+    }
+
+    writeWidgetsSortOrder(order);
+
+    if (widgetsSmartSortEnabled) {
+        writeWidgetsSmartSortEnabled(false);
+    }
+
+    renderWidgetsSortPanelList();
+    updateWidgetsSmartSortToggleUI(currentView);
+    applyWidgetsSmartSort();
+
+    widgetsSortMoveHighlightTimer = setTimeout(() => {
+        widgetsSortMoveHighlightTimer = null;
+        widgetsSortMovingWidgetId = '';
+        const panel = document.getElementById('widgetsSortPanel');
+        if (panel && !panel.hidden) {
+            renderWidgetsSortPanelList();
+        }
+    }, 1800);
+}
+
+function setWidgetsSortPanelOpen(open) {
+    const panel = document.getElementById('widgetsSortPanel');
+    if (!panel) return;
+
+    const shouldOpen = open === true;
+    panel.hidden = !shouldOpen;
+
+    const infoPanel = document.getElementById('widgetsSortInfoPanel');
+    if (infoPanel) {
+        infoPanel.hidden = true;
+    }
+
+    if (shouldOpen) {
+        const smartSortCheckbox = document.getElementById('widgetsSmartSortCheckbox');
+        if (smartSortCheckbox) {
+            smartSortCheckbox.checked = widgetsSmartSortEnabled;
+        }
+        renderWidgetsSortPanelList();
+    }
+
+    updateWidgetsSmartSortToggleUI(currentView);
+}
+
+function toggleWidgetsSortPanel() {
+    const panel = document.getElementById('widgetsSortPanel');
+    if (!panel) return;
+    setWidgetsSortPanelOpen(panel.hidden === true);
+}
+
+function setWidgetsSortInfoPanelOpen(open) {
+    const panel = document.getElementById('widgetsSortInfoPanel');
+    if (!panel) return;
+
+    const sortPanel = document.getElementById('widgetsSortPanel');
+    if (!sortPanel || sortPanel.hidden) {
+        panel.hidden = true;
+        updateWidgetsSmartSortToggleUI(currentView);
+        return;
+    }
+
+    const shouldOpen = open === true;
+    panel.hidden = !shouldOpen;
+
+    updateWidgetsSmartSortToggleUI(currentView);
+}
+
+function toggleWidgetsSortInfoPanel() {
+    const panel = document.getElementById('widgetsSortInfoPanel');
+    if (!panel) return;
+    setWidgetsSortInfoPanelOpen(panel.hidden === true);
+}
+
+function clearWidgetsSortInfoHoverHideTimer() {
+    if (widgetsSortInfoHoverHideTimer) {
+        clearTimeout(widgetsSortInfoHoverHideTimer);
+        widgetsSortInfoHoverHideTimer = null;
+    }
+}
+
+function scheduleWidgetsSortInfoPanelClose(delay = 90) {
+    clearWidgetsSortInfoHoverHideTimer();
+    widgetsSortInfoHoverHideTimer = setTimeout(() => {
+        widgetsSortInfoHoverHideTimer = null;
+        const infoBtn = document.getElementById('widgetsSmartSortInfoBtn');
+        const infoPanel = document.getElementById('widgetsSortInfoPanel');
+        if (!infoBtn || !infoPanel) return;
+
+        const overButton = infoBtn.matches(':hover');
+        const overPanel = !infoPanel.hidden && infoPanel.matches(':hover');
+        if (overButton || overPanel) return;
+
+        setWidgetsSortInfoPanelOpen(false);
+    }, Math.max(0, delay));
+}
+
+function applyWidgetsSmartSort() {
+    const grid = document.querySelector('#widgetsView .widgets-grid');
+    if (!grid) return;
+
+    const recommendWidget = document.getElementById('widgetsRecommendWidget');
+    if (recommendWidget && recommendWidget.parentElement === grid && grid.firstElementChild !== recommendWidget) {
+        grid.insertBefore(recommendWidget, grid.firstElementChild || null);
+    }
+
+    const now = Date.now();
+    widgetsSortOrder = normalizeWidgetsSortOrder(widgetsSortOrder);
+
+    const entries = widgetsSortOrder
+        .map((id, index) => {
+            const el = document.getElementById(id);
+            if (!el) return null;
+
+            const signal = getWidgetsSmartSortSignal(id);
+            const prevSignal = widgetsSmartSortSignalById[id];
+            const changed = prevSignal != null && prevSignal !== signal.signature;
+            if (changed) {
+                widgetsSmartSortChangedAtById[id] = now;
+            }
+            if (!Number.isFinite(widgetsSmartSortChangedAtById[id])) {
+                widgetsSmartSortChangedAtById[id] = 0;
+            }
+            widgetsSmartSortSignalById[id] = signal.signature;
+
+            return {
+                id,
+                el,
+                baseIndex: index,
+                changed,
+                changedAt: widgetsSmartSortChangedAtById[id],
+                hasData: signal.hasData,
+                activity: signal.activity
+            };
+        })
+        .filter(Boolean);
+
+    if (!entries.length) return;
+
+    if (widgetsSmartSortEnabled) {
+        entries.sort((a, b) => {
+            const aChanged = a.changed ? 1 : 0;
+            const bChanged = b.changed ? 1 : 0;
+            if (aChanged !== bChanged) return bChanged - aChanged;
+            if (a.changedAt !== b.changedAt) return b.changedAt - a.changedAt;
+
+            const aHasData = a.hasData ? 1 : 0;
+            const bHasData = b.hasData ? 1 : 0;
+            if (aHasData !== bHasData) return bHasData - aHasData;
+
+            if (a.activity !== b.activity) return b.activity - a.activity;
+            return a.baseIndex - b.baseIndex;
+        });
+    } else {
+        entries.sort((a, b) => a.baseIndex - b.baseIndex);
+    }
+
+    entries.forEach((entry) => {
+        grid.appendChild(entry.el);
+    });
+}
+
+function updateWidgetsSmartSortToggleUI(view = currentView) {
+    const btn = document.getElementById('widgetsSmartSortToggleBtn');
+    const infoBtn = document.getElementById('widgetsSmartSortInfoBtn');
+    const panel = document.getElementById('widgetsSortPanel');
+    const infoPanel = document.getElementById('widgetsSortInfoPanel');
+    const panelTitle = document.getElementById('widgetsSortPanelTitle');
+    const smartSortCheckboxLabel = document.getElementById('widgetsSmartSortCheckboxLabel');
+    const smartSortCheckbox = document.getElementById('widgetsSmartSortCheckbox');
+    const infoTitle = document.getElementById('widgetsSortInfoPanelTitle');
+    const infoLine1 = document.getElementById('widgetsSortInfoLine1');
+    const infoLine2 = document.getElementById('widgetsSortInfoLine2');
+    const infoLine3 = document.getElementById('widgetsSortInfoLine3');
+
+    if (panelTitle && i18n.widgetsSortPanelTitle) {
+        panelTitle.textContent = i18n.widgetsSortPanelTitle[currentLang];
+    }
+    if (smartSortCheckboxLabel && i18n.widgetsSmartSortToggle) {
+        smartSortCheckboxLabel.textContent = i18n.widgetsSmartSortToggle[currentLang];
+    }
+    if (infoTitle && i18n.widgetsSortInfoPanelTitle) {
+        infoTitle.textContent = i18n.widgetsSortInfoPanelTitle[currentLang];
+    }
+    if (infoLine1 && i18n.widgetsSortInfoLine1) {
+        infoLine1.textContent = i18n.widgetsSortInfoLine1[currentLang];
+    }
+    if (infoLine2 && i18n.widgetsSortInfoLine2) {
+        infoLine2.textContent = i18n.widgetsSortInfoLine2[currentLang];
+    }
+    if (infoLine3 && i18n.widgetsSortInfoLine3) {
+        infoLine3.textContent = i18n.widgetsSortInfoLine3[currentLang];
+    }
+
+    if (!btn) return;
+
+    const pageTitleText = String(document.getElementById('pageTitle')?.textContent || '').trim();
+    const widgetsTitle = String((i18n.sidePanelTitleWidgets && i18n.sidePanelTitleWidgets[currentLang]) || i18n.navWidgets[currentLang] || '').trim();
+
+    let shouldShow = view === 'widgets';
+    if (isSidePanelMode) {
+        shouldShow = shouldShow && pageTitleText === widgetsTitle;
+    }
+
+    btn.classList.toggle('show', shouldShow);
+    btn.style.display = shouldShow ? 'inline-flex' : 'none';
+
+    if (!shouldShow) {
+        if (panel) panel.hidden = true;
+        if (infoPanel) infoPanel.hidden = true;
+        btn.classList.remove('panel-open');
+        if (infoBtn) infoBtn.classList.remove('panel-open');
+        return;
+    }
+
+    if (smartSortCheckbox) {
+        smartSortCheckbox.checked = widgetsSmartSortEnabled;
+    }
+
+    const panelOpen = Boolean(panel && !panel.hidden);
+    const infoPanelOpen = Boolean(infoPanel && !infoPanel.hidden);
+    if (panelOpen) {
+        renderWidgetsSortPanelList();
+    }
+
+    btn.classList.toggle('panel-open', panelOpen);
+    if (infoBtn) {
+        infoBtn.classList.toggle('panel-open', infoPanelOpen);
+    }
+    btn.classList.toggle('smart-enabled', widgetsSmartSortEnabled);
+    btn.setAttribute('aria-pressed', widgetsSmartSortEnabled ? 'true' : 'false');
+
+    const tooltipText = widgetsSmartSortEnabled
+        ? i18n.widgetsSmartSortEnabled[currentLang]
+        : i18n.widgetsSmartSortDisabled[currentLang];
+    btn.title = tooltipText;
+    btn.setAttribute('aria-label', tooltipText);
+
+    if (infoBtn && i18n.widgetsSmartSortInfoBtn) {
+        const infoTooltipText = i18n.widgetsSmartSortInfoBtn[currentLang];
+        infoBtn.title = infoTooltipText;
+        infoBtn.setAttribute('aria-label', infoTooltipText);
     }
 }
 
@@ -6085,6 +6603,7 @@ async function updateWidgetsViewData() {
 
     await recommendTask;
     await otherWidgetsTask;
+    applyWidgetsSmartSort();
 }
 
 function startWidgetsViewRefresh() {
@@ -6134,6 +6653,12 @@ function initWidgetsView() {
     const historyWeekWidget = document.getElementById('widgetsHistoryWeekWidget');
     const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
     const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
+    const widgetsSmartSortToggleBtn = document.getElementById('widgetsSmartSortToggleBtn');
+    const widgetsSmartSortInfoBtn = document.getElementById('widgetsSmartSortInfoBtn');
+    const widgetsSortPanel = document.getElementById('widgetsSortPanel');
+    const widgetsSortInfoPanel = document.getElementById('widgetsSortInfoPanel');
+    const widgetsSmartSortCheckbox = document.getElementById('widgetsSmartSortCheckbox');
+    const widgetsSortList = document.getElementById('widgetsSortList');
 
     if (!trackingWidget && !rankingWidget && !additionsWeekWidget && !historyWeekWidget) {
         return;
@@ -6193,6 +6718,104 @@ function initWidgetsView() {
         });
     }
 
+    if (widgetsSmartSortToggleBtn) {
+        widgetsSmartSortToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleWidgetsSortPanel();
+        });
+    }
+
+    if (widgetsSmartSortInfoBtn) {
+        widgetsSmartSortInfoBtn.addEventListener('mouseenter', () => {
+            clearWidgetsSortInfoHoverHideTimer();
+            setWidgetsSortInfoPanelOpen(true);
+        });
+
+        widgetsSmartSortInfoBtn.addEventListener('mouseleave', () => {
+            scheduleWidgetsSortInfoPanelClose(120);
+        });
+
+        widgetsSmartSortInfoBtn.addEventListener('focus', () => {
+            clearWidgetsSortInfoHoverHideTimer();
+            setWidgetsSortInfoPanelOpen(true);
+        });
+
+        widgetsSmartSortInfoBtn.addEventListener('blur', () => {
+            scheduleWidgetsSortInfoPanelClose(120);
+        });
+    }
+
+    if (widgetsSortPanel) {
+        widgetsSortPanel.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+    }
+
+    if (widgetsSortInfoPanel) {
+        widgetsSortInfoPanel.addEventListener('mouseenter', () => {
+            clearWidgetsSortInfoHoverHideTimer();
+        });
+
+        widgetsSortInfoPanel.addEventListener('mouseleave', () => {
+            scheduleWidgetsSortInfoPanelClose(90);
+        });
+
+        widgetsSortInfoPanel.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+    }
+
+    if (widgetsSmartSortCheckbox) {
+        widgetsSmartSortCheckbox.addEventListener('change', () => {
+            writeWidgetsSmartSortEnabled(Boolean(widgetsSmartSortCheckbox.checked));
+            updateWidgetsSmartSortToggleUI(currentView);
+            applyWidgetsSmartSort();
+        });
+    }
+
+    if (widgetsSortList) {
+        widgetsSortList.addEventListener('click', (e) => {
+            const moveBtn = e.target.closest('.widgets-sort-move-btn');
+            if (!moveBtn || moveBtn.disabled) return;
+            e.stopPropagation();
+
+            const itemRow = moveBtn.closest('.widgets-sort-item');
+            if (!itemRow) return;
+
+            moveWidgetsSortOrder(itemRow.dataset.widgetId, moveBtn.dataset.direction);
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        const panel = document.getElementById('widgetsSortPanel');
+        const infoPanel = document.getElementById('widgetsSortInfoPanel');
+        const toggleBtn = document.getElementById('widgetsSmartSortToggleBtn');
+        const infoBtn = document.getElementById('widgetsSmartSortInfoBtn');
+
+        const clickInSortPanel = Boolean(panel && !panel.hidden && panel.contains(e.target));
+        const clickInInfoPanel = Boolean(infoPanel && !infoPanel.hidden && infoPanel.contains(e.target));
+        const clickSortBtn = Boolean(toggleBtn && toggleBtn.contains(e.target));
+        const clickInfoBtn = Boolean(infoBtn && infoBtn.contains(e.target));
+
+        if (clickInSortPanel || clickInInfoPanel || clickSortBtn || clickInfoBtn) {
+            return;
+        }
+
+        if (panel && !panel.hidden) {
+            setWidgetsSortPanelOpen(false);
+        }
+        if (infoPanel && !infoPanel.hidden) {
+            setWidgetsSortInfoPanelOpen(false);
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        setWidgetsSortPanelOpen(false);
+        setWidgetsSortInfoPanelOpen(false);
+    });
+
+    updateWidgetsSmartSortToggleUI(currentView);
     widgetsViewBound = true;
 }
 
@@ -6200,6 +6823,7 @@ function renderWidgetsView() {
     if (!widgetsViewBound) {
         initWidgetsView();
     }
+    updateWidgetsSmartSortToggleUI(currentView);
     startWidgetsViewRefresh();
 }
 
