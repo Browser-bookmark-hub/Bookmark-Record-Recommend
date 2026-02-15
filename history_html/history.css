@@ -13249,3 +13249,86 @@ html.side-panel-mode .widgets-cards-row .card-due-badge {
     margin-right: auto;
     width: 100%;
 }
+
+/* ==================== 侧边栏：书签记录视图适配优化（不影响HTML页） ==================== */
+html.side-panel-mode .additions-tabs {
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+html.side-panel-mode .additions-tab {
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+html.side-panel-mode #additionsTrackingPanel {
+    margin-top: 14px;
+}
+
+html.side-panel-mode .browsing-sub-tabs {
+    gap: 8px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+html.side-panel-mode .browsing-sub-tab-group {
+    gap: 6px;
+}
+
+html.side-panel-mode .browsing-sub-tab {
+    padding: 5px 12px;
+    font-size: 12px;
+}
+
+html.side-panel-mode .browsing-ranking-header {
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+html.side-panel-mode .ranking-title {
+    font-size: 15px;
+    margin-bottom: 2px;
+}
+
+html.side-panel-mode .ranking-description {
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+html.side-panel-mode .browsing-ranking-filters {
+    gap: 6px;
+}
+
+html.side-panel-mode .ranking-time-filter-btn,
+html.side-panel-mode .time-menu-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+html.side-panel-mode .ranking-sort-btn {
+    padding: 5px 9px;
+    font-size: 12px;
+}
+
+html.side-panel-mode .related-history-list {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    padding: 2px;
+}
+
+html.side-panel-mode .related-history-item {
+    padding: 10px;
+}
+
+html.side-panel-mode .related-history-title {
+    min-height: 30px;
+}
+
+html.side-panel-mode .related-history-url {
+    font-size: 11px;
+}
+
+html.side-panel-mode .related-history-time {
+    font-size: 10px;
+}

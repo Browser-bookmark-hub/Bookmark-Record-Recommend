@@ -553,3 +553,449 @@
 .breathe-animation {
     animation: breathe 1.2s ease-in-out;
 }
+
+/* ==================== 侧边栏：日历导航适配（不影响HTML页） ==================== */
+html.side-panel-mode .calendar-breadcrumb-nav {
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 6px;
+}
+
+html.side-panel-mode .calendar-breadcrumb-nav > div:first-child {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 4px !important;
+}
+
+html.side-panel-mode .calendar-breadcrumb-nav > div:last-child {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px !important;
+}
+
+html.side-panel-mode .breadcrumb-btn {
+    font-size: 13px;
+    padding: 5px 2px;
+}
+
+html.side-panel-mode .breadcrumb-btn i {
+    font-size: 12px;
+}
+
+html.side-panel-mode .breadcrumb-item-wrapper::before {
+    width: 14px;
+    height: 20px;
+}
+
+html.side-panel-mode .breadcrumb-dropdown-trigger {
+    width: 16px;
+    height: 20px;
+    font-size: 10px;
+}
+
+html.side-panel-mode .calendar-action-btn {
+    padding: 6px 9px;
+    font-size: 12px;
+    gap: 4px;
+}
+
+html.side-panel-mode .calendar-action-btn i {
+    font-size: 12px;
+}
+
+/* ==================== 侧边栏：四种视图 + 分栏菜单自适应 ==================== */
+html.side-panel-mode .bookmark-calendar-view .calendar-month-top-section,
+html.side-panel-mode .bookmark-calendar-view [data-calendar-top-section] {
+    gap: 6px !important;
+    align-items: stretch;
+    flex-wrap: nowrap !important;
+    min-width: 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-weeks-column] {
+    min-width: 28px !important;
+    width: 28px !important;
+    padding-right: 3px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-nav-placeholder] {
+    margin-bottom: 6px !important;
+    min-height: 28px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-week-label] {
+    font-size: 10px !important;
+    margin-bottom: 3px !important;
+    padding: 1px 0 !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-weeks-container] {
+    gap: 3px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-week-div] {
+    font-size: 9px !important;
+    border-radius: 3px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-calendar-wrapper] {
+    min-width: 0 !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-calendar-header] {
+    margin-bottom: 6px !important;
+    gap: 4px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-nav-btn {
+    padding: 5px 8px;
+    border-radius: 4px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-nav-btn i {
+    font-size: 11px;
+}
+
+html.side-panel-mode .bookmark-calendar-view #monthViewHeaderTitle {
+    font-size: 13px !important;
+    line-height: 1.15;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-weekday-header],
+html.side-panel-mode .bookmark-calendar-view [data-calendar-grid] {
+    gap: 3px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view [data-weekday-header] > div {
+    padding: 1px 0 !important;
+    font-size: 9px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-day {
+    border-radius: 3px;
+    padding: 2px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-day:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-day > div {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bookmark-calendar-view [data-week-div].week-row-linked-active {
+    background: rgba(33, 150, 243, 0.16) !important;
+    color: var(--accent-primary) !important;
+    box-shadow: inset 0 0 0 1px rgba(33, 150, 243, 0.35);
+}
+
+.bookmark-calendar-view .calendar-day.week-row-linked-active {
+    border-color: var(--accent-primary) !important;
+    background: rgba(33, 150, 243, 0.08) !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-day.week-row-linked-active {
+    background: rgba(33, 150, 243, 0.12) !important;
+}
+
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item {
+    display: grid !important;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas: "icon title time";
+    align-items: center !important;
+    column-gap: 6px;
+    row-gap: 2px;
+    padding: 7px 8px !important;
+    min-width: 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item > .bookmark-favicon {
+    grid-area: icon;
+    margin-top: 0 !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-main {
+    grid-area: title;
+    min-width: 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-title {
+    margin: 0 !important;
+    font-size: 12px !important;
+    line-height: 1.35 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-jump {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin-right: 0 !important;
+    opacity: 0;
+    pointer-events: none;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item:hover .calendar-bookmark-jump,
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-jump:hover {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-time {
+    grid-area: time;
+    margin-top: 0 !important;
+    font-size: 10px !important;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-self: end;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item .jump-to-related-btn {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+}
+
+
+.bookmark-calendar-view .calendar-folder-path {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 4px;
+    overflow: hidden;
+}
+
+.bookmark-calendar-view .calendar-folder-pill {
+    display: inline-block;
+    max-width: 240px;
+    min-width: 0;
+    background: rgba(128, 128, 128, 0.1);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+}
+
+.bookmark-calendar-view .calendar-folder-divider {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-folder-pill {
+    max-width: 130px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-view-container {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 12px 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-day-card {
+    min-height: 94px;
+    padding: 10px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-day-name {
+    font-size: 12px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-day-date {
+    font-size: 20px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-day-count {
+    font-size: 13px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .year-view-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 8px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .month-card {
+    padding: 10px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .month-card-title {
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .month-card-count {
+    font-size: 20px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .month-card-label {
+    font-size: 10px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .day-view-timeline {
+    gap: 10px;
+    margin-top: 12px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .timeline-hours {
+    width: 54px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .timeline-hour {
+    height: 46px;
+    font-size: 11px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-layout {
+    display: grid !important;
+    grid-template-columns: minmax(116px, 136px) minmax(0, 1fr);
+    gap: 10px !important;
+    min-height: 320px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar {
+    width: auto !important;
+    min-width: 0;
+    padding-right: 8px !important;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: 520px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-content {
+    min-width: 0;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-menu-type],
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-num],
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-date-key],
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-hour] {
+    font-size: 12px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-hour] {
+    padding: 5px 8px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-num] + div {
+    margin-left: 8px !important;
+}
+
+@media (max-width: 420px) {
+    html.side-panel-mode .bookmark-calendar-view .calendar-split-layout {
+        grid-template-columns: 1fr;
+    }
+
+    html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar {
+        border-right: none !important;
+        border-bottom: 1px solid var(--border-color);
+        padding-right: 0 !important;
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+        max-height: 220px;
+    }
+
+    html.side-panel-mode .bookmark-calendar-view .week-view-container,
+    html.side-panel-mode .bookmark-calendar-view .year-view-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ==================== 四视图强化：模块大小自适应（HTML + 侧边栏） ==================== */
+.bookmark-calendar-view {
+    --calendar-week-card-min: 148px;
+    --calendar-week-card-gap: 12px;
+    --calendar-week-card-padding: 16px;
+    --calendar-week-card-min-height: 112px;
+
+    --calendar-year-card-min: 142px;
+    --calendar-year-card-gap: 14px;
+    --calendar-year-grid-padding: 12px;
+    --calendar-year-card-padding: 14px;
+
+    --calendar-day-timeline-gap: 20px;
+    --calendar-day-hours-width: 80px;
+    --calendar-day-hour-height: 60px;
+}
+
+.bookmark-calendar-view .week-view-container {
+    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-week-card-min), 1fr));
+    gap: var(--calendar-week-card-gap);
+}
+
+.bookmark-calendar-view .week-day-card {
+    min-height: var(--calendar-week-card-min-height);
+    padding: var(--calendar-week-card-padding);
+}
+
+.bookmark-calendar-view .year-view-grid {
+    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-year-card-min), 1fr));
+    gap: var(--calendar-year-card-gap);
+    padding: var(--calendar-year-grid-padding);
+}
+
+.bookmark-calendar-view .month-card {
+    padding: var(--calendar-year-card-padding);
+}
+
+.bookmark-calendar-view .day-view-timeline {
+    gap: var(--calendar-day-timeline-gap);
+}
+
+.bookmark-calendar-view .timeline-hours {
+    width: var(--calendar-day-hours-width);
+}
+
+.bookmark-calendar-view .timeline-hour {
+    height: var(--calendar-day-hour-height);
+}
+
+html.side-panel-mode .bookmark-calendar-view {
+    --calendar-week-card-min: 122px;
+    --calendar-week-card-gap: 8px;
+    --calendar-week-card-padding: 10px;
+    --calendar-week-card-min-height: 92px;
+
+    --calendar-year-card-min: 122px;
+    --calendar-year-card-gap: 8px;
+    --calendar-year-grid-padding: 8px;
+    --calendar-year-card-padding: 10px;
+
+    --calendar-day-timeline-gap: 10px;
+    --calendar-day-hours-width: 54px;
+    --calendar-day-hour-height: 46px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .week-view-container {
+    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-week-card-min), 1fr));
+}
+
+html.side-panel-mode .bookmark-calendar-view .year-view-grid {
+    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-year-card-min), 1fr));
+}

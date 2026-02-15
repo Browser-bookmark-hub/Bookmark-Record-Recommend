@@ -55,10 +55,39 @@ function tm(index) {
 function formatYearMonth(year, month) {
     // 格式化年月显示 (month是0-11)
     if (typeof i18n === 'undefined' || typeof currentLang === 'undefined') {
-        return `${year}年${month + 1}月`;
+        return year + '年' + (month + 1) + '月';
     }
     const monthName = tm(month);
     return t('calendarYearMonth', year, monthName).replace('{0}', year).replace('{1}', monthName);
+}
+function getCalendarLayoutTokens() {
+    let sidePanelMode = false;
+    try {
+        sidePanelMode = (typeof window !== 'undefined' && window.__SIDE_PANEL_MODE__ === true)
+            || (typeof document !== 'undefined' && document.documentElement && document.documentElement.classList.contains('side-panel-mode'));
+    } catch (_) { }
+
+    if (sidePanelMode) {
+        return {
+            sidePanelMode: true,
+            wrapperPadding: '10px',
+            monthTopGap: '10px',
+            splitGap: '10px',
+            splitMinHeight: '320px',
+            sidebarWidth: '136px',
+            sidebarPaddingRight: '10px'
+        };
+    }
+
+    return {
+        sidePanelMode: false,
+        wrapperPadding: '20px',
+        monthTopGap: '20px',
+        splitGap: '20px',
+        splitMinHeight: '400px',
+        sidebarWidth: '200px',
+        sidebarPaddingRight: '20px'
+    };
 }
 
 function notifyBrowsingCalibrationInteraction(type, payload = {}) {
@@ -431,6 +460,8 @@ class BrowsingHistoryCalendar {
         this.dragStartPos = null; // 拖拽起始位置
         this.dragMinDistance = 10; // 拖拽最小距离(px)
         this.renderDebounceTimer = null; // 防抖定时器
+        this.monthViewResizeObserver = null; // 月视图尺寸联动观察器
+        this.monthViewSyncRafId = null; // 月视图联动同步帧ID
 
         // ✨ 新增：数据库管理器（三库架构）
         this.dbManager = null;
@@ -2114,6 +2145,7 @@ class BrowsingHistoryCalendar {
         if (!container) return;
 
         container.innerHTML = '';
+        this.teardownMonthViewResizeObserver();
 
         switch (this.viewLevel) {
             case 'year':
@@ -2121,9 +2153,14 @@ class BrowsingHistoryCalendar {
                 break;
             case 'month':
                 this.renderMonthView(container);
-                // 月视图完成后，同步左右两侧的高度
+                // 月视图完成后，同步左右两侧高度，并绑定周栏/月格联动
                 requestAnimationFrame(() => {
-                    this.syncMonthViewHeights();
+                    this.syncMonthViewHeights(container);
+                    this.bindMonthViewWeekLinkage(container);
+                    this.setupMonthViewResizeObserver(container);
+                    requestAnimationFrame(() => {
+                        this.syncMonthViewHeights(container);
+                    });
                 });
                 break;
             case 'week':
@@ -2151,8 +2188,11 @@ class BrowsingHistoryCalendar {
     }
 
     // 同步月视图左右两侧的高度对齐
-    syncMonthViewHeights() {
-        const topSection = document.querySelector('[data-calendar-top-section]');
+    syncMonthViewHeights(rootContainer = null) {
+        const root = rootContainer || document.getElementById('browsingCalendarView');
+        if (!root) return;
+
+        const topSection = root.querySelector('[data-calendar-top-section]');
         if (!topSection) return;
 
         const weeksColumn = topSection.querySelector('[data-weeks-column]');
@@ -2186,10 +2226,13 @@ class BrowsingHistoryCalendar {
             const gridRows = weeksContainer.querySelectorAll('[data-week-div]').length;
             weeksContainer.style.height = gridHeight + 'px';
 
-            // 计算gap的总高度
-            const gap = 10; // 与grid的gap一致
+            if (gridRows <= 0) return;
+
+            // 计算gap的总高度（与grid真实gap一致）
+            const computedGridStyle = window.getComputedStyle(grid);
+            const gap = Number.parseFloat(computedGridStyle.rowGap || computedGridStyle.gap || '0') || 0;
             const totalGapHeight = (gridRows - 1) * gap;
-            const availableHeight = gridHeight - totalGapHeight;
+            const availableHeight = Math.max(gridHeight - totalGapHeight, 0);
             const rowHeight = availableHeight / gridRows;
 
             weeksContainer.style.gridTemplateRows = `repeat(${gridRows}, ${rowHeight}px)`;
@@ -2201,16 +2244,121 @@ class BrowsingHistoryCalendar {
         }
     }
 
+    bindMonthViewWeekLinkage(rootContainer = null) {
+        const root = rootContainer || document.getElementById('browsingCalendarView');
+        if (!root) return;
+
+        const topSection = root.querySelector('[data-calendar-top-section]');
+        if (!topSection || topSection.dataset.weekLinkageBound === '1') return;
+
+        const weekItems = Array.from(topSection.querySelectorAll('[data-week-div][data-week-row]'));
+        const dayCells = Array.from(topSection.querySelectorAll('.calendar-day[data-week-row]'));
+        if (!weekItems.length || !dayCells.length) return;
+
+        topSection.dataset.weekLinkageBound = '1';
+
+        const clearLinkedState = () => {
+            weekItems.forEach((item) => item.classList.remove('week-row-linked-active'));
+            dayCells.forEach((cell) => cell.classList.remove('week-row-linked-active'));
+        };
+
+        const highlightWeekRow = (weekRow) => {
+            if (weekRow === undefined || weekRow === null || weekRow === '') {
+                clearLinkedState();
+                return;
+            }
+            clearLinkedState();
+            weekItems.forEach((item) => {
+                if (item.dataset.weekRow === weekRow) {
+                    item.classList.add('week-row-linked-active');
+                }
+            });
+            dayCells.forEach((cell) => {
+                if (cell.dataset.weekRow === weekRow) {
+                    cell.classList.add('week-row-linked-active');
+                }
+            });
+        };
+
+        weekItems.forEach((item) => {
+            const weekRow = item.dataset.weekRow;
+            item.addEventListener('mouseenter', () => highlightWeekRow(weekRow));
+            item.addEventListener('mouseleave', clearLinkedState);
+        });
+
+        dayCells.forEach((cell) => {
+            const weekRow = cell.dataset.weekRow;
+            cell.addEventListener('mouseenter', () => highlightWeekRow(weekRow));
+            cell.addEventListener('mouseleave', clearLinkedState);
+        });
+
+        const todayCell = topSection.querySelector('.calendar-day[data-is-today="true"][data-week-row]');
+        if (todayCell) {
+            highlightWeekRow(todayCell.dataset.weekRow);
+        }
+    }
+
+    setupMonthViewResizeObserver(rootContainer = null) {
+        if (typeof ResizeObserver === 'undefined') return;
+
+        const root = rootContainer || document.getElementById('browsingCalendarView');
+        if (!root) return;
+
+        const topSection = root.querySelector('[data-calendar-top-section]');
+        if (!topSection) return;
+
+        const calendarWrapper = topSection.querySelector('[data-calendar-wrapper]');
+        const grid = topSection.querySelector('[data-calendar-grid]');
+        if (!calendarWrapper || !grid) return;
+
+        this.teardownMonthViewResizeObserver();
+
+        this.monthViewResizeObserver = new ResizeObserver(() => {
+            if (this.viewLevel !== 'month') return;
+            if (this.monthViewSyncRafId) {
+                cancelAnimationFrame(this.monthViewSyncRafId);
+            }
+            this.monthViewSyncRafId = requestAnimationFrame(() => {
+                this.monthViewSyncRafId = null;
+                this.syncMonthViewHeights(root);
+            });
+        });
+
+        this.monthViewResizeObserver.observe(calendarWrapper);
+        this.monthViewResizeObserver.observe(grid);
+    }
+
+    teardownMonthViewResizeObserver() {
+        if (this.monthViewSyncRafId) {
+            cancelAnimationFrame(this.monthViewSyncRafId);
+            this.monthViewSyncRafId = null;
+        }
+        if (this.monthViewResizeObserver) {
+            this.monthViewResizeObserver.disconnect();
+            this.monthViewResizeObserver = null;
+        }
+    }
+
     // ========== 月视图（默认） ==========
 
     renderMonthView(container) {
+        const layout = getCalendarLayoutTokens();
         const wrapper = document.createElement('div');
-        wrapper.style.padding = '20px';
+        wrapper.style.padding = layout.wrapperPadding;
+        wrapper.style.display = 'flex';
+        wrapper.style.flexDirection = 'column';
+        wrapper.style.minWidth = '0';
+        wrapper.style.gap = layout.sidePanelMode ? '16px' : '24px';
 
         // 上方：周数 + 日历
         const topSection = document.createElement('div');
+        topSection.className = 'calendar-month-top-section';
         topSection.style.display = 'flex';
-        topSection.style.gap = '20px';
+        topSection.style.gap = layout.monthTopGap;
+        topSection.style.flexWrap = 'nowrap';
+        topSection.style.alignItems = 'stretch';
+        topSection.style.minWidth = '0';
+        topSection.style.width = '100%';
         topSection.setAttribute('data-calendar-top-section', '');
 
         // 左侧周数
@@ -2294,6 +2442,7 @@ class BrowsingHistoryCalendar {
 
             const weekDiv = document.createElement('div');
             weekDiv.setAttribute('data-week-div', '');
+            weekDiv.dataset.weekRow = String(row);
             weekDiv.style.display = 'flex';
             weekDiv.style.alignItems = 'center';
             weekDiv.style.justifyContent = 'center';
@@ -2328,9 +2477,29 @@ class BrowsingHistoryCalendar {
     }
 
     createMonthCalendar() {
+        const layout = getCalendarLayoutTokens();
         const wrapper = document.createElement('div');
         wrapper.setAttribute('data-calendar-wrapper', '');
-        wrapper.style.flex = '1';
+        wrapper.style.flex = '1 1 0';
+        wrapper.style.minWidth = '0';
+
+        const viewportWidth = (typeof window !== 'undefined' && Number.isFinite(window.innerWidth))
+            ? window.innerWidth
+            : ((typeof document !== 'undefined' && document.documentElement) ? document.documentElement.clientWidth : 0);
+        const ultraCompact = layout.sidePanelMode && viewportWidth > 0 && viewportWidth <= 380;
+
+        const monthTitleFontSize = ultraCompact ? '12px' : (layout.sidePanelMode ? '13px' : '18px');
+        const monthHeaderGap = ultraCompact ? '3px' : (layout.sidePanelMode ? '4px' : '12px');
+        const monthHeaderBottom = ultraCompact ? '6px' : (layout.sidePanelMode ? '8px' : '20px');
+        const monthGridGap = ultraCompact ? '2px' : (layout.sidePanelMode ? '3px' : '10px');
+        const weekdayPadding = ultraCompact ? '1px 0' : (layout.sidePanelMode ? '2px 0' : '8px 0');
+        const dayCellPadding = ultraCompact ? '2px' : (layout.sidePanelMode ? '3px' : '8px');
+        const dayCellRadius = layout.sidePanelMode ? '4px' : '8px';
+        const dayNumberFontSize = ultraCompact ? '11px' : (layout.sidePanelMode ? '12px' : '14px');
+        const dayCountFontSize = ultraCompact ? '8px' : (layout.sidePanelMode ? '9px' : '12px');
+        const dayCountTop = ultraCompact ? '1px' : (layout.sidePanelMode ? '2px' : '4px');
+        const todayHintSize = ultraCompact ? '7px' : (layout.sidePanelMode ? '8px' : '10px');
+        const todayHintInset = ultraCompact ? '1px' : (layout.sidePanelMode ? '2px' : '4px');
 
         // 导航
         const header = document.createElement('div');
@@ -2338,13 +2507,14 @@ class BrowsingHistoryCalendar {
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
-        header.style.marginBottom = '20px';
+        header.style.gap = monthHeaderGap;
+        header.style.marginBottom = monthHeaderBottom;
 
         header.innerHTML = `
             <button class="calendar-nav-btn" id="prevMonth">
                 <i class="fas fa-chevron-left"></i>
             </button>
-            <div style="font-size: 18px; font-weight: 600;" id="monthViewHeaderTitle">
+            <div style="font-size: ${monthTitleFontSize}; font-weight: 600; flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="monthViewHeaderTitle">
                 ${formatYearMonth(this.currentYear, this.currentMonth)}
             </div>
             <button class="calendar-nav-btn" id="nextMonth">
@@ -2352,6 +2522,15 @@ class BrowsingHistoryCalendar {
             </button>
         `;
         wrapper.appendChild(header);
+
+        if (layout.sidePanelMode) {
+            const navButtonPadding = ultraCompact ? '4px 6px' : '5px 8px';
+            const navButtonMinWidth = ultraCompact ? '24px' : '28px';
+            header.querySelectorAll('.calendar-nav-btn').forEach((button) => {
+                button.style.padding = navButtonPadding;
+                button.style.minWidth = navButtonMinWidth;
+            });
+        }
 
         header.querySelector('#prevMonth').addEventListener('click', () => {
             if (this.currentMonth === 0) {
@@ -2381,15 +2560,18 @@ class BrowsingHistoryCalendar {
         weekdayHeader.setAttribute('data-weekday-header', '');
         weekdayHeader.style.display = 'grid';
         weekdayHeader.style.gridTemplateColumns = 'repeat(7, 1fr)';
-        weekdayHeader.style.gap = '10px';
-        weekdayHeader.style.marginBottom = '10px';
+        weekdayHeader.style.gap = monthGridGap;
+        weekdayHeader.style.marginBottom = layout.sidePanelMode ? '6px' : '10px';
 
         for (let i = 0; i < 7; i++) {
             const weekday = document.createElement('div');
             weekday.style.textAlign = 'center';
             weekday.style.fontWeight = '600';
             weekday.style.color = 'var(--text-secondary)';
-            weekday.style.padding = '8px 0';
+            weekday.style.padding = weekdayPadding;
+            if (layout.sidePanelMode) {
+                weekday.style.fontSize = ultraCompact ? '9px' : '10px';
+            }
             const dayIndex = (weekStartDay + i) % 7;
             weekday.textContent = tw(dayIndex);
             weekdayHeader.appendChild(weekday);
@@ -2401,7 +2583,7 @@ class BrowsingHistoryCalendar {
         grid.setAttribute('data-calendar-grid', '');
         grid.style.display = 'grid';
         grid.style.gridTemplateColumns = 'repeat(7, 1fr)';
-        grid.style.gap = '10px';
+        grid.style.gap = monthGridGap;
 
         // 空白格(根据周开始日调整)
         const firstDay = new Date(this.currentYear, this.currentMonth, 1);
@@ -2426,13 +2608,16 @@ class BrowsingHistoryCalendar {
             dayCell.style.aspectRatio = '1';
             dayCell.style.position = 'relative';
             dayCell.style.border = isTodayCell ? '2px solid #2196F3' : '1px solid var(--border-color)';
-            dayCell.style.borderRadius = '8px';
-            dayCell.style.padding = '8px';
+            dayCell.style.borderRadius = dayCellRadius;
+            dayCell.style.padding = dayCellPadding;
             dayCell.style.cursor = 'pointer';
             dayCell.style.background = bookmarks.length > 0 ? 'var(--bg-secondary)' : 'var(--bg-primary)';
             dayCell.style.transition = 'all 0.2s';
+            dayCell.style.minWidth = '0';
+            dayCell.style.overflow = 'hidden';
             dayCell.dataset.dateKey = dateKey;
             dayCell.dataset.isToday = isTodayCell ? 'true' : 'false';
+            dayCell.dataset.weekRow = String(Math.floor((blankCells + day - 1) / 7));
 
             // 勾选模式下的样式
             if (this.selectedDates.has(dateKey)) {
@@ -2441,9 +2626,9 @@ class BrowsingHistoryCalendar {
 
             const countColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
             dayCell.innerHTML = `
-                <div style="font-weight: 600;">${day}</div>
-                ${bookmarks.length > 0 ? `<div style="font-size: 12px; color: ${countColor}; margin-top: 4px;">${t('calendarBookmarkCount', bookmarks.length)}</div>` : ''}
-                ${isTodayCell ? `<div style="position: absolute; bottom: 4px; right: 4px; font-size: 10px; color: #2196F3; font-weight: 600;">${currentLang === 'en' ? 'Today' : '今天'}</div>` : ''}
+                <div style="font-weight: 600; font-size: ${dayNumberFontSize}; line-height: 1.2;">${day}</div>
+                ${bookmarks.length > 0 ? `<div style="font-size: ${dayCountFontSize}; color: ${countColor}; margin-top: ${dayCountTop}; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${t('calendarBookmarkCount', bookmarks.length)}</div>` : ''}
+                ${isTodayCell ? `<div style="position: absolute; bottom: ${todayHintInset}; right: ${todayHintInset}; font-size: ${todayHintSize}; color: #2196F3; font-weight: 600;">${currentLang === 'en' ? 'Today' : '今天'}</div>` : ''}
             `;
 
             // 勾选模式下的事件处理
@@ -2549,8 +2734,10 @@ class BrowsingHistoryCalendar {
     }
 
     createMonthBookmarksList() {
+        const layout = getCalendarLayoutTokens();
         const section = document.createElement('div');
-        section.style.marginTop = '40px';
+        section.style.marginTop = '0';
+        section.style.paddingTop = '0';
 
         // 收集书签，按周分组
         const bookmarksByWeek = new Map(); // week -> [{date, bookmarks}]
@@ -2634,7 +2821,8 @@ class BrowsingHistoryCalendar {
         }
 
         const title = document.createElement('h3');
-        title.style.marginBottom = '20px';
+        title.style.marginTop = '0';
+        title.style.marginBottom = layout.sidePanelMode ? '12px' : '20px';
         // 勾选模式下使用绿色标题
         if (this.selectMode) {
             title.className = 'select-mode-title';
@@ -2646,19 +2834,22 @@ class BrowsingHistoryCalendar {
 
         // 左右分栏布局
         const panelContainer = document.createElement('div');
+            panelContainer.className = 'calendar-split-layout';
         panelContainer.style.display = 'flex';
-        panelContainer.style.gap = '20px';
-        panelContainer.style.minHeight = '400px';
+        panelContainer.style.gap = layout.splitGap;
+        panelContainer.style.minHeight = layout.splitMinHeight;
 
         // 左侧菜单栏
         const sidebar = document.createElement('div');
-        sidebar.style.width = '200px';
+            sidebar.className = 'calendar-split-sidebar';
+        sidebar.style.width = layout.sidebarWidth;
         sidebar.style.flexShrink = '0';
         sidebar.style.borderRight = '1px solid var(--border-color)';
-        sidebar.style.paddingRight = '20px';
+        sidebar.style.paddingRight = layout.sidebarPaddingRight;
 
         // 右侧内容区
         const contentArea = document.createElement('div');
+            contentArea.className = 'calendar-split-content';
         contentArea.style.flex = '1';
         contentArea.style.minWidth = '0';
 
@@ -3391,6 +3582,7 @@ class BrowsingHistoryCalendar {
         }
 
         const item = document.createElement('div');
+        item.className = 'bookmark-item calendar-bookmark-item';
         item.style.display = 'flex';
         item.style.alignItems = 'flex-start';
         item.style.gap = '8px';
@@ -3400,6 +3592,8 @@ class BrowsingHistoryCalendar {
         item.style.marginBottom = '6px';
         item.style.cursor = 'pointer';
         item.style.transition = 'all 0.2s';
+        item.style.minWidth = '0';
+        item.style.position = 'relative';
         item.dataset.bookmarkUrl = bookmark.url;
 
         const time = bookmark.dateAdded.toLocaleTimeString('zh-CN', {
@@ -3430,10 +3624,9 @@ class BrowsingHistoryCalendar {
 
         // 信息区域（只显示标题，移除URL）
         const infoDiv = document.createElement('div');
-        infoDiv.style.flex = '1';
-        infoDiv.style.minWidth = '0';
+        infoDiv.className = 'bookmark-info calendar-bookmark-main';
         infoDiv.innerHTML = `
-            <div style="font-size:13px;font-weight:500;word-break:break-word;line-height:1.4;" title="${this.escapeHtml(bookmark.title)}">
+            <div class="bookmark-title calendar-bookmark-title" title="${this.escapeHtml(bookmark.title)}">
                 ${this.escapeHtml(bookmark.title)}
             </div>
         `;
@@ -3441,7 +3634,7 @@ class BrowsingHistoryCalendar {
 
         // 跳转按钮容器（时间左边）
         const jumpBtnContainer = document.createElement('div');
-        jumpBtnContainer.className = 'jump-to-related-btn-container';
+        jumpBtnContainer.className = 'jump-to-related-btn-container calendar-bookmark-jump';
         jumpBtnContainer.style.display = 'flex';
         jumpBtnContainer.style.alignItems = 'center';
         jumpBtnContainer.style.marginRight = '6px';
@@ -3467,6 +3660,7 @@ class BrowsingHistoryCalendar {
 
         // 时间区域
         const timeDiv = document.createElement('div');
+        timeDiv.className = 'bookmark-time calendar-bookmark-time';
         timeDiv.style.fontSize = '11px';
         timeDiv.style.color = 'var(--text-tertiary)';
         timeDiv.style.whiteSpace = 'nowrap';
@@ -3746,20 +3940,20 @@ class BrowsingHistoryCalendar {
         let pathHTML = '';
         if (level > 1) {
             // 子层级：只显示当前文件夹名称
-            pathHTML = `<span style="display:inline-block;background:rgba(128,128,128,0.1);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;white-space:nowrap;">${this.escapeHtml(title)}</span>`;
+            pathHTML = `<span class="calendar-folder-pill" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>`;
         } else if (path.length > 0) {
             // 顶层：显示完整路径
             pathHTML = path.map(folder =>
-                `<span style="display:inline-block;background:rgba(128,128,128,0.1);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;white-space:nowrap;">${this.escapeHtml(folder)}</span>`
-            ).join('<span style="margin:0 2px;color:var(--text-tertiary);font-size:11px;">/</span>');
+                `<span class="calendar-folder-pill" title="${this.escapeHtml(folder)}">${this.escapeHtml(folder)}</span>`
+            ).join('<span class="calendar-folder-divider">/</span>');
         } else {
-            pathHTML = `<span style="display:inline-block;background:rgba(128,128,128,0.1);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;">${this.escapeHtml(title)}</span>`;
+            pathHTML = `<span class="calendar-folder-pill" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>`;
         }
 
         folderHeader.innerHTML = `
             <i class="fas fa-chevron-down" style="font-size:10px;color:${themeColor};flex-shrink:0;"></i>
             <i class="fas fa-folder" style="color:${themeColor};font-size:12px;flex-shrink:0;"></i>
-            <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;">${pathHTML}</div>
+            <div class="calendar-folder-path">${pathHTML}</div>
             <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${count}</span>
         `;
 
@@ -4067,6 +4261,7 @@ class BrowsingHistoryCalendar {
     // 浏览历史平面列表使用的单个条目（复用逻辑，便于折叠）
     createFlatHistoryBookmarkItem(bookmark) {
         const item = document.createElement('div');
+        item.className = 'bookmark-item calendar-bookmark-item';
         item.style.display = 'flex';
         item.style.alignItems = 'flex-start';
         item.style.gap = '8px';
@@ -4076,6 +4271,8 @@ class BrowsingHistoryCalendar {
         item.style.marginBottom = '6px';
         item.style.cursor = 'pointer';
         item.style.transition = 'all 0.2s';
+        item.style.minWidth = '0';
+        item.style.position = 'relative';
         item.dataset.bookmarkUrl = bookmark.url;
 
         const time = bookmark.dateAdded.toLocaleTimeString('zh-CN', {
@@ -4102,10 +4299,9 @@ class BrowsingHistoryCalendar {
         item.appendChild(faviconImg);
 
         const infoDiv = document.createElement('div');
-        infoDiv.style.flex = '1';
-        infoDiv.style.minWidth = '0';
+        infoDiv.className = 'bookmark-info calendar-bookmark-main';
         infoDiv.innerHTML = `
-            <div style="font-size:13px;font-weight:500;word-break:break-word;line-height:1.4;" title="${this.escapeHtml(bookmark.title)}">
+            <div class="bookmark-title calendar-bookmark-title" title="${this.escapeHtml(bookmark.title)}">
                 ${this.escapeHtml(bookmark.title)}
             </div>
         `;
@@ -4113,7 +4309,7 @@ class BrowsingHistoryCalendar {
 
         // 跳转按钮容器（时间左边）
         const jumpBtnContainer = document.createElement('div');
-        jumpBtnContainer.className = 'jump-to-related-btn-container';
+        jumpBtnContainer.className = 'jump-to-related-btn-container calendar-bookmark-jump';
         jumpBtnContainer.style.display = 'flex';
         jumpBtnContainer.style.alignItems = 'center';
         jumpBtnContainer.style.marginRight = '6px';
@@ -4138,6 +4334,7 @@ class BrowsingHistoryCalendar {
         item.appendChild(jumpBtnContainer);
 
         const timeDiv = document.createElement('div');
+        timeDiv.className = 'bookmark-time calendar-bookmark-time';
         timeDiv.style.fontSize = '11px';
         timeDiv.style.color = 'var(--text-tertiary)';
         timeDiv.style.whiteSpace = 'nowrap';
@@ -4174,8 +4371,9 @@ class BrowsingHistoryCalendar {
     // ========== 周视图 ==========
 
     renderWeekView(container) {
+        const layout = getCalendarLayoutTokens();
         const wrapper = document.createElement('div');
-        wrapper.style.padding = '20px';
+        wrapper.style.padding = layout.wrapperPadding;
 
         // 获取一周开始日(中文:周一=1, 英文:周日=0)
         const weekStartDay = (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? 1 : 0;
@@ -4222,7 +4420,10 @@ class BrowsingHistoryCalendar {
             const isTodayCard = this.isToday(date);
             const dayOfWeek = date.getDay(); // 0-6 (周日到周六)
 
-            if (bookmarks.length > 0) allBookmarks.push({ date, bookmarks });
+            if (bookmarks.length <= 0) {
+                continue;
+            }
+            allBookmarks.push({ date, bookmarks });
 
             const dayCard = document.createElement('div');
             dayCard.className = 'week-day-card';
@@ -4311,6 +4512,15 @@ class BrowsingHistoryCalendar {
             weekContainer.appendChild(dayCard);
         }
 
+        if (allBookmarks.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'calendar-empty-state';
+            emptyState.innerHTML = `<i class="fas fa-calendar-week"></i><p>${currentLang === 'en' ? 'No click records this week' : '本周暂无点击记录'}</p>`;
+            wrapper.appendChild(emptyState);
+            container.appendChild(wrapper);
+            return;
+        }
+
         wrapper.appendChild(weekContainer);
 
         // 勾选模式：在整个周视图容器上监听mousedown，允许单击和拖拽
@@ -4360,19 +4570,22 @@ class BrowsingHistoryCalendar {
 
             // 左右分栏布局
             const panelContainer = document.createElement('div');
+            panelContainer.className = 'calendar-split-layout';
             panelContainer.style.display = 'flex';
-            panelContainer.style.gap = '20px';
-            panelContainer.style.minHeight = '400px';
+            panelContainer.style.gap = layout.splitGap;
+            panelContainer.style.minHeight = layout.splitMinHeight;
 
             // 左侧菜单栏
             const sidebar = document.createElement('div');
-            sidebar.style.width = '200px';
+            sidebar.className = 'calendar-split-sidebar';
+            sidebar.style.width = layout.sidebarWidth;
             sidebar.style.flexShrink = '0';
             sidebar.style.borderRight = '1px solid var(--border-color)';
-            sidebar.style.paddingRight = '20px';
+            sidebar.style.paddingRight = layout.sidebarPaddingRight;
 
             // 右侧内容区
             const contentArea = document.createElement('div');
+            contentArea.className = 'calendar-split-content';
             contentArea.style.flex = '1';
             contentArea.style.minWidth = '0';
 
@@ -4893,8 +5106,9 @@ class BrowsingHistoryCalendar {
     // ========== 日视图 ==========
 
     renderDayView(container) {
+        const layout = getCalendarLayoutTokens();
         const wrapper = document.createElement('div');
-        wrapper.style.padding = '20px';
+        wrapper.style.padding = layout.wrapperPadding;
 
         // 构建标题,如果是今天则添加标注
         const dateTitle = t('calendarYearMonthDay', this.currentDay.getFullYear(), this.currentDay.getMonth() + 1, this.currentDay.getDate());
@@ -4948,17 +5162,20 @@ class BrowsingHistoryCalendar {
 
         // 日视图：左侧「全部 + 时间段」菜单，右侧内容
         const panelContainer = document.createElement('div');
+            panelContainer.className = 'calendar-split-layout';
         panelContainer.style.display = 'flex';
-        panelContainer.style.gap = '20px';
-        panelContainer.style.minHeight = '400px';
+        panelContainer.style.gap = layout.splitGap;
+        panelContainer.style.minHeight = layout.splitMinHeight;
 
         const sidebar = document.createElement('div');
-        sidebar.style.width = '200px';
+            sidebar.className = 'calendar-split-sidebar';
+        sidebar.style.width = layout.sidebarWidth;
         sidebar.style.flexShrink = '0';
         sidebar.style.borderRight = '1px solid var(--border-color)';
-        sidebar.style.paddingRight = '20px';
+        sidebar.style.paddingRight = layout.sidebarPaddingRight;
 
         const contentArea = document.createElement('div');
+            contentArea.className = 'calendar-split-content';
         contentArea.style.flex = '1';
         contentArea.style.minWidth = '0';
 
@@ -5223,8 +5440,9 @@ class BrowsingHistoryCalendar {
     // ========== 年视图 ==========
 
     renderYearView(container) {
+        const layout = getCalendarLayoutTokens();
         const wrapper = document.createElement('div');
-        wrapper.style.padding = '20px';
+        wrapper.style.padding = layout.wrapperPadding;
 
         const header = document.createElement('div');
         header.style.display = 'flex';
@@ -5249,6 +5467,7 @@ class BrowsingHistoryCalendar {
 
         const yearGrid = document.createElement('div');
         yearGrid.className = 'year-view-grid';
+        let hasMonthData = false;
 
         for (let month = 0; month < 12; month++) {
             const daysInMonth = new Date(this.currentYear, month + 1, 0).getDate();
@@ -5258,6 +5477,11 @@ class BrowsingHistoryCalendar {
                 const dateKey = this.getDateKey(new Date(this.currentYear, month, day));
                 count += (this.bookmarksByDate.get(dateKey) || []).length;
             }
+
+            if (count <= 0) {
+                continue;
+            }
+            hasMonthData = true;
 
             const monthCard = document.createElement('div');
             monthCard.className = 'month-card';
@@ -5274,6 +5498,15 @@ class BrowsingHistoryCalendar {
             });
 
             yearGrid.appendChild(monthCard);
+        }
+
+        if (!hasMonthData) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'calendar-empty-state';
+            emptyState.innerHTML = `<i class="fas fa-calendar-alt"></i><p>${currentLang === 'en' ? 'No click records this year' : '本年暂无点击记录'}</p>`;
+            wrapper.appendChild(emptyState);
+            container.appendChild(wrapper);
+            return;
         }
 
         wrapper.appendChild(yearGrid);
