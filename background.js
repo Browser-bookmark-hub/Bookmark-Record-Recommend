@@ -701,7 +701,7 @@ async function resetBrowsingCalibrationState(reason = 'manual') {
     lastCalibrationTime: Date.now()
   };
   await saveBrowsingCalibrationState(nextState);
-  console.log('[Background][Calibration] state reset:', reason);
+
 }
 
 function collectBookmarkUrlsAndTitles(node, urlSet, titleSet, parentPath = [], titleDomainMap = null) {
@@ -918,7 +918,7 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
     records: recordsPayload
   });
 
-  console.log('[Background][Calibration] history cache rebuilt:', reason, 'items:', recordsPayload.length);
+
   return true;
 }
 

@@ -16,7 +16,6 @@ try {
     const saved = localStorage.getItem('historyViewerCustomLang');
     if (saved === 'en' || saved === 'zh_CN') {
         currentLang = saved;
-        // console.log('[History Viewer] Restored language:', currentLang);
     } else {
         currentLang = detectDefaultLang();
     }
@@ -42,13 +41,13 @@ let currentView = (() => {
         const params = new URLSearchParams(window.location.search);
         const viewFromUrl = params.get('view');
         if (viewFromUrl) {
-            console.log('[全局初始化] URL 参数中的视图:', viewFromUrl);
+
             return viewFromUrl;
         }
 
         // 2. 其次尝试从 localStorage 获取
         const saved = localStorage.getItem('lastActiveView');
-        console.log('[全局初始化] localStorage中的视图:', saved);
+
         return saved || DEFAULT_VIEW;
     } catch (e) {
         console.error('[全局初始化] 读取视图失败:', e);
@@ -82,7 +81,7 @@ try {
 
 // 用于标记由拖拽操作处理过的移动，防止 applyIncrementalMoveToTree 重复处理
 window.__dragMoveHandled = window.__dragMoveHandled || new Set();
-console.log('[全局初始化] currentView初始值:', currentView);
+
 let currentTimeFilter = 'all'; // 'all', 'year', 'month', 'day'
 let allBookmarks = [];
 let currentBookmarkData = null;
@@ -395,7 +394,7 @@ async function ensureAdditionsCacheLoaded(skipRender) {
                 .filter(Boolean);
             additionsCacheRestored = true;
             rebuildBookmarkUrlSet();
-            console.log('[AdditionsCache] 已从缓存恢复记录:', allBookmarks.length);
+
             if (!skipRender && currentView === 'additions') {
                 renderAdditionsView();
             }
@@ -418,11 +417,11 @@ async function persistAdditionsCache() {
         }
 
         if (result && result.compact) {
-            console.log('[AdditionsCache] 已降级保存:', `${result.savedBookmarks}/${result.totalBookmarks}`);
+
             return;
         }
 
-        console.log('[AdditionsCache] 已保存:', payload.bookmarks.length);
+
     } catch (error) {
         console.warn('[AdditionsCache] 保存失败:', error);
     }
@@ -541,13 +540,13 @@ function removeUrlFromBookmarkSet(url) {
 }
 
 function scheduleHistoryRefresh({ forceFull = false } = {}) {
-    console.log('[History] 安排刷新，forceFull:', forceFull);
+
     pendingHistoryRefreshForceFull = pendingHistoryRefreshForceFull || forceFull;
     if (pendingHistoryRefreshTimer) {
         clearTimeout(pendingHistoryRefreshTimer);
     }
     pendingHistoryRefreshTimer = setTimeout(() => {
-        console.log('[History] 执行刷新，forceFull:', pendingHistoryRefreshForceFull);
+
         pendingHistoryRefreshTimer = null;
         const shouldForce = pendingHistoryRefreshForceFull;
         pendingHistoryRefreshForceFull = false;
@@ -582,13 +581,13 @@ function getRecommendCardsRefreshDebounceMs(changes = null) {
 
 function handleHistoryVisited(result) {
     if (!result || !result.url) return;
-    console.log('[History] onVisited:', result.url, 'title:', result.title);
+
     scheduleHistoryRefresh({ forceFull: false });
 }
 
 async function handleHistoryVisitRemoved(details) {
     if (!details) return;
-    console.log('[History] onVisitRemoved:', details);
+
 
     const urls = Array.isArray(details.urls) ? details.urls.filter(Boolean) : [];
     if (!details.allHistory && urls.length === 0 && typeof showToast === 'function') {
@@ -621,7 +620,7 @@ function ensureHistoryPolling() {
 
 function setupBrowsingHistoryRealtimeListeners() {
     if (historyRealtimeBound) {
-        console.log('[History] 实时监听器已绑定，跳过');
+
         return;
     }
     if (!browserAPI.history) {
@@ -630,12 +629,12 @@ function setupBrowsingHistoryRealtimeListeners() {
         return;
     }
     if (browserAPI.history.onVisited && typeof browserAPI.history.onVisited.addListener === 'function') {
-        console.log('[History] 绑定 onVisited 监听器');
+
         browserAPI.history.onVisited.addListener(handleHistoryVisited);
         historyRealtimeBound = true;
     }
     if (browserAPI.history.onVisitRemoved && typeof browserAPI.history.onVisitRemoved.addListener === 'function') {
-        console.log('[History] 绑定 onVisitRemoved 监听器');
+
         browserAPI.history.onVisitRemoved.addListener(handleHistoryVisitRemoved);
     }
     if (!historyRealtimeBound) {
@@ -811,7 +810,7 @@ async function saveBrowsingCalibrationSettings(settings) {
         console.warn('[校准设置] 保存失败:', e);
     }
 }
- 
+
 let browsingCalibrationCountTimer = null;
 
 function isBrowsingCalibrationPanelVisible() {
@@ -884,7 +883,7 @@ async function runBrowsingCalibration({ reason = 'manual', showToast: shouldToas
         showToast(msg, 2500);
     }
 
-    console.log('[校准] 完成:', reason);
+
     return true;
 }
 
@@ -2200,7 +2199,7 @@ window.i18n = i18n; // 暴露给其他模块使用
 // =============================================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('历史查看器初始化...');
+
 
     // ========================================================================
     // 【关键步骤 -1】检测是否需要清除 localStorage（"恢复到初始状态"功能触发）
@@ -2211,7 +2210,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         if (resetCheck && resetCheck.needClearLocalStorage === true) {
-            console.log('[初始化] 检测到重置标志，正在清除 localStorage...');
+
 
             // 清除当前页面上下文的所有 localStorage
             localStorage.clear();
@@ -2221,7 +2220,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 browserAPI.storage.local.remove(['needClearLocalStorage'], resolve);
             });
 
-            console.log('[初始化] localStorage 已清除，重置标志已移除');
+
         }
     } catch (error) {
         console.warn('[初始化] 检测重置标志时出错:', error);
@@ -2270,20 +2269,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 优先级：URL参数 > localStorage > 默认值
     if (viewParam && ALLOWED_VIEWS.includes(viewParam)) {
         currentView = viewParam;
-        console.log('[初始化] 从URL参数设置视图:', currentView);
+
         updateViewParamInUrl(currentView);
     } else if (requestedView && ALLOWED_VIEWS.includes(requestedView)) {
         currentView = requestedView;
-        console.log('[初始化] 从后台请求设置视图:', currentView);
+
         updateViewParamInUrl(currentView);
     } else {
         const lastView = localStorage.getItem('lastActiveView');
         if (lastView && ALLOWED_VIEWS.includes(lastView)) {
             currentView = lastView;
-            console.log('[初始化] 从localStorage恢复视图:', currentView);
+
         } else {
             currentView = DEFAULT_VIEW;
-            console.log('[初始化] 使用默认视图:', currentView);
+
         }
         updateViewParamInUrl(currentView);
     }
@@ -2311,7 +2310,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 立即应用视图状态到DOM
     try { window.currentView = currentView; } catch (_) { }
-    console.log('[初始化] >>>立即应用视图状态<<<:', currentView);
+
     document.querySelectorAll('.nav-tab').forEach(tab => {
         if (tab.dataset.view === currentView) {
             tab.classList.add('active');
@@ -2329,7 +2328,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     localStorage.setItem('lastActiveView', currentView);
     updatePageHeaderTitle(currentView);
-    console.log('[初始化] 视图状态已应用完成');
+
 
     // [Search Context Boot] 首次加载时同步 SearchContextManager 的 view/tab/subTab。
     // 这里不能依赖 switchView()，因为初始化阶段是直接改 DOM 来显示视图。
@@ -2350,8 +2349,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ========================================================================
     // 其他初始化
     // ========================================================================
-    console.log('[URL参数] 完整URL:', window.location.href);
-    console.log('[URL参数] viewParam:', viewParam);
+
+
 
     // 加载用户设置
     await loadUserSettings();
@@ -2386,7 +2385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupRealtimeMessageListener();
 
     // 先加载基础数据
-    console.log('[初始化] 加载基础数据...');
+
     if (isSidePanelMode) {
         await ensureAdditionsCacheLoaded(true);
         const hasFastCache = additionsCacheRestored && Array.isArray(allBookmarks) && allBookmarks.length > 0;
@@ -2394,7 +2393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             loadAllData({ skipRender: true }).catch((error) => {
                 console.warn('[初始化] 侧边栏后台刷新失败:', error);
             });
-            console.log('[初始化] 侧边栏快速模式：使用缓存秒开，后台同步数据');
+
         } else {
             await loadAllData();
         }
@@ -2419,7 +2418,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 使用智能等待：尝试渲染，如果数据不完整则等待后重试
     // 初始化时强制刷新缓存，确保显示最新数据
-    console.log('[初始化] 开始渲染当前视图:', currentView);
+
 
     // 根据当前视图渲染
     await renderCurrentView();
@@ -2489,7 +2488,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     Promise.all(preloadTasks).then(() => {
-        console.log('[初始化] 所有资源预加载完成');
+
     }).catch(error => {
         console.error('[初始化] 预加载失败:', error);
     });
@@ -2506,7 +2505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupBrowsingHistoryRealtimeListeners();
     }
 
-    console.log('历史查看器初始化完成');
+
 });
 
 // =============================================================================
@@ -2561,20 +2560,20 @@ async function loadUserSettings() {
             // 优先使用覆盖设置，否则使用主UI设置
             if (hasThemeOverride()) {
                 currentTheme = getThemeOverride() || mainUITheme;
-                console.log('[加载用户设置] 使用History Viewer的主题覆盖:', currentTheme);
+
             } else {
                 currentTheme = mainUITheme;
-                console.log('[加载用户设置] 跟随主UI主题:', currentTheme);
+
             }
 
             if (hasLangOverride()) {
                 currentLang = getLangOverride() || mainUILang;
                 window.currentLang = currentLang; // 同步到 window
-                console.log('[加载用户设置] 使用History Viewer的语言覆盖:', currentLang);
+
             } else {
                 currentLang = mainUILang;
                 window.currentLang = currentLang; // 同步到 window
-                console.log('[加载用户设置] 跟随主UI语言:', currentLang);
+
             }
 
             // 应用主题
@@ -3305,7 +3304,7 @@ function initializeUI() {
     initBrowsingCalibrationMenu();
     updateMainSearchVisibility();
 
-    console.log('[initializeUI] UI事件监听器初始化完成，当前视图:', currentView);
+
 }
 // =============================================================================
 // 数据加载
@@ -3343,7 +3342,7 @@ async function refreshAdditionsDataFromTree(options = {}) {
 
 async function loadAllData(options = {}) {
     const { skipRender = false, forceRefresh = false } = options;
-    console.log('[loadAllData] 开始加载所有数据...');
+
 
     try {
         await ensureAdditionsCacheLoaded(skipRender || currentView !== 'additions');
@@ -3352,25 +3351,21 @@ async function loadAllData(options = {}) {
 
         if (hasCachedBookmarks && !forceRefresh) {
             if (shouldRefreshAdditionsTreeInBackground()) {
-                console.log('[loadAllData] 命中共享缓存，后台刷新书签树...');
+
                 refreshAdditionsDataFromTree({ renderAfter: !skipRender }).catch((e) => {
                     console.warn('[loadAllData] 后台刷新书签树失败:', e);
                 });
             } else {
-                console.log('[loadAllData] 命中共享缓存，侧边栏快速模式：跳过短周期重复刷新');
+
             }
 
-            console.log('[loadAllData] 数据加载完成(缓存):', {
-                书签总数: allBookmarks.length
-            });
+
             return;
         }
 
         await refreshAdditionsDataFromTree({ renderAfter: !skipRender });
 
-        console.log('[loadAllData] 数据加载完成(实时):', {
-            书签总数: allBookmarks.length
-        });
+
 
     } catch (error) {
         console.error('[loadAllData] 加载数据失败:', error);
@@ -3383,16 +3378,16 @@ async function preloadAllViews() {
     if (isPreloading) return;
     isPreloading = true;
 
-    console.log('[预加载] 开始预加载所有视图...');
+
 
     try {
         // 预加载书签树（后台准备）
         if (!cachedBookmarkTree) {
             cachedBookmarkTree = await loadBookmarkTree();
-            console.log('[预加载] 书签树已缓存');
+
         }
 
-        console.log('[预加载] 所有视图数据预加载完成');
+
     } catch (error) {
         console.error('[预加载] 预加载失败:', error);
     } finally {
@@ -3402,7 +3397,7 @@ async function preloadAllViews() {
 
 // 预加载常见网站的图标
 async function preloadCommonIcons() {
-    console.log('[图标预加载] 开始预加载常见图标...');
+
 
     try {
         // 获取当前所有书签的 URL，过滤掉无效的
@@ -3411,7 +3406,7 @@ async function preloadCommonIcons() {
             .filter(url => url && url.trim() && (url.startsWith('http://') || url.startsWith('https://')));
 
         if (urls.length === 0) {
-            console.log('[图标预加载] 没有有效的 URL 需要预加载');
+
             return;
         }
 
@@ -3424,7 +3419,7 @@ async function preloadCommonIcons() {
             await Promise.all(batch.map(url => preloadIcon(url)));
         }
 
-        console.log('[图标预加载] 完成，已预加载', maxPreload, '个图标');
+
     } catch (error) {
         console.error('[图标预加载] 失败:', error);
     }
@@ -3451,7 +3446,7 @@ async function warmupFaviconCache(bookmarkUrls) {
     if (!bookmarkUrls || bookmarkUrls.length === 0) return;
 
     try {
-        console.log('[Favicon预热] 开始预热内存缓存，书签数量:', bookmarkUrls.length);
+
 
         // 初始化 IndexedDB（如果还没初始化）
         if (!FaviconCache.db) {
@@ -3473,7 +3468,7 @@ async function warmupFaviconCache(bookmarkUrls) {
 
         if (domains.size === 0) return;
 
-        console.log('[Favicon预热] 需要预热的域名数:', domains.size);
+
 
         // 批量读取
         const transaction = FaviconCache.db.transaction([FaviconCache.storeName], 'readonly');
@@ -3501,7 +3496,7 @@ async function warmupFaviconCache(bookmarkUrls) {
             }
         }
 
-        console.log('[Favicon预热] 完成，从IndexedDB加载了', loaded, '个favicon到内存');
+
     } catch (error) {
         console.warn('[Favicon预热] 失败:', error);
     }
@@ -3849,7 +3844,7 @@ function stopTimeTrackingWidgetRefresh() {
     if (timeTrackingWidgetInterval) {
         clearInterval(timeTrackingWidgetInterval);
         timeTrackingWidgetInterval = null;
-        console.log('[时间捕捉小组件] 已停止刷新（侧边栏收起）');
+
     }
 }
 
@@ -3922,7 +3917,7 @@ function initTimeTrackingWidget() {
     if (collapseState === 'expanded') {
         startTimeTrackingWidgetRefresh();
     } else {
-        console.log('[时间捕捉小组件] 侧边栏非展开状态，跳过刷新启动:', collapseState);
+
     }
 }
 
@@ -4536,7 +4531,7 @@ function initSidebarToggle() {
         e.stopPropagation();
         const nextState = getNextCycleState(currentState);
         setSidebarState(nextState, { manual: true });
-        console.log('[侧边栏] 状态切换:', nextState);
+
     });
 
     function clearToggleDragSession() {
@@ -4808,7 +4803,7 @@ function initSidebarToggle() {
 // =============================================================================
 
 function switchView(view) {
-    console.log('[switchView] 切换视图到:', view);
+
 
     const previousView = currentView;
 
@@ -4855,7 +4850,7 @@ function switchView(view) {
         }
 
         if (window.SearchContextManager) {
-            // For 'additions', we rely on sub-tab switching to refine context, 
+            // For 'additions', we rely on sub-tab switching to refine context,
             // but we set the main view here.
             window.SearchContextManager.updateContext(view);
         }
@@ -4885,7 +4880,7 @@ function switchView(view) {
 
     // 保存到 localStorage
     localStorage.setItem('lastActiveView', view);
-    console.log('[switchView] 已保存视图到localStorage:', view);
+
 
     try {
         const url = new URL(window.location.href);
@@ -4903,7 +4898,7 @@ function syncViewFromUrl(reason = 'sync') {
         const view = params.get('view');
         if (!view || !isViewAllowed(view)) return;
         if (view === currentView) return;
-        console.log('[ViewSync] from URL ->', view, 'reason:', reason);
+
         switchView(view);
     } catch (_) { }
 }
@@ -6845,7 +6840,7 @@ function renderWidgetsView() {
 let recommendViewInitialized = false;
 
 function renderRecommendView() {
-    console.log('[书签推荐] 渲染推荐视图');
+
 
     // 确保搜索模式显示为“书签推荐”
     try {
@@ -7000,7 +6995,7 @@ function saveSectionOrder() {
         .map(s => s.dataset.sectionId);
 
     browserAPI.storage.local.set({ recommendSectionOrder: order });
-    console.log('[书签推荐] 保存栏目顺序:', order);
+
 }
 
 function restoreSectionOrder() {
@@ -7020,7 +7015,7 @@ function restoreSectionOrder() {
             }
         });
 
-        console.log('[书签推荐] 恢复栏目顺序:', order);
+
     });
 }
 
@@ -7135,10 +7130,10 @@ async function saveFormulaConfig() {
         if (browserAPI.runtime.lastError) {
             console.warn('[书签推荐] 请求background计算S值失败:', browserAPI.runtime.lastError.message);
         } else {
-            console.log('[书签推荐] background计算S值完成:', response?.success);
+
         }
     });
-    console.log('[书签推荐] 保存公式配置，已请求background重新计算S值:', config);
+
 }
 
 function loadFormulaConfig() {
@@ -7155,7 +7150,7 @@ function loadFormulaConfig() {
             document.getElementById('thresholdColdness').value = config.thresholds.coldness;
             document.getElementById('thresholdTimeDegree').value = config.thresholds.shallowRead;
             document.getElementById('thresholdForgetting').value = config.thresholds.forgetting;
-            console.log('[书签推荐] 加载公式配置:', config);
+
         }
     });
 }
@@ -8252,7 +8247,7 @@ function applyPresetMode(mode) {
 
     // 如果已经是目标模式，不触发全量重算
     if (currentRecommendMode === mode) {
-        console.log('[书签推荐] 已是当前模式，跳过重算:', mode);
+
         return;
     }
 
@@ -8318,7 +8313,7 @@ function applyPresetMode(mode) {
     });
 
     const modeNames = { default: '默认', archaeology: '考古', consolidate: '巩固', wander: '漫游', priority: '优先巩固' };
-    console.log(`[书签推荐] 切换到${modeNames[mode] || mode}模式`);
+
 }
 
 function initTrackingToggle() {
@@ -10002,7 +9997,7 @@ async function blockBookmark(bookmarkId) {
         }
 
         await saveBlockedBookmarks(blocked);
-        console.log('[屏蔽] 已屏蔽书签:', targetTitle, '共', blockedCount, '个');
+
         return true;
     } catch (e) {
         console.error('[屏蔽] 屏蔽书签失败:', e);
@@ -10016,7 +10011,7 @@ async function unblockBookmark(bookmarkId) {
         const blocked = await getBlockedBookmarks();
         blocked.bookmarks = blocked.bookmarks.filter(id => id !== bookmarkId);
         await saveBlockedBookmarks(blocked);
-        console.log('[屏蔽] 已恢复书签:', bookmarkId);
+
         // 恢复后触发S值计算（该书签之前没有缓存）
         await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
         return true;
@@ -10151,7 +10146,7 @@ async function postponeBookmark(bookmarkId, delayMs) {
 
         const nextPostponed = await savePostponedBookmarks(postponed);
         await schedulePostponedExpiryRefresh(nextPostponed);
-        console.log('[稍后] 已推迟书签:', bookmarkId, '延迟:', delayMs / 3600000, '小时');
+
         return true;
     } catch (e) {
         console.error('[稍后] 推迟书签失败:', e);
@@ -10168,7 +10163,7 @@ async function cancelPostpone(bookmarkId) {
         postponed = postponed.filter(p => p.bookmarkId !== bookmarkId);
         const nextPostponed = await savePostponedBookmarks(postponed);
         await schedulePostponedExpiryRefresh(nextPostponed);
-        console.log('[稍后] 已取消推迟:', bookmarkId);
+
 
         // 检查取消后是否还有手动添加的待复习
         const hasManualPostponed = nextPostponed.some(p => p.manuallyAdded);
@@ -10176,7 +10171,7 @@ async function cancelPostpone(bookmarkId) {
         // 如果手动待复习从有变无，后续 loadPostponedList 会触发模式切换和全量重算
         // 此时不需要增量更新，避免重复计算
         if (hadManualPostponed && !hasManualPostponed && currentRecommendMode === 'priority') {
-            console.log('[稍后] 待复习将清空，跳过增量更新（后续会全量重算）');
+
         } else {
             // L因子变化，发消息给background.js更新该书签的S值
             browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId });
@@ -10198,7 +10193,7 @@ async function cleanExpiredPostponed() {
         let nextPostponed = postponed;
         if (postponed.length !== before) {
             nextPostponed = await savePostponedBookmarks(postponed);
-            console.log('[稍后] 清理无效待复习记录:', before - nextPostponed.length, '条');
+
         }
         await schedulePostponedExpiryRefresh(nextPostponed);
     } catch (e) {
@@ -10267,7 +10262,7 @@ function showLaterModal(bookmark) {
     }
 
     modal.classList.add('show');
-    console.log('[稍后] 显示弹窗:', bookmark.id, bookmark.title, '推荐间隔:', currentLaterRecommendedDays, '天');
+
 }
 
 function hideLaterModal() {
@@ -10372,7 +10367,7 @@ async function getRefreshSettings() {
 async function saveRefreshSettings(settings) {
     try {
         await browserAPI.storage.local.set({ [RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]: settings });
-        console.log('[刷新设置] 已保存:', settings);
+
     } catch (e) {
         console.error('[刷新设置] 保存失败:', e);
     }
@@ -11191,7 +11186,7 @@ function initTrackingBlockModal() {
     const addDomainBtn = document.getElementById('addTrackingBlockDomainBtn');
     const addBookmarkBtn = document.getElementById('addTrackingBlockBookmarkBtn');
 
-    console.log('[时间追踪屏蔽] 初始化屏蔽管理弹窗, modal:', !!modal, ', blockBtn:', !!blockBtn);
+
 
     if (!modal) {
         console.warn('[时间追踪屏蔽] 弹窗元素未找到');
@@ -11201,11 +11196,11 @@ function initTrackingBlockModal() {
     // 打开弹窗
     if (blockBtn) {
         blockBtn.onclick = async () => {
-            console.log('[时间追踪屏蔽] 点击屏蔽按钮');
+
             await loadTrackingBlockedLists();
             modal.classList.add('show');
         };
-        console.log('[时间追踪屏蔽] 屏蔽按钮事件已绑定');
+
     } else {
         console.warn('[时间追踪屏蔽] 屏蔽按钮元素未找到');
     }
@@ -12545,7 +12540,7 @@ async function confirmAddToPostponed() {
         }
     }
 
-    console.log(`[添加到待复习] 已添加 ${addedCount} 个书签（手动添加，优先级提升）`);
+
 
     // 刷新列表（可能触发模式切换和全量重算）
     // 注意：loadPostponedList 会检测是否需要切换到优先模式，如果切换则会全量重算
@@ -12749,7 +12744,7 @@ async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
 }
 
 async function loadRecommendData() {
-    console.log('[书签推荐] 加载推荐数据');
+
 
     let shouldAutoRefresh = false;
 
@@ -12796,7 +12791,7 @@ async function checkAndIncrementOpenCount(options = {}) {
                     try {
                         const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
                         if (preloadedCount > 0) {
-                            console.log('[自动刷新] 已预加载下一批推荐图标:', preloadedCount);
+
                         }
                     } catch (_) { }
                 }, 0);
@@ -12814,12 +12809,12 @@ async function checkAndIncrementOpenCount(options = {}) {
         // 增加打开次数（按来源分别统计）
         const nextCount = getRefreshOpenCount(settings, source) + 1;
         setRefreshOpenCount(settings, source, nextCount);
-        console.log(`[自动刷新] ${source === 'sidepanel' ? '侧边栏打开' : '页面打开'}次数:`, nextCount);
+
 
         // 检查是否达到刷新条件
         // 1. 每N次打开刷新
         if (settings.refreshEveryNOpens > 0 && nextCount >= settings.refreshEveryNOpens) {
-            console.log('[自动刷新] 达到打开次数阈值，触发刷新');
+
             shouldRefresh = true;
         }
 
@@ -12827,7 +12822,7 @@ async function checkAndIncrementOpenCount(options = {}) {
         if (!shouldRefresh && settings.refreshAfterHours > 0 && settings.lastRefreshTime > 0) {
             const hoursSinceRefresh = (now - settings.lastRefreshTime) / (1000 * 60 * 60);
             if (hoursSinceRefresh >= settings.refreshAfterHours) {
-                console.log('[自动刷新] 超过小时阈值，触发刷新');
+
                 shouldRefresh = true;
             }
         }
@@ -12836,7 +12831,7 @@ async function checkAndIncrementOpenCount(options = {}) {
         if (!shouldRefresh && settings.refreshAfterDays > 0 && settings.lastRefreshTime > 0) {
             const daysSinceRefresh = (now - settings.lastRefreshTime) / (1000 * 60 * 60 * 24);
             if (daysSinceRefresh >= settings.refreshAfterDays) {
-                console.log('[自动刷新] 超过天数阈值，触发刷新');
+
                 shouldRefresh = true;
             }
         }
@@ -12858,7 +12853,7 @@ async function checkAndIncrementOpenCount(options = {}) {
                 try {
                     const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
                     if (preloadedCount > 0) {
-                        console.log('[自动刷新] 已预加载下一批推荐图标:', preloadedCount);
+
                     }
                 } catch (_) { }
             }, 0);
@@ -13089,7 +13084,7 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
         // 点击整个item = 提前复习
         item.onclick = async (e) => {
             if (e.target.closest('.postponed-item-btn')) return;
-            console.log('[提前复习]', bookmark.id, bookmark.title);
+
 
             const openResult = await openInRecommendWindow(bookmark.url);
             if (!openResult || !openResult.success) {
@@ -13422,7 +13417,7 @@ async function saveScoresCache(cache) {
             recommend_scores_cache: cache,
             recommend_scores_time: Date.now()
         });
-        console.log('[缓存] S值缓存已保存:', Object.keys(cache).length, '个书签');
+
     } catch (e) {
         // 检测是否是配额问题
         if (e.message && (e.message.includes('QUOTA') || e.message.includes('quota'))) {
@@ -13434,7 +13429,7 @@ async function saveScoresCache(cache) {
                     recommend_scores_cache: cache,
                     recommend_scores_time: Date.now()
                 });
-                console.log('[缓存] 清理后保存成功');
+
             } catch (e2) {
                 console.error('[缓存] 清理后仍然失败，请手动清理浏览器数据');
                 showStorageFullWarning();
@@ -13458,7 +13453,7 @@ async function cleanupStorageQuota() {
         if (flipped.length > 1000) {
             const trimmed = flipped.slice(-1000);
             await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: trimmed });
-            console.log('[清理] 已翻阅记录从', flipped.length, '条缩减到', trimmed.length, '条');
+
         }
 
         // 2. 清理无效的稍后复习记录（保留到期待复习，直到用户复习/取消）
@@ -13466,7 +13461,7 @@ async function cleanupStorageQuota() {
         const validPostponed = postponed.filter(p => p && p.bookmarkId != null);
         if (validPostponed.length < postponed.length) {
             await savePostponedBookmarks(validPostponed);
-            console.log('[清理] 无效稍后复习记录已清理:', postponed.length - validPostponed.length, '条');
+
         }
 
     } catch (e) {
@@ -13497,7 +13492,7 @@ async function getCachedScore(bookmarkId) {
 // 清除缓存
 async function clearScoresCache() {
     await browserAPI.storage.local.remove(['recommend_scores_cache', 'recommend_scores_time']);
-    console.log('[缓存] 已清除S值缓存');
+
 }
 
 // ===== P1: 缓存机制 =====
@@ -13555,7 +13550,7 @@ async function loadTrackingRankingCache() {
                 }
             }
             trackingRankingCache.loaded = true;
-            console.log('[T值缓存] 已加载综合时间排行:', titleStats.size, '条记录');
+
         }
     } catch (e) {
         console.warn('[T值缓存] 加载失败:', e);
@@ -13670,7 +13665,7 @@ async function getBatchHistoryData() {
             // 更新缓存（URL + 标题，与点击记录一致）
             historyDataCache = { original: originalMap, title: titleMap };
             historyCacheTime = Date.now();
-            console.log('[权重计算] 历史数据已加载:', originalMap.size, '条URL,', titleMap.size, '条标题');
+
             return historyDataCache;
         } catch (e) {
             console.warn('[权重计算] 批量获取历史数据失败:', e);
@@ -13742,7 +13737,7 @@ async function recordReview(bookmarkId) {
             const nextSkipped = normalizeSkippedBookmarkIds(response.skippedIds || []);
             skippedBookmarks = new Set(nextSkipped);
 
-            console.log('[复习] 已记录复习:', normalizedId, '下次间隔:', response.review.interval, '天');
+
             return response.review;
         }
     } catch (_) { }
@@ -13760,7 +13755,7 @@ async function recordReview(bookmarkId) {
                 postponed.filter(p => String(p?.bookmarkId || '') !== normalizedId)
             );
             await schedulePostponedExpiryRefresh(nextPostponed);
-            console.log('[复习] 已移出待复习队列:', normalizedId);
+
         }
 
         // 复习完成后，清除“已跳过”状态（允许后续再次进入推荐）
@@ -13786,7 +13781,7 @@ async function recordReview(bookmarkId) {
         }
 
         await browserAPI.storage.local.set({ recommend_reviews: reviews });
-        console.log('[复习] 已记录复习:', normalizedId, '下次间隔:', reviews[normalizedId].interval, '天');
+
 
         // R因子变化，发消息给background.js更新S值
         browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId: normalizedId });
@@ -13913,7 +13908,7 @@ async function markBookmarkFlipped(bookmarkId) {
     const normalizedId = String(bookmarkId || '').trim();
     if (!normalizedId) return;
 
-    console.log('[翻牌] 标记书签:', normalizedId);
+
 
     let flippedCount = null;
     try {
@@ -13934,12 +13929,12 @@ async function markBookmarkFlipped(bookmarkId) {
         }
         flippedCount = flipped.length;
     }
-    console.log('[翻牌] flippedBookmarks 已更新:', flippedCount, '个');
+
 
     // 记录翻牌时间（用于热力图，写入固定日索引）
     const flipHistoryCount = await appendFlipHistoryRecord(normalizedId, Date.now());
     if (flipHistoryCount >= 0) {
-        console.log('[翻牌] flipHistory 已更新:', flipHistoryCount, '条记录');
+
     }
 
     // 立即刷新热力图
@@ -13980,9 +13975,9 @@ async function refreshRecommendCards(force = false) {
                 ensureRecommendScoresReadyForView(`${currentView || 'unknown'}:${isSidePanelMode ? 'sidepanel' : 'page'}`)
                     .then((readiness) => {
                         if (readiness?.ready) {
-                            console.info('[书签推荐] S值缓存已通过后台快速恢复就绪:', readiness?.mode || 'unknown');
+
                         } else {
-                            console.info('[书签推荐] S值缓存暂未就绪，保持快照展示并等待后台恢复:', readiness?.mode || 'pending');
+
                         }
                     })
                     .catch(() => { })
@@ -14310,13 +14305,7 @@ async function refreshRecommendCards(force = false) {
         }
 
         if (force) {
-            console.log(
-                '[推荐轮换] 池总数:', sortedPool.length,
-                '强制到期数:', forceDuePool.length,
-                '普通池起点:', startIndex,
-                '普通池下一起点:', nextCursor,
-                '游标来源:', shouldRotateByCurrent ? 'derived' : (cursorMeta.source || 'local')
-            );
+
         }
 
         try {
@@ -14363,7 +14352,7 @@ async function refreshRecommendCards(force = false) {
                 await saveRefreshSettings(settings);
                 updateRefreshSettingsStatus(settings);
             }
-            console.log('[刷新] 已更新刷新时间');
+
         }
 
     } catch (error) {
@@ -14489,8 +14478,8 @@ async function loadCurrentTrackingSessions() {
                         `<span class="tracking-expand-icon ${isExpanded ? 'expanded' : ''}" data-group-key="${escapeHtml(groupKey)}">▶</span>` : '';
 
                     html += `
-                        <tr class="tracking-group-header ${isMultiple ? 'has-children' : ''}" 
-                            data-tab-id="${primarySession.tabId}" 
+                        <tr class="tracking-group-header ${isMultiple ? 'has-children' : ''}"
+                            data-tab-id="${primarySession.tabId}"
                             data-bookmark-url="${escapeHtml(primarySession.url)}"
                             data-group-key="${escapeHtml(groupKey)}">
                             <td><span class="tracking-state">${stateIcon}</span></td>
@@ -14543,8 +14532,8 @@ async function loadCurrentTrackingSessions() {
                             const startLabel = currentLang === 'en' ? `Started ${dateTimeStr}` : `开始于 ${dateTimeStr}`;
 
                             html += `
-                                <tr class="tracking-group-child" 
-                                    data-tab-id="${session.tabId}" 
+                                <tr class="tracking-group-child"
+                                    data-tab-id="${session.tabId}"
                                     data-bookmark-url="${escapeHtml(session.url)}"
                                     data-group-key="${escapeHtml(groupKey)}">
                                     <td><span class="tracking-state">${subStateIcon}</span></td>
@@ -15116,7 +15105,7 @@ function renderHeatmap(container, dailyCounts) {
         monthsArray.push(data);
     }
 
-    console.log('[热力图] 月份顺序:', monthsArray.map(m => m.month).join(', '));
+
 
     // 生成 HTML
     let html = `<div class="heatmap-year-view">`;
@@ -15656,7 +15645,7 @@ function showTrackingClearMenu(anchorEl) {
                 try {
                     await browserAPI.runtime.sendMessage({ action: 'clearCurrentTrackingSessions' });
                     await loadCurrentTrackingSessions();
-                    console.log('[时间捕捉] 正在追踪的会话已清除');
+
                 } catch (e) {
                     console.error('[时间捕捉] 清除失败:', e);
                 }
@@ -15674,7 +15663,7 @@ function showTrackingClearMenu(anchorEl) {
                     });
                     if (response && response.success) {
                         const msg = i18n.trackingClearedCount[currentLang].replace('{count}', response.cleared);
-                        console.log('[时间捕捉]', msg);
+
                         await loadActiveTimeRanking();
                     }
                 } catch (e) {
@@ -16071,7 +16060,7 @@ function renderAdditionsView() {
 
     // 【修复】容器已被删除（在UI重构中），直接返回
     if (!container) {
-        console.log('[renderAdditionsView] additionsList容器不存在，跳过渲染');
+
         return;
     }
 
@@ -16312,14 +16301,14 @@ function initBrowsingSubTabs() {
 // 基于浏览器历史记录的“书签点击排行榜”（书签温故第二个子视图）
 function loadBookmarkClickRankingForAdditions(container) {
     if (!container) return;
- 
+
     container.innerHTML = `
         <div class="empty-state">
             <div class="empty-state-icon"><i class="fas fa-clock"></i></div>
             <div class="empty-state-title">${currentLang === 'zh_CN' ? '正在读取历史记录...' : 'Loading history...'}</div>
         </div>
     `;
- 
+
     if (!browserAPI || !browserAPI.history || typeof browserAPI.history.getVisits !== 'function') {
         container.innerHTML = `
             <div class="empty-state">
@@ -16330,7 +16319,7 @@ function loadBookmarkClickRankingForAdditions(container) {
         `;
         return;
     }
- 
+
     if (!Array.isArray(allBookmarks) || allBookmarks.length === 0) {
         container.innerHTML = `
             <div class="empty-state">
@@ -16340,12 +16329,12 @@ function loadBookmarkClickRankingForAdditions(container) {
         `;
         return;
     }
- 
+
     // 仅统计有效的 HTTP/HTTPS 书签，限制数量避免开销过大
     const candidates = allBookmarks
         .filter(b => b.url && (b.url.startsWith('http://') || b.url.startsWith('https://')))
         .slice(0, 150);
- 
+
     if (!candidates.length) {
         container.innerHTML = `
             <div class="empty-state">
@@ -16355,17 +16344,17 @@ function loadBookmarkClickRankingForAdditions(container) {
         `;
         return;
     }
- 
+
     const now = Date.now();
     const oneDay = 24 * 60 * 60 * 1000;
- 
+
     const rankingMap = new Map(); // url -> stats
     let pending = candidates.length;
- 
+
     const finishIfDone = () => {
         pending -= 1;
         if (pending > 0) return;
- 
+
         const items = Array.from(rankingMap.values())
             // 只保留至少有一次访问的
             .filter(item =>
@@ -16377,7 +16366,7 @@ function loadBookmarkClickRankingForAdditions(container) {
                 item.last180d ||
                 item.last365d
             );
- 
+
         if (!items.length) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -16388,17 +16377,17 @@ function loadBookmarkClickRankingForAdditions(container) {
             `;
             return;
         }
- 
+
         // 排序：优先最近 7 天，再看 30 天
         items.sort((a, b) => {
             if (b.last7d !== a.last7d) return b.last7d - a.last7d;
             if (b.last30d !== a.last30d) return b.last30d - a.last30d;
             return (b.last365d || 0) - (a.last365d || 0);
         });
- 
+
         renderBookmarkClickRankingList(container, items.slice(0, 50));
     };
- 
+
     candidates.forEach(bookmark => {
         try {
             browserAPI.history.getVisits({ url: bookmark.url }, (visits) => {
@@ -16407,7 +16396,7 @@ function loadBookmarkClickRankingForAdditions(container) {
                     finishIfDone();
                     return;
                 }
- 
+
                 const key = bookmark.url;
                 let info = rankingMap.get(key);
                 if (!info) {
@@ -16425,16 +16414,16 @@ function loadBookmarkClickRankingForAdditions(container) {
                     };
                     rankingMap.set(key, info);
                 }
- 
+
                 if (Array.isArray(visits)) {
                     visits.forEach(v => {
                         const t = typeof v.visitTime === 'number' ? v.visitTime : 0;
                         if (!t) return;
- 
+
                         if (t > info.lastVisitTime) {
                             info.lastVisitTime = t;
                         }
- 
+
                         const diff = now - t;
                         if (diff <= oneDay) info.last1d += 1;
                         if (diff <= 3 * oneDay) info.last3d += 1;
@@ -16445,7 +16434,7 @@ function loadBookmarkClickRankingForAdditions(container) {
                         if (diff <= 365 * oneDay) info.last365d += 1;
                     });
                 }
- 
+
                 finishIfDone();
             });
         } catch (e) {
@@ -16453,56 +16442,56 @@ function loadBookmarkClickRankingForAdditions(container) {
         }
     });
 }
- 
+
 function renderBookmarkClickRankingList(container, items) {
     container.innerHTML = '';
- 
+
     items.forEach(entry => {
         const row = document.createElement('div');
         row.className = 'addition-item ranking-item';
         row.dataset.url = entry.url;
- 
+
         const icon = document.createElement('img');
         icon.className = 'addition-icon';
         icon.src = getFaviconUrl(entry.url);
         icon.alt = '';
- 
+
         const info = document.createElement('div');
         info.className = 'addition-info';
- 
+
         const titleLink = document.createElement('a');
         titleLink.className = 'addition-title';
         titleLink.href = entry.url;
         titleLink.target = '_blank';
         titleLink.rel = 'noopener noreferrer';
         titleLink.textContent = entry.title;
- 
+
         const urlDiv = document.createElement('div');
         urlDiv.className = 'addition-url';
         urlDiv.textContent = entry.url;
- 
+
         info.appendChild(titleLink);
         info.appendChild(urlDiv);
- 
+
         const counts = document.createElement('div');
         counts.className = 'ranking-counts';
         counts.textContent = currentLang === 'zh_CN'
             ? `7天：${entry.last7d}，30天：${entry.last30d}`
             : `7 days: ${entry.last7d}, 30 days: ${entry.last30d}`;
- 
+
         const header = document.createElement('div');
         header.className = 'ranking-item-header';
         header.appendChild(info);
         header.appendChild(counts);
- 
+
         const detail = document.createElement('div');
         detail.className = 'ranking-detail';
         detail.style.display = 'none';
- 
+
         const lastVisitText = entry.lastVisitTime
             ? new Date(entry.lastVisitTime).toLocaleString()
             : (currentLang === 'zh_CN' ? '无访问记录' : 'No visits');
- 
+
         if (currentLang === 'zh_CN') {
             detail.textContent =
                 `1天：${entry.last1d}，3天：${entry.last3d}，7天：${entry.last7d}，` +
@@ -16514,24 +16503,24 @@ function renderBookmarkClickRankingList(container, items) {
                 `30 days: ${entry.last30d}, 90 days: ${entry.last90d}, 180 days: ${entry.last180d}, 365 days: ${entry.last365d}; ` +
                 `Last visit: ${lastVisitText}`;
         }
- 
+
         row.appendChild(icon);
         row.appendChild(header);
         row.appendChild(detail);
- 
+
         // 整行可点击：展开/收起详细统计，同时打开书签
         row.addEventListener('click', (e) => {
             // 如果直接点击的是标题链接，让浏览器默认打开，不拦截
             if (e.target === titleLink) {
                 return;
             }
- 
+
             e.preventDefault();
- 
+
             // 切换详情可见性
             const visible = detail.style.display === 'block';
             detail.style.display = visible ? 'none' : 'block';
- 
+
             // 打开对应书签
             try {
                 if (browserAPI && browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
@@ -16543,7 +16532,7 @@ function renderBookmarkClickRankingList(container, items) {
                 console.warn('[Additions] 打开书签失败:', err);
             }
         });
- 
+
         container.appendChild(row);
     });
 }
@@ -16959,7 +16948,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
 
             bookmarkItem.innerHTML = `
                 <img class="ranking-favicon" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
-                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;" 
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
                       title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
                 <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
             `;
@@ -17937,7 +17926,7 @@ try {
 } catch (_) { }
 
 document.addEventListener('browsingHistoryCacheUpdated', () => {
-    console.log('[Event] browsingHistoryCacheUpdated 触发，刷新所有浏览记录相关页面');
+
     browsingClickRankingStats = null;
     refreshActiveBrowsingRankingIfVisible();
     refreshBrowsingRelatedHistory(); // 同时刷新书签关联页面
@@ -18197,7 +18186,7 @@ function toggleTheme() {
     try {
         localStorage.setItem('historyViewerHasCustomTheme', 'true');
         localStorage.setItem('historyViewerCustomTheme', currentTheme);
-        console.log('[History Viewer] 设置主题覆盖:', currentTheme);
+
     } catch (e) {
         console.error('[History Viewer] 无法保存主题覆盖:', e);
     }
@@ -18221,7 +18210,7 @@ function toggleLanguage() {
     try {
         localStorage.setItem('historyViewerHasCustomLang', 'true');
         localStorage.setItem('historyViewerCustomLang', currentLang);
-        console.log('[History Viewer] 设置语言覆盖:', currentLang);
+
     } catch (e) {
         console.error('[History Viewer] 无法保存语言覆盖:', e);
     }
@@ -18282,7 +18271,7 @@ function updateLanguageDependentUI() {
         }
     }
 
-    console.log('[toggleLanguage] 已更新UI文字');
+
 }
 
 // =============================================================================
@@ -18363,7 +18352,7 @@ function handleStorageChange(changes, namespace) {
 
     lastStorageChanges = changes;
 
-    console.log('[存储监听] 检测到变化:', Object.keys(changes));
+
 
     // 书签数据变化时，刷新当前视图数据
     if (changes.lastBookmarkData || changes.lastSyncOperations || changes.lastSyncTime) {
@@ -18434,7 +18423,7 @@ function handleStorageChange(changes, namespace) {
     // 主题变化（只在没有覆盖设置时跟随主UI）
     if (changes.currentTheme && !hasThemeOverride()) {
         const newTheme = changes.currentTheme.newValue;
-        console.log('[存储监听] 主题变化，跟随主UI:', newTheme);
+
         currentTheme = newTheme;
         if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
         else document.documentElement.removeAttribute('data-theme');
@@ -18455,7 +18444,7 @@ function handleStorageChange(changes, namespace) {
         const newLang = (changes.preferredLang.newValue === 'zh_CN' || changes.preferredLang.newValue === 'en')
             ? changes.preferredLang.newValue
             : detectDefaultLang();
-        console.log('[存储监听] 语言变化，跟随主UI:', newLang);
+
         currentLang = newLang;
         window.currentLang = currentLang; // 同步到 window
 
@@ -18488,7 +18477,7 @@ function handleStorageChange(changes, namespace) {
 
 function setupBookmarkListener() {
     if (bookmarkListenerRegistered) {
-        console.log('[书签监听] 已注册，跳过重复绑定');
+
         return;
     }
 
@@ -18497,11 +18486,11 @@ function setupBookmarkListener() {
         return;
     }
 
-    console.log('[书签监听] 设置书签API监听器');
+
 
     // 书签创建
     browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
-        console.log('[书签监听] 书签创建:', bookmark.title);
+
         try {
             addBookmarkToAdditionsCache(bookmark);
             // S值计算由background.js的bookmarks.onCreated监听器处理
@@ -18516,7 +18505,7 @@ function setupBookmarkListener() {
 
     // 书签删除
     browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
-        console.log('[书签监听] 书签删除:', id);
+
         try {
             removeBookmarkFromAdditionsCache(id);
             // 从S值缓存中删除该书签
@@ -18539,7 +18528,7 @@ function setupBookmarkListener() {
 
     // 书签修改
     browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
-        console.log('[书签监听] 书签修改:', changeInfo);
+
         try {
             updateBookmarkInAdditionsCache(id, changeInfo);
 
@@ -18549,11 +18538,11 @@ function setupBookmarkListener() {
                 // 因为无法可靠获取修改前的旧URL/标题，直接让缓存重新加载
                 if (trackingRankingCache.loaded) {
                     clearTrackingRankingCache();
-                    console.log('[书签修改] 已清除T值缓存（URL或标题变化）');
+
                 }
                 // 发消息给background.js重新计算该书签的S值
                 browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId: id });
-                console.log('[书签修改] 已请求background更新S值:', id);
+
             }
 
             // 书签URL或标题变化会影响匹配结果，重建最近一年的点击记录
@@ -18566,7 +18555,7 @@ function setupBookmarkListener() {
 
     // 书签移动
     browserAPI.bookmarks.onMoved.addListener(async (id, moveInfo) => {
-        console.log('[书签监听] 书签移动:', id);
+
 
         try {
             moveBookmarkInAdditionsCache(id, moveInfo);
@@ -18615,7 +18604,7 @@ function setupRealtimeMessageListener() {
                     if (message.url) {
                         trackingRankingCache.byUrl.set(message.url, stat);
                     }
-                    console.log('[T值缓存] 增量更新:', message.title || message.url);
+
                 }
 
                 // T值变化后，发消息给background.js触发S值增量更新
@@ -18641,10 +18630,10 @@ function setupRealtimeMessageListener() {
             }
         } else if (message.action === 'clearLocalStorage') {
             // 收到来自 background.js 的清除 localStorage 请求（"恢复到初始状态"功能）
-            console.log('[history.js] 收到清除 localStorage 请求');
+
             try {
                 localStorage.clear();
-                console.log('[history.js] localStorage 已清除');
+
             } catch (e) {
                 console.warn('[history.js] 清除 localStorage 失败:', e);
             }
@@ -18980,7 +18969,7 @@ async function loadBrowsingRelatedHistory(range = 'day') {
 
         // 确保「点击记录」日历已初始化
         if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-            console.log('[BrowsingRelated] 初始化日历...');
+
             initBrowsingHistoryCalendar();
         }
 
@@ -18991,7 +18980,7 @@ async function loadBrowsingRelatedHistory(range = 'day') {
             while (Date.now() - start < timeout) {
                 const inst = window.browsingHistoryCalendarInstance;
                 if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-                    console.log('[BrowsingRelated] 日历数据已加载，记录数:', inst.bookmarksByDate.size);
+
                     return inst;
                 }
                 await new Promise(resolve => setTimeout(resolve, 200));
@@ -19094,19 +19083,19 @@ async function loadBrowsingRelatedHistory(range = 'day') {
 
         // 优先使用 DatabaseManager 获取书签信息（最准确）
         if (calendar && calendar.dbManager) {
-            console.log('[BrowsingRelated] 从DatabaseManager获取书签集合');
+
             const bookmarkDB = calendar.dbManager.getBookmarksDB();
             if (bookmarkDB) {
                 bookmarkUrls = bookmarkDB.getAllUrls();
                 bookmarkTitles = bookmarkDB.getAllTitles();
-                console.log('[BrowsingRelated] DatabaseManager书签集合 - URL:', bookmarkUrls.size, 'Title:', bookmarkTitles.size);
+
             } else {
                 // 回退到日历数据
                 bookmarkUrls = new Set();
                 bookmarkTitles = new Set();
             }
         } else if (calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
-            console.log('[BrowsingRelated] 从日历提取书签集合');
+
             // 从日历实例中提取书签URL和标题集合
             bookmarkUrls = new Set();
             bookmarkTitles = new Set();
@@ -19117,14 +19106,14 @@ async function loadBrowsingRelatedHistory(range = 'day') {
                     if (record.title && record.title.trim()) bookmarkTitles.add(record.title.trim());
                 });
             }
-            console.log('[BrowsingRelated] 日历书签集合 - URL:', bookmarkUrls.size, 'Title:', bookmarkTitles.size);
+
         } else {
-            console.log('[BrowsingRelated] 使用降级方案获取书签');
+
             // 降级方案：直接获取书签库
             const result = await getBookmarkUrlsAndTitles();
             bookmarkUrls = result.urls;
             bookmarkTitles = result.titles;
-            console.log('[BrowsingRelated] 降级方案书签集合 - URL:', bookmarkUrls.size, 'Title:', bookmarkTitles.size);
+
         }
 
         // 按当前排序方式排序（使用展开后的记录）
@@ -21595,7 +21584,7 @@ function showBackButton() {
     const existingBtn = document.getElementById('jumpBackBtn');
     if (existingBtn) existingBtn.remove();
 
-    console.log('[showBackButton] 显示返回按钮, jumpSourceInfo:', jumpSourceInfo);
+
 
     const btn = document.createElement('button');
     btn.id = 'jumpBackBtn';
@@ -21606,7 +21595,7 @@ function showBackButton() {
     btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        console.log('[showBackButton] 点击返回按钮');
+
         goBackToSource();
     });
 
@@ -21638,7 +21627,7 @@ async function goBackToSource() {
     }
 
     const { type, url, scrollTop } = jumpSourceInfo;
-    console.log('[goBackToSource] 返回:', type, url);
+
 
     // 先隐藏返回按钮
     const btn = document.getElementById('jumpBackBtn');
@@ -21652,7 +21641,7 @@ async function goBackToSource() {
         const historyTab = document.getElementById('browsingTabHistory');
         if (historyTab) {
             historyTab.click();
-            console.log('[goBackToSource] 已切换到点击记录');
+
         }
 
         // 恢复滚动位置并高亮
@@ -21669,7 +21658,7 @@ async function goBackToSource() {
         const reviewTab = document.getElementById('additionsTabReview');
         if (reviewTab) {
             reviewTab.click();
-            console.log('[goBackToSource] 已切换到书签添加记录');
+
         }
 
         // 恢复滚动位置并高亮
@@ -21686,7 +21675,7 @@ async function goBackToSource() {
         const rankingTab = document.getElementById('browsingTabRanking');
         if (rankingTab) {
             rankingTab.click();
-            console.log('[goBackToSource] 已切换到点击排行');
+
         }
 
         // 恢复滚动位置并高亮
@@ -21711,14 +21700,14 @@ function highlightSourceBookmark(url) {
 
     // 查找所有匹配URL的书签项
     const items = contentArea.querySelectorAll('[data-bookmark-url]');
-    console.log('[highlightSourceBookmark] 查找书签:', url, '找到', items.length, '个书签项');
+
 
     let found = false;
 
     items.forEach(item => {
         if (item.dataset.bookmarkUrl === url && !found) {
             found = true;
-            console.log('[highlightSourceBookmark] 找到匹配书签，添加高亮');
+
             item.classList.add('highlight-source');
             item.scrollIntoView({ behavior: 'instant', block: 'center' });
 
@@ -21744,7 +21733,7 @@ function highlightSourceRankingItem(url) {
 
     // 查找所有排行项
     const items = listContainer.querySelectorAll('.ranking-item');
-    console.log('[highlightSourceRankingItem] 查找排行项:', url, '找到', items.length, '个项目');
+
 
     let found = false;
 
@@ -21753,7 +21742,7 @@ function highlightSourceRankingItem(url) {
         const jumpBtn = item.querySelector('.jump-to-related-btn');
         if (jumpBtn && jumpBtn.dataset.url === url && !found) {
             found = true;
-            console.log('[highlightSourceRankingItem] 找到匹配排行项，添加高亮');
+
             item.classList.add('highlight-source');
             item.scrollIntoView({ behavior: 'instant', block: 'center' });
 
