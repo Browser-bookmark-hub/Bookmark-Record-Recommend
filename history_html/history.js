@@ -2049,6 +2049,9 @@ const i18n = {pageTitle: {
     },cardLaterTitle: {
         'zh_CN': '待复习',
         'en': 'To Review'
+    },cardSkipTitle: {
+        'zh_CN': '跳过',
+        'en': 'Skip'
     },addTabFolder: {
         'zh_CN': '从文件夹',
         'en': 'From folder'
@@ -3149,7 +3152,15 @@ function applyLanguage() {
     if (addPostponedConfirmBtn) addPostponedConfirmBtn.textContent = i18n.addPostponedConfirmText[currentLang];
 
     document.querySelectorAll('.card-btn-later').forEach(btn => {
-        btn.title = i18n.cardLaterTitle[currentLang];
+        const title = i18n.cardLaterTitle[currentLang];
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+    });
+
+    document.querySelectorAll('.card-btn-skip').forEach(btn => {
+        const title = i18n.cardSkipTitle[currentLang];
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
     });
 
     const blockManageTitle = document.getElementById('blockManageTitle');
