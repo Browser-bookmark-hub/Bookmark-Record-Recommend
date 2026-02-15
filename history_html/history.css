@@ -213,6 +213,17 @@ body {
     margin-left: 2px;
 }
 
+.widgets-sort-anchor {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+}
+
+.widgets-sort-anchor .widgets-smart-sort-toggle {
+    margin-left: 0;
+}
+
 .widgets-smart-sort-toggle.show {
     display: inline-flex !important;
 }
@@ -230,7 +241,8 @@ body {
 .widgets-sort-panel {
     position: absolute;
     top: calc(100% + 8px);
-    left: 0;
+    right: 0;
+    left: auto;
     z-index: 220;
     width: 236px;
     padding: 10px;
@@ -831,6 +843,10 @@ html.side-panel-mode .search-container:not(.side-panel-search-expanded) .search-
 
 html.side-panel-mode .search-container.side-panel-search-expanded+.tool-buttons {
     max-width: 0;
+    width: 0;
+    min-width: 0;
+    flex-basis: 0;
+    overflow: hidden;
     opacity: 0;
     pointer-events: none;
     transform: translateX(8px);

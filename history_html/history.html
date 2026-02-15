@@ -31,28 +31,6 @@
         <div class="header-left">
             <div class="header-title-row">
                 <h1 id="pageTitle">书签记录 &amp; 推荐</h1>
-                <button id="widgetsSmartSortToggleBtn" class="tool-btn widgets-smart-sort-toggle" type="button" aria-pressed="true" title="智能排序：开启">
-                    <i class="fas fa-sort-amount-down"></i>
-                </button>
-                <div id="widgetsSortPanel" class="widgets-sort-panel" hidden>
-                    <div class="widgets-sort-panel-title" id="widgetsSortPanelTitle">小组件排序</div>
-                    <div class="widgets-sort-smart-row">
-                        <label class="widgets-sort-smart-label" for="widgetsSmartSortCheckbox">
-                            <input id="widgetsSmartSortCheckbox" type="checkbox" checked>
-                            <span id="widgetsSmartSortCheckboxLabel">智能排序</span>
-                        </label>
-                        <button id="widgetsSmartSortInfoBtn" class="widgets-sort-inline-info-btn" type="button" title="智能排序说明" aria-label="智能排序说明">
-                            <i class="fas fa-info-circle"></i>
-                        </button>
-                        <div id="widgetsSortInfoPanel" class="widgets-sort-info-panel" hidden>
-                            <div class="widgets-sort-info-title" id="widgetsSortInfoPanelTitle">智能排序说明</div>
-                            <div class="widgets-sort-info-line" id="widgetsSortInfoLine1">书签推荐固定在最上方。</div>
-                            <div class="widgets-sort-info-line" id="widgetsSortInfoLine2">其余小组件会根据数据变化自动上浮。</div>
-                            <div class="widgets-sort-info-line" id="widgetsSortInfoLine3">关闭智能排序后，顺序按手动排序结果展示。</div>
-                        </div>
-                    </div>
-                    <div class="widgets-sort-list" id="widgetsSortList"></div>
-                </div>
             </div>
         </div>
         <div class="header-right">
@@ -81,6 +59,31 @@
                     <i class="fas fa-expand"></i>
                     <span class="btn-tooltip" id="openHistoryPageTooltip"></span>
                 </button>
+
+                <div class="widgets-sort-anchor">
+                    <button id="widgetsSmartSortToggleBtn" class="tool-btn widgets-smart-sort-toggle" type="button" aria-pressed="true" title="智能排序：开启">
+                        <i class="fas fa-sort-amount-down"></i>
+                    </button>
+                    <div id="widgetsSortPanel" class="widgets-sort-panel" hidden>
+                        <div class="widgets-sort-panel-title" id="widgetsSortPanelTitle">小组件排序</div>
+                        <div class="widgets-sort-smart-row">
+                            <label class="widgets-sort-smart-label" for="widgetsSmartSortCheckbox">
+                                <input id="widgetsSmartSortCheckbox" type="checkbox" checked>
+                                <span id="widgetsSmartSortCheckboxLabel">智能排序</span>
+                            </label>
+                            <button id="widgetsSmartSortInfoBtn" class="widgets-sort-inline-info-btn" type="button" title="智能排序说明" aria-label="智能排序说明">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <div id="widgetsSortInfoPanel" class="widgets-sort-info-panel" hidden>
+                                <div class="widgets-sort-info-title" id="widgetsSortInfoPanelTitle">智能排序说明</div>
+                                <div class="widgets-sort-info-line" id="widgetsSortInfoLine1">书签推荐固定在最上方。</div>
+                                <div class="widgets-sort-info-line" id="widgetsSortInfoLine2">其余小组件会根据数据变化自动上浮。</div>
+                                <div class="widgets-sort-info-line" id="widgetsSortInfoLine3">关闭智能排序后，顺序按手动排序结果展示。</div>
+                            </div>
+                        </div>
+                        <div class="widgets-sort-list" id="widgetsSortList"></div>
+                    </div>
+                </div>
 
                 <!-- 统一设置按钮 -->
                 <button id="settingsToggle" class="tool-btn settings-btn" aria-label="Settings" type="button">
