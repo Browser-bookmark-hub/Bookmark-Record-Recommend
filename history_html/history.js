@@ -1492,14 +1492,14 @@ const i18n = {pageTitle: {
         'zh_CN': '书签推荐',
         'en': 'Bookmark Recommend'
     },widgetsAdditionsWeekWidgetTitle: {
-        'zh_CN': '书签添加记录（周）',
-        'en': 'Bookmark Additions (Week)'
+        'zh_CN': '书签添加记录',
+        'en': 'Bookmark Additions'
     },widgetsAdditionsWeekWidgetEmpty: {
         'zh_CN': '暂无本周书签添加记录',
         'en': 'No additions this week'
     },widgetsHistoryWeekWidgetTitle: {
-        'zh_CN': '点击记录（周）',
-        'en': 'Click History (Week)'
+        'zh_CN': '点击记录',
+        'en': 'Click History'
     },widgetsHistoryWeekWidgetEmpty: {
         'zh_CN': '暂无本周点击记录',
         'en': 'No clicks this week'
@@ -3791,7 +3791,11 @@ function startTimeTrackingWidgetRefresh() {
         clearInterval(timeTrackingWidgetInterval);
     }
     updateTimeTrackingWidget();
-    timeTrackingWidgetInterval = setInterval(updateTimeTrackingWidget, 1000);  // 1秒刷新，更实时
+    timeTrackingWidgetInterval = setInterval(() => {
+        if (document.body.classList.contains('sidebar-resizing')) return;
+        if (document.documentElement.classList.contains('layout-resizing')) return;
+        updateTimeTrackingWidget();
+    }, 1000);  // 1秒刷新，更实时
 }
 
 function stopTimeTrackingWidgetRefresh() {
@@ -3933,6 +3937,12 @@ function initSidebarToggle() {
     let resizeDragSession = null;
     let suppressToggleClick = false;
     let autoResizeDebounceTimer = null;
+    const LAYOUT_RESIZE_ACTIVE_CLASS = 'layout-resizing';
+    const LAYOUT_RESIZE_CLASS_CLEAR_DELAY_MS = 140;
+    let resizeMoveRafId = null;
+    let resizePendingClientX = null;
+    let windowResizeRafId = null;
+    let layoutResizeClassTimer = null;
 
     let toggleHintUp = null;
     let toggleHintDown = null;
@@ -3940,6 +3950,23 @@ function initSidebarToggle() {
     let toggleHintHoldTimer = null;
     let toggleHoldVisualActive = false;
     let toggleDragGuideDirection = null;
+
+    function setLayoutResizingClass(active) {
+        const root = document.documentElement;
+        if (!root) return;
+        root.classList.toggle(LAYOUT_RESIZE_ACTIVE_CLASS, active === true);
+    }
+
+    function markLayoutResizingActive() {
+        setLayoutResizingClass(true);
+        if (layoutResizeClassTimer != null) {
+            window.clearTimeout(layoutResizeClassTimer);
+        }
+        layoutResizeClassTimer = window.setTimeout(() => {
+            layoutResizeClassTimer = null;
+            setLayoutResizingClass(false);
+        }, LAYOUT_RESIZE_CLASS_CLEAR_DELAY_MS);
+    }
 
     function clamp(value, min, max) {
         return Math.min(max, Math.max(min, value));
@@ -4566,6 +4593,13 @@ function initSidebarToggle() {
                 resizeHandle.releasePointerCapture(pointerId);
             }
         } catch (_) { }
+
+        if (resizeMoveRafId != null) {
+            try { window.cancelAnimationFrame(resizeMoveRafId); } catch (_) { }
+            resizeMoveRafId = null;
+        }
+        resizePendingClientX = null;
+
         resizeDragSession = null;
         sidebar.classList.remove('is-resizing');
         document.body.classList.remove('sidebar-resizing');
@@ -4573,6 +4607,37 @@ function initSidebarToggle() {
 
     function widthFromDragDelta(startWidth, dx) {
         return sidebarPosition === 'right' ? startWidth - dx : startWidth + dx;
+    }
+
+    function applyResizeDragPreview(clientX) {
+        if (!resizeDragSession) return;
+
+        const dx = clientX - resizeDragSession.startX;
+        if (!resizeDragSession.moved && Math.abs(dx) > 1) {
+            resizeDragSession.moved = true;
+        }
+
+        const rawWidth = widthFromDragDelta(resizeDragSession.startWidth, dx);
+        if (rawWidth <= SIDEBAR_RESIZE_COMPACT_THRESHOLD) {
+            if (resizeDragSession.previewState !== 'compact' || currentState !== 'compact') {
+                currentState = applySidebarState('compact');
+            }
+            resizeDragSession.previewState = 'compact';
+            markLayoutResizingActive();
+            syncSidebarWidth();
+            return;
+        }
+
+        const safeWidth = setExpandedWidth(sidebarPosition, rawWidth, { persist: false, apply: false });
+        if (resizeDragSession.previewState !== 'expanded' || currentState !== 'expanded') {
+            currentState = applySidebarState('expanded');
+        }
+        sidebar.style.width = `${safeWidth}px`;
+        document.documentElement.style.setProperty('--sidebar-expanded-width', `${safeWidth}px`);
+        resizeDragSession.previewState = 'expanded';
+        resizeDragSession.previewWidth = safeWidth;
+        markLayoutResizingActive();
+        syncSidebarWidth();
     }
 
     if (resizeHandle) {
@@ -4600,42 +4665,43 @@ function initSidebarToggle() {
                 resizeHandle.setPointerCapture(event.pointerId);
             } catch (_) { }
 
+            markLayoutResizingActive();
             event.preventDefault();
         });
 
         resizeHandle.addEventListener('pointermove', (event) => {
             if (!resizeDragSession || event.pointerId !== resizeDragSession.pointerId) return;
 
-            const dx = event.clientX - resizeDragSession.startX;
-            if (!resizeDragSession.moved && Math.abs(dx) > 1) {
-                resizeDragSession.moved = true;
-            }
+            resizePendingClientX = event.clientX;
+            if (resizeMoveRafId != null) return;
 
-            const rawWidth = widthFromDragDelta(resizeDragSession.startWidth, dx);
-            if (rawWidth <= SIDEBAR_RESIZE_COMPACT_THRESHOLD) {
-                currentState = applySidebarState('compact');
-                resizeDragSession.previewState = 'compact';
-                syncSidebarWidth();
-                return;
-            }
-
-            const safeWidth = setExpandedWidth(sidebarPosition, rawWidth, { persist: false, apply: false });
-            currentState = applySidebarState('expanded');
-            sidebar.style.width = `${safeWidth}px`;
-            document.documentElement.style.setProperty('--sidebar-expanded-width', `${safeWidth}px`);
-            resizeDragSession.previewState = 'expanded';
-            resizeDragSession.previewWidth = safeWidth;
-            syncSidebarWidth();
+            resizeMoveRafId = window.requestAnimationFrame(() => {
+                resizeMoveRafId = null;
+                const pendingClientX = resizePendingClientX;
+                resizePendingClientX = null;
+                if (!resizeDragSession || !Number.isFinite(pendingClientX)) return;
+                applyResizeDragPreview(pendingClientX);
+            });
         });
 
         function finishResizeDrag(event, canceled) {
             if (!resizeDragSession || event.pointerId !== resizeDragSession.pointerId) return;
+
+            if (resizeMoveRafId != null) {
+                try { window.cancelAnimationFrame(resizeMoveRafId); } catch (_) { }
+                resizeMoveRafId = null;
+            }
+            if (Number.isFinite(resizePendingClientX)) {
+                applyResizeDragPreview(resizePendingClientX);
+                resizePendingClientX = null;
+            }
 
             const moved = resizeDragSession.moved;
             const previewState = resizeDragSession.previewState;
             const previewWidth = resizeDragSession.previewWidth;
 
             clearResizeDragSession();
+            markLayoutResizingActive();
 
             if (!moved || canceled) {
                 currentState = applySidebarState(currentState);
@@ -4660,10 +4726,16 @@ function initSidebarToggle() {
     }
 
     window.addEventListener('resize', () => {
-        setToggleTopRatio(toggleTopRatio, { persist: false });
-        syncSidebarWidth();
-        updateWidgetToggleBtn();
+        markLayoutResizingActive();
         scheduleAutoStateOnResize();
+
+        if (windowResizeRafId != null) return;
+        windowResizeRafId = window.requestAnimationFrame(() => {
+            windowResizeRafId = null;
+            setToggleTopRatio(toggleTopRatio, { persist: false });
+            syncSidebarWidth();
+            updateWidgetToggleBtn();
+        });
     });
 
     try {
@@ -4823,6 +4895,9 @@ let widgetsViewRefreshInterval = null;
 let lastWidgetsRecommendCardSignature = '';
 let widgetsRecommendBootstrapAttempted = false;
 let widgetsRelatedFolderDepth = 'level1';
+let widgetsRelatedPrimaryRange = 'day';
+let widgetsRelatedSecondaryAvailable = true;
+let widgetsRelatedActiveSecondaryKey = '';
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
 
 function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = currentLang) {
@@ -4865,6 +4940,14 @@ function normalizeWidgetsRelatedDepth(mode) {
     return mode === 'level2' ? 'level2' : 'level1';
 }
 
+function normalizeWidgetsRelatedRange(range) {
+    const safe = String(range || '').toLowerCase();
+    if (safe === 'day' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'day';
+}
+
 function readWidgetsRelatedFolderDepth() {
     try {
         return normalizeWidgetsRelatedDepth(localStorage.getItem('widgetsRelatedFolderDepth') || 'level1');
@@ -4873,20 +4956,58 @@ function readWidgetsRelatedFolderDepth() {
     }
 }
 
-function setWidgetsRelatedFolderDepth(mode, persist = true) {
-    const safe = normalizeWidgetsRelatedDepth(mode);
+function readWidgetsRelatedPrimaryRange() {
+    try {
+        return normalizeWidgetsRelatedRange(
+            localStorage.getItem('widgetsRelatedPrimaryRange')
+            || localStorage.getItem('browsingRelatedActiveRange')
+            || 'day'
+        );
+    } catch (_) {
+        return 'day';
+    }
+}
+
+function setWidgetsRelatedPrimaryRange(range, persist = true, refresh = true) {
+    const safe = normalizeWidgetsRelatedRange(range);
+    widgetsRelatedPrimaryRange = safe;
+
+    if (persist) {
+        try { localStorage.setItem('widgetsRelatedPrimaryRange', safe); } catch (_) { }
+    }
+
+    if (refresh) {
+        try {
+            const maybePromise = updateWidgetsRelatedWidget();
+            if (maybePromise && typeof maybePromise.catch === 'function') {
+                maybePromise.catch(() => { });
+            }
+        } catch (_) { }
+    }
+
+    return safe;
+}
+
+function setWidgetsRelatedFolderDepth(mode, persist = true, refresh = true) {
+    let safe = normalizeWidgetsRelatedDepth(mode);
+    if (safe === 'level2' && !widgetsRelatedSecondaryAvailable) {
+        safe = 'level1';
+    }
+
     widgetsRelatedFolderDepth = safe;
     if (persist) {
         try { localStorage.setItem('widgetsRelatedFolderDepth', safe); } catch (_) { }
     }
     updateWidgetsRelatedDepthButtonsState();
 
-    try {
-        const maybePromise = updateWidgetsRelatedWidget();
-        if (maybePromise && typeof maybePromise.catch === 'function') {
-            maybePromise.catch(() => { });
-        }
-    } catch (_) { }
+    if (refresh) {
+        try {
+            const maybePromise = updateWidgetsRelatedWidget();
+            if (maybePromise && typeof maybePromise.catch === 'function') {
+                maybePromise.catch(() => { });
+            }
+        } catch (_) { }
+    }
 
     return safe;
 }
@@ -4895,11 +5016,13 @@ function updateWidgetsRelatedDepthButtonsState() {
     const level1Btn = document.getElementById('widgetsRelatedLevel1Btn');
     const level2Btn = document.getElementById('widgetsRelatedLevel2Btn');
     const safeDepth = normalizeWidgetsRelatedDepth(widgetsRelatedFolderDepth);
+    const canUseLevel2 = widgetsRelatedSecondaryAvailable;
 
     if (level1Btn) {
         level1Btn.classList.toggle('active', safeDepth === 'level1');
     }
     if (level2Btn) {
+        level2Btn.style.display = canUseLevel2 ? '' : 'none';
         level2Btn.classList.toggle('active', safeDepth === 'level2');
     }
 }
@@ -4977,10 +5100,9 @@ function getWidgetsWeekdayLabel(date) {
 }
 
 function formatWidgetsWeekTotal(total) {
-    const tpl = i18n.widgetsWeekTotal
-        ? i18n.widgetsWeekTotal[currentLang]
-        : (currentLang === 'zh_CN' ? '本周合计 {count} 条' : '{count} this week');
-    return tpl.replace('{count}', String(total));
+    const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
+    if (currentLang === 'zh_CN') return `本周合集${safeTotal}条`;
+    return `Week ${safeTotal}`;
 }
 
 function computeWidgetsWeekDailyCounts(bookmarksByDate) {
@@ -5030,11 +5152,24 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText) {
     });
 
     widgetList.appendChild(daysRow);
+}
 
-    const totalEl = document.createElement('div');
-    totalEl.className = 'widgets-week-total';
-    totalEl.textContent = formatWidgetsWeekTotal(total);
-    widgetList.appendChild(totalEl);
+function setWidgetsWeekWidgetHeaderCount(widgetType, total) {
+    const safeType = widgetType === 'history' ? 'history' : 'additions';
+    const titleId = safeType === 'history' ? 'widgetsHistoryWeekWidgetTitle' : 'widgetsAdditionsWeekWidgetTitle';
+    const titleEl = document.getElementById(titleId);
+    if (!titleEl) return;
+
+    const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
+    const totalText = formatWidgetsWeekTotal(safeTotal);
+    if (currentLang === 'zh_CN') {
+        const base = safeType === 'history' ? '点击记录' : '书签添加记录';
+        titleEl.textContent = `${base}（${totalText}）`;
+        return;
+    }
+
+    const base = safeType === 'history' ? 'Click History' : 'Bookmark Additions';
+    titleEl.textContent = `${base} (${totalText})`;
 }
 
 async function waitForBookmarkCalendarForWidgets(timeoutMs = 3000) {
@@ -5175,38 +5310,208 @@ function navigateToAdditionsHistoryWeekFromWidgets() {
     }, 100);
 }
 
-function navigateToAdditionsRelatedLevelFromWidgets(level) {
-    const safeDepth = normalizeWidgetsRelatedDepth(level);
-    setWidgetsRelatedFolderDepth(safeDepth, true);
+function cloneWidgetsRelatedFilter(filter) {
+    if (!filter || typeof filter !== 'object' || !filter.type) return null;
 
-    try {
-        if (typeof setBrowsingRankingFolderDepth === 'function') {
-            setBrowsingRankingFolderDepth(safeDepth, { persist: true, reload: false });
+    const cloned = {
+        type: filter.type,
+        value: filter.value
+    };
+
+    if (cloned.type === 'day') {
+        const dayValue = filter.value instanceof Date ? new Date(filter.value) : new Date(filter.value);
+        if (Number.isNaN(dayValue.getTime())) return null;
+        dayValue.setHours(0, 0, 0, 0);
+        cloned.value = dayValue;
+    }
+
+    return cloned;
+}
+
+function getWidgetsRelatedFilterKey(filter) {
+    if (!filter || !filter.type) return '';
+    if (filter.type === 'day') {
+        const dayValue = filter.value instanceof Date ? filter.value : new Date(filter.value);
+        if (Number.isNaN(dayValue.getTime())) return '';
+        return `day:${dayValue.toDateString()}`;
+    }
+    return `${filter.type}:${String(filter.value)}`;
+}
+
+function getWidgetsRelatedRangeLabel(range) {
+    const isZh = currentLang === 'zh_CN';
+    const safeRange = normalizeWidgetsRelatedRange(range);
+    const labels = {
+        day: isZh ? '当天' : 'Day',
+        week: isZh ? '当周' : 'Week',
+        month: isZh ? '当月' : 'Month',
+        year: isZh ? '当年' : 'Year',
+        all: isZh ? '全部' : 'All'
+    };
+    return labels[safeRange] || labels.day;
+}
+
+function getWidgetsRelatedPrimaryRangeItems() {
+    const rangeConfig = [
+        { range: 'day', countKey: 'dayCount' },
+        { range: 'week', countKey: 'weekCount' },
+        { range: 'month', countKey: 'monthCount' },
+        { range: 'year', countKey: 'yearCount' },
+        { range: 'all', countKey: 'allCount' }
+    ];
+
+    return rangeConfig.map(({ range, countKey }) => {
+        const sourceItems = getBrowsingRankingItemsForRange(range) || [];
+        const count = sourceItems.reduce((sum, item) => {
+            const value = Number(item && item[countKey] ? item[countKey] : 0);
+            return sum + (Number.isFinite(value) ? value : 0);
+        }, 0);
+
+        return {
+            id: `range:${range}`,
+            range,
+            label: getWidgetsRelatedRangeLabel(range),
+            count
+        };
+    });
+}
+
+async function getWidgetsRelatedSecondaryItems(range, stats) {
+    const safeRange = normalizeWidgetsRelatedRange(range);
+    const boundaries = stats && stats.boundaries ? stats.boundaries : null;
+    if (!boundaries) return [];
+
+    const calendar = await waitForBrowsingCalendarForWidgets();
+    if (!calendar || !calendar.bookmarksByDate || calendar.bookmarksByDate.size === 0) {
+        return [];
+    }
+
+    const isZh = currentLang === 'zh_CN';
+    const weekdayNames = isZh
+        ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+        : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const monthNames = isZh
+        ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+        : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const bucketMap = new Map();
+    const addBucket = (filter, label, order) => {
+        const normalizedFilter = cloneWidgetsRelatedFilter(filter);
+        const key = getWidgetsRelatedFilterKey(normalizedFilter);
+        if (!key) return;
+
+        if (!bucketMap.has(key)) {
+            bucketMap.set(key, {
+                id: key,
+                label,
+                count: 0,
+                order,
+                filter: normalizedFilter
+            });
         }
-    } catch (_) { }
+
+        const entry = bucketMap.get(key);
+        entry.count += 1;
+    };
+
+    for (const records of calendar.bookmarksByDate.values()) {
+        if (!Array.isArray(records)) continue;
+        records.forEach((record) => {
+            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
+            if (!t || !Number.isFinite(t)) return;
+
+            const visitDate = new Date(t);
+
+            if (safeRange === 'day') {
+                if (t < boundaries.dayStart || t > boundaries.now) return;
+                const hour = visitDate.getHours();
+                addBucket({ type: 'hour', value: hour }, `${String(hour).padStart(2, '0')}:00`, hour);
+                return;
+            }
+
+            if (safeRange === 'week') {
+                if (t < boundaries.weekStart || t > boundaries.now) return;
+                const dayDate = new Date(visitDate);
+                dayDate.setHours(0, 0, 0, 0);
+                addBucket({ type: 'day', value: dayDate }, weekdayNames[dayDate.getDay()], dayDate.getTime());
+                return;
+            }
+
+            if (safeRange === 'month') {
+                if (t < boundaries.monthStart || t > boundaries.now) return;
+                const weekNo = getWeekNumberForRelated(visitDate);
+                addBucket({ type: 'week', value: weekNo }, isZh ? `第${weekNo}周` : `W${weekNo}`, weekNo);
+                return;
+            }
+
+            if (safeRange === 'year') {
+                if (t < boundaries.yearStart || t > boundaries.now) return;
+                const month = visitDate.getMonth();
+                addBucket({ type: 'month', value: month }, monthNames[month], month);
+                return;
+            }
+
+            if (safeRange === 'all') {
+                if (t > boundaries.now) return;
+                const year = visitDate.getFullYear();
+                addBucket({ type: 'year', value: year }, isZh ? `${year}年` : `${year}`, -year);
+            }
+        });
+    }
+
+    return Array.from(bucketMap.values())
+        .sort((a, b) => {
+            if (a.order !== b.order) return a.order - b.order;
+
+            return String(a.label || '').localeCompare(String(b.label || ''));
+        });
+}
+
+function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelatedPrimaryRange, secondaryFilter = null) {
+    const safeDepth = setWidgetsRelatedFolderDepth(level, true, false);
+    const targetRange = setWidgetsRelatedPrimaryRange(range, true, false);
+    const normalizedFilter = safeDepth === 'level2' ? cloneWidgetsRelatedFilter(secondaryFilter) : null;
+
+    widgetsRelatedActiveSecondaryKey = getWidgetsRelatedFilterKey(normalizedFilter);
 
     try {
-        saveBrowsingRankingViewMode('folder');
-        localStorage.setItem('browsingRankingActiveRange', 'week');
+        localStorage.setItem('browsingRelatedActiveRange', targetRange);
     } catch (_) { }
+
+    const applySecondary = () => {
+        if (safeDepth === 'level2' && normalizedFilter) {
+            scheduleApplyRelatedFilter(normalizedFilter);
+        } else {
+            applyRelatedTimeFilter(null);
+        }
+    };
 
     switchView('additions');
     setTimeout(() => {
         const browsingTab = document.getElementById('additionsTabBrowsing');
-        if (!browsingTab) return;
-        browsingTab.click();
+        if (browsingTab && !browsingTab.classList.contains('active')) {
+            browsingTab.click();
+        }
 
         setTimeout(() => {
-            const rankingTab = document.getElementById('browsingTabRanking');
-            if (rankingTab) rankingTab.click();
+            const relatedTab = document.getElementById('browsingTabRelated');
+            if (relatedTab && !relatedTab.classList.contains('active')) {
+                relatedTab.click();
+            }
 
-            try {
-                if (typeof setBrowsingRankingActiveRange === 'function') {
-                    setBrowsingRankingActiveRange('week');
-                } else {
-                    loadBrowsingClickRanking('week');
-                }
-            } catch (_) { }
+            setTimeout(() => {
+                try {
+                    if (typeof setBrowsingRelatedActiveRange === 'function') {
+                        setBrowsingRelatedActiveRange(targetRange, true);
+                    } else {
+                        browsingRelatedCurrentRange = targetRange;
+                        showBrowsingRelatedTimeMenu(targetRange);
+                        loadBrowsingRelatedHistory(targetRange);
+                    }
+
+                    setTimeout(applySecondary, 260);
+                } catch (_) { }
+            }, 150);
         }, 70);
     }, 100);
 }
@@ -5215,57 +5520,30 @@ async function getWidgetsRelatedFolderItems(depth = 'level1') {
     const safeDepth = normalizeWidgetsRelatedDepth(depth);
     const stats = await ensureBrowsingClickRankingStats();
     if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
-        return [];
+        widgetsRelatedSecondaryAvailable = false;
+        return {
+            primaryItems: [],
+            secondaryItems: [],
+            displayItems: []
+        };
     }
 
-    try {
-        await getBookmarkUrlsAndTitles();
-    } catch (_) { }
+    const primaryItems = getWidgetsRelatedPrimaryRangeItems();
+    const secondaryItems = await getWidgetsRelatedSecondaryItems(widgetsRelatedPrimaryRange, stats);
 
-    const sourceItems = getBrowsingRankingItemsForRange('week') || [];
-    if (!Array.isArray(sourceItems) || sourceItems.length === 0) {
-        return [];
+    widgetsRelatedSecondaryAvailable = secondaryItems.length > 0;
+    if (!widgetsRelatedSecondaryAvailable && safeDepth === 'level2') {
+        widgetsRelatedFolderDepth = 'level1';
     }
 
-    const folderStats = new Map();
+    const realDepth = normalizeWidgetsRelatedDepth(widgetsRelatedFolderDepth);
+    const displayItems = realDepth === 'level2' ? secondaryItems : primaryItems;
 
-    sourceItems.forEach((item) => {
-        const weekCount = Number(item && item.weekCount ? item.weekCount : 0);
-        if (!weekCount) return;
-
-        const rawPath = (browsingRelatedBookmarkInfo && browsingRelatedBookmarkInfo.get(item.url)
-            ? browsingRelatedBookmarkInfo.get(item.url).folderPath
-            : null) || [];
-
-        let folderPath = Array.isArray(rawPath) ? rawPath.slice() : [];
-        if (safeDepth === 'level1') {
-            folderPath = folderPath.slice(0, 1);
-        } else {
-            folderPath = folderPath.slice(0, 2);
-        }
-
-        if (!folderPath.length) {
-            return;
-        }
-
-        const pathKey = folderPath.join(' / ');
-        if (!folderStats.has(pathKey)) {
-            folderStats.set(pathKey, {
-                path: pathKey,
-                name: folderPath[folderPath.length - 1],
-                count: 0
-            });
-        }
-
-        const entry = folderStats.get(pathKey);
-        entry.count += weekCount;
-    });
-
-    return Array.from(folderStats.values())
-        .sort((a, b) => {
-            if (b.count !== a.count) return b.count - a.count;
-            return String(a.path || '').localeCompare(String(b.path || ''));
-        });
+    return {
+        primaryItems,
+        secondaryItems,
+        displayItems
+    };
 }
 
 async function updateWidgetsRelatedWidget() {
@@ -5276,52 +5554,136 @@ async function updateWidgetsRelatedWidget() {
         ? i18n.widgetsRelatedEmpty[currentLang]
         : (currentLang === 'zh_CN' ? '暂无目录记录' : 'No folder records');
 
-    const safeDepth = normalizeWidgetsRelatedDepth(widgetsRelatedFolderDepth);
-    updateWidgetsRelatedDepthButtonsState();
-
     try {
-        const folders = await getWidgetsRelatedFolderItems(safeDepth);
-
-        if (!folders.length) {
+        const stats = await ensureBrowsingClickRankingStats();
+        if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
             listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
             return;
         }
 
+        const primaryItems = getWidgetsRelatedPrimaryRangeItems();
+        const secondaryItems = await getWidgetsRelatedSecondaryItems(widgetsRelatedPrimaryRange, stats);
+        widgetsRelatedSecondaryAvailable = secondaryItems.length > 0;
+        updateWidgetsRelatedDepthButtonsState();
+
+        if (!primaryItems.length) {
+            listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            return;
+        }
+
+        listEl.style.display = '';
         listEl.innerHTML = '';
 
-        folders.slice(0, 8).forEach((folder, index) => {
-            const row = document.createElement('div');
-            row.className = 'widgets-related-folder-item';
+        const primaryRow = document.createElement('div');
+        primaryRow.className = 'widgets-related-level-row widgets-related-level1-row';
 
-            const rank = document.createElement('span');
-            rank.className = 'widgets-related-folder-rank';
-            rank.textContent = `${index + 1}`;
+        primaryItems.slice(0, 5).forEach((folder) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'time-menu-btn widgets-related-folder-item widgets-related-primary-item';
+
+            const activeKey = `range:${normalizeWidgetsRelatedRange(widgetsRelatedPrimaryRange)}`;
+            const rowKey = `range:${folder.range}`;
+            if (activeKey && rowKey && activeKey === rowKey) {
+                row.classList.add('is-selected');
+                row.classList.add('active');
+            }
 
             const name = document.createElement('span');
             name.className = 'widgets-related-folder-name';
-            name.textContent = folder.path || folder.name || '--';
-            name.title = folder.path || folder.name || '--';
+            name.textContent = folder.label || '--';
+            name.title = folder.label || '--';
 
             const count = document.createElement('span');
             count.className = 'widgets-related-folder-count';
             count.textContent = currentLang === 'zh_CN' ? `${folder.count}次` : `${folder.count}x`;
 
-            row.appendChild(rank);
             row.appendChild(name);
             row.appendChild(count);
 
             row.addEventListener('click', (event) => {
                 event.stopPropagation();
-                navigateToAdditionsRelatedLevelFromWidgets(safeDepth);
+
+                const targetRange = normalizeWidgetsRelatedRange(folder.range);
+                setWidgetsRelatedPrimaryRange(targetRange, true, false);
+                widgetsRelatedActiveSecondaryKey = '';
+                setWidgetsRelatedFolderDepth('level1', true, false);
+
+                try {
+                    const maybePromise = updateWidgetsRelatedWidget();
+                    if (maybePromise && typeof maybePromise.catch === 'function') {
+                        maybePromise.catch(() => { });
+                    }
+                } catch (_) { }
             });
 
-            listEl.appendChild(row);
+            primaryRow.appendChild(row);
         });
+
+        listEl.appendChild(primaryRow);
+
+        if (!secondaryItems.length) {
+            return;
+        }
+
+        const secondaryRow = document.createElement('div');
+        secondaryRow.className = 'widgets-related-level-row widgets-related-level2-row';
+
+        secondaryItems.slice(0, 8).forEach((folder) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'time-menu-btn widgets-related-folder-item widgets-related-secondary-item';
+
+            const rowKey = getWidgetsRelatedFilterKey(folder.filter);
+            if (widgetsRelatedActiveSecondaryKey && rowKey && widgetsRelatedActiveSecondaryKey === rowKey) {
+                row.classList.add('is-selected');
+                row.classList.add('active');
+            }
+
+            const name = document.createElement('span');
+            name.className = 'widgets-related-folder-name';
+            name.textContent = folder.label || '--';
+            name.title = folder.label || '--';
+
+            const count = document.createElement('span');
+            count.className = 'widgets-related-folder-count';
+            count.textContent = currentLang === 'zh_CN' ? `${folder.count}次` : `${folder.count}x`;
+
+            row.appendChild(name);
+            row.appendChild(count);
+
+            row.addEventListener('click', (event) => {
+                event.stopPropagation();
+
+                const filter = cloneWidgetsRelatedFilter(folder.filter);
+                const filterKey = getWidgetsRelatedFilterKey(filter);
+                if (!filterKey) return;
+
+                if (widgetsRelatedActiveSecondaryKey !== filterKey) {
+                    widgetsRelatedActiveSecondaryKey = filterKey;
+                    try {
+                        const maybePromise = updateWidgetsRelatedWidget();
+                        if (maybePromise && typeof maybePromise.catch === 'function') {
+                            maybePromise.catch(() => { });
+                        }
+                    } catch (_) { }
+                    return;
+                }
+
+                navigateToAdditionsRelatedLevelFromWidgets('level2', widgetsRelatedPrimaryRange, filter);
+            });
+
+            secondaryRow.appendChild(row);
+        });
+
+        listEl.appendChild(secondaryRow);
     } catch (error) {
         console.warn('[Widgets] 更新关联记录小组件失败:', error);
+        listEl.style.display = '';
         listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
     }
 }
+
 
 async function updateWidgetsTrackingWidget() {
     const widgetList = document.getElementById('widgetsTrackingWidgetList');
@@ -5522,14 +5884,17 @@ async function updateWidgetsAdditionsWeekWidget() {
     try {
         const calendar = await waitForBookmarkCalendarForWidgets();
         if (!calendar || !calendar.bookmarksByDate) {
+            setWidgetsWeekWidgetHeaderCount('additions', 0);
             widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
             return;
         }
 
         const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
+        setWidgetsWeekWidgetHeaderCount('additions', total);
         renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
     } catch (error) {
         console.warn('[Widgets] 更新书签添加周视图小组件失败:', error);
+        setWidgetsWeekWidgetHeaderCount('additions', 0);
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
     }
 }
@@ -5545,14 +5910,17 @@ async function updateWidgetsHistoryWeekWidget() {
     try {
         const calendar = await waitForBrowsingCalendarForWidgets();
         if (!calendar || !calendar.bookmarksByDate) {
+            setWidgetsWeekWidgetHeaderCount('history', 0);
             widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
             return;
         }
 
         const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
+        setWidgetsWeekWidgetHeaderCount('history', total);
         renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
     } catch (error) {
         console.warn('[Widgets] 更新点击记录周视图小组件失败:', error);
+        setWidgetsWeekWidgetHeaderCount('history', 0);
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
     }
 }
@@ -5728,6 +6096,8 @@ function startWidgetsViewRefresh() {
 
     widgetsViewRefreshInterval = setInterval(() => {
         if (currentView !== 'widgets') return;
+        if (document.body.classList.contains('sidebar-resizing')) return;
+        if (document.documentElement.classList.contains('layout-resizing')) return;
         updateWidgetsViewData().catch((error) => {
             console.warn('[Widgets] 周期刷新失败:', error);
         });
@@ -5763,15 +6133,14 @@ function initWidgetsView() {
     const additionsWeekWidget = document.getElementById('widgetsAdditionsWeekWidget');
     const historyWeekWidget = document.getElementById('widgetsHistoryWeekWidget');
     const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
-    const relatedLevel1Btn = document.getElementById('widgetsRelatedLevel1Btn');
-    const relatedLevel2Btn = document.getElementById('widgetsRelatedLevel2Btn');
     const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
 
-    if (!trackingWidget && !rankingWidget && !additionsWeekWidget && !historyWeekWidget && !relatedLevel1Btn && !relatedLevel2Btn) {
+    if (!trackingWidget && !rankingWidget && !additionsWeekWidget && !historyWeekWidget) {
         return;
     }
 
     widgetsRelatedFolderDepth = readWidgetsRelatedFolderDepth();
+    widgetsRelatedPrimaryRange = readWidgetsRelatedPrimaryRange();
     updateWidgetsRelatedDepthButtonsState();
 
     if (trackingWidget) {
@@ -5809,19 +6178,6 @@ function initWidgetsView() {
         });
     }
 
-    if (relatedLevel1Btn) {
-        relatedLevel1Btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            setWidgetsRelatedFolderDepth('level1', true);
-        });
-    }
-
-    if (relatedLevel2Btn) {
-        relatedLevel2Btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            setWidgetsRelatedFolderDepth('level2', true);
-        });
-    }
 
     if (widgetsCardRefreshBtn) {
         widgetsCardRefreshBtn.addEventListener('click', async (e) => {
