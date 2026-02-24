@@ -6,11 +6,11 @@
   "description": "__MSG_extensionDescription__",
   "author": "kk1",
   "icons": {
-    "100": "icons/icon200.png"
+    "128": "icons/icon200.png"
   },
   "action": {
     "default_icon": {
-      "200": "icons/icon200.png"
+      "128": "icons/icon200.png"
     },
     "default_title": "__MSG_actionTitle__"
   },
