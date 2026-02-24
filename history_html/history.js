@@ -1434,8 +1434,8 @@ const internalScheme = (navigator.userAgent || '').includes('Edg/') ? 'edge://' 
 // =============================================================================
 
 const i18n = {pageTitle: {
-        'zh_CN': '书签推荐 & 记录',
-        'en': 'Bookmark Recommend & Records'
+        'zh_CN': '推荐 & 记录',
+        'en': 'Recommend & Records'
     },pageSubtitle: {
         'zh_CN': '',
         'en': ''
@@ -1461,11 +1461,11 @@ const i18n = {pageTitle: {
         'zh_CN': '小组件',
         'en': 'Widgets'
     },sidePanelTitleRecommend: {
-        'zh_CN': '书签推荐',
-        'en': 'Bookmark Recommend'
+        'zh_CN': '推荐',
+        'en': 'Recommend'
     },sidePanelTitleAdditions: {
-        'zh_CN': '书签记录',
-        'en': 'Bookmark Records'
+        'zh_CN': '记录',
+        'en': 'Records'
     },widgetsViewTitle: {
         'zh_CN': '小组件',
         'en': 'Widgets'

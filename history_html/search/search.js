@@ -2529,16 +2529,16 @@ function renderEmptyQuerySuggestions() {
 const SEARCH_MODES = [
     {
         key: 'additions',
-        label: '书签记录',
-        labelEn: 'Bookmark Records',
+        label: '记录',
+        labelEn: 'Records',
         icon: 'fa-plus-circle',
         desc: '标题 / URL / 日期',
         descEn: 'Title / URL / Date'
     },
     {
         key: 'recommend',
-        label: '书签推荐',
-        labelEn: 'Bookmark Recommend',
+        label: '推荐',
+        labelEn: 'Recommend',
         icon: 'fa-lightbulb',
         desc: 'S值 / 标题 / URL',
         descEn: 'S score / Title / URL'
@@ -2649,7 +2649,7 @@ function renderSearchModeUI() {
     const label = isZh ? mode.label : mode.labelEn;
     const modeColorClass = mode && mode.key === 'recommend' ? 'mode-color-orange' : 'mode-color-blue';
 
-    trigger.innerHTML = `<i class="fas ${mode.icon} ${modeColorClass}"></i><span class="search-mode-label ${modeColorClass}">${label}</span>`;
+    trigger.innerHTML = `<i class="fas fa-search ${modeColorClass}"></i><span class="search-mode-label ${modeColorClass}">${label}</span>`;
     trigger.title = isZh ? `搜索模式：${label}` : `Mode: ${label}`;
 }
 
