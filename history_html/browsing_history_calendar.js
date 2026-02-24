@@ -3706,7 +3706,7 @@ class BrowsingHistoryCalendar {
         return div.innerHTML;
     }
 
-    // 构建书签树结构
+    // 构建书签树结构（保留层级）
     buildBookmarkTree(bookmarks) {
         const root = {
             title: 'Root',
@@ -3717,9 +3717,10 @@ class BrowsingHistoryCalendar {
 
         bookmarks.forEach(bookmark => {
             let currentNode = root;
+            const folderPath = Array.isArray(bookmark.folderPath) ? bookmark.folderPath : [];
 
             // 遍历文件夹路径，构建树
-            bookmark.folderPath.forEach((folderName, index) => {
+            folderPath.forEach((folderName, index) => {
                 let childNode = currentNode.children.find(child => child.title === folderName);
 
                 if (!childNode) {
@@ -3727,7 +3728,8 @@ class BrowsingHistoryCalendar {
                         title: folderName,
                         children: [],
                         bookmarks: [],
-                        path: bookmark.folderPath.slice(0, index + 1)
+                        path: folderPath.slice(0, index + 1),
+                        displaySegments: [folderName]
                     };
                     currentNode.children.push(childNode);
                 }
@@ -3740,6 +3742,39 @@ class BrowsingHistoryCalendar {
         });
 
         return root;
+    }
+
+    // 压缩书签树：跳过无书签且无分叉的中间层级
+    compressBookmarkTree(node) {
+        if (!node || !Array.isArray(node.children)) return node;
+
+        node.children = node.children
+            .map(child => this.compressBookmarkTree(child))
+            .filter(child => child && (child.bookmarks.length > 0 || child.children.length > 0));
+
+        if (node.title === 'Root') return node;
+
+        if (!Array.isArray(node.displaySegments) || node.displaySegments.length === 0) {
+            node.displaySegments = [node.title];
+        }
+
+        while (node.bookmarks.length === 0 && node.children.length === 1) {
+            const onlyChild = node.children[0];
+            const currentSegments = Array.isArray(node.displaySegments) && node.displaySegments.length > 0
+                ? node.displaySegments
+                : [node.title];
+            const childSegments = Array.isArray(onlyChild.displaySegments) && onlyChild.displaySegments.length > 0
+                ? onlyChild.displaySegments
+                : [onlyChild.title];
+
+            node.displaySegments = [...currentSegments, ...childSegments];
+            node.title = onlyChild.title;
+            node.path = onlyChild.path;
+            node.bookmarks = onlyChild.bookmarks;
+            node.children = onlyChild.children;
+        }
+
+        return node;
     }
 
     // 渲染树节点（递归）
@@ -3850,8 +3885,13 @@ class BrowsingHistoryCalendar {
         }
 
         // 文件夹标题
-        const folderHeader = this.createFolderHeader(node.title, node.path,
-            node.bookmarks.length + this.countAllBookmarks(node), level);
+        const folderHeader = this.createFolderHeader(
+            node.title,
+            node.path,
+            node.bookmarks.length + this.countAllBookmarks(node),
+            level,
+            node.displaySegments
+        );
         if (level > 0) {
             folderHeader.style.marginLeft = '0';
         }
@@ -3920,7 +3960,7 @@ class BrowsingHistoryCalendar {
     }
 
     // 创建文件夹标题
-    createFolderHeader(title, path, count, level) {
+    createFolderHeader(title, path, count, level, displaySegments = null) {
         const folderHeader = document.createElement('div');
         folderHeader.style.display = 'flex';
         folderHeader.style.alignItems = 'center';
@@ -3936,13 +3976,14 @@ class BrowsingHistoryCalendar {
         const themeColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
 
         // 创建路径显示（每个文件夹用椭圆框框住）
-        // level > 1 时只显示当前文件夹名称，level = 1 时显示完整路径
+        // 仅在关键节点显示合并路径；子层级默认只显示当前节点，避免重复
         let pathHTML = '';
-        if (level > 1) {
-            // 子层级：只显示当前文件夹名称
-            pathHTML = `<span class="calendar-folder-pill" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>`;
-        } else if (path.length > 0) {
-            // 顶层：显示完整路径
+        const compactSegments = Array.isArray(displaySegments) ? displaySegments.filter(Boolean) : [];
+        if (compactSegments.length > 1) {
+            pathHTML = compactSegments.map(folder =>
+                `<span class="calendar-folder-pill" title="${this.escapeHtml(folder)}">${this.escapeHtml(folder)}</span>`
+            ).join('<span class="calendar-folder-divider">/</span>');
+        } else if (level <= 1 && path.length > 0) {
             pathHTML = path.map(folder =>
                 `<span class="calendar-folder-pill" title="${this.escapeHtml(folder)}">${this.escapeHtml(folder)}</span>`
             ).join('<span class="calendar-folder-divider">/</span>');
@@ -4151,6 +4192,7 @@ class BrowsingHistoryCalendar {
 
         // 使用树状结构显示
         const tree = this.buildBookmarkTree(bookmarksWithPath);
+        this.compressBookmarkTree(tree);
         const treeNode = this.renderTreeNode(tree, 0, expandToLevel, false, {
             lazyRenderCollapsed: isLargeDataset
         });
