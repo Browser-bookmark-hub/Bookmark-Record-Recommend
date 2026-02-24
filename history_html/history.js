@@ -1564,14 +1564,17 @@ const i18n = {pageTitle: {
         'zh_CN': '智能排序说明',
         'en': 'How Smart Sort Works'
     },widgetsSortInfoLine1: {
-        'zh_CN': '书签推荐固定在最上方。',
-        'en': 'Bookmark Recommend stays at the top.'
+        'zh_CN': '待复习到期时，「书签推荐」会自动置顶。',
+        'en': 'Bookmark Recommend goes to top when review-later items are due.'
     },widgetsSortInfoLine2: {
         'zh_CN': '其余小组件会根据数据变化自动上浮。',
         'en': 'Other widgets move up when data changes.'
     },widgetsSortInfoLine3: {
         'zh_CN': '关闭智能排序后，顺序按手动排序结果展示。',
         'en': 'When smart sort is off, manual order is used.'
+    },widgetsSortManualLockedHint: {
+        'zh_CN': '智能排序开启时，手动排序已锁定',
+        'en': 'Manual order is locked while Smart Sort is on'
     },additionsTabReview: {
         'zh_CN': '书签添加记录',
         'en': 'Bookmark additions'
@@ -5646,6 +5649,7 @@ let widgetsRelatedSecondaryAvailable = true;
 let widgetsRelatedActiveSecondaryKey = '';
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
 const WIDGETS_SMART_SORT_WIDGET_IDS = [
+    'widgetsRecommendWidget',
     'widgetsTrackingWidget',
     'widgetsRankingWidget',
     'widgetsAdditionsWeekWidget',
@@ -5798,6 +5802,7 @@ function normalizeWidgetsSmartSortText(value) {
 }
 
 function getWidgetsSortWidgetLabel(widgetId) {
+    if (widgetId === 'widgetsRecommendWidget') return i18n.widgetsRecommendWidgetTitle[currentLang];
     if (widgetId === 'widgetsTrackingWidget') return i18n.widgetsTrackingWidgetTitle[currentLang];
     if (widgetId === 'widgetsRankingWidget') return i18n.widgetsRankingWidgetTitle[currentLang];
     if (widgetId === 'widgetsAdditionsWeekWidget') return i18n.widgetsAdditionsWeekWidgetTitle[currentLang];
@@ -5807,10 +5812,40 @@ function getWidgetsSortWidgetLabel(widgetId) {
 }
 
 function getWidgetsSmartSortSignal(widgetId) {
+    if (widgetId === 'widgetsRecommendWidget') {
+        const cards = Array.isArray(recommendCards) ? recommendCards : [];
+        const normalizedCards = cards.map((card) => {
+            const forceDueAt = Number(card?.forceDueAt || 0);
+            const forceDueMovedAt = Number(card?.forceDueMovedAt || 0);
+            return {
+                ...card,
+                forceDue: card?.forceDue === true,
+                forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
+                forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
+            };
+        });
+
+        const now = Date.now();
+        const dueNow = normalizedCards.some((card) => {
+            if (card.forceDue === true) return true;
+            const dueAt = Number(card.forceDueAt || 0);
+            return Number.isFinite(dueAt) && dueAt > 0 && dueAt <= now;
+        });
+
+        return {
+            signature: normalizedCards.length > 0
+                ? buildWidgetsRecommendCardSignature(normalizedCards, [], currentLang)
+                : `empty:${widgetId}`,
+            hasData: normalizedCards.length > 0,
+            activity: dueNow ? (1000 + normalizedCards.length) : normalizedCards.length,
+            dueNow
+        };
+    }
+
     const widgetEl = document.getElementById(widgetId);
     const listEl = widgetEl ? widgetEl.querySelector('.time-tracking-widget-list') : null;
     if (!widgetEl || !listEl) {
-        return { signature: `missing:${widgetId}`, hasData: false, activity: 0 };
+        return { signature: `missing:${widgetId}`, hasData: false, activity: 0, dueNow: false };
     }
 
     const hasEmptyNode = Boolean(listEl.querySelector('.time-tracking-widget-empty'));
@@ -5822,7 +5857,8 @@ function getWidgetsSmartSortSignal(widgetId) {
         return {
             signature: rows.length > 0 ? `${titleSig}::${stateSig}::${rows.length}` : `empty:${widgetId}`,
             hasData: rows.length > 0 && !hasEmptyNode,
-            activity: rows.length
+            activity: rows.length,
+            dueNow: false
         };
     }
 
@@ -5841,7 +5877,8 @@ function getWidgetsSmartSortSignal(widgetId) {
         return {
             signature: rows.length > 0 ? `${range}::${rowSig}` : `empty:${widgetId}:${range}`,
             hasData: rows.length > 0 && !hasEmptyNode,
-            activity
+            activity,
+            dueNow: false
         };
     }
 
@@ -5853,7 +5890,8 @@ function getWidgetsSmartSortSignal(widgetId) {
         return {
             signature: nums.length > 0 ? nums.join(',') : `empty:${widgetId}`,
             hasData: activity > 0 && !hasEmptyNode,
-            activity
+            activity,
+            dueNow: false
         };
     }
 
@@ -5869,7 +5907,8 @@ function getWidgetsSmartSortSignal(widgetId) {
         return {
             signature: primary.length > 0 ? signature : `empty:${widgetId}`,
             hasData: primary.length > 0 && !hasEmptyNode,
-            activity: secondary.length > 0 ? secondary.length : primary.length
+            activity: secondary.length > 0 ? secondary.length : primary.length,
+            dueNow: false
         };
     }
 
@@ -5878,13 +5917,17 @@ function getWidgetsSmartSortSignal(widgetId) {
     return {
         signature: text || `empty:${widgetId}`,
         hasData: !hasEmptyNode && text.length > 0,
-        activity: nums.reduce((sum, num) => sum + num, 0)
+        activity: nums.reduce((sum, num) => sum + num, 0),
+        dueNow: false
     };
 }
 
 function renderWidgetsSortPanelList() {
     const listEl = document.getElementById('widgetsSortList');
     if (!listEl) return;
+
+    const manualLocked = widgetsSmartSortEnabled === true;
+    listEl.setAttribute('aria-disabled', manualLocked ? 'true' : 'false');
 
     const moveUpText = i18n.widgetsSortMoveUp[currentLang];
     const moveDownText = i18n.widgetsSortMoveDown[currentLang];
@@ -5913,7 +5956,7 @@ function renderWidgetsSortPanelList() {
         upBtn.innerHTML = '<i class="fas fa-arrow-up" aria-hidden="true"></i>';
         upBtn.title = moveUpText;
         upBtn.setAttribute('aria-label', moveUpText);
-        upBtn.disabled = index === 0;
+        upBtn.disabled = manualLocked || index === 0;
 
         const downBtn = document.createElement('button');
         downBtn.type = 'button';
@@ -5922,7 +5965,7 @@ function renderWidgetsSortPanelList() {
         downBtn.innerHTML = '<i class="fas fa-arrow-down" aria-hidden="true"></i>';
         downBtn.title = moveDownText;
         downBtn.setAttribute('aria-label', moveDownText);
-        downBtn.disabled = index === widgetsSortOrder.length - 1;
+        downBtn.disabled = manualLocked || index === widgetsSortOrder.length - 1;
 
         actions.appendChild(upBtn);
         actions.appendChild(downBtn);
@@ -6088,11 +6131,6 @@ function applyWidgetsSmartSort() {
     const grid = document.querySelector('#widgetsView .widgets-grid');
     if (!grid) return;
 
-    const recommendWidget = document.getElementById('widgetsRecommendWidget');
-    if (recommendWidget && recommendWidget.parentElement === grid && grid.firstElementChild !== recommendWidget) {
-        grid.insertBefore(recommendWidget, grid.firstElementChild || null);
-    }
-
     const now = Date.now();
     widgetsSortOrder = normalizeWidgetsSortOrder(widgetsSortOrder);
 
@@ -6119,7 +6157,8 @@ function applyWidgetsSmartSort() {
                 changed,
                 changedAt: widgetsSmartSortChangedAtById[id],
                 hasData: signal.hasData,
-                activity: signal.activity
+                activity: signal.activity,
+                dueNow: signal.dueNow === true
             };
         })
         .filter(Boolean);
@@ -6128,6 +6167,10 @@ function applyWidgetsSmartSort() {
 
     if (widgetsSmartSortEnabled) {
         entries.sort((a, b) => {
+            const aRecommendDue = a.id === 'widgetsRecommendWidget' && a.dueNow ? 1 : 0;
+            const bRecommendDue = b.id === 'widgetsRecommendWidget' && b.dueNow ? 1 : 0;
+            if (aRecommendDue !== bRecommendDue) return bRecommendDue - aRecommendDue;
+
             const aChanged = a.changed ? 1 : 0;
             const bChanged = b.changed ? 1 : 0;
             if (aChanged !== bChanged) return bChanged - aChanged;
@@ -6154,6 +6197,7 @@ function updateWidgetsSmartSortToggleUI(view = currentView) {
     const infoBtn = document.getElementById('widgetsSmartSortInfoBtn');
     const panel = document.getElementById('widgetsSortPanel');
     const infoPanel = document.getElementById('widgetsSortInfoPanel');
+    const sortList = document.getElementById('widgetsSortList');
     const panelTitle = document.getElementById('widgetsSortPanelTitle');
     const smartSortCheckboxLabel = document.getElementById('widgetsSmartSortCheckboxLabel');
     const smartSortCheckbox = document.getElementById('widgetsSmartSortCheckbox');
@@ -6181,6 +6225,9 @@ function updateWidgetsSmartSortToggleUI(view = currentView) {
         infoLine3.textContent = i18n.widgetsSortInfoLine3[currentLang];
     }
 
+    const manualLockedHint = (i18n.widgetsSortManualLockedHint && i18n.widgetsSortManualLockedHint[currentLang])
+        || (currentLang === 'zh_CN' ? '智能排序开启时，手动排序已锁定' : 'Manual order is locked while Smart Sort is on');
+
     if (!btn) return;
 
     const pageTitleText = String(document.getElementById('pageTitle')?.textContent || '').trim();
@@ -6195,8 +6242,15 @@ function updateWidgetsSmartSortToggleUI(view = currentView) {
     btn.style.display = shouldShow ? 'inline-flex' : 'none';
 
     if (!shouldShow) {
-        if (panel) panel.hidden = true;
+        if (panel) {
+            panel.hidden = true;
+            panel.classList.remove('manual-locked');
+        }
         if (infoPanel) infoPanel.hidden = true;
+        if (sortList) {
+            sortList.dataset.lockHint = manualLockedHint;
+            sortList.setAttribute('aria-disabled', 'false');
+        }
         btn.classList.remove('panel-open');
         if (infoBtn) infoBtn.classList.remove('panel-open');
         return;
@@ -6204,6 +6258,13 @@ function updateWidgetsSmartSortToggleUI(view = currentView) {
 
     if (smartSortCheckbox) {
         smartSortCheckbox.checked = widgetsSmartSortEnabled;
+    }
+    if (panel) {
+        panel.classList.toggle('manual-locked', widgetsSmartSortEnabled === true);
+    }
+    if (sortList) {
+        sortList.dataset.lockHint = manualLockedHint;
+        sortList.setAttribute('aria-disabled', widgetsSmartSortEnabled ? 'true' : 'false');
     }
 
     const panelOpen = Boolean(panel && !panel.hidden);
@@ -7463,6 +7524,7 @@ function initWidgetsView() {
                 await refreshRecommendCards(true);
                 lastWidgetsRecommendCardSignature = '';
                 await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                applyWidgetsSmartSort();
             } catch (err) {
                 console.warn('[Widgets] 刷新推荐卡片失败:', err);
             }
@@ -7526,6 +7588,11 @@ function initWidgetsView() {
 
     if (widgetsSortList) {
         widgetsSortList.addEventListener('click', (e) => {
+            if (widgetsSmartSortEnabled) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             const moveBtn = e.target.closest('.widgets-sort-move-btn');
             if (!moveBtn || moveBtn.disabled) return;
             e.stopPropagation();
@@ -10856,6 +10923,7 @@ async function schedulePostponedExpiryRefresh(postponedInput = null) {
                 await refreshRecommendCards(true);
                 if (currentView === 'widgets') {
                     await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                    applyWidgetsSmartSort();
                 }
             } catch (error) {
                 console.warn('[稍后] 到期换卡刷新失败:', error);
@@ -19046,6 +19114,7 @@ function scheduleRecommendCardsRefreshFromCacheChange() {
             } else if (currentView === 'widgets') {
                 await refreshRecommendCards(true);
                 await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                applyWidgetsSmartSort();
             }
         } catch (error) {
             console.warn('[存储监听] 推荐卡片增量刷新失败:', error);
@@ -19079,6 +19148,7 @@ function scheduleRecommendCardsRefreshFromStateSync() {
             } else if (currentView === 'widgets') {
                 await refreshRecommendCards(false);
                 await renderWidgetsRecommendCards({ force: false, allowBootstrap: false });
+                applyWidgetsSmartSort();
             }
         } catch (error) {
             console.warn('[存储监听] 推荐状态同步刷新失败:', error);

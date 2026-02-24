@@ -614,6 +614,7 @@ body.header-dock-bottom:not(.header-compact) #widgetsSortInfoPanel {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    position: relative;
 }
 
 .widgets-sort-item {
@@ -683,6 +684,37 @@ body.header-dock-bottom:not(.header-compact) #widgetsSortInfoPanel {
     opacity: 0.35;
     cursor: not-allowed;
     transform: none;
+}
+
+.widgets-sort-panel.manual-locked .widgets-sort-list {
+    opacity: 0.58;
+}
+
+.widgets-sort-panel.manual-locked .widgets-sort-item {
+    pointer-events: none;
+    user-select: none;
+    filter: saturate(0.72);
+}
+
+.widgets-sort-panel.manual-locked .widgets-sort-list::after {
+    content: attr(data-lock-hint);
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px dashed var(--border-color);
+    background: rgba(128, 128, 128, 0.18);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.35;
+    pointer-events: auto;
+    cursor: not-allowed;
 }
 
 .header-subtitle {
