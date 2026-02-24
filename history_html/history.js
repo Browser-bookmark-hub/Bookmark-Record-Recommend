@@ -68,11 +68,15 @@ const isSidePanelMode = (() => {
 const HEADER_STORAGE_SCOPE_SUFFIX = isSidePanelMode ? '__sidepanel' : '';
 const HEADER_COLLAPSE_STATE_KEY = `headerCollapseState${HEADER_STORAGE_SCOPE_SUFFIX}`;
 const HEADER_DOCK_SIDE_KEY = `headerDockSide${HEADER_STORAGE_SCOPE_SUFFIX}`;
+const HEADER_COMPACT_LEFT_TOP_KEY = `headerCompactToggleLeftTop${HEADER_STORAGE_SCOPE_SUFFIX}`;
+const HEADER_COMPACT_LEFT_BOTTOM_KEY = `headerCompactToggleLeftBottom${HEADER_STORAGE_SCOPE_SUFFIX}`;
 const HEADER_COMPACT_LEFT_KEY = `headerCompactToggleLeft${HEADER_STORAGE_SCOPE_SUFFIX}`;
+const HEADER_COMPACT_LEFT_MOVED_TOP_KEY = `headerCompactToggleLeftMovedTop${HEADER_STORAGE_SCOPE_SUFFIX}`;
+const HEADER_COMPACT_LEFT_MOVED_BOTTOM_KEY = `headerCompactToggleLeftMovedBottom${HEADER_STORAGE_SCOPE_SUFFIX}`;
 const HEADER_COMPACT_LEFT_MOVED_KEY = `headerCompactToggleLeftMoved${HEADER_STORAGE_SCOPE_SUFFIX}`;
 
 let currentHeaderState = 'expanded';
-let currentHeaderDockSide = 'bottom';
+let currentHeaderDockSide = isSidePanelMode ? 'bottom' : 'top';
 
 window.__SIDE_PANEL_MODE__ = isSidePanelMode;
 try {
@@ -4922,12 +4926,13 @@ function initSidebarToggle() {
 // =============================================================================
 
 function initHeaderToggle() {
+    const header = document.querySelector('.history-header');
     const toggleBtn = document.getElementById('headerToggleBtn');
-    if (!toggleBtn) return;
+    if (!header || !toggleBtn) return;
 
     const HEADER_STATES = ['expanded', 'compact'];
     const HEADER_DOCK_SIDES = ['top', 'bottom'];
-    const DEFAULT_HEADER_DOCK_SIDE = 'bottom';
+    const DEFAULT_HEADER_DOCK_SIDE = isSidePanelMode ? 'bottom' : 'top';
     const TOGGLE_DRAG_ACTIVATE_THRESHOLD = 10;
     const TOGGLE_HINT_HOLD_DELAY_MS = 160;
     const TOGGLE_DRAG_DIRECTION_THRESHOLD = 8;
@@ -4945,7 +4950,18 @@ function initHeaderToggle() {
     let hintUp = null;
     let hintDown = null;
     let compactLeft = COMPACT_LEFT_DEFAULT;
-    let compactLeftMoved = false;
+    let compactLeftByDock = {
+        top: COMPACT_LEFT_DEFAULT,
+        bottom: COMPACT_LEFT_DEFAULT
+    };
+    let compactLeftHasStoredByDock = {
+        top: false,
+        bottom: false
+    };
+    let compactFirstCollapseDoneByDock = {
+        top: false,
+        bottom: false
+    };
 
     function normalizeHeaderState(raw) {
         const value = String(raw || '').toLowerCase();
@@ -4986,11 +5002,34 @@ function initHeaderToggle() {
         } catch (_) { }
     }
 
+    function getCompactLeftStorageKeyByDock(dockSide) {
+        return dockSide === 'bottom' ? HEADER_COMPACT_LEFT_BOTTOM_KEY : HEADER_COMPACT_LEFT_TOP_KEY;
+    }
+
+    function getCompactLeftMovedStorageKeyByDock(dockSide) {
+        return dockSide === 'bottom' ? HEADER_COMPACT_LEFT_MOVED_BOTTOM_KEY : HEADER_COMPACT_LEFT_MOVED_TOP_KEY;
+    }
+
+    function readCompactLeftByDock(dockSide) {
+        return normalizeCompactLeft(readStorage(getCompactLeftStorageKeyByDock(dockSide)));
+    }
+
+    function readCompactLeftMovedByDock(dockSide) {
+        return readStorage(getCompactLeftMovedStorageKeyByDock(dockSide)) === 'true';
+    }
+
     function setCompactToggleLeft(nextLeft, options = {}) {
         compactLeft = clamp(Math.round(nextLeft), COMPACT_LEFT_MIN, getCompactLeftMax());
+        compactLeftByDock.top = compactLeft;
+        compactLeftByDock.bottom = compactLeft;
         document.documentElement.style.setProperty('--header-toggle-compact-left', compactLeft + 'px');
         if (!options || options.persist !== false) {
-            compactLeftMoved = true;
+            compactLeftHasStoredByDock.top = true;
+            compactLeftHasStoredByDock.bottom = true;
+            writeStorage(HEADER_COMPACT_LEFT_TOP_KEY, String(compactLeft));
+            writeStorage(HEADER_COMPACT_LEFT_BOTTOM_KEY, String(compactLeft));
+            writeStorage(HEADER_COMPACT_LEFT_MOVED_TOP_KEY, 'true');
+            writeStorage(HEADER_COMPACT_LEFT_MOVED_BOTTOM_KEY, 'true');
             writeStorage(HEADER_COMPACT_LEFT_KEY, String(compactLeft));
             writeStorage(HEADER_COMPACT_LEFT_MOVED_KEY, 'true');
         }
@@ -5106,8 +5145,14 @@ function initHeaderToggle() {
 
     function applyHeaderDockSide(dockSide, options = {}) {
         const nextDock = normalizeHeaderDockSide(dockSide) || DEFAULT_HEADER_DOCK_SIDE;
+        const changed = nextDock !== currentHeaderDockSide;
         currentHeaderDockSide = nextDock;
         document.body.classList.toggle('header-dock-bottom', nextDock === 'bottom');
+
+        if (changed) {
+            setCompactToggleLeft(compactLeft, { persist: false });
+        }
+
         if (typeof syncWidgetsSortPanelsDockDirection === 'function') {
             try { syncWidgetsSortPanelsDockDirection(); } catch (_) { }
         }
@@ -5116,24 +5161,58 @@ function initHeaderToggle() {
         }
         updateToggleLabel(currentHeaderState);
     }
+    function alignCompactToggleToExpandedPosition(expandedRect) {
+        if (!expandedRect || !Number.isFinite(expandedRect.left) || !Number.isFinite(expandedRect.width)) {
+            return;
+        }
+
+        const expandedCenterX = expandedRect.left + (expandedRect.width / 2);
+        const compactRect = toggleBtn.getBoundingClientRect();
+        if (!compactRect || !Number.isFinite(compactRect.left) || !Number.isFinite(compactRect.width)) {
+            return;
+        }
+
+        const compactCenterX = compactRect.left + (compactRect.width / 2);
+        const deltaX = expandedCenterX - compactCenterX;
+        if (!Number.isFinite(deltaX) || Math.abs(deltaX) < 0.2) {
+            return;
+        }
+
+        setCompactToggleLeft(compactLeft + deltaX, { persist: false });
+    }
 
     function applyHeaderState(state, options = {}) {
-        const prevState = currentHeaderState;
+        const prevRect = toggleBtn.getBoundingClientRect();
         const nextState = normalizeHeaderState(state) || 'expanded';
-
-        if (nextState === 'compact' && prevState !== 'compact' && !compactLeftMoved) {
-            const rect = toggleBtn.getBoundingClientRect();
-            if (rect && Number.isFinite(rect.left)) {
-                const alignedLeft = rect.left + (rect.width / 2) - 12;
-                setCompactToggleLeft(alignedLeft, { persist: false });
-            }
-        }
+        const prevState = currentHeaderState;
+        const isBootstrap = !!(options && options.bootstrap === true);
+        const dock = currentHeaderDockSide === 'bottom' ? 'bottom' : 'top';
+        const shouldForceFirstCompactOrigin = nextState === 'compact'
+            && prevState !== 'compact'
+            && !isBootstrap
+            && !compactFirstCollapseDoneByDock[dock];
 
         currentHeaderState = nextState;
         document.body.classList.toggle('header-compact', nextState === 'compact');
 
         if (nextState === 'compact') {
-            setCompactToggleLeft(compactLeft, { persist: false });
+            if (prevState !== 'compact') {
+                if (isBootstrap || compactLeftHasStoredByDock[dock]) {
+                    const dockLeft = compactLeftByDock[dock];
+                    setCompactToggleLeft(dockLeft, { persist: false });
+                } else {
+                    setCompactToggleLeft(compactLeft, { persist: false });
+                }
+
+                if (shouldForceFirstCompactOrigin) {
+                    alignCompactToggleToExpandedPosition(prevRect);
+                    compactFirstCollapseDoneByDock[dock] = true;
+                } else if (!compactLeftHasStoredByDock[dock]) {
+                    alignCompactToggleToExpandedPosition(prevRect);
+                }
+            } else {
+                setCompactToggleLeft(compactLeft, { persist: false });
+            }
         }
 
         if (!options || options.persist !== false) {
@@ -5185,6 +5264,7 @@ function initHeaderToggle() {
         const dragDistance = Math.hypot(dx, dy);
         const moved = dragSession.moved || dragDistance >= TOGGLE_DRAG_ACTIVATE_THRESHOLD;
         let consumed = false;
+        let switchedDock = false;
 
         if (moved && !canceled) {
             consumed = true;
@@ -5192,13 +5272,14 @@ function initHeaderToggle() {
                 const nextDock = dy > 0 ? 'bottom' : 'top';
                 if (nextDock !== currentHeaderDockSide) {
                     applyHeaderDockSide(nextDock, { persist: true });
+                    switchedDock = true;
                 }
             }
         }
 
         clearDragSession();
 
-        if (consumed) {
+        if (consumed || switchedDock) {
             suppressToggleClick = true;
             window.setTimeout(() => {
                 suppressToggleClick = false;
@@ -5258,20 +5339,42 @@ function initHeaderToggle() {
 
     const savedDock = normalizeHeaderDockSide(readStorage(HEADER_DOCK_SIDE_KEY)) || DEFAULT_HEADER_DOCK_SIDE;
     const savedState = normalizeHeaderState(readStorage(HEADER_COLLAPSE_STATE_KEY)) || 'expanded';
-    const savedCompactLeft = normalizeCompactLeft(readStorage(HEADER_COMPACT_LEFT_KEY));
-    const storedMoved = readStorage(HEADER_COMPACT_LEFT_MOVED_KEY) === 'true';
+    const legacyLeft = normalizeCompactLeft(readStorage(HEADER_COMPACT_LEFT_KEY));
+    const savedTopLeft = readCompactLeftByDock('top');
+    const savedBottomLeft = readCompactLeftByDock('bottom');
+    const savedTopMoved = readCompactLeftMovedByDock('top');
+    const savedBottomMoved = readCompactLeftMovedByDock('bottom');
+    const fallbackLeft = clamp(COMPACT_LEFT_DEFAULT, COMPACT_LEFT_MIN, getCompactLeftMax());
+    const legacyMoved = legacyLeft != null && legacyLeft !== COMPACT_LEFT_DEFAULT;
+    const topMovedByValue = savedTopLeft != null && savedTopLeft !== COMPACT_LEFT_DEFAULT;
+    const bottomMovedByValue = savedBottomLeft != null && savedBottomLeft !== COMPACT_LEFT_DEFAULT;
+    const hasMovedMemory = savedTopMoved || savedBottomMoved || legacyMoved || topMovedByValue || bottomMovedByValue;
+    const preferredDockLeft = savedDock === 'bottom' ? savedBottomLeft : savedTopLeft;
+    const alternateDockLeft = savedDock === 'bottom' ? savedTopLeft : savedBottomLeft;
+    const mirroredInitialLeft = legacyLeft != null
+        ? legacyLeft
+        : (preferredDockLeft != null
+            ? preferredDockLeft
+            : (alternateDockLeft != null ? alternateDockLeft : fallbackLeft));
 
-    if (savedCompactLeft != null) {
-        compactLeft = savedCompactLeft;
-        compactLeftMoved = storedMoved || savedCompactLeft !== COMPACT_LEFT_DEFAULT;
-    } else {
-        compactLeft = clamp(COMPACT_LEFT_DEFAULT, COMPACT_LEFT_MIN, getCompactLeftMax());
-        compactLeftMoved = storedMoved;
+    compactLeft = mirroredInitialLeft;
+    compactLeftByDock.top = mirroredInitialLeft;
+    compactLeftByDock.bottom = mirroredInitialLeft;
+    compactLeftHasStoredByDock.top = hasMovedMemory;
+    compactLeftHasStoredByDock.bottom = hasMovedMemory;
+
+    if (hasMovedMemory) {
+        writeStorage(HEADER_COMPACT_LEFT_TOP_KEY, String(mirroredInitialLeft));
+        writeStorage(HEADER_COMPACT_LEFT_BOTTOM_KEY, String(mirroredInitialLeft));
+        writeStorage(HEADER_COMPACT_LEFT_MOVED_TOP_KEY, 'true');
+        writeStorage(HEADER_COMPACT_LEFT_MOVED_BOTTOM_KEY, 'true');
+        writeStorage(HEADER_COMPACT_LEFT_KEY, String(mirroredInitialLeft));
+        writeStorage(HEADER_COMPACT_LEFT_MOVED_KEY, 'true');
     }
 
     ensureToggleHints();
     applyHeaderDockSide(savedDock, { persist: false });
-    applyHeaderState(savedState, { persist: false });
+    applyHeaderState(savedState, { persist: false, bootstrap: true });
     setCompactToggleLeft(compactLeft, { persist: false });
 
     window.__refreshHeaderToggleI18n = () => {
