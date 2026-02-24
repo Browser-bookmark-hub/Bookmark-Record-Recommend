@@ -1459,8 +1459,8 @@ const i18n = {pageTitle: {
         'zh_CN': '没有找到匹配的记录',
         'en': 'No results'
     },helpTooltip: {
-        'zh_CN': '开源信息与快捷键',
-        'en': 'Open Source Info & Shortcuts'
+        'zh_CN': '问题反馈与快捷键',
+        'en': 'Feedback & Shortcuts'
     },headerToggleCollapseTooltip: {
         'zh_CN': '收起标题栏',
         'en': 'Collapse header'
@@ -1759,8 +1759,8 @@ const i18n = {pageTitle: {
         'zh_CN': '点击排行',
         'en': 'Click Ranking'
     },shortcutsModalTitle: {
-        'zh_CN': '开源信息与快捷键',
-        'en': 'Open Source Info & Shortcuts'
+        'zh_CN': '问题反馈与快捷键',
+        'en': 'Feedback & Shortcuts'
     },openSourceGithubLabel: {
         'zh_CN': 'GitHub 仓库:',
         'en': 'GitHub Repository:'
@@ -2781,7 +2781,7 @@ function applyLanguage() {
     const settingsLanguageText = document.getElementById('settingsLanguageText');
     if (settingsLanguageText) settingsLanguageText.textContent = '中文 - English';
     const settingsHelpText = document.getElementById('settingsHelpText');
-    if (settingsHelpText) settingsHelpText.textContent = isEn ? 'Open Source & Shortcuts' : '开源信息与快捷键';
+    if (settingsHelpText) settingsHelpText.textContent = isEn ? 'Feedback & Shortcuts' : '问题反馈与快捷键';
     const settingsSidebarText = document.getElementById('settingsSidebarText');
     if (settingsSidebarText) settingsSidebarText.textContent = isEn ? 'Sidebar Width Settings' : '菜单栏宽度设置';
 

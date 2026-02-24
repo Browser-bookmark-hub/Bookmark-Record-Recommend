@@ -1510,6 +1510,19 @@ body.header-dock-bottom:not(.header-compact) .settings-menu {
     color: #fff;
 }
 
+html[lang="en"] .sidebar-manual-state-row .sidebar-state-btn {
+    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+html[lang="en"] #sidebarManualStateHiddenBtn {
+    padding-left: 7px;
+    padding-right: 9px;
+}
+
 .sidebar-settings-input {
     width: 84px;
     border: 1px solid var(--border-color);
@@ -10897,6 +10910,9 @@ html.side-panel-mode .widgets-cards-row .card-due-badge {
     grid-template-columns: 24px 18px minmax(100px, 1fr) 70px 65px;
     align-items: center;
     gap: 10px;
+    width: 100%;
+    min-width: 420px;
+    box-sizing: border-box;
     padding: 8px 12px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -11139,7 +11155,9 @@ html.side-panel-mode .widgets-cards-row .card-due-badge {
 #additionsTrackingPanel .tracking-list {
     padding: 12px;
     max-height: 320px;
+    overflow-x: auto;
     overflow-y: auto;
+    box-sizing: border-box;
 }
 
 /* 响应式 */
