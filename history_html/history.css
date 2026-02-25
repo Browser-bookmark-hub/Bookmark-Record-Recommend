@@ -2414,6 +2414,12 @@ html.layout-resizing *::after {
     /* Visually center with text */
 }
 
+.widgets-week-title-count {
+    color: var(--accent-primary);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Specific override for the toggle button to avoid blue accent if generic styles apply */
 .widget-header-action-btn {
     margin-left: auto;
@@ -2808,6 +2814,7 @@ html.sidebar-state-hidden #sidebar {
 #widgetsHistoryWeekWidget .widgets-week-day-number {
     font-size: 12px;
     line-height: 1;
+    color: var(--accent-primary);
 }
 
 #widgetsAdditionsWeekWidget .widgets-week-total,
@@ -2845,6 +2852,10 @@ html.sidebar-state-hidden #sidebar {
     border-radius: 8px;
     background: var(--bg-tertiary);
     border: 1px solid transparent;
+}
+
+.widgets-week-day-cell.is-clickable {
+    cursor: pointer;
 }
 
 .widgets-week-day-cell:hover {

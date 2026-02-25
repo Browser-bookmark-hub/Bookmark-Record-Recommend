@@ -91,6 +91,8 @@ let currentHeaderDockSide = isSidePanelMode ? 'bottom' : 'top';
 window.__SIDE_PANEL_MODE__ = isSidePanelMode;
 
 const HISTORY_JUMP_TARGET_MODE_KEY = 'historyJumpTargetMode';
+const WIDGETS_JUMP_CONTEXT_KEY = 'widgetsJumpContext_v1';
+const WIDGETS_JUMP_CONTEXT_MAX_AGE_MS = 2 * 60 * 1000;
 
 function normalizeHistoryJumpTargetMode(rawMode) {
     const safeMode = String(rawMode || '').toLowerCase();
@@ -2489,9 +2491,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 使用智能等待：尝试渲染，如果数据不完整则等待后重试
     // 初始化时强制刷新缓存，确保显示最新数据
 
+    if (isSidePanelMode && currentView === 'widgets' && widgetsSmartSortEnabled) {
+        widgetsSortApplyDeferredInteractionsOnOpen = true;
+    }
+
 
     // 根据当前视图渲染
     await renderCurrentView();
+
+    try {
+        await applyPendingWidgetsJumpContextFromNavToken(urlParams.get('nav'));
+    } catch (_) { }
 
     // [View Sync] Ensure the URL param always wins after initial render (protect against late overrides)
     try {
@@ -5590,6 +5600,11 @@ function switchView(view) {
 
     // 更新全局变量
     currentView = view;
+
+    if (isSidePanelMode && previousView !== view && view === 'widgets' && widgetsSmartSortEnabled) {
+        widgetsSortApplyDeferredInteractionsOnOpen = true;
+    }
+
     try { window.currentView = currentView; } catch (_) { }
     updatePageHeaderTitle(currentView);
 
@@ -6485,9 +6500,10 @@ function applyWidgetsSmartSort(options = {}) {
     const now = Date.now();
     widgetsSortOrder = normalizeWidgetsSortOrder(widgetsSortOrder);
 
-    const deferEnabled = isSidePanelMode && widgetsSmartSortEnabled && widgetsSortDeferredInteractionIds.size > 0;
-    const applyDeferredOnOpenNow = deferEnabled && widgetsSortApplyDeferredInteractionsOnOpen === true;
     const sidepanelSmartSortEnabled = isSidePanelMode && widgetsSmartSortEnabled;
+    const deferEnabled = sidepanelSmartSortEnabled && widgetsSortDeferredInteractionIds.size > 0;
+    const applyDeferredOnOpenNow = sidepanelSmartSortEnabled && widgetsSortApplyDeferredInteractionsOnOpen === true;
+    const freezeRealtimeReorderInSidePanel = sidepanelSmartSortEnabled && !force && !applyDeferredOnOpenNow;
     const nextDeferredIds = new Set(widgetsSortDeferredInteractionIds || []);
     let deferredIdsUpdated = false;
 
@@ -6540,6 +6556,13 @@ function applyWidgetsSmartSort(options = {}) {
         .filter(Boolean);
 
     if (!entries.length) return;
+
+    if (freezeRealtimeReorderInSidePanel) {
+        if (deferredIdsUpdated) {
+            writeWidgetsSortDeferredInteractionIds(nextDeferredIds);
+        }
+        return;
+    }
 
     if (widgetsSmartSortEnabled) {
         entries.sort((a, b) => {
@@ -6816,6 +6839,58 @@ function getWidgetsDateKey(date) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function normalizeWidgetsDateKey(value) {
+    if (!value) return '';
+
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        const directMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+        if (directMatch) {
+            return `${directMatch[1]}-${directMatch[2]}-${directMatch[3]}`;
+        }
+
+        const parsedTextDate = new Date(trimmed);
+        if (Number.isNaN(parsedTextDate.getTime())) return '';
+        parsedTextDate.setHours(0, 0, 0, 0);
+        return getWidgetsDateKey(parsedTextDate);
+    }
+
+    const parsedDate = value instanceof Date ? new Date(value) : new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) return '';
+    parsedDate.setHours(0, 0, 0, 0);
+    return getWidgetsDateKey(parsedDate);
+}
+
+function parseWidgetsDateKey(dateKey) {
+    const safeKey = normalizeWidgetsDateKey(dateKey);
+    if (!safeKey) return null;
+
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(safeKey);
+    if (!match) return null;
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+
+    const date = new Date(year, month - 1, day);
+    date.setHours(0, 0, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getWidgetsWeekStartByDate(dateInput) {
+    const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return null;
+
+    date.setHours(0, 0, 0, 0);
+    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0;
+    const currentDay = date.getDay();
+    let diff = currentDay - weekStartDay;
+    if (diff < 0) diff += 7;
+    date.setDate(date.getDate() - diff);
+    return date;
+}
+
 function getWidgetsWeekdayLabel(date) {
     if (currentLang === 'zh_CN') {
         const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -6827,7 +6902,7 @@ function getWidgetsWeekdayLabel(date) {
 function formatWidgetsWeekTotal(total) {
     const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
     if (currentLang === 'zh_CN') return `本周合集${safeTotal}条`;
-    return `Week ${safeTotal}`;
+    return `This week total ${safeTotal}`;
 }
 
 function computeWidgetsWeekDailyCounts(bookmarksByDate) {
@@ -6846,7 +6921,7 @@ function computeWidgetsWeekDailyCounts(bookmarksByDate) {
     return { dailyCounts, total };
 }
 
-function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText) {
+function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, widgetType = 'additions') {
     if (!widgetList) return;
 
     if (!Array.isArray(dailyCounts) || dailyCounts.length === 0 || total <= 0) {
@@ -6859,6 +6934,8 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText) {
     const daysRow = document.createElement('div');
     daysRow.className = 'widgets-week-days-row';
 
+    const safeWidgetType = widgetType === 'history' ? 'history' : 'additions';
+
     dailyCounts.forEach((item) => {
         const cell = document.createElement('div');
         cell.className = 'widgets-week-day-cell';
@@ -6870,6 +6947,33 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText) {
         const count = document.createElement('span');
         count.className = 'widgets-week-day-number';
         count.textContent = `${item.count}`;
+
+        if (Number(item.count) > 0) {
+            const targetDateKey = normalizeWidgetsDateKey(item.date);
+            const handleJump = () => {
+                if (!targetDateKey) return;
+                if (safeWidgetType === 'history') {
+                    navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                } else {
+                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                }
+            };
+
+            cell.classList.add('is-clickable');
+            cell.tabIndex = 0;
+            cell.setAttribute('role', 'button');
+            cell.addEventListener('click', (event) => {
+                event.stopPropagation();
+                handleJump();
+            });
+            cell.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleJump();
+                }
+            });
+        }
 
         cell.appendChild(label);
         cell.appendChild(count);
@@ -6887,14 +6991,41 @@ function setWidgetsWeekWidgetHeaderCount(widgetType, total) {
 
     const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
     const totalText = formatWidgetsWeekTotal(safeTotal);
-    if (currentLang === 'zh_CN') {
-        const base = safeType === 'history' ? '点击记录' : '书签添加记录';
-        titleEl.textContent = `${base}（${totalText}）`;
-        return;
+    const base = currentLang === 'zh_CN'
+        ? (safeType === 'history' ? '点击记录' : '书签添加记录')
+        : (safeType === 'history' ? 'Click History' : 'Bookmark Additions');
+    const openBracket = currentLang === 'zh_CN' ? '（' : ' (';
+    const closeBracket = currentLang === 'zh_CN' ? '）' : ')';
+
+    titleEl.textContent = '';
+    titleEl.appendChild(document.createTextNode(base + openBracket));
+
+    const matchedNumber = String(totalText).match(/^(.*?)(\d[\d,]*)(.*)$/);
+    if (matchedNumber) {
+        const prefixText = matchedNumber[1] || '';
+        const numberText = matchedNumber[2] || '';
+        const suffixText = matchedNumber[3] || '';
+
+        if (prefixText) {
+            titleEl.appendChild(document.createTextNode(prefixText));
+        }
+
+        const numberSpan = document.createElement('span');
+        numberSpan.className = 'widgets-week-title-count';
+        numberSpan.textContent = numberText;
+        titleEl.appendChild(numberSpan);
+
+        if (suffixText) {
+            titleEl.appendChild(document.createTextNode(suffixText));
+        }
+    } else {
+        const fallbackSpan = document.createElement('span');
+        fallbackSpan.className = 'widgets-week-title-count';
+        fallbackSpan.textContent = totalText;
+        titleEl.appendChild(fallbackSpan);
     }
 
-    const base = safeType === 'history' ? 'Click History' : 'Bookmark Additions';
-    titleEl.textContent = `${base} (${totalText})`;
+    titleEl.appendChild(document.createTextNode(closeBracket));
 }
 
 async function waitForBookmarkCalendarForWidgets(timeoutMs = 3000) {
@@ -6966,110 +7097,364 @@ function openBookmarkFromWidgets(url, title = '') {
     }
 }
 
+function createWidgetsJumpContext(action, options = {}) {
+    const safeAction = String(action || '').trim();
+    if (!safeAction) return null;
+
+    const context = {
+        source: 'widgets',
+        action: safeAction,
+        createdAt: Date.now(),
+        token: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    };
+
+    if (safeAction === 'ranking') {
+        context.range = normalizeWidgetsRankingRange(options.range || 'day');
+    } else if (safeAction === 'review-week' || safeAction === 'history-week') {
+        const dateKey = normalizeWidgetsDateKey(options.dateKey || options.date || null);
+        if (dateKey) {
+            context.dateKey = dateKey;
+        }
+    } else if (safeAction === 'related') {
+        context.level = normalizeWidgetsRelatedDepth(options.level || 'level1');
+        context.range = normalizeWidgetsRelatedRange(options.range || 'day');
+        const filter = serializeWidgetsRelatedFilterForJump(options.filter || null);
+        if (filter) {
+            context.filter = filter;
+        }
+    }
+
+    return context;
+}
+
+function isValidWidgetsJumpAction(action) {
+    return action === 'tracking'
+        || action === 'ranking'
+        || action === 'review-week'
+        || action === 'history-week'
+        || action === 'related';
+}
+
+function persistWidgetsJumpContext(context) {
+    if (!context || typeof context !== 'object' || !context.token) return null;
+    try {
+        localStorage.setItem(WIDGETS_JUMP_CONTEXT_KEY, JSON.stringify(context));
+        return context.token;
+    } catch (_) {
+        return null;
+    }
+}
+
+function readWidgetsJumpContext() {
+    try {
+        const raw = localStorage.getItem(WIDGETS_JUMP_CONTEXT_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') {
+            localStorage.removeItem(WIDGETS_JUMP_CONTEXT_KEY);
+            return null;
+        }
+
+        const token = typeof parsed.token === 'string' ? parsed.token.trim() : '';
+        const action = typeof parsed.action === 'string' ? parsed.action.trim() : '';
+        const createdAt = Number(parsed.createdAt);
+        const ageMs = Number.isFinite(createdAt) ? Date.now() - createdAt : Number.POSITIVE_INFINITY;
+
+        if (!token || !isValidWidgetsJumpAction(action) || !Number.isFinite(createdAt) || ageMs > WIDGETS_JUMP_CONTEXT_MAX_AGE_MS) {
+            localStorage.removeItem(WIDGETS_JUMP_CONTEXT_KEY);
+            return null;
+        }
+
+        return parsed;
+    } catch (_) {
+        try { localStorage.removeItem(WIDGETS_JUMP_CONTEXT_KEY); } catch (_) { }
+        return null;
+    }
+}
+
+function consumeWidgetsJumpContext(expectedToken = '') {
+    const context = readWidgetsJumpContext();
+    if (!context) return null;
+
+    const safeExpectedToken = String(expectedToken || '').trim();
+    if (safeExpectedToken && context.token !== safeExpectedToken) {
+        return null;
+    }
+
+    try { localStorage.removeItem(WIDGETS_JUMP_CONTEXT_KEY); } catch (_) { }
+    return context;
+}
+
+function discardWidgetsJumpContextByToken(token) {
+    const safeToken = String(token || '').trim();
+    if (!safeToken) return;
+
+    const context = readWidgetsJumpContext();
+    if (!context || context.token !== safeToken) return;
+
+    try { localStorage.removeItem(WIDGETS_JUMP_CONTEXT_KEY); } catch (_) { }
+}
+
+function serializeWidgetsRelatedFilterForJump(filter) {
+    const normalized = cloneWidgetsRelatedFilter(filter);
+    if (!normalized) return null;
+
+    if (normalized.type === 'day') {
+        const dayKey = normalizeWidgetsDateKey(normalized.value);
+        if (!dayKey) return null;
+        return { type: 'day', value: dayKey };
+    }
+
+    return {
+        type: normalized.type,
+        value: normalized.value
+    };
+}
+
+function deserializeWidgetsRelatedFilterFromJump(filter) {
+    if (!filter || typeof filter !== 'object' || !filter.type) return null;
+
+    if (filter.type === 'day') {
+        const dayDate = parseWidgetsDateKey(filter.value);
+        if (!dayDate) return null;
+        return { type: 'day', value: dayDate };
+    }
+
+    return {
+        type: filter.type,
+        value: filter.value
+    };
+}
+
+function focusBookmarkCalendarDate(targetDateKey) {
+    const calendar = window.bookmarkCalendarInstance;
+    const targetDate = parseWidgetsDateKey(targetDateKey);
+    if (!calendar || !targetDate) return false;
+
+    const weekStart = getWidgetsWeekStartByDate(targetDate);
+    if (calendar.selectMode && typeof calendar.exitLocateMode === 'function') {
+        calendar.exitLocateMode();
+    }
+
+    calendar.currentDay = new Date(targetDate);
+    if (weekStart) {
+        calendar.currentWeekStart = new Date(weekStart);
+    }
+    calendar.viewLevel = 'day';
+    if (typeof calendar.render === 'function') {
+        calendar.render();
+    }
+    return true;
+}
+
+function focusBrowsingCalendarDate(targetDateKey) {
+    const calendar = window.browsingHistoryCalendarInstance;
+    const targetDate = parseWidgetsDateKey(targetDateKey);
+    if (!calendar || !targetDate) return false;
+
+    const weekStart = getWidgetsWeekStartByDate(targetDate);
+    if (calendar.selectMode && typeof calendar.exitLocateMode === 'function') {
+        calendar.exitLocateMode();
+    }
+
+    calendar.currentDay = new Date(targetDate);
+    if (weekStart) {
+        calendar.currentWeekStart = new Date(weekStart);
+    }
+    calendar.viewLevel = 'day';
+    if (typeof calendar.render === 'function') {
+        calendar.render();
+    }
+    return true;
+}
+
+function applyWidgetsJumpContext(context) {
+    if (!context || context.source !== 'widgets') return false;
+
+    const action = String(context.action || '').trim();
+    if (action === 'tracking') {
+        navigateToAdditionsTrackingFromWidgets();
+        return true;
+    }
+
+    if (action === 'ranking') {
+        navigateToAdditionsRankingFromWidgets({ range: context.range });
+        return true;
+    }
+
+    if (action === 'review-week') {
+        navigateToAdditionsReviewWeekFromWidgets({ dateKey: context.dateKey || '' });
+        return true;
+    }
+
+    if (action === 'history-week') {
+        navigateToAdditionsHistoryWeekFromWidgets({ dateKey: context.dateKey || '' });
+        return true;
+    }
+
+    if (action === 'related') {
+        const level = normalizeWidgetsRelatedDepth(context.level || (context.filter ? 'level2' : 'level1'));
+        const range = normalizeWidgetsRelatedRange(context.range || 'day');
+        const filter = deserializeWidgetsRelatedFilterFromJump(context.filter || null);
+        navigateToAdditionsRelatedLevelFromWidgets(level, range, filter);
+        return true;
+    }
+
+    return false;
+}
+
+async function applyPendingWidgetsJumpContextFromNavToken(navToken = '') {
+    const safeNavToken = String(navToken || '').trim();
+    if (!safeNavToken) return false;
+
+    const context = consumeWidgetsJumpContext(safeNavToken);
+    if (!context) return false;
+
+    try {
+        return applyWidgetsJumpContext(context);
+    } catch (error) {
+        console.warn('[WidgetsJump] 应用跳转上下文失败:', error);
+        return false;
+    }
+}
+
+function navigateToAdditionsFromWidgetsWithJumpFallback(inPanelNavigate, jumpContext = null) {
+    if (typeof inPanelNavigate !== 'function') return;
+
+    if (!shouldJumpToHtmlFromSidePanel()) {
+        inPanelNavigate();
+        return;
+    }
+
+    const contextToken = jumpContext ? persistWidgetsJumpContext(jumpContext) : null;
+    const navigateToken = contextToken || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    openOrFocusHistoryPage({
+        view: 'additions',
+        forceNavigate: true,
+        navigateToken
+    })
+        .then((tabId) => {
+            if (typeof tabId === 'number') return;
+            discardWidgetsJumpContextByToken(contextToken);
+            inPanelNavigate();
+        })
+        .catch(() => {
+            discardWidgetsJumpContextByToken(contextToken);
+            inPanelNavigate();
+        });
+}
+
 function navigateToAdditionsTrackingFromWidgets() {
     try {
         localStorage.setItem('additionsActiveTab', 'tracking');
     } catch (_) { }
 
-    if (shouldJumpToHtmlFromSidePanel()) {
-        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
-        return;
-    }
+    const jumpContext = createWidgetsJumpContext('tracking');
 
-    switchView('additions');
-    setTimeout(() => {
-        const trackingTab = document.getElementById('additionsTabTracking');
-        if (trackingTab) trackingTab.click();
-    }, 100);
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
+        setTimeout(() => {
+            const trackingTab = document.getElementById('additionsTabTracking');
+            if (trackingTab) trackingTab.click();
+        }, 100);
+    }, jumpContext);
 }
 
-function navigateToAdditionsRankingFromWidgets() {
-    const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+function navigateToAdditionsRankingFromWidgets(options = {}) {
+    const range = normalizeWidgetsRankingRange(
+        options.range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day'
+    );
     try {
         localStorage.setItem('browsingRankingActiveRange', range);
         localStorage.setItem('additionsActiveTab', 'browsing');
         localStorage.setItem('browsingActiveSubTab', 'ranking');
     } catch (_) { }
 
-    if (shouldJumpToHtmlFromSidePanel()) {
-        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
-        return;
-    }
+    const jumpContext = createWidgetsJumpContext('ranking', { range });
 
-    switchView('additions');
-    setTimeout(() => {
-        const browsingTab = document.getElementById('additionsTabBrowsing');
-        if (!browsingTab) return;
-        browsingTab.click();
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
         setTimeout(() => {
-            const rankingTab = document.getElementById('browsingTabRanking');
-            if (rankingTab) rankingTab.click();
-        }, 50);
-    }, 100);
+            const browsingTab = document.getElementById('additionsTabBrowsing');
+            if (!browsingTab) return;
+            browsingTab.click();
+            setTimeout(() => {
+                const rankingTab = document.getElementById('browsingTabRanking');
+                if (rankingTab) rankingTab.click();
+            }, 50);
+        }, 100);
+    }, jumpContext);
 }
 
-function navigateToAdditionsReviewWeekFromWidgets() {
+function navigateToAdditionsReviewWeekFromWidgets(options = {}) {
+    const targetDateKey = normalizeWidgetsDateKey(options.dateKey || options.date || '');
     try {
         localStorage.setItem('additionsActiveTab', 'review');
     } catch (_) { }
 
-    if (shouldJumpToHtmlFromSidePanel()) {
-        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
-        return;
-    }
+    const jumpContext = createWidgetsJumpContext('review-week', { dateKey: targetDateKey });
 
-    switchView('additions');
-    setTimeout(() => {
-        const reviewTab = document.getElementById('additionsTabReview');
-        if (reviewTab) reviewTab.click();
-
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
         setTimeout(() => {
-            try {
-                if (typeof initBookmarkCalendar === 'function' && !window.bookmarkCalendarInstance) {
-                    initBookmarkCalendar();
+            const reviewTab = document.getElementById('additionsTabReview');
+            if (reviewTab) reviewTab.click();
+
+            setTimeout(async () => {
+                try {
+                    if (typeof initBookmarkCalendar === 'function' && !window.bookmarkCalendarInstance) {
+                        initBookmarkCalendar();
+                    }
+                    await waitForBookmarkCalendarForWidgets();
+                    if (!focusBookmarkCalendarDate(targetDateKey)) {
+                        focusBookmarkCalendarCurrentWeek();
+                    }
+                } catch (e) {
+                    console.warn('[Widgets] 跳转书签添加记录周视图失败:', e);
                 }
-                focusBookmarkCalendarCurrentWeek();
-            } catch (e) {
-                console.warn('[Widgets] 跳转书签添加记录周视图失败:', e);
-            }
-        }, 80);
-    }, 100);
+            }, 80);
+        }, 100);
+    }, jumpContext);
 }
 
-function navigateToAdditionsHistoryWeekFromWidgets() {
+function navigateToAdditionsHistoryWeekFromWidgets(options = {}) {
+    const targetDateKey = normalizeWidgetsDateKey(options.dateKey || options.date || '');
     try {
         localStorage.setItem('additionsActiveTab', 'browsing');
         localStorage.setItem('browsingActiveSubTab', 'history');
     } catch (_) { }
 
-    if (shouldJumpToHtmlFromSidePanel()) {
-        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
-        return;
-    }
+    const jumpContext = createWidgetsJumpContext('history-week', { dateKey: targetDateKey });
 
-    switchView('additions');
-    setTimeout(() => {
-        const browsingTab = document.getElementById('additionsTabBrowsing');
-        if (!browsingTab) return;
-        browsingTab.click();
-
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
         setTimeout(() => {
-            const historyTab = document.getElementById('browsingTabHistory');
-            if (historyTab) historyTab.click();
+            const browsingTab = document.getElementById('additionsTabBrowsing');
+            if (!browsingTab) return;
+            browsingTab.click();
 
-            setTimeout(async () => {
-                try {
-                    if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-                        initBrowsingHistoryCalendar();
+            setTimeout(() => {
+                const historyTab = document.getElementById('browsingTabHistory');
+                if (historyTab) historyTab.click();
+
+                setTimeout(async () => {
+                    try {
+                        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+                            initBrowsingHistoryCalendar();
+                        }
+                        await waitForBrowsingCalendarForWidgets();
+                        if (!focusBrowsingCalendarDate(targetDateKey)) {
+                            focusBrowsingCalendarCurrentWeek();
+                        }
+                    } catch (e) {
+                        console.warn('[Widgets] 跳转点击记录周视图失败:', e);
                     }
-                    await waitForBrowsingCalendarForWidgets();
-                    focusBrowsingCalendarCurrentWeek();
-                } catch (e) {
-                    console.warn('[Widgets] 跳转点击记录周视图失败:', e);
-                }
-            }, 80);
-        }, 60);
-    }, 100);
+                }, 80);
+            }, 60);
+        }, 100);
+    }, jumpContext);
 }
 
 function cloneWidgetsRelatedFilter(filter) {
@@ -7233,6 +7618,11 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
     const safeDepth = setWidgetsRelatedFolderDepth(level, true, false);
     const targetRange = setWidgetsRelatedPrimaryRange(range, true, false);
     const normalizedFilter = safeDepth === 'level2' ? cloneWidgetsRelatedFilter(secondaryFilter) : null;
+    const jumpContext = createWidgetsJumpContext('related', {
+        level: safeDepth,
+        range: targetRange,
+        filter: normalizedFilter
+    });
 
     widgetsRelatedActiveSecondaryKey = getWidgetsRelatedFilterKey(normalizedFilter);
 
@@ -7242,11 +7632,6 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
         localStorage.setItem('browsingActiveSubTab', 'related');
     } catch (_) { }
 
-    if (shouldJumpToHtmlFromSidePanel()) {
-        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
-        return;
-    }
-
     const applySecondary = () => {
         if (safeDepth === 'level2' && normalizedFilter) {
             scheduleApplyRelatedFilter(normalizedFilter);
@@ -7255,34 +7640,36 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
         }
     };
 
-    switchView('additions');
-    setTimeout(() => {
-        const browsingTab = document.getElementById('additionsTabBrowsing');
-        if (browsingTab && !browsingTab.classList.contains('active')) {
-            browsingTab.click();
-        }
-
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
         setTimeout(() => {
-            const relatedTab = document.getElementById('browsingTabRelated');
-            if (relatedTab && !relatedTab.classList.contains('active')) {
-                relatedTab.click();
+            const browsingTab = document.getElementById('additionsTabBrowsing');
+            if (browsingTab && !browsingTab.classList.contains('active')) {
+                browsingTab.click();
             }
 
             setTimeout(() => {
-                try {
-                    if (typeof setBrowsingRelatedActiveRange === 'function') {
-                        setBrowsingRelatedActiveRange(targetRange, true);
-                    } else {
-                        browsingRelatedCurrentRange = targetRange;
-                        showBrowsingRelatedTimeMenu(targetRange);
-                        loadBrowsingRelatedHistory(targetRange);
-                    }
+                const relatedTab = document.getElementById('browsingTabRelated');
+                if (relatedTab && !relatedTab.classList.contains('active')) {
+                    relatedTab.click();
+                }
 
-                    setTimeout(applySecondary, 260);
-                } catch (_) { }
-            }, 150);
-        }, 70);
-    }, 100);
+                setTimeout(() => {
+                    try {
+                        if (typeof setBrowsingRelatedActiveRange === 'function') {
+                            setBrowsingRelatedActiveRange(targetRange, true);
+                        } else {
+                            browsingRelatedCurrentRange = targetRange;
+                            showBrowsingRelatedTimeMenu(targetRange);
+                            loadBrowsingRelatedHistory(targetRange);
+                        }
+
+                        setTimeout(applySecondary, 260);
+                    } catch (_) { }
+                }, 150);
+            }, 70);
+        }, 100);
+    }, jumpContext);
 }
 
 async function getWidgetsRelatedFolderItems(depth = 'level1') {
@@ -7428,17 +7815,7 @@ async function updateWidgetsRelatedWidget() {
                 const filterKey = getWidgetsRelatedFilterKey(filter);
                 if (!filterKey) return;
 
-                if (widgetsRelatedActiveSecondaryKey !== filterKey) {
-                    widgetsRelatedActiveSecondaryKey = filterKey;
-                    try {
-                        const maybePromise = updateWidgetsRelatedWidget();
-                        if (maybePromise && typeof maybePromise.catch === 'function') {
-                            maybePromise.catch(() => { });
-                        }
-                    } catch (_) { }
-                    return;
-                }
-
+                widgetsRelatedActiveSecondaryKey = filterKey;
                 navigateToAdditionsRelatedLevelFromWidgets('level2', widgetsRelatedPrimaryRange, filter);
             });
 
@@ -7660,7 +8037,7 @@ async function updateWidgetsAdditionsWeekWidget() {
 
         const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
         setWidgetsWeekWidgetHeaderCount('additions', total);
-        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
+        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'additions');
     } catch (error) {
         console.warn('[Widgets] 更新书签添加周视图小组件失败:', error);
         setWidgetsWeekWidgetHeaderCount('additions', 0);
@@ -7686,7 +8063,7 @@ async function updateWidgetsHistoryWeekWidget() {
 
         const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
         setWidgetsWeekWidgetHeaderCount('history', total);
-        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText);
+        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'history');
     } catch (error) {
         console.warn('[Widgets] 更新点击记录周视图小组件失败:', error);
         setWidgetsWeekWidgetHeaderCount('history', 0);
@@ -8039,28 +8416,32 @@ function initWidgetsView() {
 
     if (trackingWidget) {
         trackingWidget.addEventListener('click', (e) => {
-            if (e.target.closest('.time-tracking-widget-item') || e.target.closest('a')) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (target && (target.closest('.time-tracking-widget-item') || target.closest('a'))) return;
             navigateToAdditionsTrackingFromWidgets();
         });
     }
 
     if (rankingWidget) {
         rankingWidget.addEventListener('click', (e) => {
-            if (e.target.closest('#widgetsRankingRangeToggleBtn') || e.target.closest('.time-tracking-widget-item') || e.target.closest('a')) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (target && (target.closest('#widgetsRankingRangeToggleBtn') || target.closest('.time-tracking-widget-item') || target.closest('a'))) return;
             navigateToAdditionsRankingFromWidgets();
         });
     }
 
     if (additionsWeekWidget) {
         additionsWeekWidget.addEventListener('click', (e) => {
-            if (e.target.closest('button') || e.target.closest('a')) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (target && (target.closest('button') || target.closest('a'))) return;
             navigateToAdditionsReviewWeekFromWidgets();
         });
     }
 
     if (historyWeekWidget) {
         historyWeekWidget.addEventListener('click', (e) => {
-            if (e.target.closest('button') || e.target.closest('a')) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (target && (target.closest('button') || target.closest('a'))) return;
             navigateToAdditionsHistoryWeekFromWidgets();
         });
     }
@@ -8699,6 +9080,16 @@ function getHistoryPageUrl(view = 'widgets', options = {}) {
     if (options.sidepanel === true) {
         query.set('sidepanel', '1');
     }
+
+    const shouldAttachNavToken = options.forceNavigate === true || options.navigateToken != null;
+    if (shouldAttachNavToken) {
+        const rawToken = options.navigateToken;
+        const navToken = rawToken != null && String(rawToken).trim() !== ''
+            ? String(rawToken)
+            : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        query.set('nav', navToken);
+    }
+
     const qs = query.toString();
     if (browserAPI?.runtime?.getURL) {
         return browserAPI.runtime.getURL(`history_html/history.html${qs ? `?${qs}` : ''}`);
@@ -8789,16 +9180,25 @@ async function createHistoryPageTab(url) {
 }
 
 async function openOrFocusHistoryPage(options = {}) {
-    const { view = currentView || 'widgets' } = options;
+    const {
+        view = currentView || 'widgets',
+        forceNavigate = false,
+        navigateToken = null
+    } = options;
     const safeView = normalizeHistoryPageView(view, 'widgets');
-    const url = getHistoryPageUrl(safeView, { sidepanel: false });
+    const url = getHistoryPageUrl(safeView, {
+        sidepanel: false,
+        forceNavigate,
+        navigateToken
+    });
 
     let targetTab = await findLatestHistoryPageTabInCurrentWindow();
     if (targetTab && typeof targetTab.id === 'number') {
         try {
             const parsed = new URL(targetTab.url || targetTab.pendingUrl || '');
             const currentTabView = parsed.searchParams.get('view');
-            if (currentTabView !== safeView) {
+            const shouldNavigateTab = forceNavigate === true || currentTabView !== safeView;
+            if (shouldNavigateTab) {
                 targetTab = await new Promise((resolve) => {
                     try {
                         browserAPI.tabs.update(targetTab.id, { url, active: true }, (tab) => resolve(tab || targetTab));
