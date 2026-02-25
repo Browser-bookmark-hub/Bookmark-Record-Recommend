@@ -2,6 +2,10 @@
 (function () {
   try {
     const params = new URLSearchParams(location.search);
+    const sidePanelFlag = params.get('sidepanel') || params.get('side_panel') || params.get('panel');
+    const isSidePanelMode = sidePanelFlag === '1' || sidePanelFlag === 'true';
+    const viewStorageKey = isSidePanelMode ? 'lastActiveView__sidepanel' : 'lastActiveView';
+
     let view = params.get('view');
     let defaultView = 'widgets';
     if (Array.isArray(window.__ALLOWED_VIEWS) && window.__ALLOWED_VIEWS.length) {
@@ -11,7 +15,7 @@
       defaultView = window.__DEFAULT_VIEW;
     }
     if (!view) {
-      view = localStorage.getItem('lastActiveView') || defaultView;
+      view = localStorage.getItem(viewStorageKey) || defaultView;
     }
     if (document?.documentElement) {
       document.documentElement.setAttribute('data-initial-view', view);

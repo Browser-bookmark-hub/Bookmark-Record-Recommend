@@ -249,12 +249,15 @@ async function saveSession(session) {
 
                 // 通知其他页面T值数据已更新
                 try {
-                    chrome.runtime.sendMessage({
+                    const maybePromise = browserAPI?.runtime?.sendMessage?.({
                         action: 'trackingDataUpdated',
                         url: record.url,
                         title: record.title,
                         compositeMs: record.compositeMs
                     });
+                    if (maybePromise && typeof maybePromise.catch === 'function') {
+                        maybePromise.catch(() => { });
+                    }
                 } catch (e) {
                     // 忽略发送失败（可能没有监听者）
                 }

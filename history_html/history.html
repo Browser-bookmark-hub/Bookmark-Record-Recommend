@@ -188,6 +188,22 @@
                         </div>
                     </div>
                 </div>
+                <button class="settings-menu-item settings-menu-item-expandable"
+                    data-action="toggle-jump-settings" id="sidebarJumpSettingsToggle" type="button" aria-expanded="false">
+                    <i class="fas fa-share-square"></i>
+                    <span id="sidebarJumpSettingsText"></span>
+                    <i class="fas fa-chevron-down settings-submenu-caret" aria-hidden="true"></i>
+                </button>
+                <div id="sidebarJumpSettingsPanel" class="sidebar-settings-panel" hidden>
+                    <label class="sidebar-jump-option" id="sidebarJumpModeHtmlOption" data-action="set-jump-target-mode" data-mode="html">
+                        <input id="sidebarJumpModeHtmlCheckbox" type="checkbox" data-action="set-jump-target-mode" data-mode="html">
+                        <span id="sidebarJumpModeHtmlText"></span>
+                    </label>
+                    <label class="sidebar-jump-option" id="sidebarJumpModeSidepanelOption" data-action="set-jump-target-mode" data-mode="sidepanel">
+                        <input id="sidebarJumpModeSidepanelCheckbox" type="checkbox" data-action="set-jump-target-mode" data-mode="sidepanel">
+                        <span id="sidebarJumpModeSidepanelText"></span>
+                    </label>
+                </div>
             </div>
         </div>
     </header>

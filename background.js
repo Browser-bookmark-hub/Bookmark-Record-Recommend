@@ -21,8 +21,6 @@ const browserAPI = (function () {
   throw new Error('Unsupported browser');
 })();
 
-const SIDE_PANEL_HISTORY_PATH = 'history_html/history.html?view=widgets&sidepanel=1';
-
 function normalizeHistoryPanelView(view, fallback = 'widgets') {
   if (view === 'widgets' || view === 'recommend' || view === 'additions') {
     return view;
@@ -47,11 +45,6 @@ function initSidePanel() {
   try {
     if (browserAPI.sidePanel.setPanelBehavior) {
       browserAPI.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }, () => {});
-    }
-  } catch (_) {}
-  try {
-    if (browserAPI.sidePanel.setOptions) {
-      browserAPI.sidePanel.setOptions({ path: SIDE_PANEL_HISTORY_PATH, enabled: true }, () => {});
     }
   } catch (_) {}
 }
@@ -84,45 +77,7 @@ async function resolveWindowIdForSidePanelAction(message, sender) {
   return await getCurrentWindowIdAsync();
 }
 
-async function setSidePanelOptionsForWindow(windowId, view = 'widgets') {
-  if (typeof browserAPI?.sidePanel?.setOptions !== 'function') {
-    return { success: true };
-  }
-
-  const safeView = normalizeHistoryPanelView(view, 'widgets');
-  const path = `history_html/history.html?view=${safeView}&sidepanel=1`;
-  const baseOptions = { path, enabled: true };
-  const candidates = [];
-  if (typeof windowId === 'number') {
-    candidates.push({ ...baseOptions, windowId });
-  }
-  candidates.push(baseOptions);
-
-  let last = { success: false, error: 'set_options_failed' };
-  for (const opts of candidates) {
-    const result = await new Promise((resolve) => {
-      try {
-        browserAPI.sidePanel.setOptions(opts, () => {
-          const err = browserAPI?.runtime?.lastError;
-          if (err) {
-            resolve({ success: false, error: err.message || 'set_options_failed' });
-            return;
-          }
-          resolve({ success: true });
-        });
-      } catch (error) {
-        resolve({ success: false, error: error?.message || 'set_options_failed' });
-      }
-    });
-
-    if (result && result.success) return result;
-    last = result || last;
-  }
-
-  return last;
-}
-
-async function openSidePanelInWindow(windowId, view = 'widgets') {
+async function openSidePanelInWindow(windowId, view = null) {
   if (typeof windowId !== 'number') {
     return { success: false, error: 'window_unavailable' };
   }
@@ -130,9 +85,13 @@ async function openSidePanelInWindow(windowId, view = 'widgets') {
     return { success: false, error: 'open_unavailable' };
   }
 
-  const configured = await setSidePanelOptionsForWindow(windowId, view);
-  if (!configured || configured.success !== true) {
-    return { success: false, error: configured?.error || 'set_options_failed' };
+  const safeView = normalizeHistoryPanelView(view, '');
+  if (safeView) {
+    try {
+      browserAPI.storage.local.set({
+        historyRequestedView: { view: safeView, time: Date.now() }
+      }, () => {});
+    } catch (_) {}
   }
 
   return await new Promise((resolve) => {
@@ -4065,7 +4024,9 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const windowId = await resolveWindowIdForSidePanelAction(message, sender);
-        const view = normalizeHistoryPanelView(message.view, 'widgets');
+        const view = typeof message.view === 'string'
+          ? normalizeHistoryPanelView(message.view, '')
+          : null;
         const result = await openSidePanelInWindow(windowId, view);
         if (!result || result.success !== true) {
           sendResponse({ success: false, error: result?.error || 'open_failed' });
@@ -4121,7 +4082,9 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: 'window_unavailable' });
           return;
         }
-        const view = normalizeHistoryPanelView(message.view, 'widgets');
+        const view = typeof message.view === 'string'
+          ? normalizeHistoryPanelView(message.view, '')
+          : null;
         const isOpen = await getSidePanelOpenStateForWindow(windowId);
         const result = isOpen
           ? await closeSidePanelInWindow(windowId)

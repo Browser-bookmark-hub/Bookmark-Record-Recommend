@@ -31,6 +31,21 @@ const DEFAULT_VIEW = (typeof window.__DEFAULT_VIEW === 'string' && ALLOWED_VIEWS
     ? window.__DEFAULT_VIEW
     : ALLOWED_VIEWS[0];
 const isViewAllowed = (view) => ALLOWED_VIEWS.includes(view);
+
+function detectSidePanelModeFromLocation() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const flag = params.get('sidepanel') || params.get('side_panel') || params.get('panel');
+        return flag === '1' || flag === 'true';
+    } catch (_) {
+        return false;
+    }
+}
+
+function getLastActiveViewStorageKey(sidePanelMode) {
+    return sidePanelMode ? 'lastActiveView__sidepanel' : 'lastActiveView';
+}
+
 let currentTheme = 'light';
 // 从 localStorage 立即恢复视图，避免页面闪烁
 // 从 URL 参数或 localStorage 恢复视图
@@ -46,7 +61,9 @@ let currentView = (() => {
         }
 
         // 2. 其次尝试从 localStorage 获取
-        const saved = localStorage.getItem('lastActiveView');
+        const sidePanelMode = detectSidePanelModeFromLocation();
+        const viewStorageKey = getLastActiveViewStorageKey(sidePanelMode);
+        const saved = localStorage.getItem(viewStorageKey);
 
         return saved || DEFAULT_VIEW;
     } catch (e) {
@@ -55,15 +72,8 @@ let currentView = (() => {
     }
 })();
 
-const isSidePanelMode = (() => {
-    try {
-        const params = new URLSearchParams(window.location.search);
-        const flag = params.get('sidepanel') || params.get('side_panel') || params.get('panel');
-        return flag === '1' || flag === 'true';
-    } catch (_) {
-        return false;
-    }
-})();
+const isSidePanelMode = detectSidePanelModeFromLocation();
+const LAST_ACTIVE_VIEW_STORAGE_KEY = getLastActiveViewStorageKey(isSidePanelMode);
 
 const HEADER_STORAGE_SCOPE_SUFFIX = isSidePanelMode ? '__sidepanel' : '';
 const HEADER_COLLAPSE_STATE_KEY = `headerCollapseState${HEADER_STORAGE_SCOPE_SUFFIX}`;
@@ -79,6 +89,40 @@ let currentHeaderState = 'expanded';
 let currentHeaderDockSide = isSidePanelMode ? 'bottom' : 'top';
 
 window.__SIDE_PANEL_MODE__ = isSidePanelMode;
+
+const HISTORY_JUMP_TARGET_MODE_KEY = 'historyJumpTargetMode';
+
+function normalizeHistoryJumpTargetMode(rawMode) {
+    const safeMode = String(rawMode || '').toLowerCase();
+    return safeMode === 'sidepanel' ? 'sidepanel' : 'html';
+}
+
+function readHistoryJumpTargetMode() {
+    try {
+        return normalizeHistoryJumpTargetMode(localStorage.getItem(HISTORY_JUMP_TARGET_MODE_KEY));
+    } catch (_) {
+        return 'html';
+    }
+}
+
+let historyJumpTargetMode = readHistoryJumpTargetMode();
+
+function getHistoryJumpTargetMode() {
+    return normalizeHistoryJumpTargetMode(historyJumpTargetMode);
+}
+
+function writeHistoryJumpTargetMode(mode) {
+    const normalized = normalizeHistoryJumpTargetMode(mode);
+    historyJumpTargetMode = normalized;
+    try {
+        localStorage.setItem(HISTORY_JUMP_TARGET_MODE_KEY, normalized);
+    } catch (_) { }
+    return normalized;
+}
+
+function shouldJumpToHtmlFromSidePanel() {
+    return isSidePanelMode && getHistoryJumpTargetMode() === 'html';
+}
 try {
     if (isSidePanelMode && document && document.documentElement) {
         document.documentElement.classList.add('side-panel-mode');
@@ -2281,6 +2325,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (_) { }
 
     const updateViewParamInUrl = (view) => {
+        if (isSidePanelMode) return;
         try {
             const url = new URL(window.location.href);
             url.searchParams.set('view', view);
@@ -2298,7 +2343,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         updateViewParamInUrl(currentView);
     } else {
-        const lastView = localStorage.getItem('lastActiveView');
+        const lastView = localStorage.getItem(LAST_ACTIVE_VIEW_STORAGE_KEY);
         if (lastView && ALLOWED_VIEWS.includes(lastView)) {
             currentView = lastView;
 
@@ -2348,7 +2393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    localStorage.setItem('lastActiveView', currentView);
+    localStorage.setItem(LAST_ACTIVE_VIEW_STORAGE_KEY, currentView);
     updatePageHeaderTitle(currentView);
 
 
@@ -2784,6 +2829,13 @@ function applyLanguage() {
     if (settingsHelpText) settingsHelpText.textContent = isEn ? 'Feedback & Shortcuts' : '问题反馈与快捷键';
     const settingsSidebarText = document.getElementById('settingsSidebarText');
     if (settingsSidebarText) settingsSidebarText.textContent = isEn ? 'Sidebar Width Settings' : '菜单栏宽度设置';
+
+    const sidebarJumpSettingsText = document.getElementById('sidebarJumpSettingsText');
+    if (sidebarJumpSettingsText) sidebarJumpSettingsText.textContent = isEn ? 'Jump Settings' : '跳转设置';
+    const sidebarJumpModeHtmlText = document.getElementById('sidebarJumpModeHtmlText');
+    if (sidebarJumpModeHtmlText) sidebarJumpModeHtmlText.textContent = isEn ? 'Jump to HTML page' : '跳转至 HTML 页面';
+    const sidebarJumpModeSidepanelText = document.getElementById('sidebarJumpModeSidepanelText');
+    if (sidebarJumpModeSidepanelText) sidebarJumpModeSidepanelText.textContent = isEn ? 'Jump in side panel' : '在侧边栏跳转';
 
     const sidebarCollapseModeLabel = document.getElementById('sidebarCollapseModeLabel');
     if (sidebarCollapseModeLabel) sidebarCollapseModeLabel.textContent = isEn ? 'Mode' : '模式';
@@ -3263,7 +3315,10 @@ function updateMainSearchVisibility() {
 function initializeUI() {
     // 导航标签切换
     document.querySelectorAll('.nav-tab').forEach(tab => {
-        tab.addEventListener('click', () => switchView(tab.dataset.view));
+        tab.addEventListener('click', () => {
+            const targetView = normalizeHistoryPageView(tab.dataset.view, currentView || 'widgets');
+            switchView(targetView);
+        });
     });
 
     // 「书签温故」子视图标签
@@ -5586,14 +5641,16 @@ function switchView(view) {
     });
 
     // 保存到 localStorage
-    localStorage.setItem('lastActiveView', view);
+    localStorage.setItem(LAST_ACTIVE_VIEW_STORAGE_KEY, view);
 
 
-    try {
-        const url = new URL(window.location.href);
-        url.searchParams.set('view', view);
-        window.history.replaceState({}, '', url.toString());
-    } catch (_) { }
+    if (!isSidePanelMode) {
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('view', view);
+            window.history.replaceState({}, '', url.toString());
+        } catch (_) { }
+    }
 
     // 渲染当前视图
     renderCurrentView();
@@ -5667,6 +5724,7 @@ let widgetsSortMoveHighlightLastShownAt = 0;
 let widgetsSortInfoHoverHideTimer = null;
 let widgetsSortDeferredInteractionIds = new Set(readWidgetsSortDeferredInteractionIds());
 let widgetsSortApplyDeferredInteractionsOnOpen = isSidePanelMode && widgetsSortDeferredInteractionIds.size > 0;
+let widgetsSortDeferredOpenEventsBound = false;
 const WIDGETS_SORT_MOVE_HIGHLIGHT_DEBOUNCE_MS = 180;
 const WIDGETS_SORT_MOVE_HIGHLIGHT_MIN_INTERVAL_MS = 900;
 const WIDGETS_SORT_MOVE_HIGHLIGHT_DURATION_MS = 1300;
@@ -5941,6 +5999,27 @@ function markWidgetsSortDeferredInteraction(widgetId) {
 function clearWidgetsSortDeferredInteractionIds() {
     writeWidgetsSortDeferredInteractionIds([]);
     widgetsSortApplyDeferredInteractionsOnOpen = false;
+}
+
+function bindWidgetsDeferredSortApplyOnOpenEvents() {
+    if (!isSidePanelMode || widgetsSortDeferredOpenEventsBound) return;
+    widgetsSortDeferredOpenEventsBound = true;
+
+    const handleMaybeSidePanelReopen = () => {
+        if (document.hidden) return;
+        if (!(widgetsSortDeferredInteractionIds instanceof Set) || widgetsSortDeferredInteractionIds.size === 0) return;
+
+        widgetsSortApplyDeferredInteractionsOnOpen = true;
+
+        if (currentView === 'widgets') {
+            requestAnimationFrame(() => {
+                applyWidgetsSmartSort({ force: true });
+            });
+        }
+    };
+
+    window.addEventListener('focus', handleMaybeSidePanelReopen);
+    document.addEventListener('visibilitychange', handleMaybeSidePanelReopen);
 }
 
 function normalizeWidgetsSortOrder(orderLike) {
@@ -6389,6 +6468,12 @@ function scheduleWidgetsSortInfoPanelClose(delay = 90) {
 // 智能排序的统一出口：交互中不做 DOM 重排，避免用户悬浮/点击时列表跳动。
 function applyWidgetsSmartSort(options = {}) {
     const force = options.force === true;
+
+    // 仅在 widgets 页面执行排序，避免“书签推荐/书签记录”等页面触发重排。
+    if (currentView !== 'widgets') {
+        return;
+    }
+
     if (!force && isWidgetsInteractionActive()) {
         requestWidgetsPendingRefresh({ delayMs: WIDGETS_INTERACTION_COOLDOWN_MS });
         return;
@@ -6402,6 +6487,9 @@ function applyWidgetsSmartSort(options = {}) {
 
     const deferEnabled = isSidePanelMode && widgetsSmartSortEnabled && widgetsSortDeferredInteractionIds.size > 0;
     const applyDeferredOnOpenNow = deferEnabled && widgetsSortApplyDeferredInteractionsOnOpen === true;
+    const sidepanelSmartSortEnabled = isSidePanelMode && widgetsSmartSortEnabled;
+    const nextDeferredIds = new Set(widgetsSortDeferredInteractionIds || []);
+    let deferredIdsUpdated = false;
 
     const entries = widgetsSortOrder
         .map((id, index) => {
@@ -6413,9 +6501,20 @@ function applyWidgetsSmartSort(options = {}) {
             const changedBySignal = prevSignal != null && prevSignal !== signal.signature;
 
             const deferredByInteraction = deferEnabled && widgetsSortDeferredInteractionIds.has(id);
+            const shouldDeferSignalUntilNextOpen = sidepanelSmartSortEnabled
+                && id !== 'widgetsRecommendWidget'
+                && changedBySignal
+                && !applyDeferredOnOpenNow;
+
+            if (shouldDeferSignalUntilNextOpen && !nextDeferredIds.has(id)) {
+                nextDeferredIds.add(id);
+                deferredIdsUpdated = true;
+            }
+
+            const deferredByRefreshSignal = sidepanelSmartSortEnabled && nextDeferredIds.has(id);
             let changed = changedBySignal;
 
-            if (deferredByInteraction) {
+            if (deferredByInteraction || deferredByRefreshSignal) {
                 changed = applyDeferredOnOpenNow ? true : false;
             }
 
@@ -6479,6 +6578,10 @@ function applyWidgetsSmartSort(options = {}) {
         entries.forEach((entry) => {
             grid.appendChild(entry.el);
         });
+    }
+
+    if (deferredIdsUpdated) {
+        writeWidgetsSortDeferredInteractionIds(nextDeferredIds);
     }
 
     if (applyDeferredOnOpenNow) {
@@ -6864,6 +6967,15 @@ function openBookmarkFromWidgets(url, title = '') {
 }
 
 function navigateToAdditionsTrackingFromWidgets() {
+    try {
+        localStorage.setItem('additionsActiveTab', 'tracking');
+    } catch (_) { }
+
+    if (shouldJumpToHtmlFromSidePanel()) {
+        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
+        return;
+    }
+
     switchView('additions');
     setTimeout(() => {
         const trackingTab = document.getElementById('additionsTabTracking');
@@ -6873,7 +6985,16 @@ function navigateToAdditionsTrackingFromWidgets() {
 
 function navigateToAdditionsRankingFromWidgets() {
     const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
-    try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
+    try {
+        localStorage.setItem('browsingRankingActiveRange', range);
+        localStorage.setItem('additionsActiveTab', 'browsing');
+        localStorage.setItem('browsingActiveSubTab', 'ranking');
+    } catch (_) { }
+
+    if (shouldJumpToHtmlFromSidePanel()) {
+        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
+        return;
+    }
 
     switchView('additions');
     setTimeout(() => {
@@ -6888,6 +7009,15 @@ function navigateToAdditionsRankingFromWidgets() {
 }
 
 function navigateToAdditionsReviewWeekFromWidgets() {
+    try {
+        localStorage.setItem('additionsActiveTab', 'review');
+    } catch (_) { }
+
+    if (shouldJumpToHtmlFromSidePanel()) {
+        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
+        return;
+    }
+
     switchView('additions');
     setTimeout(() => {
         const reviewTab = document.getElementById('additionsTabReview');
@@ -6907,6 +7037,16 @@ function navigateToAdditionsReviewWeekFromWidgets() {
 }
 
 function navigateToAdditionsHistoryWeekFromWidgets() {
+    try {
+        localStorage.setItem('additionsActiveTab', 'browsing');
+        localStorage.setItem('browsingActiveSubTab', 'history');
+    } catch (_) { }
+
+    if (shouldJumpToHtmlFromSidePanel()) {
+        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
+        return;
+    }
+
     switchView('additions');
     setTimeout(() => {
         const browsingTab = document.getElementById('additionsTabBrowsing');
@@ -7098,7 +7238,14 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
 
     try {
         localStorage.setItem('browsingRelatedActiveRange', targetRange);
+        localStorage.setItem('additionsActiveTab', 'browsing');
+        localStorage.setItem('browsingActiveSubTab', 'related');
     } catch (_) { }
+
+    if (shouldJumpToHtmlFromSidePanel()) {
+        openOrFocusHistoryPage({ view: 'additions' }).catch(() => { });
+        return;
+    }
 
     const applySecondary = () => {
         if (safeDepth === 'level2' && normalizedFilter) {
@@ -7817,6 +7964,7 @@ function initWidgetsView() {
     widgetsRelatedPrimaryRange = readWidgetsRelatedPrimaryRange();
     syncWidgetsSortPanelsDockDirection();
     updateWidgetsRelatedDepthButtonsState();
+    bindWidgetsDeferredSortApplyOnOpenEvents();
 
     const widgetsViewRoot = document.getElementById('widgetsView');
     // 统一采集 widgets 交互信号：新增小组件时尽量保持在 #widgetsView 下，自动复用此保护。
@@ -8731,27 +8879,7 @@ async function openSidePanelDirectlyFromHistoryPage() {
     const safeView = normalizeHistoryPageView(currentView, 'widgets');
 
     try {
-        if (typeof browserAPI?.sidePanel?.setOptions === 'function') {
-            await new Promise((resolve) => {
-                try {
-                    browserAPI.sidePanel.setOptions({
-                        path: `history_html/history.html?view=${safeView}&sidepanel=1`,
-                        enabled: true,
-                        windowId
-                    }, () => {
-                        try {
-                            const err = browserAPI?.runtime?.lastError;
-                            if (err && err.message) {
-                                // ignore and continue open attempt
-                            }
-                        } catch (_) { }
-                        resolve();
-                    });
-                } catch (_) {
-                    resolve();
-                }
-            });
-        }
+        localStorage.setItem('lastActiveView__sidepanel', safeView);
     } catch (_) { }
 
     return await new Promise((resolve) => {
@@ -8820,6 +8948,13 @@ function setupSettingsMenu() {
     const sidebarPanel = document.getElementById('sidebarSettingsPanel');
     const autoWidthInput = document.getElementById('sidebarAutoWidthInput');
 
+    const jumpSettingsToggle = document.getElementById('sidebarJumpSettingsToggle');
+    const jumpSettingsPanel = document.getElementById('sidebarJumpSettingsPanel');
+    const jumpModeHtmlOption = document.getElementById('sidebarJumpModeHtmlOption');
+    const jumpModeSidepanelOption = document.getElementById('sidebarJumpModeSidepanelOption');
+    const jumpModeHtmlCheckbox = document.getElementById('sidebarJumpModeHtmlCheckbox');
+    const jumpModeSidepanelCheckbox = document.getElementById('sidebarJumpModeSidepanelCheckbox');
+
     const modeAutoBtn = document.getElementById('sidebarModeAutoBtn');
     const modeManualBtn = document.getElementById('sidebarModeManualBtn');
 
@@ -8843,6 +8978,27 @@ function setupSettingsMenu() {
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
+    function closeJumpSettingsPanel() {
+        if (!jumpSettingsPanel) return;
+        jumpSettingsPanel.setAttribute('hidden', '');
+        if (jumpSettingsToggle) {
+            jumpSettingsToggle.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    function toggleJumpSettingsPanel() {
+        if (!jumpSettingsPanel) return;
+        if (jumpSettingsPanel.hasAttribute('hidden')) {
+            closeSidebarPanel();
+            jumpSettingsPanel.removeAttribute('hidden');
+            if (jumpSettingsToggle) {
+                jumpSettingsToggle.setAttribute('aria-expanded', 'true');
+            }
+        } else {
+            closeJumpSettingsPanel();
+        }
+    }
+
     function closeSidebarPanel() {
         if (!sidebarPanel) return;
         sidebarPanel.setAttribute('hidden', '');
@@ -8854,6 +9010,7 @@ function setupSettingsMenu() {
     function toggleSidebarPanel() {
         if (!sidebarPanel) return;
         if (sidebarPanel.hasAttribute('hidden')) {
+            closeJumpSettingsPanel();
             sidebarPanel.removeAttribute('hidden');
             if (sidebarPanelToggle) {
                 sidebarPanelToggle.setAttribute('aria-expanded', 'true');
@@ -8865,6 +9022,7 @@ function setupSettingsMenu() {
 
     function closeMenu() {
         closeSidebarPanel();
+        closeJumpSettingsPanel();
         if (!menu.hasAttribute('hidden')) {
             menu.setAttribute('hidden', '');
         }
@@ -8895,6 +9053,25 @@ function setupSettingsMenu() {
         if (autoWidthInput) {
             autoWidthInput.value = String(autoWidth);
             autoWidthInput.disabled = mode !== 'auto';
+        }
+
+        const jumpMode = getHistoryJumpTargetMode();
+        const jumpToHtml = jumpMode === 'html';
+
+        if (jumpModeHtmlCheckbox) {
+            jumpModeHtmlCheckbox.checked = jumpToHtml;
+        }
+        if (jumpModeSidepanelCheckbox) {
+            jumpModeSidepanelCheckbox.checked = !jumpToHtml;
+        }
+        if (jumpModeHtmlOption) {
+            jumpModeHtmlOption.classList.toggle('active', jumpToHtml);
+        }
+        if (jumpModeSidepanelOption) {
+            jumpModeSidepanelOption.classList.toggle('active', !jumpToHtml);
+        }
+        if (jumpSettingsToggle) {
+            jumpSettingsToggle.setAttribute('aria-expanded', jumpSettingsPanel && !jumpSettingsPanel.hasAttribute('hidden') ? 'true' : 'false');
         }
 
         if (sidebarPanelToggle) {
@@ -8952,6 +9129,20 @@ function setupSettingsMenu() {
         if (action === 'toggle-sidebar-settings') {
             e.preventDefault();
             toggleSidebarPanel();
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (action === 'toggle-jump-settings') {
+            e.preventDefault();
+            toggleJumpSettingsPanel();
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (action === 'set-jump-target-mode') {
+            e.preventDefault();
+            writeHistoryJumpTargetMode(target.dataset.mode || 'sidepanel');
             syncSidebarSettingsControls();
             return;
         }

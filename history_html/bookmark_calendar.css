@@ -234,6 +234,58 @@
     opacity: 0 !important;
 }
 
+/* 日历页按钮 tooltip 层级修复：避免被空白区/下方内容覆盖 */
+.bookmark-calendar-view .calendar-action-btn {
+    z-index: 1;
+}
+
+.bookmark-calendar-view .calendar-action-btn:hover,
+.bookmark-calendar-view .calendar-action-btn:focus-visible {
+    z-index: 3000;
+}
+
+.bookmark-calendar-view .calendar-action-btn .btn-tooltip {
+    top: auto;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    margin-top: 0;
+    white-space: nowrap;
+    text-align: center;
+    pointer-events: none;
+    z-index: 3100;
+}
+
+.bookmark-calendar-view .calendar-action-btn .btn-tooltip::before {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    top: 100%;
+    bottom: auto;
+    border-bottom-color: transparent;
+    border-top-color: rgba(0, 0, 0, 0.9);
+}
+
+/* 中间（树视图）按钮：提示文案稍紧凑 */
+.bookmark-calendar-view .calendar-tree-view-btn .btn-tooltip {
+    font-size: 11px;
+    padding: 5px 8px;
+}
+
+/* 右侧（排序）按钮：提示气泡向左偏一点 */
+.bookmark-calendar-view .calendar-sort-btn .btn-tooltip {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+
+.bookmark-calendar-view .calendar-sort-btn .btn-tooltip::before {
+    left: auto;
+    right: 10px;
+    transform: none;
+}
+
 /* 日历导航按钮 */
 .calendar-nav-btn {
     padding: 8px 16px;
@@ -562,14 +614,14 @@ html.side-panel-mode .calendar-breadcrumb-nav {
     row-gap: 6px;
 }
 
-html.side-panel-mode .calendar-breadcrumb-nav > div:first-child {
+html.side-panel-mode .calendar-breadcrumb-nav>div:first-child {
     width: 100%;
     min-width: 0;
     flex-wrap: wrap;
     gap: 4px !important;
 }
 
-html.side-panel-mode .calendar-breadcrumb-nav > div:last-child {
+html.side-panel-mode .calendar-breadcrumb-nav>div:last-child {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
@@ -604,6 +656,18 @@ html.side-panel-mode .calendar-action-btn {
 
 html.side-panel-mode .calendar-action-btn i {
     font-size: 12px;
+}
+
+@media (max-width: 560px) {
+    html.side-panel-mode .bookmark-calendar-view .calendar-action-btn {
+        padding: 5px 7px;
+        font-size: 11px;
+        gap: 3px;
+    }
+
+    html.side-panel-mode .bookmark-calendar-view .calendar-action-btn i {
+        font-size: 11px;
+    }
 }
 
 /* ==================== 侧边栏：四种视图 + 分栏菜单自适应 ==================== */
@@ -673,7 +737,7 @@ html.side-panel-mode .bookmark-calendar-view [data-calendar-grid] {
     gap: 3px !important;
 }
 
-html.side-panel-mode .bookmark-calendar-view [data-weekday-header] > div {
+html.side-panel-mode .bookmark-calendar-view [data-weekday-header]>div {
     padding: 1px 0 !important;
     font-size: 9px !important;
 }
@@ -688,7 +752,7 @@ html.side-panel-mode .bookmark-calendar-view .calendar-day:hover {
     box-shadow: none;
 }
 
-html.side-panel-mode .bookmark-calendar-view .calendar-day > div {
+html.side-panel-mode .bookmark-calendar-view .calendar-day>div {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -710,6 +774,36 @@ html.side-panel-mode .bookmark-calendar-view .calendar-day.week-row-linked-activ
 }
 
 
+.bookmark-calendar-view .calendar-bookmark-item {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    border-left-width: 0.8px !important;
+    border-right-width: 0.8px !important;
+    box-sizing: border-box;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.bookmark-calendar-view .calendar-bookmark-main {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.bookmark-calendar-view .calendar-bookmark-title {
+    margin: 0 !important;
+    line-height: 1.35 !important;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical !important;
+    -webkit-line-clamp: 2 !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    max-height: calc(1.35em * 2);
+}
+
 html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item {
     display: grid !important;
     grid-template-columns: 16px minmax(0, 1fr) auto;
@@ -717,11 +811,11 @@ html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item {
     align-items: center !important;
     column-gap: 6px;
     row-gap: 2px;
-    padding: 7px 8px !important;
+    padding: 6px 7px !important;
     min-width: 0;
 }
 
-html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item > .bookmark-favicon {
+html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-item>.bookmark-favicon {
     grid-area: icon;
     margin-top: 0 !important;
 }
@@ -734,12 +828,6 @@ html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-main {
 html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-title {
     margin: 0 !important;
     font-size: 12px !important;
-    line-height: 1.35 !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    word-break: normal !important;
-    overflow-wrap: normal !important;
 }
 
 html.side-panel-mode .bookmark-calendar-view .calendar-bookmark-jump {
@@ -812,6 +900,77 @@ html.side-panel-mode .bookmark-calendar-view .calendar-folder-pill {
     max-width: 130px;
 }
 
+.bookmark-calendar-view .calendar-folder-path-full-path {
+    overflow: visible;
+}
+
+.bookmark-calendar-view .calendar-folder-pill-full-path {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    overflow: visible;
+    max-width: 240px;
+}
+
+.bookmark-calendar-view .calendar-folder-pill-full-path-label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bookmark-calendar-view .calendar-folder-pill-full-path::after {
+    content: attr(data-full-path);
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    max-width: min(460px, calc(100vw - 36px));
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: normal;
+    word-break: break-word;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 4200;
+    transition: none;
+}
+
+.bookmark-calendar-view .calendar-folder-pill-full-path::before {
+    content: '';
+    position: absolute;
+    left: 12px;
+    bottom: calc(100% + 3px);
+    border: 5px solid transparent;
+    border-top-color: var(--bg-primary);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 4201;
+    transition: none;
+}
+
+.bookmark-calendar-view .calendar-folder-pill-full-path:hover::after,
+.bookmark-calendar-view .calendar-folder-pill-full-path:hover::before,
+.bookmark-calendar-view .calendar-folder-pill-full-path:focus-visible::after,
+.bookmark-calendar-view .calendar-folder-pill-full-path:focus-visible::before {
+    opacity: 1;
+    visibility: visible;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-folder-pill-full-path::after {
+    max-width: min(360px, calc(100vw - 24px));
+    font-size: 11px;
+    padding: 7px 9px;
+}
+
 html.side-panel-mode .bookmark-calendar-view .week-view-container {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -872,11 +1031,108 @@ html.side-panel-mode .bookmark-calendar-view .timeline-hour {
     font-size: 11px;
 }
 
+/* 包裹「顶部滚动条行 + 书签树」的外层容器——滚动条与树内容平级，互不干扰 */
+.bookmark-calendar-view .calendar-split-panel-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll-row {
+    margin: 0 0 8px 0;
+    max-width: 100%;
+    display: none !important;
+}
+
+.bookmark-calendar-view .calendar-split-content>.calendar-split-top-scroll-row {
+    display: none !important;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll {
+    display: none !important;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll::-webkit-scrollbar {
+    height: 8px;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 999px;
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);
+}
+
+.bookmark-calendar-view .calendar-split-top-scroll-inner {
+    height: 1px;
+}
+
+.bookmark-calendar-view .calendar-split-layout {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: visible;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+}
+
+.bookmark-calendar-view .calendar-split-content-viewport {
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: visible;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+}
+
+.bookmark-calendar-view .calendar-split-content-viewport::-webkit-scrollbar {
+    display: none !important;
+    width: 0;
+    height: 0;
+}
+
+.bookmark-calendar-view .calendar-split-content {
+    min-width: 0 !important;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    /* 右侧使用与外层 wrapper 相同的间距，让内容不贴边 */
+    padding-right: 20px;
+    overflow-x: visible;
+}
+
+.bookmark-calendar-view .calendar-split-content>* {
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.bookmark-calendar-view .calendar-split-content .calendar-bookmark-item {
+    width: 100%;
+    max-width: 100%;
+}
+
 html.side-panel-mode .bookmark-calendar-view .calendar-split-layout {
     display: grid !important;
     grid-template-columns: minmax(116px, 136px) minmax(0, 1fr);
     gap: 10px !important;
     min-height: 320px !important;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-content-viewport {
+    min-width: 0;
 }
 
 html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar {
@@ -889,6 +1145,13 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar {
 }
 
 html.side-panel-mode .bookmark-calendar-view .calendar-split-content {
+    min-width: 0 !important;
+    /* 侧边栏模式下，右侧间距稍小 */
+    padding-right: 10px;
+}
+
+html.side-panel-mode .bookmark-calendar-view .calendar-split-panel-wrapper {
+    width: 100%;
     min-width: 0;
 }
 
@@ -903,23 +1166,67 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-hour]
     padding: 5px 8px !important;
 }
 
-html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-num] + div {
+html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-num]+div {
     margin-left: 8px !important;
 }
 
-@media (max-width: 420px) {
-    html.side-panel-mode .bookmark-calendar-view .calendar-split-layout {
-        grid-template-columns: 1fr;
+@media (max-width: 480px) {
+    .bookmark-calendar-view .calendar-split-layout {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        gap: 8px !important;
     }
 
-    html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar {
+    .bookmark-calendar-view .calendar-split-sidebar {
+        width: 100% !important;
+        max-width: none;
         border-right: none !important;
         border-bottom: 1px solid var(--border-color);
         padding-right: 0 !important;
         padding-bottom: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 2px;
+        overflow-y: auto;
+        overflow-x: hidden;
         max-height: 220px;
     }
+}
+
+/* 窄宽度：日期/时间段选择改为列表，固定高度 */
+.bookmark-calendar-view .calendar-split-sidebar-compact {
+    --calendar-selector-sidebar-height: 260px;
+    max-height: var(--calendar-selector-sidebar-height);
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.bookmark-calendar-view .calendar-split-sidebar-compact .calendar-selector-all-chip,
+.bookmark-calendar-view .calendar-split-sidebar-compact .calendar-selector-week-chip,
+.bookmark-calendar-view .calendar-split-sidebar-compact .calendar-selector-date-chip,
+.bookmark-calendar-view .calendar-split-sidebar-compact .calendar-selector-time-chip {
+    width: 100%;
+    max-width: 100%;
+}
+
+.bookmark-calendar-view .calendar-split-sidebar-month.calendar-split-sidebar-compact .calendar-selector-days-grid {
+    display: block !important;
+    margin-left: 8px !important;
+}
+
+.bookmark-calendar-view .calendar-split-sidebar-compact .calendar-selector-item-group {
+    display: block;
+}
+
+.bookmark-calendar-view .calendar-split-sidebar-month.calendar-split-sidebar-compact .calendar-selector-time-group,
+.bookmark-calendar-view .calendar-split-sidebar-week.calendar-split-sidebar-compact .calendar-selector-time-group {
+    display: block;
+}
+
+.bookmark-calendar-view .calendar-split-sidebar-week.calendar-split-sidebar-compact,
+.bookmark-calendar-view .calendar-split-sidebar-day.calendar-split-sidebar-compact {
+    display: block;
+}
+
+@media (max-width: 420px) {
 
     html.side-panel-mode .bookmark-calendar-view .week-view-container,
     html.side-panel-mode .bookmark-calendar-view .year-view-grid {
@@ -942,6 +1249,7 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-
     --calendar-day-timeline-gap: 20px;
     --calendar-day-hours-width: 80px;
     --calendar-day-hour-height: 60px;
+    --calendar-split-content-min-width: 0px;
 }
 
 .bookmark-calendar-view .week-view-container {
@@ -990,6 +1298,7 @@ html.side-panel-mode .bookmark-calendar-view {
     --calendar-day-timeline-gap: 10px;
     --calendar-day-hours-width: 54px;
     --calendar-day-hour-height: 46px;
+    --calendar-split-content-min-width: 0px;
 }
 
 html.side-panel-mode .bookmark-calendar-view .week-view-container {

@@ -60,6 +60,9 @@ function formatYearMonth(year, month) {
     const monthName = tm(month);
     return t('calendarYearMonth', year, monthName).replace('{0}', year).replace('{1}', monthName);
 }
+
+const CALENDAR_COMPACT_BREAKPOINT = 480;
+
 function getCalendarLayoutTokens() {
     let sidePanelMode = false;
     try {
@@ -74,8 +77,8 @@ function getCalendarLayoutTokens() {
             monthTopGap: '10px',
             splitGap: '10px',
             splitMinHeight: '320px',
-            sidebarWidth: '136px',
-            sidebarPaddingRight: '10px'
+            sidebarWidth: '92px',
+            sidebarPaddingRight: '6px'
         };
     }
 
@@ -85,9 +88,27 @@ function getCalendarLayoutTokens() {
         monthTopGap: '20px',
         splitGap: '20px',
         splitMinHeight: '400px',
-        sidebarWidth: '200px',
-        sidebarPaddingRight: '20px'
+        sidebarWidth: '128px',
+        sidebarPaddingRight: '10px'
     };
+}
+
+function shouldUseCompactSelectorLayout(layout) {
+    const resolvedLayout = layout || getCalendarLayoutTokens();
+    const viewportWidth = (typeof window !== 'undefined' && Number.isFinite(window.innerWidth))
+        ? window.innerWidth
+        : 0;
+    return resolvedLayout.sidePanelMode || (viewportWidth > 0 && viewportWidth <= CALENDAR_COMPACT_BREAKPOINT);
+}
+
+function applyCalendarSplitSidebarClasses(sidebar, layout, viewType) {
+    if (!sidebar) return;
+    if (viewType) {
+        sidebar.classList.add(`calendar-split-sidebar-${viewType}`);
+    }
+    if (shouldUseCompactSelectorLayout(layout)) {
+        sidebar.classList.add('calendar-split-sidebar-compact');
+    }
 }
 
 function notifyBrowsingCalibrationInteraction(type, payload = {}) {
@@ -421,6 +442,12 @@ async function removeHistoryCacheValue(key) {
     await removeHistoryStorageValue(key);
 }
 
+function createCalendarSplitPanelWithTopScroll(panelContainer) {
+    panelContainer.style.overflowX = 'hidden';
+    return panelContainer;
+}
+
+
 // 按小时分组书签
 function groupBookmarksByHour(bookmarks) {
     const groups = {}; // { hour: [bookmarks] }
@@ -448,6 +475,7 @@ class BrowsingHistoryCalendar {
         this.selectedDates = new Set(); // 已勾选的日期集合 'YYYY-MM-DD'
         this.bookmarkSortAsc = false; // 书签排序：true=正序，false=倒序（默认倒序）
         this.sortButtonCooldown = false; // 排序按钮点击防抖标志
+        this.bookmarkTreeViewMode = this.getDefaultTreeViewMode(); // 书签树视图模式
         this.historyCacheMeta = { lastSyncTime: 0 };
         this.historyCacheRestored = false;
         this.visitKeySet = new Set();
@@ -1137,6 +1165,13 @@ class BrowsingHistoryCalendar {
             this.bookmarkSortAsc = savedSortAsc === 'true';
         }
 
+        const savedTreeViewMode = localStorage.getItem(this.getTreeViewStorageKey());
+        if (this.isValidTreeViewMode(savedTreeViewMode)) {
+            this.bookmarkTreeViewMode = savedTreeViewMode;
+        } else {
+            this.bookmarkTreeViewMode = this.getDefaultTreeViewMode();
+        }
+
         /*
         if (savedSelectedDates) {
             try {
@@ -1177,6 +1212,50 @@ class BrowsingHistoryCalendar {
             }
         }
         */
+    }
+
+    getDefaultTreeViewMode() {
+        return getCalendarLayoutTokens().sidePanelMode ? 'bookmarks_only' : 'current';
+    }
+
+    getTreeViewStorageKey() {
+        const suffix = getCalendarLayoutTokens().sidePanelMode ? 'sidepanel' : 'tab';
+        return `browsingHistoryCalendar_treeViewMode_${suffix}`;
+    }
+
+    isValidTreeViewMode(mode) {
+        return mode === 'current' || mode === 'bookmarks_only' || mode === 'full_path';
+    }
+
+    getTreeViewModeLabel(mode = this.bookmarkTreeViewMode) {
+        const isZh = currentLang === 'zh_CN';
+        switch (mode) {
+            case 'bookmarks_only':
+                return isZh ? '纯书签' : 'Bookmarks Only';
+            case 'full_path':
+                return isZh ? '完整路径' : 'Full Folder Path';
+            case 'current':
+            default:
+                return isZh ? '当前规则' : 'Current Rule';
+        }
+    }
+
+    getTreeViewModeOptions() {
+        return [
+            { value: 'current', label: this.getTreeViewModeLabel('current') },
+            { value: 'bookmarks_only', label: this.getTreeViewModeLabel('bookmarks_only') },
+            { value: 'full_path', label: this.getTreeViewModeLabel('full_path') }
+        ];
+    }
+
+    setTreeViewMode(mode, shouldRender = true) {
+        if (!this.isValidTreeViewMode(mode)) return;
+        if (this.bookmarkTreeViewMode === mode) return;
+        this.bookmarkTreeViewMode = mode;
+        localStorage.setItem(this.getTreeViewStorageKey(), mode);
+        if (shouldRender) {
+            this.render();
+        }
     }
 
     // 保存勾选模式和视图状态到localStorage
@@ -2834,14 +2913,14 @@ class BrowsingHistoryCalendar {
 
         // 左右分栏布局
         const panelContainer = document.createElement('div');
-            panelContainer.className = 'calendar-split-layout';
+        panelContainer.className = 'calendar-split-layout';
         panelContainer.style.display = 'flex';
         panelContainer.style.gap = layout.splitGap;
         panelContainer.style.minHeight = layout.splitMinHeight;
 
         // 左侧菜单栏
         const sidebar = document.createElement('div');
-            sidebar.className = 'calendar-split-sidebar';
+        sidebar.className = 'calendar-split-sidebar';
         sidebar.style.width = layout.sidebarWidth;
         sidebar.style.flexShrink = '0';
         sidebar.style.borderRight = '1px solid var(--border-color)';
@@ -2849,7 +2928,7 @@ class BrowsingHistoryCalendar {
 
         // 右侧内容区
         const contentArea = document.createElement('div');
-            contentArea.className = 'calendar-split-content';
+        contentArea.className = 'calendar-split-content';
         contentArea.style.flex = '1';
         contentArea.style.minWidth = '0';
 
@@ -2868,13 +2947,13 @@ class BrowsingHistoryCalendar {
 
         // 添加「All」0级菜单（所有模式下都显示）
         const allMenuItem = document.createElement('div');
-        allMenuItem.style.padding = '12px';
+        allMenuItem.style.padding = '8px 8px';
         allMenuItem.style.borderRadius = '8px';
         allMenuItem.style.cursor = 'pointer';
         allMenuItem.style.transition = 'all 0.2s';
-        allMenuItem.style.fontSize = '14px';
+        allMenuItem.style.fontSize = '12px';
         allMenuItem.style.fontWeight = '600';
-        allMenuItem.style.marginBottom = '12px';
+        allMenuItem.style.marginBottom = '8px';
         allMenuItem.dataset.menuType = 'all';
 
         // 勾选模式下默认选中（绿色），普通模式下也默认选中（蓝色），统一从「全部」开始
@@ -2891,7 +2970,7 @@ class BrowsingHistoryCalendar {
 
         allMenuItem.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span><i class="fas fa-th-large"></i> ${currentLang === 'en' ? 'All' : '全部'}</span>
+                <span>${currentLang === 'en' ? 'All' : '全部'}</span>
                 <span style="font-size:12px;opacity:0.9;">${totalCount}</span>
             </div>
         `;
@@ -2952,11 +3031,11 @@ class BrowsingHistoryCalendar {
 
             // 周标题
             const weekHeader = document.createElement('div');
-            weekHeader.style.padding = '10px 12px';
+            weekHeader.style.padding = '7px 8px';
             weekHeader.style.borderRadius = '8px';
             weekHeader.style.cursor = 'pointer';
             weekHeader.style.transition = 'all 0.2s';
-            weekHeader.style.fontSize = '14px';
+            weekHeader.style.fontSize = '12px';
             weekHeader.style.fontWeight = '600';
             weekHeader.style.background = 'var(--bg-secondary)';
             weekHeader.style.color = 'var(--text-primary)';
@@ -2975,7 +3054,7 @@ class BrowsingHistoryCalendar {
 
             // 日期子菜单容器
             const daysContainer = document.createElement('div');
-            daysContainer.style.marginLeft = '12px';
+            daysContainer.style.marginLeft = '8px';
             daysContainer.style.marginTop = '4px';
             daysContainer.style.display = shouldExpand ? 'block' : 'none';
             daysContainer.dataset.weekNum = weekNum;
@@ -2991,14 +3070,14 @@ class BrowsingHistoryCalendar {
                 dayMenuContainer.style.marginBottom = '4px';
 
                 const dayMenuItem = document.createElement('div');
-                dayMenuItem.style.padding = '8px 12px';
+                dayMenuItem.style.padding = '6px 8px';
                 dayMenuItem.style.borderRadius = '6px';
                 dayMenuItem.style.cursor = 'pointer';
                 dayMenuItem.style.transition = 'all 0.2s';
-                dayMenuItem.style.fontSize = '13px';
+                dayMenuItem.style.fontSize = '12px';
                 dayMenuItem.dataset.dateKey = dateKey;
                 // 在勾选模式下，默认展开所有有小时菜单的日期
-                dayMenuItem.dataset.expanded = (this.selectMode && hasTimePeriods) ? 'true' : 'false';
+                dayMenuItem.dataset.expanded = 'false';
 
                 // 第一周的第一天默认选中（仅在普通模式下且是当前月）
                 if (weekIndex === 0 && dayIndex === 0 && !this.selectMode && !shouldShowAllByDefault) {
@@ -3012,7 +3091,7 @@ class BrowsingHistoryCalendar {
                     dayMenuItem.style.border = '1px solid transparent';
                 }
 
-                const isExpanded = (this.selectMode && hasTimePeriods);
+                const isExpanded = false;
                 dayMenuItem.innerHTML = `
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <span>
@@ -3027,7 +3106,7 @@ class BrowsingHistoryCalendar {
                 let hoursContainer = null;
                 if (hasTimePeriods) {
                     hoursContainer = document.createElement('div');
-                    hoursContainer.style.marginLeft = '16px';
+                    hoursContainer.style.marginLeft = '10px';
                     hoursContainer.style.marginTop = '4px';
                     hoursContainer.style.display = isExpanded ? 'block' : 'none';
                     hoursContainer.dataset.dateKey = dateKey;
@@ -3042,7 +3121,7 @@ class BrowsingHistoryCalendar {
                         const hourBookmarks = hourGroups[hour];
 
                         const hourMenuItem = document.createElement('div');
-                        hourMenuItem.style.padding = '6px 10px';
+                        hourMenuItem.style.padding = '4px 7px';
                         hourMenuItem.style.marginBottom = '3px';
                         hourMenuItem.style.borderRadius = '4px';
                         hourMenuItem.style.cursor = 'pointer';
@@ -3056,7 +3135,7 @@ class BrowsingHistoryCalendar {
 
                         hourMenuItem.innerHTML = `
                             <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <span>${String(hour).padStart(2, '0')}:00-${String(hour).padStart(2, '0')}:59</span>
+                                <span>${String(hour).padStart(2, '0')}:00</span>
                                 <span style="font-size:11px;opacity:0.8;">${hourBookmarks.length}</span>
                             </div>
                         `;
@@ -3557,7 +3636,7 @@ class BrowsingHistoryCalendar {
 
         panelContainer.appendChild(sidebar);
         panelContainer.appendChild(contentArea);
-        section.appendChild(panelContainer);
+        section.appendChild(createCalendarSplitPanelWithTopScroll(panelContainer));
 
         return section;
     }
@@ -3566,15 +3645,16 @@ class BrowsingHistoryCalendar {
         const wrapper = document.createElement('div');
         wrapper.style.position = 'relative';
         wrapper.style.paddingLeft = showTreeLines ? '20px' : '0';
+        let horizontalLine = null;
 
         // 添加树状连接线
         if (showTreeLines) {
-            // 横向连接线
-            const horizontalLine = document.createElement('div');
+            // 横向连接线（根据条目高度动态居中）
+            horizontalLine = document.createElement('div');
             horizontalLine.style.position = 'absolute';
-            horizontalLine.style.left = '0';
-            horizontalLine.style.top = '18px';
-            horizontalLine.style.width = '12px';
+            horizontalLine.style.left = '13px';
+            horizontalLine.style.top = '0';
+            horizontalLine.style.width = '7px';
             horizontalLine.style.height = '1px';
             horizontalLine.style.background = 'var(--border-color)';
             horizontalLine.style.opacity = '0.5';
@@ -3697,6 +3777,23 @@ class BrowsingHistoryCalendar {
         });
 
         wrapper.appendChild(item);
+
+        if (showTreeLines && horizontalLine) {
+            const syncGuideLinePosition = () => {
+                const centerY = Math.round(item.offsetTop + (item.offsetHeight / 2));
+                horizontalLine.style.top = `${centerY}px`;
+            };
+
+            syncGuideLinePosition();
+            requestAnimationFrame(syncGuideLinePosition);
+
+            if (typeof ResizeObserver !== 'undefined') {
+                const guideLineObserver = new ResizeObserver(syncGuideLinePosition);
+                guideLineObserver.observe(item);
+                wrapper._guideLineObserver = guideLineObserver;
+            }
+        }
+
         return wrapper;
     }
 
@@ -3843,41 +3940,32 @@ class BrowsingHistoryCalendar {
         folderContainer.style.position = 'relative';
         folderContainer.style.marginBottom = shouldExpandThisLevel ? '12px' : '0';
         folderContainer.dataset.treeLevel = level;
+        const hasParentGuideLine = level > 1;
+
+        let verticalLine = null;
+        let horizontalLine = null;
 
         // 添加树状连接线
-        if (level > 0) {
+        if (hasParentGuideLine) {
             folderContainer.style.paddingLeft = '20px';
 
-            // 纵向连接线（从上一级延伸下来）
-            if (!isLastChild) {
-                const verticalLine = document.createElement('div');
-                verticalLine.style.position = 'absolute';
-                verticalLine.style.left = '0';
-                verticalLine.style.top = '0';
-                verticalLine.style.width = '1px';
-                verticalLine.style.height = '100%';
-                verticalLine.style.background = 'var(--border-color)';
-                verticalLine.style.opacity = '0.5';
-                folderContainer.appendChild(verticalLine);
-            } else {
-                // 最后一个子节点的纵线只到中间
-                const verticalLine = document.createElement('div');
-                verticalLine.style.position = 'absolute';
-                verticalLine.style.left = '0';
-                verticalLine.style.top = '0';
-                verticalLine.style.width = '1px';
-                verticalLine.style.height = '18px';
-                verticalLine.style.background = 'var(--border-color)';
-                verticalLine.style.opacity = '0.5';
-                folderContainer.appendChild(verticalLine);
-            }
+            // 纵向连接线（x 坐标与折叠按钮中心同轴）
+            verticalLine = document.createElement('div');
+            verticalLine.style.position = 'absolute';
+            verticalLine.style.left = '13px';
+            verticalLine.style.top = '0';
+            verticalLine.style.width = '1px';
+            verticalLine.style.height = isLastChild ? '0' : '100%';
+            verticalLine.style.background = 'var(--border-color)';
+            verticalLine.style.opacity = '0.5';
+            folderContainer.appendChild(verticalLine);
 
-            // 横向连接线（连接到文件夹标题）
-            const horizontalLine = document.createElement('div');
+            // 横向连接线（后续按文件夹标题实际高度动态定位）
+            horizontalLine = document.createElement('div');
             horizontalLine.style.position = 'absolute';
-            horizontalLine.style.left = '0';
-            horizontalLine.style.top = '18px';
-            horizontalLine.style.width = '12px';
+            horizontalLine.style.left = '13px';
+            horizontalLine.style.top = '0';
+            horizontalLine.style.width = '7px';
             horizontalLine.style.height = '1px';
             horizontalLine.style.background = 'var(--border-color)';
             horizontalLine.style.opacity = '0.5';
@@ -3897,6 +3985,25 @@ class BrowsingHistoryCalendar {
         }
         folderContainer.appendChild(folderHeader);
 
+        if (hasParentGuideLine && horizontalLine) {
+            const syncGuideLinePosition = () => {
+                const centerY = Math.round(folderHeader.offsetTop + (folderHeader.offsetHeight / 2));
+                horizontalLine.style.top = `${centerY}px`;
+                if (verticalLine && isLastChild) {
+                    verticalLine.style.height = `${centerY + 1}px`;
+                }
+            };
+
+            syncGuideLinePosition();
+            requestAnimationFrame(syncGuideLinePosition);
+
+            if (typeof ResizeObserver !== 'undefined') {
+                const guideLineObserver = new ResizeObserver(syncGuideLinePosition);
+                guideLineObserver.observe(folderHeader);
+                folderContainer._guideLineObserver = guideLineObserver;
+            }
+        }
+
         // 子内容容器
         const childrenContainer = document.createElement('div');
         childrenContainer.style.display = shouldExpandThisLevel ? 'block' : 'none';
@@ -3913,7 +4020,7 @@ class BrowsingHistoryCalendar {
             if (level > 0 && (node.bookmarks.length > 0 || node.children.length > 0)) {
                 const childrenVerticalLine = document.createElement('div');
                 childrenVerticalLine.style.position = 'absolute';
-                childrenVerticalLine.style.left = '0';
+                childrenVerticalLine.style.left = '33px';
                 childrenVerticalLine.style.top = '0';
                 childrenVerticalLine.style.width = '1px';
                 childrenVerticalLine.style.height = '100%';
@@ -3978,8 +4085,12 @@ class BrowsingHistoryCalendar {
         // 创建路径显示（每个文件夹用椭圆框框住）
         // 仅在关键节点显示合并路径；子层级默认只显示当前节点，避免重复
         let pathHTML = '';
+        const showFullPath = this.bookmarkTreeViewMode === 'full_path';
         const compactSegments = Array.isArray(displaySegments) ? displaySegments.filter(Boolean) : [];
-        if (compactSegments.length > 1) {
+        if (showFullPath && Array.isArray(path) && path.length > 0) {
+            const fullPathText = path.join(' / ');
+            pathHTML = `<span class="calendar-folder-pill calendar-folder-pill-full-path" data-full-path="${this.escapeHtml(fullPathText)}"><span class="calendar-folder-pill-full-path-label">${this.escapeHtml(fullPathText)}</span></span>`;
+        } else if (compactSegments.length > 1) {
             pathHTML = compactSegments.map(folder =>
                 `<span class="calendar-folder-pill" title="${this.escapeHtml(folder)}">${this.escapeHtml(folder)}</span>`
             ).join('<span class="calendar-folder-divider">/</span>');
@@ -3991,10 +4102,12 @@ class BrowsingHistoryCalendar {
             pathHTML = `<span class="calendar-folder-pill" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>`;
         }
 
+        const pathContainerClass = showFullPath ? 'calendar-folder-path calendar-folder-path-full-path' : 'calendar-folder-path';
+
         folderHeader.innerHTML = `
             <i class="fas fa-chevron-down" style="font-size:10px;color:${themeColor};flex-shrink:0;"></i>
             <i class="fas fa-folder" style="color:${themeColor};font-size:12px;flex-shrink:0;"></i>
-            <div class="calendar-folder-path">${pathHTML}</div>
+            <div class="${pathContainerClass}">${pathHTML}</div>
             <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${count}</span>
         `;
 
@@ -4173,15 +4286,28 @@ class BrowsingHistoryCalendar {
 
         const LARGE_DATASET_THRESHOLD = 300;
         const isLargeDataset = sortedBookmarks.length > LARGE_DATASET_THRESHOLD;
+        const treeViewMode = this.isValidTreeViewMode(this.bookmarkTreeViewMode)
+            ? this.bookmarkTreeViewMode
+            : this.getDefaultTreeViewMode();
+
+        if (treeViewMode === 'bookmarks_only') {
+            return this.createFlatBookmarkList(sortedBookmarks);
+        }
 
         // 为每个书签填充 folderPath（从 bookmarkFolderPaths 获取）
-        const bookmarksWithPath = sortedBookmarks.map(bm => {
+        const bookmarksWithPath = sortedBookmarks.map((bm) => {
             const folderPath = this.bookmarkFolderPaths?.get(bm.url) || [];
             return { ...bm, folderPath };
         });
 
+        if (treeViewMode === 'full_path') {
+            return this.createFullPathGroupedList(bookmarksWithPath, {
+                collapseLarge: isLargeDataset
+            });
+        }
+
         // 检查是否有任何书签有文件夹路径
-        const hasAnyFolderPath = bookmarksWithPath.some(bm => bm.folderPath.length > 0);
+        const hasAnyFolderPath = bookmarksWithPath.some((bm) => bm.folderPath.length > 0);
 
         if (!hasAnyFolderPath) {
             // 没有文件夹路径，使用平面列表显示（兼容旧逻辑）
@@ -4296,6 +4422,76 @@ class BrowsingHistoryCalendar {
 
             container.appendChild(toggleBtn);
         }
+
+        return container;
+    }
+
+    createFullPathGroupedList(bookmarks, options = {}) {
+        const { collapseLarge = false } = options;
+        const container = document.createElement('div');
+        if (bookmarks.length === 0) return container;
+
+        const pathGroups = new Map();
+        const uncategorizedTitle = currentLang === 'en' ? 'Uncategorized' : '未分类';
+
+        bookmarks.forEach((bookmark) => {
+            const folderPath = Array.isArray(bookmark.folderPath) ? bookmark.folderPath.filter(Boolean) : [];
+            const pathKey = folderPath.length > 0 ? JSON.stringify(folderPath) : '__uncategorized__';
+
+            if (!pathGroups.has(pathKey)) {
+                pathGroups.set(pathKey, {
+                    title: folderPath.length > 0 ? folderPath[folderPath.length - 1] : uncategorizedTitle,
+                    path: folderPath,
+                    bookmarks: []
+                });
+            }
+
+            pathGroups.get(pathKey).bookmarks.push(bookmark);
+        });
+
+        const defaultCollapsed = collapseLarge && pathGroups.size > 1;
+
+        pathGroups.forEach((group) => {
+            const folderContainer = document.createElement('div');
+            folderContainer.style.marginBottom = '10px';
+
+            const folderHeader = this.createFolderHeader(
+                group.title,
+                group.path,
+                group.bookmarks.length,
+                1,
+                group.path
+            );
+            folderContainer.appendChild(folderHeader);
+
+            const bookmarksContainer = document.createElement('div');
+            bookmarksContainer.style.paddingLeft = '20px';
+            bookmarksContainer.style.display = defaultCollapsed ? 'none' : 'block';
+
+            const renderBookmarks = () => {
+                if (bookmarksContainer.dataset.lazyLoaded === '1') return;
+                bookmarksContainer.innerHTML = '';
+                bookmarksContainer.appendChild(this.renderBookmarkList(group.bookmarks, false));
+                bookmarksContainer.dataset.lazyLoaded = '1';
+            };
+
+            if (defaultCollapsed) {
+                bookmarksContainer.dataset.lazyLoaded = '0';
+            } else {
+                renderBookmarks();
+            }
+
+            folderContainer.appendChild(bookmarksContainer);
+            this.attachFolderToggle(
+                folderHeader,
+                bookmarksContainer,
+                folderContainer,
+                defaultCollapsed,
+                defaultCollapsed ? renderBookmarks : null
+            );
+
+            container.appendChild(folderContainer);
+        });
 
         return container;
     }
@@ -4620,6 +4816,7 @@ class BrowsingHistoryCalendar {
             // 左侧菜单栏
             const sidebar = document.createElement('div');
             sidebar.className = 'calendar-split-sidebar';
+            applyCalendarSplitSidebarClasses(sidebar, layout, 'week');
             sidebar.style.width = layout.sidebarWidth;
             sidebar.style.flexShrink = '0';
             sidebar.style.borderRight = '1px solid var(--border-color)';
@@ -4639,6 +4836,7 @@ class BrowsingHistoryCalendar {
             currentWeekMonday.setHours(0, 0, 0, 0);
             const isCurrentWeek = (this.currentWeekStart.getTime() === currentWeekMonday.getTime());
             const shouldShowAllByDefault = !this.selectMode && !isCurrentWeek;
+            const useBlockDateCardInSidebar = !shouldUseCompactSelectorLayout(layout);
 
             // 默认选中第一天
             let selectedDateKey = this.getDateKey(filteredBookmarks[0].date);
@@ -4647,14 +4845,15 @@ class BrowsingHistoryCalendar {
             const totalBookmarks = filteredBookmarks.reduce((sum, item) => sum + item.bookmarks.length, 0);
 
             const allMenuItem = document.createElement('div');
-            allMenuItem.style.padding = '12px';
+            allMenuItem.style.padding = '8px 8px';
             allMenuItem.style.borderRadius = '8px';
             allMenuItem.style.cursor = 'pointer';
             allMenuItem.style.transition = 'all 0.2s';
-            allMenuItem.style.fontSize = '14px';
+            allMenuItem.style.fontSize = '12px';
             allMenuItem.style.fontWeight = '600';
-            allMenuItem.style.marginBottom = '12px';
+            allMenuItem.style.marginBottom = '8px';
             allMenuItem.dataset.menuType = 'all';
+            allMenuItem.classList.add('calendar-selector-all-chip');
 
             // 勾选模式下默认选中（绿色），普通模式下未选中（透明）
             if (this.selectMode) {
@@ -4669,7 +4868,7 @@ class BrowsingHistoryCalendar {
 
             allMenuItem.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <span><i class="fas fa-th-large"></i> ${currentLang === 'en' ? 'All' : '全部'}</span>
+                    <span>${currentLang === 'en' ? 'All' : '全部'}</span>
                     <span style="font-size:12px;opacity:0.9;">${totalBookmarks}</span>
                 </div>
             `;
@@ -4724,18 +4923,20 @@ class BrowsingHistoryCalendar {
                 // 日期菜单项容器
                 const dayMenuContainer = document.createElement('div');
                 dayMenuContainer.style.marginBottom = '8px';
+                dayMenuContainer.classList.add('calendar-selector-item-group');
 
                 // 左侧菜单项
                 const menuItem = document.createElement('div');
-                menuItem.style.padding = '12px';
+                menuItem.style.padding = '8px 8px';
                 menuItem.style.borderRadius = '8px';
                 menuItem.style.cursor = 'pointer';
                 menuItem.style.transition = 'all 0.2s';
-                menuItem.style.fontSize = '14px';
+                menuItem.style.fontSize = '12px';
                 menuItem.style.position = 'relative';
                 menuItem.dataset.dateKey = dateKey;
+                menuItem.classList.add('calendar-selector-date-chip');
                 // 在勾选模式下，默认展开所有有小时菜单的日期
-                menuItem.dataset.expanded = (this.selectMode && hasTimePeriods) ? 'true' : 'false';
+                menuItem.dataset.expanded = 'false';
 
                 // 第一天默认选中（仅在普通模式下且是当前周）
                 if (index === 0 && !this.selectMode && !shouldShowAllByDefault) {
@@ -4747,18 +4948,30 @@ class BrowsingHistoryCalendar {
                     menuItem.style.color = 'var(--text-primary)';
                 }
 
-                const isExpanded = (this.selectMode && hasTimePeriods);
-                menuItem.innerHTML = `
-                    <div style="display:flex;flex-direction:column;gap:4px;">
-                        <div style="display:flex;align-items:center;gap:4px;">
-                            ${hasTimePeriods ? `<i class="fas fa-chevron-${isExpanded ? 'down' : 'right'}" style="font-size:9px;"></i>` : ''}
-                            <span style="font-size:14px;font-weight:600;">${twFull(date.getDay())}</span>
+                const isExpanded = false;
+                if (useBlockDateCardInSidebar) {
+                    menuItem.innerHTML = `
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                ${hasTimePeriods ? `<i class="fas fa-chevron-${isExpanded ? 'down' : 'right'}" style="font-size:9px;"></i>` : ''}
+                                <span style="font-size:12px;font-weight:600;">${twFull(date.getDay())}</span>
+                            </div>
+                            <div style="font-size:11px;opacity:0.85;">${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}</div>
+                            <div style="font-size:10px;opacity:0.72;">${t('calendarBookmarkCount', bookmarks.length)}</div>
                         </div>
-                        <div style="font-size:13px;opacity:0.85;">${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}</div>
-                        <div style="font-size:12px;opacity:0.7;">${t('calendarBookmarkCount', bookmarks.length)}</div>
-                    </div>
-                    ${isDayToday ? `<div style="position: absolute; bottom: 4px; right: 4px; font-size: 11px; color: ${index === 0 ? 'white' : '#2196F3'}; font-weight: 600;">${currentLang === 'en' ? 'Today' : '今天'}</div>` : ''}
-                `;
+                        ${isDayToday ? `<div style="position: absolute; bottom: 4px; right: 4px; font-size: 11px; color: ${index === 0 ? 'white' : '#2196F3'}; font-weight: 600;">${currentLang === 'en' ? 'Today' : '今天'}</div>` : ''}
+                    `;
+                } else {
+                    menuItem.innerHTML = `
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                            <span>
+                                ${hasTimePeriods ? `<i class="fas fa-chevron-${isExpanded ? 'down' : 'right'}" style="font-size:9px;margin-right:4px;"></i>` : ''}
+                                ${tw(date.getDay())} ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}${isDayToday ? ` <span style="color:${index === 0 ? 'white' : '#2196F3'};font-weight:600;">(${currentLang === 'en' ? 'Today' : '今天'})</span>` : ''}
+                            </span>
+                            <span style="font-size:11px;opacity:0.82;">${bookmarks.length}</span>
+                        </div>
+                    `;
+                }
 
                 // 小时子菜单容器（二级菜单）
                 let hoursContainer = null;
@@ -4768,6 +4981,7 @@ class BrowsingHistoryCalendar {
                     hoursContainer.style.marginTop = '4px';
                     hoursContainer.style.display = isExpanded ? 'block' : 'none';
                     hoursContainer.dataset.dateKey = dateKey;
+                    hoursContainer.classList.add('calendar-selector-time-group');
 
                     // 按小时分组
                     const hourGroups = groupBookmarksByHour(bookmarks);
@@ -4779,7 +4993,7 @@ class BrowsingHistoryCalendar {
                         const hourBookmarks = hourGroups[hour];
 
                         const hourMenuItem = document.createElement('div');
-                        hourMenuItem.style.padding = '6px 10px';
+                        hourMenuItem.style.padding = '4px 7px';
                         hourMenuItem.style.marginBottom = '3px';
                         hourMenuItem.style.borderRadius = '4px';
                         hourMenuItem.style.cursor = 'pointer';
@@ -4790,10 +5004,11 @@ class BrowsingHistoryCalendar {
                         hourMenuItem.style.border = '1px solid transparent';
                         hourMenuItem.dataset.hour = hour;
                         hourMenuItem.dataset.parentDateKey = dateKey;
+                        hourMenuItem.classList.add('calendar-selector-time-chip');
 
                         hourMenuItem.innerHTML = `
                             <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <span>${String(hour).padStart(2, '0')}:00-${String(hour).padStart(2, '0')}:59</span>
+                                <span>${String(hour).padStart(2, '0')}:00</span>
                                 <span style="font-size:11px;opacity:0.8;">${hourBookmarks.length}</span>
                             </div>
                         `;
@@ -5042,7 +5257,11 @@ class BrowsingHistoryCalendar {
                 const themeColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
 
                 const allHeader = document.createElement('div');
-                allHeader.style.fontSize = '18px';
+                const headerWidth = contentArea.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0);
+                const narrowHeader = headerWidth > 0 && headerWidth <= 720;
+                const compactHeader = getCalendarLayoutTokens().sidePanelMode || narrowHeader;
+
+                allHeader.style.fontSize = compactHeader ? '16px' : '18px';
                 allHeader.style.fontWeight = '700';
                 allHeader.style.color = 'var(--text-primary)';
                 allHeader.style.marginBottom = '20px';
@@ -5050,7 +5269,10 @@ class BrowsingHistoryCalendar {
                 allHeader.style.borderBottom = `2px solid ${themeColor}`;
                 allHeader.style.display = 'flex';
                 allHeader.style.justifyContent = 'space-between';
-                allHeader.style.alignItems = 'center';
+                allHeader.style.alignItems = compactHeader ? 'flex-start' : 'center';
+                allHeader.style.flexWrap = compactHeader ? 'wrap' : 'nowrap';
+                allHeader.style.gap = compactHeader ? '8px' : '12px';
+                allHeader.style.minWidth = '0';
 
                 const totalBookmarks = filteredBookmarks.reduce((sum, item) => sum + item.bookmarks.length, 0);
 
@@ -5062,12 +5284,33 @@ class BrowsingHistoryCalendar {
                 // 创建标题和书签数量的容器
                 const titleContainer = document.createElement('div');
                 titleContainer.style.display = 'flex';
-                titleContainer.style.alignItems = 'baseline';
-                titleContainer.style.gap = '12px';
+                titleContainer.style.alignItems = compactHeader ? 'center' : 'baseline';
+                titleContainer.style.gap = compactHeader ? '8px' : '12px';
+                titleContainer.style.minWidth = '0';
+                titleContainer.style.flex = '1 1 auto';
+                titleContainer.style.flexWrap = compactHeader ? 'wrap' : 'nowrap';
                 titleContainer.innerHTML = `
-                    <span><i class="fas ${headerIcon}"></i> ${headerText}</span>
-                    <span style="font-size:14px;color:var(--text-secondary);">${t('calendarBookmarksCount', totalBookmarks)}</span>
+                    <span data-header-main><i class="fas ${headerIcon}"></i> ${headerText}</span>
+                    <span data-header-count style="font-size:14px;color:var(--text-secondary);">${t('calendarBookmarksCount', totalBookmarks)}</span>
                 `;
+
+                const mainHeaderLabel = titleContainer.querySelector('[data-header-main]');
+                if (mainHeaderLabel) {
+                    mainHeaderLabel.style.display = 'inline-flex';
+                    mainHeaderLabel.style.alignItems = 'center';
+                    mainHeaderLabel.style.gap = '6px';
+                    mainHeaderLabel.style.minWidth = '0';
+                    mainHeaderLabel.style.lineHeight = compactHeader ? '1.25' : '1.2';
+                    mainHeaderLabel.style.fontSize = compactHeader ? '14px' : 'inherit';
+                    mainHeaderLabel.style.whiteSpace = compactHeader ? 'normal' : 'nowrap';
+                }
+
+                const countHeaderLabel = titleContainer.querySelector('[data-header-count]');
+                if (countHeaderLabel) {
+                    countHeaderLabel.style.fontSize = compactHeader ? '12px' : '14px';
+                    countHeaderLabel.style.whiteSpace = 'nowrap';
+                    countHeaderLabel.style.flexShrink = '0';
+                }
 
                 // 创建导出按钮
                 const exportBtn = this.createInlineExportButton({
@@ -5082,7 +5325,16 @@ class BrowsingHistoryCalendar {
                 // 创建按钮容器
                 const buttonsContainer = document.createElement('div');
                 buttonsContainer.style.display = 'flex';
-                buttonsContainer.style.gap = '8px';
+                buttonsContainer.style.gap = compactHeader ? '6px' : '8px';
+                buttonsContainer.style.alignItems = 'center';
+                buttonsContainer.style.justifyContent = compactHeader ? 'flex-end' : 'flex-start';
+                buttonsContainer.style.flex = '0 0 auto';
+                buttonsContainer.style.minWidth = '0';
+                buttonsContainer.style.flexWrap = compactHeader ? 'wrap' : 'nowrap';
+                if (compactHeader) {
+                    buttonsContainer.style.width = '100%';
+                    buttonsContainer.style.marginTop = '2px';
+                }
                 buttonsContainer.appendChild(exportBtn);
                 buttonsContainer.appendChild(sortBtn);
 
@@ -5137,7 +5389,7 @@ class BrowsingHistoryCalendar {
 
             panelContainer.appendChild(sidebar);
             panelContainer.appendChild(contentArea);
-            section.appendChild(panelContainer);
+            section.appendChild(createCalendarSplitPanelWithTopScroll(panelContainer));
 
             wrapper.appendChild(section);
         }
@@ -5204,20 +5456,21 @@ class BrowsingHistoryCalendar {
 
         // 日视图：左侧「全部 + 时间段」菜单，右侧内容
         const panelContainer = document.createElement('div');
-            panelContainer.className = 'calendar-split-layout';
+        panelContainer.className = 'calendar-split-layout';
         panelContainer.style.display = 'flex';
         panelContainer.style.gap = layout.splitGap;
         panelContainer.style.minHeight = layout.splitMinHeight;
 
         const sidebar = document.createElement('div');
-            sidebar.className = 'calendar-split-sidebar';
+        sidebar.className = 'calendar-split-sidebar';
+        applyCalendarSplitSidebarClasses(sidebar, layout, 'day');
         sidebar.style.width = layout.sidebarWidth;
         sidebar.style.flexShrink = '0';
         sidebar.style.borderRight = '1px solid var(--border-color)';
         sidebar.style.paddingRight = layout.sidebarPaddingRight;
 
         const contentArea = document.createElement('div');
-            contentArea.className = 'calendar-split-content';
+        contentArea.className = 'calendar-split-content';
         contentArea.style.flex = '1';
         contentArea.style.minWidth = '0';
 
@@ -5235,14 +5488,15 @@ class BrowsingHistoryCalendar {
 
         // 「全部」菜单项
         const allMenuItem = document.createElement('div');
-        allMenuItem.style.padding = '10px 12px';
+        allMenuItem.style.padding = '7px 8px';
         allMenuItem.style.marginBottom = '8px';
         allMenuItem.style.borderRadius = '8px';
         allMenuItem.style.cursor = 'pointer';
         allMenuItem.style.transition = 'all 0.2s';
-        allMenuItem.style.fontSize = '14px';
+        allMenuItem.style.fontSize = '12px';
         allMenuItem.style.fontWeight = '600';
         allMenuItem.dataset.menuType = 'all';
+        allMenuItem.classList.add('calendar-selector-all-chip');
 
         const applyAllActiveStyle = (active) => {
             if (active) {
@@ -5266,7 +5520,7 @@ class BrowsingHistoryCalendar {
 
         allMenuItem.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span><i class="fas fa-th-large"></i> ${allLabel}</span>
+                <span>${allLabel}</span>
                 <span style="font-size:12px;opacity:0.8;">${t('calendarBookmarkCount', bookmarks.length)}</span>
             </div>
         `;
@@ -5292,20 +5546,21 @@ class BrowsingHistoryCalendar {
         hours.forEach(hour => {
             const hourBookmarks = hourGroups[hour];
             const menuItem = document.createElement('div');
-            menuItem.style.padding = '10px 12px';
+            menuItem.style.padding = '6px 8px';
             menuItem.style.marginBottom = '6px';
             menuItem.style.borderRadius = '8px';
             menuItem.style.cursor = 'pointer';
             menuItem.style.transition = 'all 0.2s';
-            menuItem.style.fontSize = '13px';
+            menuItem.style.fontSize = '12px';
             menuItem.style.background = 'transparent';
             menuItem.style.color = 'var(--text-primary)';
             menuItem.style.border = '1px solid transparent';
             menuItem.dataset.hour = hour;
+            menuItem.classList.add('calendar-selector-time-chip');
 
             menuItem.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <span>${String(hour).padStart(2, '0')}:00-${String(hour).padStart(2, '0')}:59</span>
+                    <span>${String(hour).padStart(2, '0')}:00</span>
                     <span style="font-size:11px;opacity:0.8;">${hourBookmarks.length}</span>
                 </div>
             `;
@@ -5588,10 +5843,130 @@ class BrowsingHistoryCalendar {
         return btn;
     }
 
+    createTreeViewModeButton() {
+        const wrapper = document.createElement('div');
+        wrapper.style.position = 'relative';
+        wrapper.style.display = 'inline-flex';
+        wrapper.style.alignItems = 'center';
+
+        const btn = document.createElement('button');
+        btn.className = 'calendar-action-btn calendar-tree-view-btn';
+
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-sitemap';
+        btn.appendChild(icon);
+
+        const tooltip = document.createElement('span');
+        tooltip.className = 'btn-tooltip';
+        const isZh = currentLang === 'zh_CN';
+        tooltip.textContent = this.getTreeViewModeLabel();
+        btn.appendChild(tooltip);
+
+        const menu = document.createElement('div');
+        menu.className = 'calendar-tree-view-menu';
+        menu.style.position = 'absolute';
+        menu.style.top = 'calc(100% + 6px)';
+        menu.style.right = '0';
+        menu.style.minWidth = '154px';
+        menu.style.padding = '4px';
+        menu.style.borderRadius = '8px';
+        menu.style.border = '1px solid var(--border-color)';
+        menu.style.background = 'var(--bg-primary)';
+        menu.style.boxShadow = '0 6px 24px rgba(0, 0, 0, 0.15)';
+        menu.style.zIndex = '1000';
+        menu.style.display = 'none';
+
+        const renderMenuOptions = () => {
+            menu.innerHTML = '';
+            this.getTreeViewModeOptions().forEach((option) => {
+                const optionBtn = document.createElement('button');
+                optionBtn.type = 'button';
+                optionBtn.style.width = '100%';
+                optionBtn.style.border = 'none';
+                optionBtn.style.background = option.value === this.bookmarkTreeViewMode
+                    ? 'rgba(33, 150, 243, 0.12)'
+                    : 'transparent';
+                optionBtn.style.color = 'var(--text-primary)';
+                optionBtn.style.borderRadius = '6px';
+                optionBtn.style.padding = '6px 8px';
+                optionBtn.style.cursor = 'pointer';
+                optionBtn.style.display = 'flex';
+                optionBtn.style.alignItems = 'center';
+                optionBtn.style.gap = '6px';
+                optionBtn.style.textAlign = 'left';
+                optionBtn.innerHTML = `${option.value === this.bookmarkTreeViewMode ? '<i class="fas fa-check" style="font-size:10px;color:var(--accent-primary);"></i>' : '<span style="width:10px;"></span>'}<span>${option.label}</span>`;
+
+                optionBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    closeMenu();
+                    this.setTreeViewMode(option.value, true);
+                });
+
+                optionBtn.addEventListener('mouseenter', () => {
+                    if (option.value !== this.bookmarkTreeViewMode) {
+                        optionBtn.style.background = 'var(--bg-secondary)';
+                    }
+                });
+
+                optionBtn.addEventListener('mouseleave', () => {
+                    optionBtn.style.background = option.value === this.bookmarkTreeViewMode
+                        ? 'rgba(33, 150, 243, 0.12)'
+                        : 'transparent';
+                });
+
+                menu.appendChild(optionBtn);
+            });
+        };
+
+        const closeMenu = () => {
+            menu.classList.remove('show');
+            menu.style.display = 'none';
+            document.removeEventListener('click', handleDocumentClick, true);
+        };
+
+        const handleDocumentClick = (event) => {
+            if (!wrapper.contains(event.target)) {
+                closeMenu();
+            }
+        };
+
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const opening = !menu.classList.contains('show');
+            document.querySelectorAll('.calendar-tree-view-menu.show').forEach((openMenu) => {
+                openMenu.classList.remove('show');
+                openMenu.style.display = 'none';
+            });
+
+            if (!opening) {
+                closeMenu();
+                return;
+            }
+
+            renderMenuOptions();
+            menu.classList.add('show');
+            menu.style.display = 'block';
+            document.addEventListener('click', handleDocumentClick, true);
+        });
+
+        wrapper.appendChild(btn);
+        wrapper.appendChild(menu);
+        return wrapper;
+    }
+
     // 创建排序切换按钮（用于标题右侧，导出按钮旁边）
     createSortToggleButton() {
+        const buttonsWrapper = document.createElement('div');
+        const compactActionButtons = getCalendarLayoutTokens().sidePanelMode ||
+            (typeof window !== 'undefined' && window.innerWidth > 0 && window.innerWidth <= 560);
+        buttonsWrapper.style.display = 'inline-flex';
+        buttonsWrapper.style.alignItems = 'center';
+        buttonsWrapper.style.gap = compactActionButtons ? '6px' : '8px';
+
+        buttonsWrapper.appendChild(this.createTreeViewModeButton());
+
         const btn = document.createElement('button');
-        btn.className = 'calendar-action-btn';
+        btn.className = 'calendar-action-btn calendar-sort-btn';
 
         // 如果处于冷却期，添加防抖类
         if (this.sortButtonCooldown) {
@@ -5636,7 +6011,9 @@ class BrowsingHistoryCalendar {
             }, 800);
         });
 
-        return btn;
+        buttonsWrapper.appendChild(btn);
+
+        return buttonsWrapper;
     }
 
     setupExportUI() {
