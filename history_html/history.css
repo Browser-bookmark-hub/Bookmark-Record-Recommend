@@ -42,8 +42,8 @@
     --git-moved-bg: #eff6ff;
 
     /* Layout constants */
-    --sidebar-collapsed-width: 60px;
     --header-height: 58px;
+    --sidebar-collapsed-width: 54px;
     --search-container-width: 420px;
     --search-container-min-width: 220px;
 }
