@@ -5662,7 +5662,144 @@ let widgetsSmartSortEnabled = readWidgetsSmartSortEnabled();
 let widgetsSortOrder = readWidgetsSortOrder();
 let widgetsSortMovingWidgetId = '';
 let widgetsSortMoveHighlightTimer = null;
+let widgetsSortMoveHighlightDebounceTimer = null;
+let widgetsSortMoveHighlightLastShownAt = 0;
 let widgetsSortInfoHoverHideTimer = null;
+let widgetsSortDeferredInteractionIds = new Set(readWidgetsSortDeferredInteractionIds());
+let widgetsSortApplyDeferredInteractionsOnOpen = isSidePanelMode && widgetsSortDeferredInteractionIds.size > 0;
+const WIDGETS_SORT_MOVE_HIGHLIGHT_DEBOUNCE_MS = 180;
+const WIDGETS_SORT_MOVE_HIGHLIGHT_MIN_INTERVAL_MS = 900;
+const WIDGETS_SORT_MOVE_HIGHLIGHT_DURATION_MS = 1300;
+// 小组件全局交互保护参数：后续新增小组件时，也走这套“交互期暂停刷新/重排，交互后补刷”。
+const WIDGETS_INTERACTION_COOLDOWN_MS = 620;
+const WIDGETS_PENDING_REFRESH_RETRY_MS = 220;
+let widgetsInteractionPointerDown = false;
+let widgetsInteractionLastAt = 0;
+let widgetsPendingRefreshTimer = null;
+let widgetsViewRefreshRunning = false;
+let widgetsViewRefreshPending = false;
+let widgetsViewRefreshPendingForce = false;
+
+// 自动刷新被交互拦截后，不立即丢弃，而是进入待补刷队列。
+function scheduleWidgetsPendingRefreshFlush(delayMs = WIDGETS_PENDING_REFRESH_RETRY_MS) {
+    if (widgetsPendingRefreshTimer) {
+        clearTimeout(widgetsPendingRefreshTimer);
+        widgetsPendingRefreshTimer = null;
+    }
+
+    const safeDelay = Number.isFinite(Number(delayMs))
+        ? Math.max(80, Number(delayMs))
+        : WIDGETS_PENDING_REFRESH_RETRY_MS;
+
+    widgetsPendingRefreshTimer = setTimeout(() => {
+        widgetsPendingRefreshTimer = null;
+        flushWidgetsPendingRefresh();
+    }, safeDelay);
+}
+
+function requestWidgetsPendingRefresh(options = {}) {
+    const force = options.force === true;
+    const delayMs = Number(options.delayMs);
+
+    widgetsViewRefreshPending = true;
+    if (force) {
+        widgetsViewRefreshPendingForce = true;
+    }
+
+    scheduleWidgetsPendingRefreshFlush(
+        Number.isFinite(delayMs) ? Math.max(80, delayMs) : WIDGETS_PENDING_REFRESH_RETRY_MS
+    );
+}
+
+function flushWidgetsPendingRefresh() {
+    if (!widgetsViewRefreshPending) return;
+
+    if (currentView !== 'widgets') {
+        widgetsViewRefreshPending = false;
+        widgetsViewRefreshPendingForce = false;
+        return;
+    }
+
+    if (widgetsViewRefreshRunning || isWidgetsInteractionActive()) {
+        const retryDelay = isWidgetsInteractionActive()
+            ? WIDGETS_INTERACTION_COOLDOWN_MS
+            : WIDGETS_PENDING_REFRESH_RETRY_MS;
+        scheduleWidgetsPendingRefreshFlush(retryDelay);
+        return;
+    }
+
+    const force = widgetsViewRefreshPendingForce;
+    widgetsViewRefreshPending = false;
+    widgetsViewRefreshPendingForce = false;
+
+    updateWidgetsViewData({ force, reason: 'pending-refresh' }).catch((error) => {
+        console.warn('[Widgets] 交互后补刷失败:', error);
+    });
+}
+
+function touchWidgetsInteraction() {
+    widgetsInteractionLastAt = Date.now();
+    if (widgetsViewRefreshPending) {
+        scheduleWidgetsPendingRefreshFlush(WIDGETS_INTERACTION_COOLDOWN_MS + 48);
+    }
+}
+
+// 统一交互判定入口：任何 widgets 内的交互都应在这里体现。
+// 后续新增小组件/二级面板时，优先补充本函数的判定条件，而不是在各组件里各自绕过刷新。
+function isWidgetsInteractionActive(options = {}) {
+    if (currentView !== 'widgets') return false;
+
+    const includeCooldown = options.includeCooldown !== false;
+    const widgetsViewRoot = document.getElementById('widgetsView');
+    if (!widgetsViewRoot) return false;
+
+    if (widgetsInteractionPointerDown) {
+        return true;
+    }
+
+    const sortPanel = document.getElementById('widgetsSortPanel');
+    if (sortPanel && !sortPanel.hidden) {
+        return true;
+    }
+
+    const sortInfoPanel = document.getElementById('widgetsSortInfoPanel');
+    if (sortInfoPanel && !sortInfoPanel.hidden) {
+        return true;
+    }
+
+    if (widgetsViewRoot.querySelector('.recommend-card.debug-open')) {
+        return true;
+    }
+
+    const activeEl = document.activeElement;
+    if (activeEl instanceof Element && activeEl !== document.body && widgetsViewRoot.contains(activeEl)) {
+        return true;
+    }
+
+    const hoveredSortUi = document.querySelector(
+        '#widgetsSortPanel:hover, #widgetsSortInfoPanel:hover, #widgetsSmartSortToggleBtn:hover, #widgetsSmartSortInfoBtn:hover'
+    );
+    if (hoveredSortUi) {
+        return true;
+    }
+
+    const hoveredInteractive = widgetsViewRoot.querySelector(
+        'button:hover, a:hover, input:hover, select:hover, textarea:hover, .time-menu-btn:hover, .recommend-debug:hover, [role="button"]:hover, .widgets-widget-card:hover'
+    );
+    if (hoveredInteractive) {
+        return true;
+    }
+
+    if (includeCooldown && (Date.now() - widgetsInteractionLastAt) < WIDGETS_INTERACTION_COOLDOWN_MS) {
+        return true;
+    }
+
+    return false;
+}
+
+function isWidgetsRecommendInteractionActive() {
+    return isWidgetsInteractionActive();
+}
 
 function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = currentLang) {
     const cardSignature = (Array.isArray(cards) ? cards : [])
@@ -5738,6 +5875,72 @@ function getWidgetsSmartSortStorageKey() {
 
 function getWidgetsSortOrderStorageKey() {
     return isSidePanelMode ? 'widgetsSortOrder__sidepanel' : 'widgetsSortOrder';
+}
+
+function getWidgetsSortDeferredInteractionStorageKey() {
+    return isSidePanelMode
+        ? 'widgetsSortDeferredInteractionIds__sidepanel'
+        : 'widgetsSortDeferredInteractionIds';
+}
+
+function normalizeWidgetsSortDeferredInteractionIds(idsLike) {
+    if (!Array.isArray(idsLike)) return [];
+
+    const seen = new Set();
+    const normalized = [];
+    idsLike.forEach((id) => {
+        const safeId = String(id || '').trim();
+        if (!WIDGETS_SMART_SORT_WIDGET_IDS.includes(safeId)) return;
+        if (seen.has(safeId)) return;
+        seen.add(safeId);
+        normalized.push(safeId);
+    });
+
+    return normalized;
+}
+
+function readWidgetsSortDeferredInteractionIds() {
+    try {
+        const raw = localStorage.getItem(getWidgetsSortDeferredInteractionStorageKey());
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return normalizeWidgetsSortDeferredInteractionIds(parsed);
+    } catch (_) {
+        return [];
+    }
+}
+
+function writeWidgetsSortDeferredInteractionIds(idsLike) {
+    const normalized = normalizeWidgetsSortDeferredInteractionIds(
+        Array.isArray(idsLike) ? idsLike : Array.from(idsLike || [])
+    );
+    widgetsSortDeferredInteractionIds = new Set(normalized);
+
+    try {
+        if (normalized.length === 0) {
+            localStorage.removeItem(getWidgetsSortDeferredInteractionStorageKey());
+        } else {
+            localStorage.setItem(getWidgetsSortDeferredInteractionStorageKey(), JSON.stringify(normalized));
+        }
+    } catch (_) { }
+}
+
+function markWidgetsSortDeferredInteraction(widgetId) {
+    if (!isSidePanelMode || !widgetsSmartSortEnabled) return;
+
+    const safeId = String(widgetId || '').trim();
+    if (!WIDGETS_SMART_SORT_WIDGET_IDS.includes(safeId)) return;
+
+    const nextIds = new Set(widgetsSortDeferredInteractionIds || []);
+    if (nextIds.has(safeId)) return;
+
+    nextIds.add(safeId);
+    writeWidgetsSortDeferredInteractionIds(nextIds);
+}
+
+function clearWidgetsSortDeferredInteractionIds() {
+    writeWidgetsSortDeferredInteractionIds([]);
+    widgetsSortApplyDeferredInteractionsOnOpen = false;
 }
 
 function normalizeWidgetsSortOrder(orderLike) {
@@ -5975,6 +6178,71 @@ function renderWidgetsSortPanelList() {
     });
 }
 
+function clearWidgetsSortMoveHighlight(shouldRerender = false) {
+    if (widgetsSortMoveHighlightTimer) {
+        clearTimeout(widgetsSortMoveHighlightTimer);
+        widgetsSortMoveHighlightTimer = null;
+    }
+    if (widgetsSortMoveHighlightDebounceTimer) {
+        clearTimeout(widgetsSortMoveHighlightDebounceTimer);
+        widgetsSortMoveHighlightDebounceTimer = null;
+    }
+
+    const hadHighlight = Boolean(widgetsSortMovingWidgetId);
+    widgetsSortMovingWidgetId = '';
+
+    if (!shouldRerender || !hadHighlight) return;
+
+    const panel = document.getElementById('widgetsSortPanel');
+    if (panel && !panel.hidden) {
+        renderWidgetsSortPanelList();
+    }
+}
+
+function scheduleWidgetsSortMoveHighlight(widgetId) {
+    const safeId = String(widgetId || '').trim();
+    if (!safeId) return;
+
+    const panel = document.getElementById('widgetsSortPanel');
+    if (!panel || panel.hidden) {
+        clearWidgetsSortMoveHighlight(false);
+        return;
+    }
+
+    if (widgetsSortMoveHighlightDebounceTimer) {
+        clearTimeout(widgetsSortMoveHighlightDebounceTimer);
+        widgetsSortMoveHighlightDebounceTimer = null;
+    }
+
+    widgetsSortMoveHighlightDebounceTimer = setTimeout(() => {
+        widgetsSortMoveHighlightDebounceTimer = null;
+
+        const now = Date.now();
+        if (now - widgetsSortMoveHighlightLastShownAt < WIDGETS_SORT_MOVE_HIGHLIGHT_MIN_INTERVAL_MS) {
+            return;
+        }
+
+        widgetsSortMoveHighlightLastShownAt = now;
+        widgetsSortMovingWidgetId = safeId;
+        renderWidgetsSortPanelList();
+
+        if (widgetsSortMoveHighlightTimer) {
+            clearTimeout(widgetsSortMoveHighlightTimer);
+            widgetsSortMoveHighlightTimer = null;
+        }
+
+        widgetsSortMoveHighlightTimer = setTimeout(() => {
+            widgetsSortMoveHighlightTimer = null;
+            widgetsSortMovingWidgetId = '';
+
+            const activePanel = document.getElementById('widgetsSortPanel');
+            if (activePanel && !activePanel.hidden) {
+                renderWidgetsSortPanelList();
+            }
+        }, WIDGETS_SORT_MOVE_HIGHLIGHT_DURATION_MS);
+    }, WIDGETS_SORT_MOVE_HIGHLIGHT_DEBOUNCE_MS);
+}
+
 function moveWidgetsSortOrder(widgetId, direction) {
     const safeId = String(widgetId || '').trim();
     if (!safeId) return;
@@ -5990,12 +6258,6 @@ function moveWidgetsSortOrder(widgetId, direction) {
     order[index] = order[target];
     order[target] = temp;
 
-    widgetsSortMovingWidgetId = safeId;
-    if (widgetsSortMoveHighlightTimer) {
-        clearTimeout(widgetsSortMoveHighlightTimer);
-        widgetsSortMoveHighlightTimer = null;
-    }
-
     writeWidgetsSortOrder(order);
 
     if (widgetsSmartSortEnabled) {
@@ -6004,16 +6266,9 @@ function moveWidgetsSortOrder(widgetId, direction) {
 
     renderWidgetsSortPanelList();
     updateWidgetsSmartSortToggleUI(currentView);
-    applyWidgetsSmartSort();
+    applyWidgetsSmartSort({ force: true });
 
-    widgetsSortMoveHighlightTimer = setTimeout(() => {
-        widgetsSortMoveHighlightTimer = null;
-        widgetsSortMovingWidgetId = '';
-        const panel = document.getElementById('widgetsSortPanel');
-        if (panel && !panel.hidden) {
-            renderWidgetsSortPanelList();
-        }
-    }, 1800);
+    scheduleWidgetsSortMoveHighlight(safeId);
 }
 
 function syncWidgetsSortPanelsDockDirection() {
@@ -6056,6 +6311,10 @@ function setWidgetsSortPanelOpen(open) {
 
     const shouldOpen = open === true;
     panel.hidden = !shouldOpen;
+
+    if (!shouldOpen) {
+        clearWidgetsSortMoveHighlight(false);
+    }
 
     const infoPanel = document.getElementById('widgetsSortInfoPanel');
     if (infoPanel) {
@@ -6127,12 +6386,22 @@ function scheduleWidgetsSortInfoPanelClose(delay = 90) {
     }, Math.max(0, delay));
 }
 
-function applyWidgetsSmartSort() {
+// 智能排序的统一出口：交互中不做 DOM 重排，避免用户悬浮/点击时列表跳动。
+function applyWidgetsSmartSort(options = {}) {
+    const force = options.force === true;
+    if (!force && isWidgetsInteractionActive()) {
+        requestWidgetsPendingRefresh({ delayMs: WIDGETS_INTERACTION_COOLDOWN_MS });
+        return;
+    }
+
     const grid = document.querySelector('#widgetsView .widgets-grid');
     if (!grid) return;
 
     const now = Date.now();
     widgetsSortOrder = normalizeWidgetsSortOrder(widgetsSortOrder);
+
+    const deferEnabled = isSidePanelMode && widgetsSmartSortEnabled && widgetsSortDeferredInteractionIds.size > 0;
+    const applyDeferredOnOpenNow = deferEnabled && widgetsSortApplyDeferredInteractionsOnOpen === true;
 
     const entries = widgetsSortOrder
         .map((id, index) => {
@@ -6141,13 +6410,21 @@ function applyWidgetsSmartSort() {
 
             const signal = getWidgetsSmartSortSignal(id);
             const prevSignal = widgetsSmartSortSignalById[id];
-            const changed = prevSignal != null && prevSignal !== signal.signature;
+            const changedBySignal = prevSignal != null && prevSignal !== signal.signature;
+
+            const deferredByInteraction = deferEnabled && widgetsSortDeferredInteractionIds.has(id);
+            let changed = changedBySignal;
+
+            if (deferredByInteraction) {
+                changed = applyDeferredOnOpenNow ? true : false;
+            }
+
             if (changed) {
                 widgetsSmartSortChangedAtById[id] = now;
-            }
-            if (!Number.isFinite(widgetsSmartSortChangedAtById[id])) {
+            } else if (!Number.isFinite(widgetsSmartSortChangedAtById[id])) {
                 widgetsSmartSortChangedAtById[id] = 0;
             }
+
             widgetsSmartSortSignalById[id] = signal.signature;
 
             return {
@@ -6187,11 +6464,27 @@ function applyWidgetsSmartSort() {
         entries.sort((a, b) => a.baseIndex - b.baseIndex);
     }
 
-    entries.forEach((entry) => {
-        grid.appendChild(entry.el);
-    });
-}
+    const currentOrderedIds = Array.from(grid.querySelectorAll('.widgets-widget-card'))
+        .map((el) => String(el?.id || '').trim())
+        .filter(Boolean);
 
+    const targetOrderedIds = entries
+        .map((entry) => String(entry?.id || '').trim())
+        .filter(Boolean);
+
+    const needsReorder = currentOrderedIds.length !== targetOrderedIds.length
+        || targetOrderedIds.some((id, idx) => currentOrderedIds[idx] !== id);
+
+    if (needsReorder) {
+        entries.forEach((entry) => {
+            grid.appendChild(entry.el);
+        });
+    }
+
+    if (applyDeferredOnOpenNow) {
+        clearWidgetsSortDeferredInteractionIds();
+    }
+}
 function updateWidgetsSmartSortToggleUI(view = currentView) {
     const btn = document.getElementById('widgetsSmartSortToggleBtn');
     const infoBtn = document.getElementById('widgetsSmartSortInfoBtn');
@@ -7264,6 +7557,10 @@ async function renderWidgetsRecommendCards(options = {}) {
     const force = Boolean(options.force);
     const allowBootstrap = options.allowBootstrap !== false;
 
+    if (!force && isWidgetsInteractionActive()) {
+        return;
+    }
+
     let currentCards = null;
     try {
         currentCards = await getHistoryCurrentCards();
@@ -7402,19 +7699,49 @@ async function renderWidgetsRecommendCards(options = {}) {
     } catch (_) { }
 }
 
-async function updateWidgetsViewData() {
-    const recommendTask = renderWidgetsRecommendCards();
-    const otherWidgetsTask = Promise.all([
-        updateWidgetsTrackingWidget(),
-        updateWidgetsRankingWidget(),
-        updateWidgetsAdditionsWeekWidget(),
-        updateWidgetsHistoryWeekWidget(),
-        updateWidgetsRelatedWidget()
-    ]);
+// 小组件总刷新入口：所有自动轮询刷新都先经过交互保护。
+async function updateWidgetsViewData(options = {}) {
+    const force = options.force === true;
+    const allowDuringInteraction = options.allowDuringInteraction === true;
 
-    await recommendTask;
-    await otherWidgetsTask;
-    applyWidgetsSmartSort();
+    if (currentView !== 'widgets') {
+        return false;
+    }
+
+    if (!force && !allowDuringInteraction && isWidgetsInteractionActive()) {
+        requestWidgetsPendingRefresh({ delayMs: WIDGETS_INTERACTION_COOLDOWN_MS });
+        return false;
+    }
+
+    if (widgetsViewRefreshRunning) {
+        requestWidgetsPendingRefresh({ force, delayMs: WIDGETS_PENDING_REFRESH_RETRY_MS });
+        return false;
+    }
+
+    widgetsViewRefreshRunning = true;
+    try {
+        const recommendTask = force
+            ? renderWidgetsRecommendCards({ force: true, allowBootstrap: false })
+            : renderWidgetsRecommendCards();
+
+        const otherWidgetsTask = Promise.all([
+            updateWidgetsTrackingWidget(),
+            updateWidgetsRankingWidget(),
+            updateWidgetsAdditionsWeekWidget(),
+            updateWidgetsHistoryWeekWidget(),
+            updateWidgetsRelatedWidget()
+        ]);
+
+        await recommendTask;
+        await otherWidgetsTask;
+        applyWidgetsSmartSort({ force });
+        return true;
+    } finally {
+        widgetsViewRefreshRunning = false;
+        if (widgetsViewRefreshPending) {
+            scheduleWidgetsPendingRefreshFlush(120);
+        }
+    }
 }
 
 function startWidgetsViewRefresh() {
@@ -7435,9 +7762,20 @@ function startWidgetsViewRefresh() {
 }
 
 function stopWidgetsViewRefresh() {
-    if (!widgetsViewRefreshInterval) return;
-    clearInterval(widgetsViewRefreshInterval);
-    widgetsViewRefreshInterval = null;
+    if (widgetsViewRefreshInterval) {
+        clearInterval(widgetsViewRefreshInterval);
+        widgetsViewRefreshInterval = null;
+    }
+
+    if (widgetsPendingRefreshTimer) {
+        clearTimeout(widgetsPendingRefreshTimer);
+        widgetsPendingRefreshTimer = null;
+    }
+
+    widgetsViewRefreshPending = false;
+    widgetsViewRefreshPendingForce = false;
+    widgetsViewRefreshRunning = false;
+    widgetsInteractionPointerDown = false;
 }
 
 function cycleWidgetsRankingRange() {
@@ -7479,6 +7817,77 @@ function initWidgetsView() {
     widgetsRelatedPrimaryRange = readWidgetsRelatedPrimaryRange();
     syncWidgetsSortPanelsDockDirection();
     updateWidgetsRelatedDepthButtonsState();
+
+    const widgetsViewRoot = document.getElementById('widgetsView');
+    // 统一采集 widgets 交互信号：新增小组件时尽量保持在 #widgetsView 下，自动复用此保护。
+    if (widgetsViewRoot) {
+        widgetsViewRoot.addEventListener('pointerdown', () => {
+            widgetsInteractionPointerDown = true;
+            touchWidgetsInteraction();
+        }, true);
+
+        widgetsViewRoot.addEventListener('pointerup', () => {
+            widgetsInteractionPointerDown = false;
+            touchWidgetsInteraction();
+        }, true);
+
+        widgetsViewRoot.addEventListener('pointercancel', () => {
+            widgetsInteractionPointerDown = false;
+            touchWidgetsInteraction();
+        }, true);
+
+        widgetsViewRoot.addEventListener('pointerleave', () => {
+            widgetsInteractionPointerDown = false;
+        }, true);
+
+        widgetsViewRoot.addEventListener('pointerover', () => {
+            touchWidgetsInteraction();
+        }, { capture: true, passive: true });
+
+        widgetsViewRoot.addEventListener('wheel', () => {
+            touchWidgetsInteraction();
+        }, { capture: true, passive: true });
+
+        widgetsViewRoot.addEventListener('focusin', () => {
+            touchWidgetsInteraction();
+        }, true);
+
+        widgetsViewRoot.addEventListener('keydown', () => {
+            touchWidgetsInteraction();
+        }, true);
+
+        widgetsViewRoot.addEventListener('click', (event) => {
+            touchWidgetsInteraction();
+
+            if (!isSidePanelMode || !widgetsSmartSortEnabled) return;
+            if (currentView !== 'widgets') return;
+
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+
+            if (target.closest('#widgetsSortPanel') || target.closest('#widgetsSortInfoPanel')
+                || target.closest('#widgetsSmartSortToggleBtn') || target.closest('#widgetsSmartSortInfoBtn')) {
+                return;
+            }
+
+            const widgetCard = target.closest('.widgets-widget-card');
+            if (!widgetCard || !widgetCard.id) return;
+
+            markWidgetsSortDeferredInteraction(widgetCard.id);
+        }, true);
+    }
+
+    document.addEventListener('pointerup', () => {
+        if (!widgetsInteractionPointerDown) return;
+        widgetsInteractionPointerDown = false;
+        touchWidgetsInteraction();
+    }, true);
+
+    document.addEventListener('pointercancel', () => {
+        if (!widgetsInteractionPointerDown) return;
+        widgetsInteractionPointerDown = false;
+        touchWidgetsInteraction();
+    }, true);
 
     if (trackingWidget) {
         trackingWidget.addEventListener('click', (e) => {
@@ -7524,7 +7933,7 @@ function initWidgetsView() {
                 await refreshRecommendCards(true);
                 lastWidgetsRecommendCardSignature = '';
                 await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
-                applyWidgetsSmartSort();
+                applyWidgetsSmartSort({ force: true });
             } catch (err) {
                 console.warn('[Widgets] 刷新推荐卡片失败:', err);
             }
@@ -7534,12 +7943,14 @@ function initWidgetsView() {
     if (widgetsSmartSortToggleBtn) {
         widgetsSmartSortToggleBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            touchWidgetsInteraction();
             toggleWidgetsSortPanel();
         });
     }
 
     if (widgetsSmartSortInfoBtn) {
         widgetsSmartSortInfoBtn.addEventListener('mouseenter', () => {
+            touchWidgetsInteraction();
             clearWidgetsSortInfoHoverHideTimer();
             setWidgetsSortInfoPanelOpen(true);
         });
@@ -7549,6 +7960,7 @@ function initWidgetsView() {
         });
 
         widgetsSmartSortInfoBtn.addEventListener('focus', () => {
+            touchWidgetsInteraction();
             clearWidgetsSortInfoHoverHideTimer();
             setWidgetsSortInfoPanelOpen(true);
         });
@@ -7582,7 +7994,7 @@ function initWidgetsView() {
         widgetsSmartSortCheckbox.addEventListener('change', () => {
             writeWidgetsSmartSortEnabled(Boolean(widgetsSmartSortCheckbox.checked));
             updateWidgetsSmartSortToggleUI(currentView);
-            applyWidgetsSmartSort();
+            applyWidgetsSmartSort({ force: true });
         });
     }
 
@@ -9800,6 +10212,15 @@ function formatRecommendCardPriority(priority, compact = false) {
 
 // 更新单个卡片显示
 function updateCardDisplay(card, bookmark, isFlipped = false) {
+    const previousBookmarkId = String(card.dataset.bookmarkId || '');
+    const nextBookmarkId = String(bookmark?.id || '');
+    const preserveDebugOpen = Boolean(
+        previousBookmarkId
+        && nextBookmarkId
+        && previousBookmarkId === nextBookmarkId
+        && card.classList.contains('debug-open')
+    );
+
     card.classList.remove('empty');
     card.classList.remove('is-opening');
     card.dataset.opening = '0';
@@ -9843,11 +10264,15 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
     }
 
     // 诊断面板（右上角）
-    card.classList.remove('debug-open');
     const debugOverlay = card.querySelector('.recommend-debug');
-    if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
     const debugPre = card.querySelector('.recommend-debug-pre');
-    if (debugPre) debugPre.textContent = '--';
+    if (!preserveDebugOpen) {
+        card.classList.remove('debug-open');
+        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+        if (debugPre) debugPre.textContent = '--';
+    } else if (debugOverlay) {
+        debugOverlay.setAttribute('aria-hidden', 'false');
+    }
 
     const closeDebug = () => {
         card.classList.remove('debug-open');
