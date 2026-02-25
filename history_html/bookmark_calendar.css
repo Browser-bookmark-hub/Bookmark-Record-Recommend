@@ -245,8 +245,8 @@
 }
 
 .bookmark-calendar-view .calendar-action-btn .btn-tooltip {
-    top: auto;
-    bottom: calc(100% + 4px);
+    top: calc(100% + 6px);
+    bottom: auto;
     left: 50%;
     right: auto;
     transform: translateX(-50%);
@@ -261,10 +261,10 @@
     left: 50%;
     right: auto;
     transform: translateX(-50%);
-    top: 100%;
-    bottom: auto;
-    border-bottom-color: transparent;
-    border-top-color: rgba(0, 0, 0, 0.9);
+    top: auto;
+    bottom: 100%;
+    border-bottom-color: rgba(0, 0, 0, 0.9);
+    border-top-color: transparent;
 }
 
 /* 中间（树视图）按钮：提示文案稍紧凑 */
@@ -284,6 +284,38 @@
     left: auto;
     right: 10px;
     transform: none;
+}
+
+/* 覆盖 history.css 中 body.header-dock-bottom 的全局 tooltip 方向，确保日历按钮在侧边栏也向下弹出 */
+body.header-dock-bottom:not(.header-compact) .bookmark-calendar-view .calendar-action-btn .btn-tooltip {
+    top: calc(100% + 6px) !important;
+    bottom: auto !important;
+}
+
+body.header-dock-bottom:not(.header-compact) .bookmark-calendar-view .calendar-action-btn .btn-tooltip::before {
+    top: auto !important;
+    bottom: 100% !important;
+    border-bottom-color: rgba(0, 0, 0, 0.9) !important;
+    border-top-color: transparent !important;
+}
+
+/* 顶部操作区「勾选 / 定位今天」按钮：统一向下弹出（覆盖 header-dock-bottom 的全局反转规则） */
+#calendarSelectModeBtn .btn-tooltip,
+#calendarLocateTodayBtn .btn-tooltip,
+#browsingCalendarSelectModeBtn .btn-tooltip,
+#browsingCalendarLocateTodayBtn .btn-tooltip {
+    top: calc(100% + 6px) !important;
+    bottom: auto !important;
+}
+
+#calendarSelectModeBtn .btn-tooltip::before,
+#calendarLocateTodayBtn .btn-tooltip::before,
+#browsingCalendarSelectModeBtn .btn-tooltip::before,
+#browsingCalendarLocateTodayBtn .btn-tooltip::before {
+    top: auto !important;
+    bottom: 100% !important;
+    border-bottom-color: rgba(0, 0, 0, 0.9) !important;
+    border-top-color: transparent !important;
 }
 
 /* 日历导航按钮 */
@@ -649,24 +681,24 @@ html.side-panel-mode .breadcrumb-dropdown-trigger {
 }
 
 html.side-panel-mode .calendar-action-btn {
-    padding: 6px 9px;
-    font-size: 12px;
-    gap: 4px;
+    padding: 5px 8px;
+    font-size: 11px;
+    gap: 3px;
 }
 
 html.side-panel-mode .calendar-action-btn i {
-    font-size: 12px;
+    font-size: 11px;
 }
 
 @media (max-width: 560px) {
     html.side-panel-mode .bookmark-calendar-view .calendar-action-btn {
-        padding: 5px 7px;
-        font-size: 11px;
-        gap: 3px;
+        padding: 4px 6px;
+        font-size: 10px;
+        gap: 2px;
     }
 
     html.side-panel-mode .bookmark-calendar-view .calendar-action-btn i {
-        font-size: 11px;
+        font-size: 10px;
     }
 }
 

@@ -61,7 +61,7 @@ function formatYearMonth(year, month) {
     return t('calendarYearMonth', year, monthName).replace('{0}', year).replace('{1}', monthName);
 }
 
-const CALENDAR_COMPACT_BREAKPOINT = 480;
+const BROWSING_CALENDAR_COMPACT_BREAKPOINT = 480;
 
 function getCalendarLayoutTokens() {
     let sidePanelMode = false;
@@ -98,7 +98,7 @@ function shouldUseCompactSelectorLayout(layout) {
     const viewportWidth = (typeof window !== 'undefined' && Number.isFinite(window.innerWidth))
         ? window.innerWidth
         : 0;
-    return resolvedLayout.sidePanelMode || (viewportWidth > 0 && viewportWidth <= CALENDAR_COMPACT_BREAKPOINT);
+    return resolvedLayout.sidePanelMode || (viewportWidth > 0 && viewportWidth <= BROWSING_CALENDAR_COMPACT_BREAKPOINT);
 }
 
 function applyCalendarSplitSidebarClasses(sidebar, layout, viewType) {

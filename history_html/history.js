@@ -20091,6 +20091,8 @@ function initBrowsingRelatedHistory() {
     const panel = document.getElementById('browsingRelatedPanel');
     if (!panel) return;
 
+    syncBrowsingRelatedSortButtonPlacement();
+
     const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
     const sortBtn = document.getElementById('browsingRelatedSortBtn');
     if (!buttons.length) return;
@@ -21199,6 +21201,35 @@ function saveBrowsingRankingViewMode(mode) {
     }
 }
 
+function mountBrowsingRankingToggleToHeader(toggleContainer) {
+    if (!isSidePanelMode || !toggleContainer) return false;
+    const actionContainer = document.getElementById('browsingRankingTitleActions');
+    if (!actionContainer) return false;
+    actionContainer.innerHTML = '';
+    actionContainer.appendChild(toggleContainer);
+    return true;
+}
+
+function syncBrowsingRelatedSortButtonPlacement() {
+    const sortBtn = document.getElementById('browsingRelatedSortBtn');
+    if (!sortBtn) return;
+
+    const filterContainer = sortBtn.closest('.browsing-ranking-filters')
+        || document.querySelector('#browsingRelatedPanel .browsing-ranking-filters');
+    const titleActionContainer = document.getElementById('browsingRelatedTitleActions');
+
+    if (isSidePanelMode) {
+        if (titleActionContainer && sortBtn.parentElement !== titleActionContainer) {
+            titleActionContainer.appendChild(sortBtn);
+        }
+        return;
+    }
+
+    if (filterContainer && sortBtn.parentElement !== filterContainer) {
+        filterContainer.appendChild(sortBtn);
+    }
+}
+
 // 显示点击排行的时间段菜单
 async function showBrowsingRankingTimeMenu(range) {
     browsingRankingCurrentRange = range;
@@ -21319,12 +21350,14 @@ async function showBrowsingRankingTimeMenu(range) {
 
     // 文件夹按钮（左边）
     const folderBtn = document.createElement('button');
+    folderBtn.className = 'ranking-view-toggle-btn ranking-view-toggle-folder-btn';
     folderBtn.style.cssText = btnStyle;
     folderBtn.style.color = browsingRankingViewMode === 'folder' ? '#fff' : 'var(--text-tertiary)';
     folderBtn.innerHTML = `<i class="fas fa-folder" style="font-size:11px;"></i><span>${isZh ? '文件夹' : 'Folder'}</span>`;
 
     // 书签按钮（右边）
     const bookmarkBtn = document.createElement('button');
+    bookmarkBtn.className = 'ranking-view-toggle-btn ranking-view-toggle-bookmark-btn';
     bookmarkBtn.style.cssText = btnStyle;
     bookmarkBtn.style.color = browsingRankingViewMode === 'bookmark' ? '#fff' : 'var(--text-tertiary)';
     bookmarkBtn.innerHTML = `<i class="fas fa-bookmark" style="font-size:10px;"></i><span>${isZh ? '书签' : 'Bookmark'}</span>`;
@@ -21369,11 +21402,19 @@ async function showBrowsingRankingTimeMenu(range) {
 
     toggleContainer.appendChild(folderBtn);
     toggleContainer.appendChild(bookmarkBtn);
-    menuRow.appendChild(toggleContainer);
+
+    const headerToggleMounted = mountBrowsingRankingToggleToHeader(toggleContainer);
+    if (!headerToggleMounted) {
+        menuRow.appendChild(toggleContainer);
+    }
 
     // 对于 'all' 范围，即使只有"全部"按钮，也要显示菜单（因为需要切换按钮）
     if (itemsContainer.children.length > 1 || range === 'all') {
-        menuContainer.appendChild(menuRow);
+        if (headerToggleMounted) {
+            menuContainer.appendChild(itemsContainer);
+        } else {
+            menuContainer.appendChild(menuRow);
+        }
         menuContainer.style.display = 'block';
     }
 }

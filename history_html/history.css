@@ -4062,6 +4062,20 @@ html.side-panel-mode .widgets-cards-row .card-debug-btn i {
     flex: 1;
 }
 
+.browsing-ranking-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.browsing-ranking-title-actions {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
 .ranking-title {
     font-size: 16px;
     font-weight: 600;
@@ -13824,8 +13838,8 @@ html.side-panel-mode .additions-tabs {
 
 html.side-panel-mode .additions-tab {
     padding: 6px 8px;
-    font-size: 12px;
-    line-height: 1.2;
+    font-size: 11px;
+    line-height: 1.15;
 }
 
 html.side-panel-mode #additionsTrackingPanel {
@@ -13833,18 +13847,46 @@ html.side-panel-mode #additionsTrackingPanel {
 }
 
 html.side-panel-mode .browsing-sub-tabs {
-    gap: 8px;
+    gap: 6px;
     margin-top: 10px;
     margin-bottom: 10px;
+    justify-content: flex-start;
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding-right: 0;
 }
 
 html.side-panel-mode .browsing-sub-tab-group {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+    flex: 1 1 100%;
+    min-width: 0;
 }
 
 html.side-panel-mode .browsing-sub-tab {
-    padding: 5px 12px;
-    font-size: 12px;
+    width: 100%;
+    padding: 4px 9px;
+    font-size: 10px;
+    line-height: 1.1;
+}
+
+html.side-panel-mode .browsing-sub-tab-actions {
+    position: static;
+    transform: none;
+    width: 100%;
+    justify-content: flex-end;
+    margin-top: 2px;
+}
+
+html.side-panel-mode .browsing-calibrate-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+    gap: 4px;
+}
+
+html.side-panel-mode .browsing-calibrate-btn i {
+    font-size: 10px;
 }
 
 html.side-panel-mode .browsing-ranking-header {
@@ -13855,6 +13897,42 @@ html.side-panel-mode .browsing-ranking-header {
 html.side-panel-mode .ranking-title {
     font-size: 15px;
     margin-bottom: 2px;
+}
+
+html.side-panel-mode .browsing-ranking-title-row {
+    align-items: center;
+    gap: 8px;
+}
+
+html.side-panel-mode .browsing-ranking-title-actions {
+    display: inline-flex;
+}
+
+html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle {
+    border-radius: 16px;
+    padding: 2px !important;
+}
+
+html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle .ranking-view-toggle-btn {
+    padding: 4px 8px !important;
+    font-size: 10px !important;
+    gap: 4px !important;
+    border-radius: 14px !important;
+}
+
+html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle .ranking-view-toggle-btn i {
+    font-size: 9px !important;
+}
+
+html.side-panel-mode #browsingRelatedTitleActions .ranking-sort-btn {
+    margin-left: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+}
+
+html.side-panel-mode #browsingRelatedTitleActions .ranking-sort-btn i {
+    font-size: 12px;
 }
 
 html.side-panel-mode .ranking-description {
@@ -13875,6 +13953,77 @@ html.side-panel-mode .time-menu-btn {
 html.side-panel-mode .ranking-sort-btn {
     padding: 5px 9px;
     font-size: 12px;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item {
+    padding: 8px 10px;
+    gap: 3px;
+}
+
+html.side-panel-mode #browsingRankingPanel .ranking-item-header {
+    gap: 6px;
+    position: relative;
+}
+
+html.side-panel-mode #browsingRankingPanel .ranking-item-header>.ranking-main {
+    gap: 6px;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item .ranking-index {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    font-size: 11px;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item .ranking-counts {
+    min-width: 34px;
+    font-size: 15px;
+    line-height: 1;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item .jump-to-related-btn-container {
+    position: absolute;
+    right: 34px;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-right: 0;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item .jump-to-related-btn {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+}
+
+html.side-panel-mode #browsingRankingPanel .addition-item.ranking-item .jump-to-related-btn i {
+    font-size: 10px;
+}
+
+html.side-panel-mode #browsingRankingPanel .ranking-item .addition-icon {
+    width: 14px;
+    height: 14px;
+}
+
+html.side-panel-mode #browsingRankingPanel .ranking-item .addition-title {
+    font-size: 13px;
+    margin-bottom: 1px;
+    line-height: 1.25;
+    white-space: normal;
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+html.side-panel-mode #browsingRankingPanel .ranking-item .addition-url {
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: normal;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
 }
 
 html.side-panel-mode .related-history-list {
