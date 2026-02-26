@@ -1,12 +1,4 @@
-# Bookmark Records & Recommendations (MV3)
-
-Chrome / Edge Manifest V3 extension for **bookmark records + smart recommendations** in one workspace.
-
-## Language / 语言
-- [中文](#中文)
-- [English](#english)
-
----
+## Switch to [English](#english)
 
 ## 中文
 
@@ -24,6 +16,12 @@ Chrome / Edge Manifest V3 extension for **bookmark records + smart recommendatio
 - **上下文搜索**：同一个搜索框按场景切换，支持关键词、日期区间、S 值筛选。
 - **中英文 + 主题切换**：自动语言识别，支持明暗主题。
 
+### 预览
+| 侧边栏 | 推荐公式|
+| :---: | :---: |
+| <img src="doc/screenshots/sidebar_zh.png" width="400"> | <img src="doc/screenshots/recommend_zh.png" width="400"> |
+| **搜索** | **点击排行** |
+| <img src="doc/screenshots/search_zh.png" width="400"> | <img src="doc/screenshots/ranking_zh.png" width="400"> |
 ### 快速安装（开发者模式）
 1. 下载或克隆本仓库。
 2. 打开 `chrome://extensions`（或 Edge 扩展页）。
@@ -62,6 +60,14 @@ It combines **recording** and **recommendation** into one workflow, available in
 - **Context-aware search**: one search box, multiple modes (keywords, date ranges, S-score filters).
 - **Bilingual + themes**: auto language detection and light/dark themes.
 
+### Preview
+
+| Sidebar | Recommend |
+| :---: | :---: |
+| <img src="doc/screenshots/sidebar_en.png" width="400"> | <img src="doc/screenshots/recommend_en.png" width="400"> |
+| **Search** | **Ranking** |
+| <img src="doc/screenshots/search_en.png" width="400"> | <img src="doc/screenshots/ranking_en.png" width="400"> |
+
 ### Quick Start (Developer Mode)
 1. Clone or download this repository.
 2. Open `chrome://extensions` (or Edge extensions page).
@@ -87,3 +93,5 @@ It combines **recording** and **recommendation** into one workflow, available in
 ## License
 
 GPL-3.0
+
+## [Back to top ](#中文)
