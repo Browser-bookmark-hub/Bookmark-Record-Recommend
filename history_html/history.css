@@ -1677,8 +1677,8 @@ body.header-dock-bottom:not(.header-compact) .btn-tooltip::before {
 /* 快捷键 & 开源信息弹窗 */
 .shortcuts-modal {
     display: inline-block;
-    width: auto;
-    max-width: none;
+    width: min(520px, calc(100vw - 48px));
+    max-width: min(520px, calc(100vw - 48px));
     margin: 24px auto;
     background: var(--bg-elevated, #ffffff);
     border-radius: 10px;
@@ -2945,26 +2945,35 @@ html.sidebar-state-hidden #sidebar {
 .cards-row.widgets-cards-row {
     width: 100%;
     min-width: 0;
-    padding: 6px 0 8px;
+    padding: 20px 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
 }
 
 .widgets-cards-row .recommend-card {
-    min-height: 84px;
-    padding: 10px 12px;
-    gap: 10px;
+    min-height: 140px;
+    padding: 20px 16px;
+    gap: 12px;
     display: grid;
     grid-template-columns: 28px minmax(0, 1fr);
     align-items: center;
     text-align: left;
-    overflow: visible;
+    overflow: hidden;
 }
 
 .widgets-cards-row .recommend-card:hover,
+.widgets-cards-row .recommend-card:focus-within {
+    transform: translateY(-4px);
+}
+
 .widgets-cards-row .recommend-card.debug-open {
     transform: none;
+}
+
+.widgets-cards-row .recommend-card::before {
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
 }
 
 .widgets-cards-row .card-title {
@@ -4721,8 +4730,8 @@ a.tree-label.tree-bookmark-link:hover {
 
 /* 专门给快捷键二级 UI 使用：覆盖默认宽度为“按内容自适应” */
 .modal-content.shortcuts-modal {
-    width: auto;
-    max-width: none;
+    width: min(520px, calc(100vw - 48px));
+    max-width: min(520px, calc(100vw - 48px));
     display: inline-block;
     border-radius: 10px;
     padding: 10px 10px 8px;

@@ -2,15 +2,21 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "__MSG_extensionName__",
-  "version": "1.0.0",
+  "version": "0.2.2",
   "description": "__MSG_extensionDescription__",
   "author": "kk1",
   "icons": {
-    "128": "icons/icon200.png"
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "action": {
     "default_icon": {
-      "128": "icons/icon200.png"
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     },
     "default_title": "__MSG_actionTitle__"
   },

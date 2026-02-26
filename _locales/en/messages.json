@@ -1,14 +1,14 @@
 {
   "extensionName": {
-    "message": "Bookmark Records & Recommendations",
+    "message": "Bookmark Records & Recommend",
     "description": "Extension name"
   },
   "extensionDescription": {
-    "message": "Bookmark records and recommendations: browsing history, rankings, related records, time tracking, and recommendation list.",
+    "message": "browsing history, rankings, related records, time tracking, and recommend list.",
     "description": "Extension description"
   },
   "actionTitle": {
-    "message": "Bookmark Records & Recommendations",
+    "message": "Bookmark Records & Recommend",
     "description": "Toolbar tooltip title"
   }
 }
