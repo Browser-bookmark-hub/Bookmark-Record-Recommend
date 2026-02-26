@@ -22,7 +22,7 @@
     z-index: 200;
 }
 
-body.header-dock-bottom:not(.header-compact) .search-results-panel {
+body.header-dock-bottom .search-results-panel {
     top: auto;
     bottom: calc(100% + 10px);
 }

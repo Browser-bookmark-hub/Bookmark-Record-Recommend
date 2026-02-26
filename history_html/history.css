@@ -758,6 +758,26 @@ body.header-dock-bottom:not(.header-compact) #widgetsSortInfoPanel {
     box-shadow: 0 0 0 2px var(--accent-light);
 }
 
+.search-container.search-mode-additions:focus-within {
+    border-color: #1877f2;
+    box-shadow: 0 0 0 2px rgba(24, 119, 242, 0.18);
+}
+
+.search-container.search-mode-recommend:focus-within {
+    border-color: #f97316;
+    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
+}
+
+[data-theme="dark"] .search-container.search-mode-additions:focus-within {
+    border-color: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.26);
+}
+
+[data-theme="dark"] .search-container.search-mode-recommend:focus-within {
+    border-color: #fb923c;
+    box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.26);
+}
+
 .search-container.search-container-hidden {
     display: none !important;
 }
@@ -890,7 +910,7 @@ body.header-dock-bottom:not(.header-compact) #widgetsSortInfoPanel {
     transform-origin: top left;
 }
 
-body.header-dock-bottom:not(.header-compact) .search-mode-menu {
+body.header-dock-bottom .search-mode-menu {
     top: auto;
     bottom: calc(100% + 8px);
     transform-origin: bottom left;
@@ -989,6 +1009,24 @@ body.header-dock-bottom:not(.header-compact) .search-mode-menu {
 /* Hide shortcuts in menu if user prefers simple UI */
 .mode-shortcut {
     display: none;
+}
+
+.search-mode-trigger.mode-color-blue,
+.search-mode-trigger.mode-color-blue:hover,
+.search-mode-trigger.mode-color-blue.active {
+    color: #1877f2;
+}
+
+.search-mode-trigger.mode-color-orange,
+.search-mode-trigger.mode-color-orange:hover,
+.search-mode-trigger.mode-color-orange.active {
+    color: #f97316;
+}
+
+.search-mode-trigger.mode-color-green,
+.search-mode-trigger.mode-color-green:hover,
+.search-mode-trigger.mode-color-green.active {
+    color: #42b72a;
 }
 
 /* Mode Colors - Applied to icon/text in trigger */
@@ -1117,6 +1155,7 @@ html.side-panel-mode .search-container.side-panel-search-expanded {
     min-width: 0;
     max-width: none;
     flex: 1 1 100%;
+    overflow: visible;
     z-index: 260;
 }
 

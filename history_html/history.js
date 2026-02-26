@@ -19958,7 +19958,17 @@ function handleSearch(e) {
 
 function performSearch(query) {
     if (!query) {
-        hideSearchResultsPanel();
+        let shown = false;
+        try {
+            if ((currentView === 'additions' || currentView === 'recommend') &&
+                typeof window.showEmptyQuerySuggestionsPanel === 'function') {
+                shown = window.showEmptyQuerySuggestionsPanel();
+            }
+        } catch (_) { }
+
+        if (!shown) {
+            hideSearchResultsPanel();
+        }
         return;
     }
 

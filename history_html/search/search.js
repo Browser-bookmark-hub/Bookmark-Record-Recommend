@@ -1044,6 +1044,61 @@ function searchBookmarkAdditionsAndRender(query) {
     const q = String(query).trim();
     const results = [];
 
+    const multiDayMeta = parseMultiDayDateQuery(q);
+    if (multiDayMeta) {
+        const matchedKeySet = new Set();
+        multiDayMeta.dayMetas.forEach((meta) => {
+            const keys = collectDateKeysFromDayMeta(meta, dateMap);
+            keys.forEach((key) => matchedKeySet.add(key));
+        });
+
+        const matchedKeys = Array.from(matchedKeySet).sort().reverse();
+        if (matchedKeys.length > 0) {
+            const previewLimit = 8;
+            const preview = matchedKeys.slice(0, previewLimit).join(', ');
+            const extraCount = Math.max(0, matchedKeys.length - previewLimit);
+            const inputLabel = currentLang === 'zh_CN'
+                ? multiDayMeta.parts.join('、')
+                : multiDayMeta.parts.join(', ');
+
+            const groupTitle = currentLang === 'zh_CN'
+                ? `批量定位 ${matchedKeys.length} 个日期`
+                : `Batch locate ${matchedKeys.length} dates`;
+            const groupMeta = currentLang === 'zh_CN'
+                ? `输入：${inputLabel}${preview ? `；命中：${preview}` : ''}${extraCount ? ` ... +${extraCount}` : ''}`
+                : `Input: ${inputLabel}${preview ? `; Matched: ${preview}` : ''}${extraCount ? ` ... +${extraCount}` : ''}`;
+
+            results.push({
+                type: 'calendar-dates-group',
+                id: `group:additions:multi-date:${q}`,
+                title: groupTitle,
+                meta: groupMeta,
+                dateKeys: matchedKeys,
+                score: 320,
+                nodeType: 'group_action'
+            });
+
+            for (const key of matchedKeys.slice(0, 60)) {
+                const bookmarks = dateMap.get(key) || [];
+                results.push({
+                    type: 'calendar-day',
+                    id: `day:${key}:root`,
+                    title: key,
+                    meta: `Added ${key} (${bookmarks.length} bookmarks)`,
+                    dateKey: key,
+                    url: '',
+                    dateDisplay: key,
+                    weekdayDisplay: '',
+                    score: 210
+                });
+            }
+
+            results.sort((a, b) => b.score - a.score || b.title.localeCompare(a.title));
+            renderSearchResultsPanel(results, { view: 'additions', query: q });
+            return;
+        }
+    }
+
     // 1. Precise Date Match (Unified Date Protocol)
     const dateMeta = parseDateQuery(q);
     if (dateMeta) {
@@ -1066,7 +1121,7 @@ function searchBookmarkAdditionsAndRender(query) {
                         title: `${dateMeta.m}-${dateMeta.d} (${matchedKeys.length} years matched)`,
                         meta: `Dates: ${matchedKeys.join(', ')}`,
                         dateKeys: matchedKeys,
-                        score: 300,
+                        score: 190,
                         nodeType: 'group_action'
                     });
                 }
@@ -1158,19 +1213,36 @@ function searchBookmarkAdditionsAndRender(query) {
             const matchedKeys = [];
             let totalCount = 0;
 
+            const rangeStartDate = parseDateKeyToLocalDate(dateMeta.startKey);
+            const rangeEndDate = parseDateKeyToLocalDate(dateMeta.endKey);
+            const rangeStartTime = rangeStartDate ? rangeStartDate.getTime() : null;
+            const rangeEndTime = rangeEndDate ? rangeEndDate.getTime() : null;
+
             // Helper function to check if a date is within range
             const isDateInRange = (dateKey) => {
+                const normalizedDateKey = normalizeDateKey(dateKey);
+
                 // For ignoreYear: compare only MM-DD part
                 if (dateMeta.ignoreYear) {
-                    const parts = dateKey.split('-');
+                    if (!normalizedDateKey) return false;
+                    const parts = normalizedDateKey.split('-');
                     const mmdd = parts[1] + '-' + parts[2]; // MM-DD
                     const startMmdd = dateMeta.startM + '-' + dateMeta.startD;
                     const endMmdd = dateMeta.endM + '-' + dateMeta.endD;
                     return mmdd >= startMmdd && mmdd <= endMmdd;
-                } else {
-                    // Full date comparison
-                    return dateKey >= dateMeta.startKey && dateKey <= dateMeta.endKey;
                 }
+
+                const currentDate = parseDateKeyToLocalDate(dateKey);
+                if (currentDate && rangeStartTime !== null && rangeEndTime !== null) {
+                    const currentTime = currentDate.getTime();
+                    return currentTime >= rangeStartTime && currentTime <= rangeEndTime;
+                }
+
+                if (normalizedDateKey) {
+                    return normalizedDateKey >= dateMeta.startKey && normalizedDateKey <= dateMeta.endKey;
+                }
+
+                return dateKey >= dateMeta.startKey && dateKey <= dateMeta.endKey;
             };
 
             for (const [dk, bms] of dateMap) {
@@ -1319,6 +1391,149 @@ function checkMatch(text, tokens) {
     return tokens.every(t => lower.includes(t));
 }
 
+function clearCalendarLocateState(calendar) {
+    if (!calendar || typeof calendar !== 'object') return;
+
+    try {
+        calendar.selectMode = false;
+        if (calendar.selectedDates && typeof calendar.selectedDates.clear === 'function') {
+            calendar.selectedDates.clear();
+        }
+        calendar.filteredMode = false;
+        calendar.filteredBookmarksData = null;
+        calendar.filteredSearchQuery = '';
+
+        if (typeof calendar.clearSelectModeMemory === 'function') {
+            calendar.clearSelectModeMemory();
+        }
+        if (typeof calendar.updateSelectModeButton === 'function') {
+            calendar.updateSelectModeButton();
+        }
+    } catch (_) { }
+
+    try {
+        const container = calendar.containerId ? document.getElementById(calendar.containerId) : null;
+        if (container) {
+            container.classList.remove('search-mode-active');
+            container.querySelectorAll('.calendar-day.search-highlight').forEach((el) => {
+                el.classList.remove('search-highlight');
+            });
+        }
+    } catch (_) { }
+
+    try {
+        const exitBtn = document.getElementById('exitLocateModeBtn');
+        if (exitBtn) exitBtn.remove();
+    } catch (_) { }
+}
+
+function normalizeDateKey(dateKey) {
+    const match = String(dateKey || '').trim().match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$/);
+    if (!match) return null;
+
+    const y = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const d = parseInt(match[3], 10);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+
+    const dt = new Date(y, m - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+function parseDateKeyToLocalDate(dateKey) {
+    const normalized = normalizeDateKey(dateKey);
+    if (!normalized) return null;
+
+    const [y, m, d] = normalized.split('-').map((part) => parseInt(part, 10));
+    if (!y || !m || !d) return null;
+
+    return new Date(y, m - 1, d);
+}
+
+function applyCalendarDirectNavigation(calendar, item) {
+    if (!calendar || !item) return false;
+
+    const type = String(item.type || '');
+    if (!type) return false;
+
+    clearCalendarLocateState(calendar);
+
+    if (type === 'calendar-year' || type === 'browsing-year') {
+        const y = parseInt(item.year, 10) || parseInt(String(item.id || '').split(':')[1], 10);
+        if (!y) return false;
+
+        calendar.currentYear = y;
+        calendar.currentMonth = 0;
+        calendar.currentDay = new Date(y, 0, 1);
+        calendar.viewLevel = 'year';
+
+        if (typeof calendar.render === 'function') calendar.render();
+        return true;
+    }
+
+    if (type === 'calendar-month' || type === 'browsing-month') {
+        let y = parseInt(item.year, 10);
+        let m = parseInt(item.month, 10);
+        if (!Number.isFinite(y) || !Number.isFinite(m)) {
+            const ym = String(item.id || '').split(':')[1] || '';
+            const parts = ym.split('-');
+            if (parts.length === 2) {
+                y = parseInt(parts[0], 10);
+                m = parseInt(parts[1], 10) - 1;
+            }
+        }
+        if (!Number.isFinite(y) || !Number.isFinite(m)) return false;
+
+        const firstDate = new Date(y, m, 1);
+        calendar.currentYear = y;
+        calendar.currentMonth = m;
+        calendar.currentDay = firstDate;
+
+        const dayNum = firstDate.getDay() || 7;
+        calendar.currentWeekStart = new Date(firstDate);
+        calendar.currentWeekStart.setDate(firstDate.getDate() - dayNum + 1);
+
+        calendar.viewLevel = 'month';
+        if (typeof calendar.render === 'function') calendar.render();
+        return true;
+    }
+
+    if (type === 'calendar-day' || type === 'browsing-day') {
+        const targetDate = parseDateKeyToLocalDate(item.dateKey);
+        if (!targetDate) return false;
+
+        calendar.currentYear = targetDate.getFullYear();
+        calendar.currentMonth = targetDate.getMonth();
+        calendar.currentDay = new Date(targetDate);
+
+        const dayNum = targetDate.getDay() || 7;
+        calendar.currentWeekStart = new Date(targetDate);
+        calendar.currentWeekStart.setDate(targetDate.getDate() - dayNum + 1);
+
+        calendar.viewLevel = 'day';
+        if (typeof calendar.render === 'function') calendar.render();
+
+        const targetKey = String(item.dateKey || '');
+        if (targetKey) {
+            setTimeout(() => {
+                try {
+                    const targetNode = document.querySelector(`[data-date-key="${targetKey}"]`);
+                    if (targetNode) {
+                        targetNode.classList.add('breathe-animation');
+                        setTimeout(() => targetNode.classList.remove('breathe-animation'), 1200);
+                    }
+                } catch (_) { }
+            }, 100);
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 // Dispatcher for search result activation
 function activateAdditionsSearchResult(index) {
     const item = searchUiState.results[index];
@@ -1350,26 +1565,16 @@ function activateAdditionsSearchResult(index) {
     if (!window.bookmarkCalendarInstance) return;
     const cal = window.bookmarkCalendarInstance;
 
-    if (item.type === 'calendar-year' || item.type === 'calendar-month') {
-        // For year/month, item.id is like "year:YYYY" or "month:YYYY-MM"
-        const dateParts = item.id.split(':'); // e.g., ["year", "2024"] or ["month", "2024-11"]
-        const ym = dateParts[1];
-        const [y, m] = ym.split('-');
+    const shouldDirectCalendarJump =
+        item.type === 'calendar-year' ||
+        item.type === 'calendar-month' ||
+        (item.type === 'calendar-day' && !item.url);
 
-        cal.selectYear(parseInt(y));
-        if (m) cal.selectMonth(parseInt(m) - 1); // 0-indexed
-
-        // Show exit button
-        if (cal.renderExitButton) cal.renderExitButton();
+    if (shouldDirectCalendarJump && applyCalendarDirectNavigation(cal, item)) {
+        return;
     }
-    else if (item.type === 'calendar-day') {
-        // item.dateKey is YYYY-MM-DD
-        cal.selectDay(item.dateKey);
 
-        // Show exit button
-        if (cal.renderExitButton) cal.renderExitButton();
-    }
-    else if (item.type === 'calendar-dates-group') {
+    if (item.type === 'calendar-dates-group') {
         // [Date Group Select] - Shows ALL bookmarks for selected dates
         if (Array.isArray(item.dateKeys)) {
             cal.selectDateKeys(item.dateKeys);
@@ -1407,7 +1612,13 @@ function activateAdditionsSearchResult(index) {
  * - Strict: NO standalone day numbers (e.g. "15", "15日")
  */
 function parseDateQuery(query) {
-    const q = query.trim().toLowerCase();
+    const q = String(query || '')
+        .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+        .trim()
+        .toLowerCase()
+        .replace(/[－–—]/g, '-')
+        .replace(/～/g, '~')
+        .replace(/至/g, '到');
     const now = new Date();
     const currentYear = now.getFullYear();
 
@@ -1473,7 +1684,7 @@ function parseDateQuery(query) {
         // If it is 1231, it's Dec 31 (Year 1231 unlikely).
         if (!isLikelyYear && isValidMMDD) {
             const y = String(currentYear);
-            return { type: 'day', key: `${y}-${mStr}-${dStr}`, y, m: mStr, d: dStr, ignoreYear: true };
+            return { type: 'day', key: `${y}-${mStr}-${dStr}`, y, m: mStr, d: dStr, assumedYear: true };
         }
         // Fallback to Year logic later
     }
@@ -1501,7 +1712,28 @@ function parseDateQuery(query) {
         const y = String(currentYear);
         const m = mdMatch[1].padStart(2, '0');
         const d = mdMatch[2].padStart(2, '0');
-        return { type: 'day', key: `${y}-${m}-${d}`, y, m, d, ignoreYear: true };
+        return { type: 'day', key: `${y}-${m}-${d}`, y, m, d, assumedYear: true };
+    }
+
+    // MM、DD / MM,DD / MM DD (Current Year)
+    // Supports loose separators users often type in Chinese input methods.
+    const mdLooseMatch = q.match(/^(\d{2})\s*(?:[、，,]|\s+)\s*(\d{2})$/);
+    if (mdLooseMatch) {
+        const mNum = parseInt(mdLooseMatch[1], 10);
+        const dNum = parseInt(mdLooseMatch[2], 10);
+        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+            const y = String(currentYear);
+            const m = String(mNum).padStart(2, '0');
+            const d = String(dNum).padStart(2, '0');
+            return { type: 'day', key: `${y}-${m}-${d}`, y, m, d, assumedYear: true };
+        }
+    }
+
+    // MM only (2 digits): e.g. "01", "02" -> month search across years
+    if (/^(0[1-9]|1[0-2])$/.test(q)) {
+        const y = String(currentYear);
+        const m = q;
+        return { type: 'month', key: `${y}-${m}`, y, m, assumedYear: true };
     }
 
     // YYYY-MM
@@ -1529,12 +1761,12 @@ function parseDateQuery(query) {
     }
 
     // 1月5日 (Implies Current Year)
-    const cnMonthDay = q.match(/^(\d{1,2})月(\d{1,2})[日号]?$/);
+    const cnMonthDay = q.match(/^(\d{1,2})月\s*(\d{1,2})[日号]?$/);
     if (cnMonthDay) {
         const y = String(currentYear);
         const m = cnMonthDay[1].padStart(2, '0');
         const d = cnMonthDay[2].padStart(2, '0');
-        return { type: 'day', key: `${y}-${m}-${d}`, y, m, d, ignoreYear: true };
+        return { type: 'day', key: `${y}-${m}-${d}`, y, m, d, assumedYear: true };
     }
 
     // 2024年1月
@@ -1550,7 +1782,7 @@ function parseDateQuery(query) {
     if (cnMonthOnly) {
         const y = String(currentYear);
         const m = cnMonthOnly[1].padStart(2, '0');
-        return { type: 'month', key: `${y}-${m}`, y, m, ignoreYear: true };
+        return { type: 'month', key: `${y}-${m}`, y, m, assumedYear: true };
     }
 
     // --- 4. Date Range Formats ---
@@ -1558,7 +1790,7 @@ function parseDateQuery(query) {
     // Also: MM-DD~MM-DD, MM/DD-MM/DD
 
     // MMDD-MMDD (8 digits with separator)
-    const rangeMatch1 = q.match(/^(\d{4})[-~到](\d{4})$/);
+    const rangeMatch1 = q.match(/^(\d{4})\s*[-~到]\s*(\d{4})$/);
     if (rangeMatch1) {
         const start = rangeMatch1[1];
         const end = rangeMatch1[2];
@@ -1580,13 +1812,13 @@ function parseDateQuery(query) {
                 startD: String(startD).padStart(2, '0'),
                 endM: String(endM).padStart(2, '0'),
                 endD: String(endD).padStart(2, '0'),
-                ignoreYear: true
+                assumedYear: true
             };
         }
     }
 
     // MM-DD~MM-DD or MM/DD-MM/DD (with separators)
-    const rangeMatch2 = q.match(/^(\d{1,2})[-./](\d{1,2})[-~到](\d{1,2})[-./](\d{1,2})$/);
+    const rangeMatch2 = q.match(/^(\d{1,2})[-./](\d{1,2})\s*[-~到]\s*(\d{1,2})[-./](\d{1,2})$/);
     if (rangeMatch2) {
         const startM = parseInt(rangeMatch2[1], 10);
         const startD = parseInt(rangeMatch2[2], 10);
@@ -1604,13 +1836,13 @@ function parseDateQuery(query) {
                 startD: String(startD).padStart(2, '0'),
                 endM: String(endM).padStart(2, '0'),
                 endD: String(endD).padStart(2, '0'),
-                ignoreYear: true
+                assumedYear: true
             };
         }
     }
 
     // YYYYMMDD-YYYYMMDD (Full date range)
-    const rangeMatch3 = q.match(/^(\d{8})[-~到](\d{8})$/);
+    const rangeMatch3 = q.match(/^(\d{8})\s*[-~到]\s*(\d{8})$/);
     if (rangeMatch3) {
         const start = rangeMatch3[1];
         const end = rangeMatch3[2];
@@ -1638,12 +1870,201 @@ function parseDateQuery(query) {
     return null;
 }
 
+
+function parseMultiDayDateQuery(query) {
+    const raw = String(query || '').trim();
+    if (!raw) return null;
+
+    if (!/[、，,;；\s]/.test(raw)) return null;
+
+    const parts = raw
+        .split(/[、，,;；\s]+/)
+        .map(part => String(part || '').trim())
+        .filter(Boolean);
+
+    if (parts.length < 2) return null;
+
+    const uniqueParts = Array.from(new Set(parts));
+    if (uniqueParts.length < 2) return null;
+
+    const dayMetas = [];
+    for (const part of uniqueParts) {
+        const meta = parseDateQuery(part);
+        if (!meta || meta.type !== 'day') return null;
+        dayMetas.push(meta);
+    }
+
+    return { parts: uniqueParts, dayMetas };
+}
+
+function collectDateKeysFromDayMeta(dayMeta, dateMap) {
+    if (!dayMeta || dayMeta.type !== 'day' || !dateMap) return [];
+
+    if (dayMeta.ignoreYear) {
+        const suffix = `-${dayMeta.m}-${dayMeta.d}`;
+        const matched = [];
+        for (const key of dateMap.keys()) {
+            if (key.endsWith(suffix)) matched.push(key);
+        }
+        matched.sort().reverse();
+        return matched;
+    }
+
+    if (dateMap.has(dayMeta.key)) {
+        return [dayMeta.key];
+    }
+
+    return [];
+}
+
+function getDateMetaSearchRange(dateMeta) {
+    if (!dateMeta || !dateMeta.type) return null;
+
+    if (dateMeta.type === 'day') {
+        const key = normalizeDateKey(dateMeta.key);
+        if (!key) return null;
+        return { startKey: key, endKey: key };
+    }
+
+    if (dateMeta.type === 'month') {
+        const y = parseInt(String(dateMeta.y || ''), 10);
+        const m = parseInt(String(dateMeta.m || ''), 10);
+        if (!y || !m || m < 1 || m > 12) return null;
+
+        const endDay = new Date(y, m, 0).getDate();
+        const month = String(m).padStart(2, '0');
+        return {
+            startKey: `${y}-${month}-01`,
+            endKey: `${y}-${month}-${String(endDay).padStart(2, '0')}`
+        };
+    }
+
+    if (dateMeta.type === 'year') {
+        const y = parseInt(String(dateMeta.y || dateMeta.key || ''), 10);
+        if (!y) return null;
+        return {
+            startKey: `${y}-01-01`,
+            endKey: `${y}-12-31`
+        };
+    }
+
+    if (dateMeta.type === 'range') {
+        let startKey = normalizeDateKey(dateMeta.startKey);
+        let endKey = normalizeDateKey(dateMeta.endKey);
+        if (!startKey || !endKey) return null;
+
+        if (endKey < startKey) {
+            const tmp = startKey;
+            startKey = endKey;
+            endKey = tmp;
+        }
+
+        return { startKey, endKey };
+    }
+
+    return null;
+}
+
+function normalizeBrowsingCacheRecord(record) {
+    if (!record || typeof record !== 'object') return null;
+
+    const url = typeof record.url === 'string' ? record.url : '';
+    if (!url) return null;
+
+    const rawVisitTime = typeof record.visitTime === 'number'
+        ? record.visitTime
+        : (typeof record.dateAdded === 'number'
+            ? record.dateAdded
+            : (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0));
+
+    const visitTime = Number.isFinite(rawVisitTime) && rawVisitTime > 0
+        ? rawVisitTime
+        : Date.now();
+
+    return {
+        id: record.id || `${url}-${visitTime}`,
+        title: (typeof record.title === 'string' && record.title.trim()) ? record.title : url,
+        url,
+        dateAdded: new Date(visitTime),
+        visitTime,
+        visitCount: Number.isFinite(record.visitCount) && record.visitCount > 0 ? Math.floor(record.visitCount) : 1,
+        typedCount: Number.isFinite(record.typedCount) && record.typedCount > 0 ? Math.floor(record.typedCount) : 0,
+        folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
+        transition: typeof record.transition === 'string' ? record.transition : '',
+        referringVisitId: record.referringVisitId || null,
+        aggregated: !!record.aggregated
+    };
+}
+
+async function hydrateBrowsingDateMapForDateMeta(calendar, dateMeta) {
+    if (!calendar || !calendar.bookmarksByDate || typeof readHistoryCacheRange !== 'function') {
+        return false;
+    }
+
+    const range = getDateMetaSearchRange(dateMeta);
+    if (!range || !range.startKey || !range.endKey) return false;
+
+    let cached = null;
+    try {
+        cached = await readHistoryCacheRange(range.startKey, range.endKey);
+    } catch (_) {
+        return false;
+    }
+
+    if (!cached || !Array.isArray(cached.records) || !cached.records.length) return false;
+
+    let changed = false;
+
+    cached.records.forEach((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) return;
+
+        const dateKeyRaw = entry[0];
+        const recordsRaw = entry[1];
+        const normalizedDateKey = normalizeDateKey(dateKeyRaw);
+        if (!normalizedDateKey || !Array.isArray(recordsRaw) || !recordsRaw.length) return;
+
+        const incoming = recordsRaw
+            .map((record) => normalizeBrowsingCacheRecord(record))
+            .filter(Boolean);
+
+        if (!incoming.length) return;
+
+        const existing = calendar.bookmarksByDate.get(normalizedDateKey);
+        if (!Array.isArray(existing) || existing.length === 0) {
+            calendar.bookmarksByDate.set(normalizedDateKey, incoming);
+            changed = true;
+            return;
+        }
+
+        const seen = new Set(existing.map((record) => {
+            const t = typeof record.visitTime === 'number'
+                ? record.visitTime
+                : (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
+            return `${record.url || ''}|${t || 0}`;
+        }));
+
+        let merged = false;
+        incoming.forEach((record) => {
+            const sig = `${record.url || ''}|${record.visitTime || 0}`;
+            if (seen.has(sig)) return;
+
+            existing.push(record);
+            seen.add(sig);
+            merged = true;
+        });
+
+        if (merged) changed = true;
+    });
+
+    return changed;
+}
+
 // ==================== Phase 4: 浏览记录搜索 (Browsing History) ====================
 
 /**
  * 执行浏览记录搜索 (Calendar)
  */
-function searchBrowsingHistoryAndRender(query) {
+async function searchBrowsingHistoryAndRender(query) {
     // [Fixed] Lazy Init: Ensure calendar is ready if we are searching (e.g. after refresh)
     if (!window.browsingHistoryCalendarInstance) {
         if (typeof initBrowsingHistoryCalendar === 'function') {
@@ -1665,9 +2086,83 @@ function searchBrowsingHistoryAndRender(query) {
     const q = String(query).trim();
     const results = [];
 
+    const multiDayMeta = parseMultiDayDateQuery(q);
+    if (multiDayMeta) {
+        const matchedKeySet = new Set();
+        multiDayMeta.dayMetas.forEach((meta) => {
+            const keys = collectDateKeysFromDayMeta(meta, dateMap);
+            keys.forEach((key) => matchedKeySet.add(key));
+        });
+
+        let matchedKeys = Array.from(matchedKeySet).sort().reverse();
+        if (matchedKeys.length === 0) {
+            for (const meta of multiDayMeta.dayMetas) {
+                try {
+                    await hydrateBrowsingDateMapForDateMeta(cal, meta);
+                } catch (_) { }
+            }
+
+            const retryMatchedKeySet = new Set();
+            multiDayMeta.dayMetas.forEach((meta) => {
+                const keys = collectDateKeysFromDayMeta(meta, dateMap);
+                keys.forEach((key) => retryMatchedKeySet.add(key));
+            });
+            matchedKeys = Array.from(retryMatchedKeySet).sort().reverse();
+        }
+
+        if (matchedKeys.length > 0) {
+            const previewLimit = 8;
+            const preview = matchedKeys.slice(0, previewLimit).join(', ');
+            const extraCount = Math.max(0, matchedKeys.length - previewLimit);
+            const inputLabel = currentLang === 'zh_CN'
+                ? multiDayMeta.parts.join('、')
+                : multiDayMeta.parts.join(', ');
+
+            const groupTitle = currentLang === 'zh_CN'
+                ? `批量定位 ${matchedKeys.length} 个日期`
+                : `Batch locate ${matchedKeys.length} dates`;
+            const groupMeta = currentLang === 'zh_CN'
+                ? `输入：${inputLabel}${preview ? `；命中：${preview}` : ''}${extraCount ? ` ... +${extraCount}` : ''}`
+                : `Input: ${inputLabel}${preview ? `; Matched: ${preview}` : ''}${extraCount ? ` ... +${extraCount}` : ''}`;
+
+            results.push({
+                type: 'calendar-dates-group',
+                id: `group:browsing:multi-date:${q}`,
+                title: groupTitle,
+                meta: groupMeta,
+                dateKeys: matchedKeys,
+                score: 320,
+                nodeType: 'group_action'
+            });
+
+            for (const key of matchedKeys.slice(0, 60)) {
+                const bookmarks = dateMap.get(key) || [];
+                results.push({
+                    type: 'browsing-day',
+                    id: `br-day:${key}:root`,
+                    title: key,
+                    meta: `Browse ${key} (${bookmarks.length} items)`,
+                    dateKey: key,
+                    url: '',
+                    dateDisplay: key,
+                    weekdayDisplay: '',
+                    score: 210
+                });
+            }
+
+            results.sort((a, b) => b.score - a.score || b.title.localeCompare(a.title));
+            renderSearchResultsPanel(results, { view: 'additions', query: q });
+            return;
+        }
+    }
+
     // 1. Precise Date Match (Unified Date Protocol)
     const dateMeta = parseDateQuery(q);
     if (dateMeta) {
+        try {
+            await hydrateBrowsingDateMapForDateMeta(cal, dateMeta);
+        } catch (_) { }
+
         // [Feature] Multi-Year Match for MMDD / Period-less dates
         if (dateMeta.ignoreYear && dateMeta.type === 'day') {
             const suffix = `-${dateMeta.m}-${dateMeta.d}`;
@@ -1685,7 +2180,7 @@ function searchBrowsingHistoryAndRender(query) {
                         title: `${dateMeta.m}-${dateMeta.d} (${matchedKeys.length} years matched)`,
                         meta: `Dates: ${matchedKeys.join(', ')}`,
                         dateKeys: matchedKeys,
-                        score: 300,
+                        score: 190,
                         nodeType: 'group_action'
                     });
                 }
@@ -1773,22 +2268,63 @@ function searchBrowsingHistoryAndRender(query) {
             const matchedKeys = [];
             let totalCount = 0;
 
+            const rangeStartDate = parseDateKeyToLocalDate(dateMeta.startKey);
+            const rangeEndDate = parseDateKeyToLocalDate(dateMeta.endKey);
+            const rangeStartTime = rangeStartDate ? rangeStartDate.getTime() : null;
+            const rangeEndTime = rangeEndDate ? rangeEndDate.getTime() : null;
+
             const isDateInRange = (dateKey) => {
+                const normalizedDateKey = normalizeDateKey(dateKey);
+
                 if (dateMeta.ignoreYear) {
-                    const parts = dateKey.split('-');
+                    if (!normalizedDateKey) return false;
+                    const parts = normalizedDateKey.split('-');
                     const mmdd = parts[1] + '-' + parts[2];
                     const startMmdd = dateMeta.startM + '-' + dateMeta.startD;
                     const endMmdd = dateMeta.endM + '-' + dateMeta.endD;
                     return mmdd >= startMmdd && mmdd <= endMmdd;
-                } else {
-                    return dateKey >= dateMeta.startKey && dateKey <= dateMeta.endKey;
                 }
+
+                const currentDate = parseDateKeyToLocalDate(dateKey);
+                if (currentDate && rangeStartTime !== null && rangeEndTime !== null) {
+                    const currentTime = currentDate.getTime();
+                    return currentTime >= rangeStartTime && currentTime <= rangeEndTime;
+                }
+
+                if (normalizedDateKey) {
+                    return normalizedDateKey >= dateMeta.startKey && normalizedDateKey <= dateMeta.endKey;
+                }
+
+                return dateKey >= dateMeta.startKey && dateKey <= dateMeta.endKey;
             };
 
             for (const [dk, bms] of dateMap) {
                 if (isDateInRange(dk)) {
                     matchedKeys.push(dk);
                     totalCount += bms.length;
+                }
+            }
+
+            // Fallback: compare by visit timestamps in case dateKey format or source data is inconsistent.
+            if (!matchedKeys.length && !dateMeta.ignoreYear && rangeStartTime !== null && rangeEndTime !== null) {
+                for (const [dk, bms] of dateMap) {
+                    if (!Array.isArray(bms) || !bms.length) continue;
+
+                    let hasVisitInRange = false;
+                    for (const bm of bms) {
+                        const visitTs = typeof bm.visitTime === 'number'
+                            ? bm.visitTime
+                            : (bm.dateAdded instanceof Date ? bm.dateAdded.getTime() : 0);
+                        if (visitTs && visitTs >= rangeStartTime && visitTs <= rangeEndTime) {
+                            hasVisitInRange = true;
+                            break;
+                        }
+                    }
+
+                    if (hasVisitInRange) {
+                        matchedKeys.push(dk);
+                        totalCount += bms.length;
+                    }
                 }
             }
 
@@ -1930,14 +2466,16 @@ function activateBrowsingHistorySearchResult(index) {
     const cal = window.browsingHistoryCalendarInstance;
     if (!cal) return;
 
-    if (item.type === 'browsing-year') {
-        cal.selectYear(item.year);
-    } else if (item.type === 'browsing-month') {
-        cal.selectMonth(item.year, item.month);
-    } else if (item.type === 'browsing-day') {
-        cal.selectDay(item.dateKey);
-        if (cal.renderExitButton) cal.renderExitButton();
-    } else if (item.type === 'calendar-dates-group') {
+    const shouldDirectCalendarJump =
+        item.type === 'browsing-year' ||
+        item.type === 'browsing-month' ||
+        (item.type === 'browsing-day' && !item.url);
+
+    if (shouldDirectCalendarJump && applyCalendarDirectNavigation(cal, item)) {
+        return;
+    }
+
+    if (item.type === 'calendar-dates-group') {
         // [Date Group Select] - Shows ALL bookmarks for selected dates
         if (Array.isArray(item.dateKeys)) {
             cal.selectDateKeys(item.dateKeys);
@@ -2346,6 +2884,114 @@ function shouldShowEmptyQuerySuggestions() {
     }
 }
 
+function showEmptyQuerySuggestionsPanel(options = {}) {
+    try {
+        const force = options && options.force === true;
+        const current = getCurrentViewSafe();
+        if (!force && current !== 'additions' && current !== 'recommend') {
+            hideSearchResultsPanel();
+            return false;
+        }
+
+        if (force || shouldShowEmptyQuerySuggestions()) {
+            renderEmptyQuerySuggestions();
+            showSearchResultsPanel();
+            return true;
+        }
+    } catch (_) { }
+
+    try { hideSearchResultsPanel(); } catch (_) { }
+    return false;
+}
+
+function getSearchGuidanceByContext(options = {}) {
+    const isZh = currentLang === 'zh_CN';
+    const safeView = options.view === 'recommend' ? 'recommend' : 'additions';
+    const ctx = options.ctx || (window.SearchContextManager ? window.SearchContextManager.currentContext : {}) || {};
+
+    const tab = safeView === 'additions' ? String(ctx.tab || '') : '';
+    const subTab = safeView === 'additions' ? String(ctx.subTab || '') : '';
+
+    const guidance = {
+        view: safeView,
+        tab,
+        subTab,
+        contextLabel: isZh ? '书签记录' : 'Bookmark Records',
+        tipLines: [],
+        examples: [],
+        modeHint: isZh ? '点放大镜查看模式说明与切换' : 'Click the magnifier for help and mode switch'
+    };
+
+    if (safeView === 'recommend') {
+        guidance.contextLabel = isZh ? '书签推荐' : 'Bookmark Recommend';
+        guidance.tipLines = [
+            isZh ? '支持关键词匹配：标题 / URL' : 'Keyword match: title / URL',
+            isZh ? '支持 S 值筛选：比较符和区间' : 'S-score filter: comparators and range'
+        ];
+        guidance.examples = ['>=0.8', '0.65-0.75', 'score=0.9', 'openai docs'];
+        return guidance;
+    }
+
+    if (tab === 'browsing' && subTab === 'ranking') {
+        guidance.contextLabel = isZh ? '书签浏览记录 · 点击排行' : 'Browsing Records · Ranking';
+        guidance.tipLines = [
+            isZh ? '关键词支持标题 / URL（空格 = AND）' : 'Keyword supports title / URL (space = AND)',
+            isZh ? '日期筛选请使用完整日期或完整区间（如20260105-20260120）' : 'For date filter, use full date or full range (e.g. 20260105-20260120)'
+        ];
+        guidance.examples = ['openai chrome', 'github docs', '20260105-20260120'];
+        return guidance;
+    }
+
+    if (tab === 'browsing' && subTab === 'related') {
+        guidance.contextLabel = isZh ? '书签浏览记录 · 关联记录' : 'Browsing Records · Related';
+        guidance.tipLines = [
+            isZh ? '关键词支持标题 / URL（空格 = AND）' : 'Keyword supports title / URL (space = AND)',
+            isZh ? '日期筛选请使用完整日期或完整区间（如20260105-20260120）' : 'For date filter, use full date or full range (e.g. 20260105-20260120)'
+        ];
+        guidance.examples = ['chatgpt docs', 'openai blog', '20260105-20260120'];
+        return guidance;
+    }
+
+    if (tab === 'tracking') {
+        guidance.contextLabel = isZh ? '书签记录 · 时间追踪' : 'Records · Time Tracking';
+        guidance.tipLines = [
+            isZh ? '关键词支持标题 / URL（空格 = AND）' : 'Keyword supports title / URL (space = AND)',
+            isZh ? '清空输入可恢复全部数据' : 'Clear input to restore all data'
+        ];
+        guidance.examples = ['openai', 'github docs', 'api'];
+        return guidance;
+    }
+
+    if (tab === 'browsing' && subTab === 'history') {
+        guidance.contextLabel = isZh ? '书签浏览记录 · 日历' : 'Browsing Records · Calendar';
+    } else if (tab === 'review') {
+        guidance.contextLabel = isZh ? '书签添加记录 · 日历' : 'Bookmark Additions · Calendar';
+    }
+
+    guidance.tipLines = [
+        isZh ? '支持关键词匹配：标题 / URL（空格 = AND）' : 'Keyword match: title / URL (space = AND)',
+        isZh ? '支持日期与范围：单日 / 月份 / 区间' : 'Supports date and range: day / month / span',
+        isZh ? '未写年份默认今年，也支持写完整年份（如20260105-20260115）' : 'No-year dates default to current year; full year is supported (e.g. 20260105-20260115)',
+        isZh ? '多日期批量：用空格或顿号分隔' : 'Batch dates: split by space or comma'
+    ];
+    guidance.examples = ['20260122', '0122', '1月2号', '20260105-20260115', '0101-0115', 'chrome extension'];
+    return guidance;
+}
+
+function buildSearchExamplesHtml(examples, options = {}) {
+    const arr = Array.isArray(examples) ? examples.filter(Boolean).slice(0, 6) : [];
+    if (!arr.length) return '';
+
+    const prefix = String(options.prefix || '').trim();
+    const chips = arr.map((example) => {
+        const safeText = escapeHtml(String(example));
+        return `<code style="display:inline-flex; align-items:center; padding:2px 6px; border-radius:6px; background:var(--bg-tertiary); border:1px solid var(--border-color); font-size:11px; color:var(--text-primary);">${safeText}</code>`;
+    }).join(' ');
+
+    const safePrefix = prefix ? `<span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(prefix)}</span>` : '';
+    return `<div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px;">${safePrefix}${chips}</div>`;
+}
+
 function handleSearchInputFocus(e) {
     if (currentView !== 'additions' && currentView !== 'recommend') {
         hideSearchResultsPanel();
@@ -2423,6 +3069,7 @@ function renderEmptyQuerySuggestions() {
 
     const isZh = currentLang === 'zh_CN';
     const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+    const guidance = getSearchGuidanceByContext({ view: currentView, ctx });
 
     const prefKey = getEmptyQuerySuggestionsPrefKey();
 
@@ -2436,25 +3083,7 @@ function renderEmptyQuerySuggestions() {
         }
     } catch (_) { }
 
-    const items = [];
-
-    if (currentView === 'additions') {
-        if (ctx && ctx.tab === 'browsing' && ctx.subTab === 'ranking') {
-            items.push(isZh ? '直接筛选列表（不弹候选）' : 'In-panel filter (no candidates)');
-            items.push(isZh ? '关键词：空格 AND；支持日期协议' : 'Keywords: space AND; Date Protocol supported');
-        } else if (ctx && ctx.tab === 'browsing' && ctx.subTab === 'related') {
-            items.push(isZh ? '直接筛选列表（不弹候选）' : 'In-panel filter (no candidates)');
-            items.push(isZh ? '关键词：空格 AND；支持日期协议' : 'Keywords: space AND; Date Protocol supported');
-        } else if (ctx && ctx.tab === 'tracking') {
-            items.push(isZh ? '直接筛选列表（不弹候选）' : 'In-panel filter (no candidates)');
-            items.push(isZh ? '清空输入：恢复全部' : 'Clear input: show all');
-        } else {
-            items.push(isZh ? '关键词：标题/URL（空格 AND）' : 'Keyword: title/URL (space AND)');
-            items.push(isZh ? '日期/范围：`20260122` / `0107-0120`' : 'Date/range: `20260122` / `0107-0120`');
-        }
-    } else {
-        items.push(isZh ? '输入关键词开始搜索' : 'Type to search');
-    }
+    const items = Array.isArray(guidance.tipLines) ? guidance.tipLines : [];
 
     const html = items.map((text) => {
         return `
@@ -2466,7 +3095,13 @@ function renderEmptyQuerySuggestions() {
     }).join('');
 
     const dontShowLabel = isZh ? '下次不再出现' : "Don't show again";
-    const hintText = isZh ? '点放大镜查看说明' : 'Click the magnifier for help';
+    const hintText = guidance.modeHint;
+    const contextPrefix = isZh ? '当前场景：' : 'Context: ';
+    const examplesPrefix = isZh ? '可用示例：' : 'Examples:';
+    const examplesHtml = buildSearchExamplesHtml(guidance.examples, { prefix: examplesPrefix });
+    const dockBottom = document.body && document.body.classList
+        ? (document.body.classList.contains('header-dock-bottom') && !document.body.classList.contains('header-compact'))
+        : false;
 
     // Pointer icon: an upward arrow that visually points to the left search button.
     const arrowUpSvg = `
@@ -2476,16 +3111,40 @@ function renderEmptyQuerySuggestions() {
         </svg>
     `;
 
+    const arrowDownSvg = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+            <path d="M12 3V17" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            <path d="M7 13l5 5 5-5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    `;
+
+    const headerHintHtml = dockBottom
+        ? ''
+        : `<div class="search-empty-suggestions-hint" data-arrow-direction="up" style="position:absolute; left:16px; top:50%; transform:translateY(-50%); display:flex; align-items:center; gap:6px; max-width:calc(100% - 140px); font-size:10px; line-height:1.2; color:var(--text-tertiary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;">
+                <span style="display:inline-flex; position:relative; top:-1px;">${arrowUpSvg}</span><span>${escapeHtml(hintText)}</span>
+            </div>`;
+
+    const footerHintHtml = dockBottom
+        ? `<div class="search-suggestions-footer" style="position:relative; min-height:34px; padding:6px 10px; border-top:1px solid var(--border-color);">
+                <div class="search-empty-suggestions-hint" data-arrow-direction="down" style="position:absolute; left:10px; bottom:6px; display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:calc(100% - 20px); font-size:10px; line-height:1.2; color:var(--text-tertiary); pointer-events:none;">
+                    <span style="display:inline-flex; flex:0 0 auto; position:relative; top:1px;">${arrowDownSvg}</span>
+                    <span style="min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(hintText)}</span>
+                </div>
+            </div>`
+        : '';
+
     panel.innerHTML = `
         <div class="search-suggestions-header" style="position:relative; padding:6px 10px; border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:flex-end; gap:10px;">
-            <div class="search-empty-suggestions-hint" style="position:absolute; left:16px; top:50%; transform:translateY(-50%); display:flex; align-items:center; gap:6px; max-width:calc(100% - 140px); font-size:10px; line-height:1.2; color:var(--text-tertiary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;">
-                <span style="display:inline-flex; position:relative; top:-1px;">${arrowUpSvg}</span><span>${escapeHtml(hintText)}</span>
-            </div>
+            ${headerHintHtml}
             <button type="button" class="search-empty-suggestions-hide-btn" style="border:1px solid var(--border-color); background:var(--bg-secondary); padding:3px 10px; border-radius:999px; font-size:10px; color:var(--text-secondary); cursor:pointer; white-space:nowrap;">
                 ${escapeHtml(dontShowLabel)}
             </button>
         </div>
-    ` + html;
+        <div style="padding:8px 10px 2px; border-bottom:1px solid var(--border-color-light);">
+            <div style="font-size:11px; color:var(--text-secondary); line-height:1.4;">${escapeHtml(contextPrefix + guidance.contextLabel)}</div>
+            ${examplesHtml}
+        </div>
+    ` + html + footerHintHtml;
 
     // Bind interactions (rebuilt each render)
     try {
@@ -2510,14 +3169,24 @@ function renderEmptyQuerySuggestions() {
             if (!trigger || !hint) return;
 
             const triggerRect = trigger.getBoundingClientRect();
-            const panelRect = panel.getBoundingClientRect();
+            const hintContainer = hint.offsetParent || hint.parentElement || panel;
+            const containerRect = hintContainer.getBoundingClientRect();
+            const centerX = triggerRect.left + triggerRect.width / 2;
+
+            if (hint.getAttribute('data-arrow-direction') === 'down') {
+                const arrowHalf = 8;
+                const left = centerX - containerRect.left - arrowHalf;
+                const maxLeft = Math.max(10, containerRect.width - hint.offsetWidth - 10);
+                const clampedLeft = Math.max(10, Math.min(maxLeft, left));
+                hint.style.left = `${clampedLeft}px`;
+                return;
+            }
 
             // arrow svg is 16px wide; nudge left a bit to visually align
             const arrowHalf = 8;
             const arrowNudgeLeft = 2;
-            const centerX = triggerRect.left + triggerRect.width / 2;
-            const left = centerX - panelRect.left - arrowHalf - arrowNudgeLeft;
-            const clamped = Math.max(10, Math.min(panelRect.width - 10, left));
+            const left = centerX - containerRect.left - arrowHalf - arrowNudgeLeft;
+            const clamped = Math.max(10, Math.min(containerRect.width - 10, left));
             hint.style.left = `${clamped}px`;
         });
     } catch (_) { }
@@ -2532,16 +3201,16 @@ const SEARCH_MODES = [
         label: '记录',
         labelEn: 'Records',
         icon: 'fa-plus-circle',
-        desc: '标题 / URL / 日期',
-        descEn: 'Title / URL / Date'
+        desc: '标题 / URL / 日期（未写年份默认今年）',
+        descEn: 'Title / URL / Date (no-year defaults current year)'
     },
     {
         key: 'recommend',
         label: '推荐',
         labelEn: 'Recommend',
         icon: 'fa-lightbulb',
-        desc: 'S值 / 标题 / URL',
-        descEn: 'S score / Title / URL'
+        desc: 'S值 / 标题 / URL（例：>=0.8）',
+        descEn: 'S score / Title / URL (e.g. >=0.8)'
     }
 ];
 
@@ -2578,7 +3247,9 @@ function setSearchMode(modeKey, options = {}) {
     // Sync placeholder to the active mode as a fallback
     try {
         const input = document.getElementById('searchInput');
-        if (input) {
+        if (input && window.SearchContextManager && typeof window.SearchContextManager.updateUI === 'function') {
+            window.SearchContextManager.updateUI();
+        } else if (input) {
             const isZh = currentLang === 'zh_CN';
             input.placeholder = isZh ? mode.desc : mode.descEn;
         }
@@ -2649,8 +3320,21 @@ function renderSearchModeUI() {
     const label = isZh ? mode.label : mode.labelEn;
     const modeColorClass = mode && mode.key === 'recommend' ? 'mode-color-orange' : 'mode-color-blue';
 
-    trigger.innerHTML = `<i class="fas fa-search ${modeColorClass}"></i><span class="search-mode-label ${modeColorClass}">${label}</span>`;
-    trigger.title = isZh ? `搜索模式：${label}` : `Mode: ${label}`;
+    trigger.classList.remove('mode-color-blue', 'mode-color-orange', 'mode-color-green');
+    trigger.classList.add(modeColorClass);
+
+    const container = document.querySelector('.search-container');
+    if (container) {
+        container.classList.remove('search-mode-additions', 'search-mode-recommend');
+        container.classList.add(mode.key === 'recommend' ? 'search-mode-recommend' : 'search-mode-additions');
+    }
+
+    trigger.innerHTML = `<i class="fas fa-search"></i><span class="search-mode-label">${label}</span>`;
+
+    const quickExample = mode.key === 'recommend'
+        ? (isZh ? '例：>=0.8 或 0.65-0.75' : 'e.g. >=0.8 or 0.65-0.75')
+        : (isZh ? '例：0122（默认今年）/ 20260105-20260115 / 0101-0115' : 'e.g. 0122 (current year) / 20260105-20260115 / 0101-0115');
+    trigger.title = isZh ? `搜索模式：${label}（${quickExample}）` : `Mode: ${label} (${quickExample})`;
 }
 
 function renderSearchModeMenu() {
@@ -2661,8 +3345,14 @@ function renderSearchModeMenu() {
     const hintText = currentLang === 'zh_CN'
         ? '↑/↓ 切换，Enter 选择，Esc 关闭'
         : '↑/↓ switch, Enter select, Esc close';
+    const guide = getSearchGuidanceByContext({ view: searchUiState.activeMode });
+    const modeExamplePrefix = currentLang === 'zh_CN' ? '当前模式示例：' : 'Current mode examples:';
+    const modeExamplesHtml = buildSearchExamplesHtml(guide.examples, { prefix: modeExamplePrefix });
 
     let html = `<div class="search-mode-hint" style="text-align:left;">${hintText}</div>`;
+    if (modeExamplesHtml) {
+        html += `<div class="search-mode-hint" style="text-align:left; border-top:none; margin-top:-4px;">${modeExamplesHtml}</div>`;
+    }
 
     html += SEARCH_MODES.map(mode => {
         const isActive = mode.key === searchUiState.activeMode;
@@ -2689,20 +3379,27 @@ function renderSearchHelpMenu() {
 
     const isZh = currentLang === 'zh_CN';
     const view = getCurrentViewSafe();
-    const tips = []
+    const guide = getSearchGuidanceByContext({ view });
+    const titleText = isZh ? `当前场景：${guide.contextLabel}` : `Current context: ${guide.contextLabel}`;
 
-    if (view === 'additions') {
-        tips.push(isZh ? '关键词：标题/URL（空格 AND）' : 'Keyword: title/URL (space AND)');
-        tips.push(isZh ? '日期/范围：`20260122` / `0107-0120`' : 'Date/range: `20260122` / `0107-0120`');
-    } else {
-        tips.push(isZh ? '输入关键词开始搜索' : 'Type to search');
-    }
+    const tips = (Array.isArray(guide.tipLines) ? guide.tipLines : []).map((line) => {
+        const safeLine = String(line || '').trim();
+        if (!safeLine) return '';
+        return `<div style="margin:6px 0; font-size:12px; color:var(--text-secondary); line-height:1.5;">• ${escapeHtml(safeLine)}</div>`;
+    }).join('');
 
-    const items = tips.map(t => `<div style="margin:6px 0; font-size:12px; color:var(--text-secondary); line-height:1.5;">${String(t).replace(/`([^`]+)`/g, '<code>$1</code>')}</div>`).join('');
+    const helpExamplesPrefix = isZh ? '可用示例：' : 'Examples:';
+    const examplesHtml = buildSearchExamplesHtml(guide.examples, { prefix: helpExamplesPrefix });
+    const footerText = isZh
+        ? '提示：点模式项可直接切换到对应页面'
+        : 'Tip: click a mode item to switch directly';
 
     menu.innerHTML = `
         <div class="search-help-body" style="padding:10px 12px;">
-            ${items || `<div style="color:var(--text-tertiary); font-size:12px;">(No help content)</div>`}
+            <div style="font-size:12px; color:var(--text-primary); font-weight:600; margin-bottom:4px;">${escapeHtml(titleText)}</div>
+            ${tips || `<div style="color:var(--text-tertiary); font-size:12px;">(No help content)</div>`}
+            ${examplesHtml}
+            <div style="margin-top:8px; font-size:11px; color:var(--text-tertiary); line-height:1.4;">${escapeHtml(footerText)}</div>
         </div>
     `;
 }
@@ -2924,6 +3621,7 @@ if (typeof window !== 'undefined') {
     window.setSearchMode = setSearchMode;
     window.cycleSearchMode = cycleSearchMode;
     window.toggleSearchModeMenu = toggleSearchModeMenu;
+    window.showEmptyQuerySuggestionsPanel = showEmptyQuerySuggestionsPanel;
 
     // 初始化
     window.initSearchEvents = initSearchEvents;
