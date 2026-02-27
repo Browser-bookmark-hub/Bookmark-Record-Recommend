@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "Bookmark Records & Recommend",
+    "message": "Bookmark Record and Recommend",
     "description": "Extension name"
   },
   "extensionDescription": {
@@ -8,7 +8,7 @@
     "description": "Extension description"
   },
   "actionTitle": {
-    "message": "Bookmark Records & Recommend",
+    "message": "Bookmark Record and Recommend",
     "description": "Toolbar tooltip title"
   }
 }

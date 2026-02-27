@@ -3,7 +3,7 @@
 ## 中文
 
 ### 简介
-`书签记录 & 推荐` 是一个面向重度书签用户的浏览器扩展：
+`书签记录与推荐` 是一个面向重度书签用户的浏览器扩展：
 在同一套 UI 中，把「书签记录」和「书签推荐」结合起来，支持侧边栏与独立页面两种使用方式。
 
 ### 特色功能
@@ -47,7 +47,7 @@
 ## English
 
 ### Overview
-`Bookmark Records & Recommendations` is a browser extension for power bookmark users.
+`Bookmark Record and Recommend` is a browser extension for power bookmark users.
 It combines **recording** and **recommendation** into one workflow, available in both **Side Panel** and **full HTML page** modes.
 
 ### Highlights

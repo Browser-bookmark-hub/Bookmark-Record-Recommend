@@ -3199,7 +3199,7 @@ const SEARCH_MODES = [
     {
         key: 'additions',
         label: '记录',
-        labelEn: 'Records',
+        labelEn: 'Record',
         icon: 'fa-plus-circle',
         desc: '标题 / URL / 日期（未写年份默认今年）',
         descEn: 'Title / URL / Date (no-year defaults current year)'
