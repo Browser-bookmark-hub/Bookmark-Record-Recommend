@@ -425,6 +425,10 @@ body.header-dock-bottom:not(.header-compact) .main-container {
     gap: 6px;
 }
 
+html:not(.side-panel-mode) .header-right>.title-side-tools {
+    margin-left: -8px;
+}
+
 .header-left h1 {
     font-size: 20px;
     font-weight: 600;
@@ -540,6 +544,30 @@ body.header-dock-bottom:not(.header-compact) #widgetsSortInfoPanel {
 
 .widgets-sort-info-line+.widgets-sort-info-line {
     margin-top: 5px;
+}
+
+.widgets-sort-info-toggle-row {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.widgets-sort-info-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.widgets-sort-info-toggle-label input[type="checkbox"] {
+    margin: 0;
+}
+
+.widgets-sort-info-toggle-label input[type="checkbox"]:disabled {
+    cursor: not-allowed;
 }
 
 .widgets-sort-panel-title {
@@ -1330,7 +1358,8 @@ html.side-panel-mode .widgets-sort-smart-row,
 html.side-panel-mode .widgets-sort-smart-label,
 html.side-panel-mode .widgets-sort-item-name,
 html.side-panel-mode .widgets-sort-info-title,
-html.side-panel-mode .widgets-sort-info-line {
+html.side-panel-mode .widgets-sort-info-line,
+html.side-panel-mode .widgets-sort-info-toggle-label {
     font-size: 11px;
 }
 
@@ -2488,15 +2517,66 @@ html.layout-resizing *::after {
     color: inherit;
 }
 
-.widgets-range-toggle-btn {
+.widgets-subdomain-toggle-btn {
+    margin-left: auto;
+    width: auto;
+    height: auto;
+    min-width: 38px;
+    padding: 0 2px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.15;
+    color: var(--text-tertiary);
+    transform: none;
+    transition: none;
+}
+
+.widgets-subdomain-toggle-btn:hover {
+    color: var(--text-primary);
+    background: transparent;
+}
+
+.widgets-subdomain-toggle-btn:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+}
+
+.widgets-mode-toggle-btn {
+    margin-left: 2px;
     width: auto;
     height: auto;
     min-width: 44px;
     padding: 0 2px;
     border-radius: 4px;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    line-height: 1.2;
+    line-height: 1.15;
+    color: var(--text-secondary);
+    transform: none;
+    transition: none;
+}
+
+.widgets-mode-toggle-btn:hover {
+    color: var(--text-primary);
+    background: transparent;
+}
+
+.widgets-mode-toggle-btn:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+}
+
+.widgets-range-toggle-btn {
+    margin-left: 2px;
+    width: auto;
+    height: auto;
+    min-width: 40px;
+    padding: 0 2px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.15;
     color: var(--text-secondary);
     transform: none;
     transition: none;
@@ -2510,6 +2590,49 @@ html.layout-resizing *::after {
 .widgets-range-toggle-btn:focus-visible {
     outline: 2px solid var(--accent-primary);
     outline-offset: 2px;
+}
+
+#widgetsRankingWidget .time-tracking-widget-header {
+    align-items: center !important;
+    min-height: 22px;
+}
+
+#widgetsRankingWidget .time-tracking-widget-header>i {
+    transform: none;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    line-height: 20px;
+}
+
+#widgetsRankingWidgetTitle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    height: 20px;
+    line-height: 20px;
+    min-height: 20px;
+}
+
+#widgetsRankingWidget .widget-header-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    transform: none;
+    position: relative;
+    top: 1px;
+    height: 20px;
+    min-height: 20px;
+    line-height: 20px;
+}
+
+#widgetsRankingWidget .widgets-subdomain-toggle-btn,
+#widgetsRankingWidget .widgets-mode-toggle-btn,
+#widgetsRankingWidget .widgets-range-toggle-btn {
+    line-height: 20px;
 }
 
 .time-tracking-widget-list {
@@ -2764,6 +2887,54 @@ html.sidebar-state-hidden #sidebar {
     overflow-x: hidden;
 }
 
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid {
+    opacity: 0;
+    pointer-events: none;
+}
+
+html.side-panel-mode #widgetsView.widgets-open-stabilizing {
+    position: relative;
+    min-height: 300px;
+}
+
+html.side-panel-mode #widgetsView.widgets-open-stabilizing::before {
+    content: "";
+    position: fixed;
+    left: var(--widgets-stabilizing-left-inset, 0px);
+    right: var(--widgets-stabilizing-right-inset, 0px);
+    top: var(--widgets-stabilizing-top-inset, 0px);
+    bottom: var(--widgets-stabilizing-bottom-inset, 0px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+    backdrop-filter: blur(1.5px);
+    -webkit-backdrop-filter: blur(1.5px);
+    z-index: 6;
+    pointer-events: none;
+}
+
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabilizing-label {
+    position: fixed;
+    left: var(--widgets-stabilizing-left-inset, 0px);
+    right: var(--widgets-stabilizing-right-inset, 0px);
+    top: var(--widgets-stabilizing-top-inset, 0px);
+    bottom: var(--widgets-stabilizing-bottom-inset, 0px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+    z-index: 7;
+    pointer-events: none;
+}
+
 .widgets-grid {
     display: grid;
     width: 100%;
@@ -2945,16 +3116,16 @@ html.sidebar-state-hidden #sidebar {
 .cards-row.widgets-cards-row {
     width: 100%;
     min-width: 0;
-    padding: 20px 0;
+    padding: 8px 0;
     display: flex;
     flex-direction: column;
     gap: 16px;
 }
 
 .widgets-cards-row .recommend-card {
-    min-height: 140px;
-    padding: 20px 16px;
-    gap: 12px;
+    min-height: 118px;
+    padding: 12px 16px;
+    gap: 8px;
     display: grid;
     grid-template-columns: 28px minmax(0, 1fr);
     align-items: center;
@@ -3235,6 +3406,7 @@ html.side-panel-mode #widgetsView .widgets-view-header {
 }
 
 html.side-panel-mode .cards-row.widgets-cards-row {
+    padding: 2px 0;
     gap: 6px;
 }
 
@@ -3395,7 +3567,19 @@ html.side-panel-mode .widgets-cards-row .card-debug-btn i {
 
 @media (min-width: 980px) {
     html:not(.side-panel-mode) .widgets-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        display: block;
+        column-count: 2;
+        column-gap: 16px;
+    }
+
+    html:not(.side-panel-mode) .widgets-grid>.widgets-widget-card {
+        display: inline-block;
+        width: 100%;
+        margin: 0 0 16px;
+        vertical-align: top;
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        page-break-inside: avoid;
     }
 
     html:not(.side-panel-mode) .widgets-grid>.widgets-recommend-widget,
@@ -3408,7 +3592,19 @@ html.side-panel-mode .widgets-cards-row .card-debug-btn i {
 
 @media (min-width: 760px) {
     html.side-panel-mode .widgets-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        display: block;
+        column-count: 2;
+        column-gap: 12px;
+    }
+
+    html.side-panel-mode .widgets-grid>.widgets-widget-card {
+        display: inline-block;
+        width: 100%;
+        margin: 0 0 12px;
+        vertical-align: top;
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        page-break-inside: avoid;
     }
 
     html.side-panel-mode .widgets-grid>.widgets-recommend-widget,
@@ -13973,14 +14169,14 @@ html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle {
 }
 
 html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle .ranking-view-toggle-btn {
-    padding: 4px 8px !important;
-    font-size: 10px !important;
+    padding: 3px 7px !important;
+    font-size: 9px !important;
     gap: 4px !important;
     border-radius: 14px !important;
 }
 
 html.side-panel-mode .browsing-ranking-title-actions .ranking-view-toggle .ranking-view-toggle-btn i {
-    font-size: 9px !important;
+    font-size: 8px !important;
 }
 
 html.side-panel-mode #browsingRelatedTitleActions .ranking-sort-btn {

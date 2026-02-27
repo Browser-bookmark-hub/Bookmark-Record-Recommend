@@ -7,6 +7,17 @@
     <title></title>
     <script src="history_theme_bootstrap.js"></script>
     <script src="history_view_bootstrap.js"></script>
+    <style>
+        html,
+        body {
+            background: #ffffff;
+        }
+
+        html[data-theme="dark"],
+        html[data-theme="dark"] body {
+            background: #18191a;
+        }
+    </style>
     <link rel="stylesheet" href="history.css?v=2.1">
     <link rel="stylesheet" href="search/search.css">
     <link rel="stylesheet" href="bookmark_calendar.css">
@@ -64,14 +75,14 @@
                 </button>
 
                 <div class="widgets-sort-anchor">
-                    <button id="widgetsSmartSortToggleBtn" class="tool-btn widgets-smart-sort-toggle" type="button" aria-pressed="true" title="智能排序：开启">
+                    <button id="widgetsSmartSortToggleBtn" class="tool-btn widgets-smart-sort-toggle" type="button" aria-pressed="false" title="智能排序：关闭">
                         <i class="fas fa-sort-amount-down"></i>
                     </button>
                     <div id="widgetsSortPanel" class="widgets-sort-panel" hidden>
                         <div class="widgets-sort-panel-title" id="widgetsSortPanelTitle">小组件排序</div>
                         <div class="widgets-sort-smart-row">
                             <label class="widgets-sort-smart-label" for="widgetsSmartSortCheckbox">
-                                <input id="widgetsSmartSortCheckbox" type="checkbox" checked>
+                                <input id="widgetsSmartSortCheckbox" type="checkbox">
                                 <span id="widgetsSmartSortCheckboxLabel">智能排序</span>
                             </label>
                             <button id="widgetsSmartSortInfoBtn" class="widgets-sort-inline-info-btn" type="button" title="智能排序说明" aria-label="智能排序说明">
@@ -82,6 +93,12 @@
                                 <div class="widgets-sort-info-line" id="widgetsSortInfoLine1">书签推荐固定在最上方。</div>
                                 <div class="widgets-sort-info-line" id="widgetsSortInfoLine2">其余小组件会根据数据变化自动上浮。</div>
                                 <div class="widgets-sort-info-line" id="widgetsSortInfoLine3">关闭智能排序后，顺序按手动排序结果展示。</div>
+                                <div class="widgets-sort-info-toggle-row">
+                                    <label class="widgets-sort-info-toggle-label" for="widgetsOpenStabilizingCheckbox">
+                                        <input id="widgetsOpenStabilizingCheckbox" type="checkbox" checked>
+                                        <span id="widgetsOpenStabilizingCheckboxLabel">打开“正在排序”遮罩</span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
                         <div class="widgets-sort-list" id="widgetsSortList"></div>
@@ -974,6 +991,8 @@
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-chart-bar"></i>
                             <span id="widgetsRankingWidgetTitle">点击排行</span>
+                            <button id="widgetsRankingSubdomainToggleBtn" class="widget-header-action-btn widgets-subdomain-toggle-btn" title="切换子域名" type="button" style="display:none;">子域</button>
+                            <button id="widgetsRankingModeToggleBtn" class="widget-header-action-btn widgets-mode-toggle-btn" title="切换模式" type="button">书签</button>
                             <button id="widgetsRankingRangeToggleBtn" class="widget-header-action-btn widgets-range-toggle-btn" title="切换范围" type="button">当日</button>
                         </div>
                         <div class="time-tracking-widget-list" id="widgetsRankingWidgetList">

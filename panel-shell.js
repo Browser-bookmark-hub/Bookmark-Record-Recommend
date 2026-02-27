@@ -3,6 +3,11 @@
     const frame = document.getElementById('sidePanelFrame');
     if (!frame) return;
 
+    frame.classList.remove('ready');
+    frame.addEventListener('load', () => {
+      frame.classList.add('ready');
+    }, { once: true });
+
     const params = new URLSearchParams(window.location.search || '');
     const requestedView = params.get('view');
     const safeView = requestedView === 'widgets' || requestedView === 'recommend' || requestedView === 'additions'

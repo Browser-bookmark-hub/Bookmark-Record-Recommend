@@ -1,3 +1,11 @@
+:root {
+    --panel-shell-bg: #f5f6f7;
+}
+
+[data-theme="dark"] {
+    --panel-shell-bg: #18191a;
+}
+
 html,
 body {
     width: 100%;
@@ -5,7 +13,7 @@ body {
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background: transparent;
+    background: var(--panel-shell-bg);
 }
 
 .sidepanel-frame {
@@ -13,5 +21,11 @@ body {
     height: 100%;
     border: 0;
     display: block;
-    background: transparent;
+    background: var(--panel-shell-bg);
+    opacity: 0;
+    transition: opacity 0.06s linear;
+}
+
+.sidepanel-frame.ready {
+    opacity: 1;
 }
