@@ -1,10 +1,12 @@
 ## Switch to [English](#english)
 
-## 中文
+[![GitHub Releases](https://img.shields.io/badge/GitHub_Releases-v0.2.3-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
+[![Microsoft Edge Add-ons](https://img.shields.io/badge/Edge_Add--ons-v0.2.3-0078D7?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/hdoajmdijappigkbiiefbhkfifbfoleb)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ehodmhbidnoegdodnceiepdekgeoggck?color=0F9D58&logo=googlechrome&logoColor=white&label=Chrome+Web+Store)](https://chromewebstore.google.com/detail/ehodmhbidnoegdodnceiepdekgeoggck)
 
 ### 简介
-`书签记录与推荐` 是一个面向重度书签用户的浏览器扩展：
-在同一套 UI 中，把「书签记录」和「书签推荐」结合起来，支持侧边栏与独立页面两种使用方式。
+`书签记录与推荐` 是一款专为重度书签用户打造的增强型扩展，旨在通过“书签记录”与“智能推荐”两大核心引擎，唤醒你在浏览器中沉睡的知识库。
+它不仅支持多维度的书签浏览数据追踪（日历记录、访问排行与关联组合），还独创了基于“书签记录”获得的参数计算出 S 值的书签动态推荐算法，并在侧边栏与独立网页中提供无缝的双轨使用体验。
 
 ### 特色功能
 - **双工作区**：支持 Side Panel + 独立 HTML 页面，适配不同使用习惯。
@@ -22,17 +24,12 @@
 | <img src="doc/screenshots/sidebar_zh.png" width="400"> | <img src="doc/screenshots/recommend_zh.png" width="400"> |
 | **搜索** | **点击排行** |
 | <img src="doc/screenshots/search_zh.png" width="400"> | <img src="doc/screenshots/ranking_zh.png" width="400"> |
-### 快速安装（开发者模式）
-1. 下载或克隆本仓库。
-2. 打开 `chrome://extensions`（或 Edge 扩展页）。
-3. 开启“开发者模式”。
-4. 选择“加载已解压的扩展程序”，指向本项目根目录。
-5. 点击扩展图标即可打开侧边栏。
+
 
 ### 主要视图
-- **Widgets**：聚合小组件（推荐、时间捕捉、排行、周统计等）。
-- **Bookmark Recommend**：推荐卡片、待复习、屏蔽管理、复习热力图。
-- **Bookmark Records**：添加记录 / 浏览记录 / 时间捕捉。
+- **小组件**：聚合小组件（推荐、时间捕捉、排行、周统计等）。
+- **书签推​​荐**：推荐卡片、待复习、屏蔽管理、复习热力图。
+- **书签记录**：添加记录 / 浏览记录 / 时间捕捉。
 
 ### 数据与隐私
 - 核心记录与推荐状态保存在浏览器本地存储（无独立后端服务）。
@@ -47,8 +44,8 @@
 ## English
 
 ### Overview
-`Bookmark Record and Recommend` is a browser extension for power bookmark users.
-It combines **recording** and **recommendation** into one workflow, available in both **Side Panel** and **full HTML page** modes.
+`Bookmark Record & Recommend` is an enhanced browser extension specifically designed for power bookmark users. It aims to reawaken the dormant knowledge base within your browser through two core engines: "Bookmark Records" and "Smart Recommendations".
+It not only tracks multi-dimensional bookmark browsing data (calendar logs, visit rankings, and combined history), but also features a dynamic recommendation algorithm that calculates unique S-Scores based on parameters derived from your "Bookmark Records", offering a seamless dual-track experience in both the Side Panel and standalone web pages.
 
 ### Highlights
 - **Dual workspace**: works in Side Panel and standalone page.
@@ -67,13 +64,6 @@ It combines **recording** and **recommendation** into one workflow, available in
 | <img src="doc/screenshots/sidebar_en.png" width="400"> | <img src="doc/screenshots/recommend_en.png" width="400"> |
 | **Search** | **Ranking** |
 | <img src="doc/screenshots/search_en.png" width="400"> | <img src="doc/screenshots/ranking_en.png" width="400"> |
-
-### Quick Start (Developer Mode)
-1. Clone or download this repository.
-2. Open `chrome://extensions` (or Edge extensions page).
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select this project folder.
-5. Click the extension action button to open the side panel.
 
 ### Main Views
 - **Widgets**: consolidated widgets for recommendations, tracking, ranking, weekly summaries.
@@ -94,4 +84,4 @@ It combines **recording** and **recommendation** into one workflow, available in
 
 GPL-3.0
 
-## [Back to top ](#中文)
+## [Back to top ](#switch-to-english)
