@@ -1,30 +1,41 @@
 // Helper to render current keyboard shortcuts in the secondary UI
+let shortcutsRenderSignature = '';
+
 function updateShortcutsDisplay() {
     const shortcutsContent = document.getElementById('shortcutsContent');
     if (!shortcutsContent) return;
 
     const lang = typeof currentLang === 'string' ? currentLang : 'zh_CN';
-    const isMac = navigator.platform?.toUpperCase().includes('MAC') || 
+    const isMac = navigator.platform?.toUpperCase().includes('MAC') ||
                   navigator.userAgent?.toUpperCase().includes('MAC');
 
     // 格式化快捷键显示（Mac上Alt显示为⌥）
     const formatKey = (key) => {
         if (!key) return key;
+        let value = String(key).replace(/\bDown\b/gi, '↓');
         if (isMac) {
-            return key.replace(/Alt\+/gi, '⌥');
+            value = value.replace(/Alt\+/gi, '⌥');
         }
-        return key;
+        return value;
     };
 
     const render = (shortcuts) => {
         const safe = (value, fallback) => (value && typeof value === 'string') ? value : fallback;
-        const defaultPrefix = isMac ? '⌥' : 'Alt+';
+        const defaultPrefix = 'Alt+';
         const keyRecommend = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '4'));
         const keyAdditions = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '5'));
+        const keyQuickReview = formatKey(safe(shortcuts.quick_review_next, isMac ? 'Alt+Down' : 'Ctrl+Down'));
+        const signature = `${lang}|${keyRecommend}|${keyAdditions}|${keyQuickReview}`;
+
+        if (signature === shortcutsRenderSignature) {
+            return;
+        }
+        shortcutsRenderSignature = signature;
 
         const rows = [];
         rows.push({ key: keyRecommend, label: i18n.shortcutRecommend[lang] });
         rows.push({ key: keyAdditions, label: i18n.shortcutAdditions[lang] });
+        rows.push({ key: keyQuickReview, label: i18n.shortcutQuickReviewNext[lang] });
 
         shortcutsContent.innerHTML = `
             <div class="shortcuts-card">
@@ -83,7 +94,8 @@ function updateShortcutsDisplay() {
                 }
                 render({
                     open_additions_view: map.open_additions_view,
-                    open_recommend_view: map.open_recommend_view
+                    open_recommend_view: map.open_recommend_view,
+                    quick_review_next: map.quick_review_next
                 });
             });
         } catch (e) {

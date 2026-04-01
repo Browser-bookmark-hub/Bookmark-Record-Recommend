@@ -43,9 +43,15 @@ body.header-dock-bottom .search-results-panel {
     display: block;
 }
 
+html.side-panel-mode .search-container.side-panel-search-expanded .search-results-panel,
+html.side-panel-mode .search-container.side-panel-search-collapsing .search-results-panel {
+    left: -1px;
+    right: -1px;
+}
+
 /* ==================== 空结果提示 ==================== */
 .search-results-panel .search-results-empty {
-    padding: 14px 12px;
+    padding: 14px var(--search-candidate-inline-padding, 12px);
     font-size: 12px;
     color: var(--text-secondary);
 }
@@ -53,7 +59,7 @@ body.header-dock-bottom .search-results-panel {
 /* ==================== 搜索结果项（通用） ==================== */
 .search-result-item {
     /* Tighter vertical rhythm for candidates */
-    padding: 8px 12px;
+    padding: 8px var(--search-candidate-inline-padding, 12px);
     cursor: default;
     /* Changed from pointer to default to imply mixed content */
     border-bottom: 1px solid var(--border-color);

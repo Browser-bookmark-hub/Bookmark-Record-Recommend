@@ -34,7 +34,7 @@
 ### 数据与隐私
 - 核心记录与推荐状态保存在浏览器本地存储（无独立后端服务）。
 - 插件会请求书签、历史记录、标签页等权限以提供完整功能。
-- favicon 可能通过站点图标或公共 favicon 源加载。
+- favicon 可能通过浏览器内置 favicon 服务或公共 favicon 源加载，并持久化到本地缓存。
 
 ### 相关文档
 - `doc/RECOMMEND_POOLS_V6_2.md`：推荐池模型与流转规则（v6.2）
@@ -73,7 +73,7 @@ It not only tracks multi-dimensional bookmark browsing data (calendar logs, visi
 ### Data & Privacy
 - Core states are stored locally in browser storage (no dedicated backend service).
 - Permissions include bookmarks/history/tabs to support full functionality.
-- Favicons may be loaded from site icons or public favicon providers.
+- Favicons may be loaded from the browser's built-in favicon service or public favicon providers, then persisted in local cache.
 
 ### Docs
 - `doc/RECOMMEND_POOLS_V6_2.md`: recommendation pool model and flow rules (v6.2)

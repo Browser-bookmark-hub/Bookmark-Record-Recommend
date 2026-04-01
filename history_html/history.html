@@ -105,6 +105,11 @@
                     </div>
                 </div>
 
+                <button id="quickReviewBtn" class="tool-btn quick-review-btn" aria-label="快速复习" type="button">
+                    <i class="fas fa-bolt"></i>
+                    <span class="btn-tooltip" id="quickReviewTooltip"></span>
+                </button>
+
                 <!-- 统一设置按钮 -->
                 <button id="settingsToggle" class="tool-btn settings-btn" aria-label="Settings" type="button">
                     <i class="fas fa-cog"></i>
@@ -148,6 +153,10 @@
                     <span id="settingsHelpText"></span>
                 </button>
                 <div class="settings-menu-divider" aria-hidden="true"></div>
+                <button class="settings-menu-item" data-action="open-recommend-settings" type="button">
+                    <i class="fas fa-sliders-h"></i>
+                    <span id="settingsRecommendSettingsText"></span>
+                </button>
                 <button class="settings-menu-item settings-menu-item-expandable" data-action="toggle-sidebar-settings"
                     id="sidebarSettingsToggle" type="button" aria-expanded="false">
                     <i class="fas fa-columns"></i>
@@ -292,6 +301,7 @@
                         </div>
                     </div>
                     <hr class="shortcuts-divider" />
+                    <div class="shortcuts-refresh-hint" id="shortcutsRefreshHint"></div>
                     <div id="shortcutsContent" class="shortcuts-section"></div>
                 </div>
             </div>
@@ -865,13 +875,14 @@
                                 </select>
                                 <select id="trackingRankingRange" class="tracking-range-select">
                                     <option value="today" id="trackingRangeToday">今天</option>
-                                    <option value="week" selected id="trackingRangeWeek">本周</option>
+                                    <option value="week" id="trackingRangeWeek">本周</option>
                                     <option value="month" id="trackingRangeMonth">本月</option>
                                     <option value="year" id="trackingRangeYear">当年</option>
-                                    <option value="all" id="trackingRangeAll">全部</option>
+                                    <option value="all" selected id="trackingRangeAll">全部</option>
                                 </select>
                             </div>
                         </div>
+                        <div id="trackingRankingHint" class="tracking-ranking-hint" style="display: none;"></div>
                         <div class="tracking-list" id="trackingRankingList">
                             <div class="empty-state-small">
                                 <span id="trackingNoDataText">暂无活跃时间数据</span>
@@ -888,9 +899,16 @@
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-lightbulb"></i>
                             <span id="widgetsRecommendWidgetTitle">书签推荐</span>
+                            <button id="widgetsQuickReviewBtn" class="widget-header-action-btn widgets-quick-review-btn" type="button"
+                                data-instant-tooltip="快捷复习" aria-label="快捷复习">
+                                <i class="fas fa-bolt"></i>
+                            </button>
+                            <button id="widgetsQuickReviewSettingsBtn" class="widget-header-action-btn widgets-quick-review-settings-btn" type="button" title="推荐设置">
+                                <i class="fas fa-cog"></i>
+                            </button>
                             <button id="widgetsCardRefreshBtn" class="widget-header-action-btn widgets-card-refresh-btn" type="button" title="刷新推荐">
                                 <i class="fas fa-sync-alt"></i>
-                                <span id="widgetsCardRefreshText">刷新推荐</span>
+                                <span id="widgetsCardRefreshText" class="widget-action-label">刷新推荐</span>
                             </button>
                         </div>
                         <div class="cards-row widgets-cards-row" id="widgetsCardsRow">
@@ -973,6 +991,7 @@
                                 </div>
                             </div>
                         </div>
+                        <div id="widgetsRecommendLastUpdated" class="recommend-last-updated-note">最近更新：--</div>
                     </div>
 
                     <div class="time-tracking-widget widgets-widget-card" id="widgetsTrackingWidget">
@@ -994,6 +1013,7 @@
                             <button id="widgetsRankingSubdomainToggleBtn" class="widget-header-action-btn widgets-subdomain-toggle-btn" title="切换子域名" type="button" style="display:none;">子域</button>
                             <button id="widgetsRankingModeToggleBtn" class="widget-header-action-btn widgets-mode-toggle-btn" title="切换模式" type="button">书签</button>
                             <button id="widgetsRankingRangeToggleBtn" class="widget-header-action-btn widgets-range-toggle-btn" title="切换范围" type="button">当日</button>
+                            <button id="widgetsRankingVisualToggleBtn" class="widget-header-action-btn widgets-visual-toggle-btn" title="切换视图" type="button">列表</button>
                         </div>
                         <div class="time-tracking-widget-list" id="widgetsRankingWidgetList">
                             <div class="time-tracking-widget-empty">
@@ -1005,11 +1025,13 @@
                     <div class="time-tracking-widget widgets-widget-card" id="widgetsAdditionsWeekWidget">
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-calendar-plus"></i>
-                            <span id="widgetsAdditionsWeekWidgetTitle">书签添加记录</span>
+                            <span id="widgetsAdditionsWeekWidgetTitle">添加记录</span>
+                            <button id="widgetsAdditionsRangeToggleBtn" class="widget-header-action-btn widgets-mini-range-toggle-btn" title="切换范围" type="button">本周</button>
+                            <button id="widgetsAdditionsViewToggleBtn" class="widget-header-action-btn widgets-mini-view-toggle-btn" title="切换视图" type="button">曲线</button>
                         </div>
                         <div class="time-tracking-widget-list widgets-week-summary" id="widgetsAdditionsWeekWidgetList">
                             <div class="time-tracking-widget-empty">
-                                <span id="widgetsAdditionsWeekWidgetEmptyText">暂无本周书签添加记录</span>
+                                <span id="widgetsAdditionsWeekWidgetEmptyText">暂无本周添加记录</span>
                             </div>
                         </div>
                     </div>
@@ -1018,6 +1040,8 @@
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-calendar-week"></i>
                             <span id="widgetsHistoryWeekWidgetTitle">点击记录</span>
+                            <button id="widgetsHistoryRangeToggleBtn" class="widget-header-action-btn widgets-mini-range-toggle-btn" title="切换范围" type="button">本周</button>
+                            <button id="widgetsHistoryViewToggleBtn" class="widget-header-action-btn widgets-mini-view-toggle-btn" title="切换视图" type="button">曲线</button>
                         </div>
                         <div class="time-tracking-widget-list widgets-week-summary" id="widgetsHistoryWeekWidgetList">
                             <div class="time-tracking-widget-empty">
@@ -1136,11 +1160,17 @@
                         </div>
                     </div>
                     <div class="card-navigation">
+                        <button id="cardQuickReviewBtn" class="card-nav-btn quick-review-nav-btn" type="button"
+                            data-instant-tooltip="快捷复习" aria-label="快捷复习">
+                            <i class="fas fa-bolt"></i>
+                            <span id="cardQuickReviewText">快捷复习</span>
+                        </button>
                         <button id="refreshSettingsBtn" class="card-nav-btn compact" title="自动刷新设置"><i
                                 class="fas fa-cog"></i></button>
                         <button id="cardRefreshBtn" class="card-nav-btn primary"><i class="fas fa-sync-alt"></i> <span
                                 id="cardRefreshText">刷新推荐</span></button>
                     </div>
+                    <div id="recommendLastUpdated" class="recommend-last-updated-note recommend-last-updated-main">最近更新：--</div>
                 </div>
 
                 <!-- 可拖拽折叠区域容器 -->
@@ -1492,32 +1522,30 @@
     <div id="refreshSettingsModal" class="modal content-center">
         <div class="modal-content refresh-settings-modal">
             <div class="modal-header compact">
-                <h3 id="refreshSettingsTitle">自动刷新设置</h3>
+                <h3 id="refreshSettingsTitle">书签推荐设置</h3>
                 <button class="modal-close" id="refreshSettingsClose">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
             <div class="modal-body">
-                <div class="refresh-settings-section">
+                <div class="refresh-settings-subtitle" id="settingsAutoRefreshText">自动刷新设置</div>
+                <div class="refresh-settings-section auto-refresh-settings-section">
                     <label class="refresh-setting-item">
                         <input type="checkbox" id="refreshEveryNOpensEnabled" checked>
                         <span id="refreshEveryNOpensLabel">每打开</span>
-                        <input type="number" id="refreshEveryNOpensValue" value="3" min="1" max="100"
-                            style="width: 50px; margin: 0 6px;">
+                        <input type="number" class="refresh-setting-number" id="refreshEveryNOpensValue" value="3" min="1" max="100">
                         <span id="refreshEveryNOpensUnit">次刷新</span>
                     </label>
                     <label class="refresh-setting-item">
                         <input type="checkbox" id="refreshAfterHoursEnabled">
                         <span id="refreshAfterHoursLabel">距上次刷新超过</span>
-                        <input type="number" id="refreshAfterHoursValue" value="1" min="1" max="24"
-                            style="width: 50px; margin: 0 6px;">
+                        <input type="number" class="refresh-setting-number" id="refreshAfterHoursValue" value="1" min="1" max="24">
                         <span id="refreshAfterHoursUnit">小时</span>
                     </label>
                     <label class="refresh-setting-item">
                         <input type="checkbox" id="refreshAfterDaysEnabled">
                         <span id="refreshAfterDaysLabel">距上次刷新超过</span>
-                        <input type="number" id="refreshAfterDaysValue" value="1" min="1" max="30"
-                            style="width: 50px; margin: 0 6px;">
+                        <input type="number" class="refresh-setting-number" id="refreshAfterDaysValue" value="1" min="1" max="30">
                         <span id="refreshAfterDaysUnit">天</span>
                     </label>
                 </div>
@@ -1525,7 +1553,33 @@
                     style="margin-top: 12px; padding: 8px 10px; background: var(--bg-tertiary); border-radius: 6px; font-size: 13px; color: var(--text-secondary);">
                     <!-- 动态显示状态 -->
                 </div>
-                <div class="refresh-settings-actions" style="margin-top: 12px; text-align: right;">
+                <div class="refresh-settings-divider" aria-hidden="true"></div>
+                <div class="refresh-settings-section quick-review-settings-section">
+                    <div class="refresh-settings-subtitle" id="settingsQuickReviewText">快捷复习设置</div>
+                    <div class="quick-review-settings-row">
+                        <span class="sidebar-settings-label" id="quickReviewShortcutLabel"></span>
+                        <button id="refreshQuickReviewOpenShortcutsBtn" class="sidebar-state-btn quick-review-shortcuts-btn"
+                            type="button">
+                            <span id="openShortcutsSettingsText"></span>
+                        </button>
+                    </div>
+                    <div class="quick-review-settings-row">
+                        <span class="sidebar-settings-label" id="quickReviewOpenModeLabel"></span>
+                        <div class="sidebar-mode-switch" role="group" aria-label="Quick Review Open Mode">
+                            <button class="sidebar-mode-btn" id="refreshQuickReviewModeSingleBtn"
+                                type="button" aria-pressed="false">
+                                <span id="quickReviewModeSingleText"></span>
+                            </button>
+                            <button class="sidebar-mode-btn" id="refreshQuickReviewModeNewTabBtn"
+                                type="button" aria-pressed="false">
+                                <span id="quickReviewModeNewTabText"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="refresh-settings-inline-hint" id="quickReviewShortcutRefreshHint"></div>
+                </div>
+                <div class="refresh-settings-divider" aria-hidden="true"></div>
+                <div class="refresh-settings-actions">
                     <button id="refreshSettingsSaveBtn" class="view-action-btn"
                         style="display: inline-flex; width: auto;">
                         <i class="fas fa-check"></i> <span id="refreshSettingsSaveText">保存</span>

@@ -122,6 +122,41 @@ function writeHistoryJumpTargetMode(mode) {
     return normalized;
 }
 
+function normalizeQuickReviewOpenMode(rawMode) {
+    const mode = String(rawMode || '').trim().toLowerCase();
+    return mode === 'new_tab' ? 'new_tab' : 'single_tab';
+}
+
+function readQuickReviewOpenMode() {
+    try {
+        return normalizeQuickReviewOpenMode(localStorage.getItem(QUICK_REVIEW_OPEN_MODE_STORAGE_KEY));
+    } catch (_) {
+        return 'single_tab';
+    }
+}
+
+function syncQuickReviewOpenModeToBackground(mode) {
+    try {
+        if (!browserAPI?.runtime?.sendMessage) return;
+        const task = browserAPI.runtime.sendMessage({
+            action: 'setQuickReviewOpenMode',
+            mode: normalizeQuickReviewOpenMode(mode)
+        });
+        if (task && typeof task.catch === 'function') {
+            task.catch(() => { });
+        }
+    } catch (_) { }
+}
+
+function writeQuickReviewOpenMode(mode) {
+    const normalized = normalizeQuickReviewOpenMode(mode);
+    try {
+        localStorage.setItem(QUICK_REVIEW_OPEN_MODE_STORAGE_KEY, normalized);
+    } catch (_) { }
+    syncQuickReviewOpenModeToBackground(normalized);
+    return normalized;
+}
+
 function shouldJumpToHtmlFromSidePanel() {
     return isSidePanelMode && getHistoryJumpTargetMode() === 'html';
 }
@@ -145,6 +180,9 @@ let currentTimeFilter = 'all'; // 'all', 'year', 'month', 'day'
 let allBookmarks = [];
 let currentBookmarkData = null;
 let browsingClickRankingStats = null; // 点击排行缓存（基于浏览器历史记录）
+let browsingClickRankingRetryTimer = null;
+const BROWSING_RANKING_TRANSIENT_RETRY_MS = 1200;
+const BROWSING_RANKING_TRANSIENT_CACHE_TTL_MS = 2600;
 
 const bookmarkUrlSet = new Set();
 const bookmarkTitleSet = new Set(); // 书签标题集合（用于标题匹配的实时刷新）
@@ -155,6 +193,8 @@ const DATA_CACHE_KEYS = {
     additions: 'bb_cache_additions_v1'
 };
 
+const ADDITIONS_WIDGETS_SNAPSHOT_KEY = 'bb_widgets_additions_snapshot_v1';
+const ADDITIONS_WIDGETS_SNAPSHOT_DAYS = 45;
 const ADDITIONS_CACHE_BACKOFF_KEY = 'bb_cache_additions_write_backoff_until_v1';
 const ADDITIONS_CACHE_WRITE_BACKOFF_MS = 10 * 60 * 1000;
 const ADDITIONS_TREE_REFRESH_TS_KEY = 'bb_cache_additions_tree_refresh_ts_v1';
@@ -165,7 +205,6 @@ const SIDEPANEL_FAVICON_WARMUP_TS_KEY = 'bb_sidepanel_favicon_warmup_ts_v1';
 const SIDEPANEL_FAVICON_WARMUP_COOLDOWN_MS = 15 * 60 * 1000;
 const SIDEPANEL_RECOMMEND_SNAPSHOT_KEY = 'bb_sidepanel_recommend_cards_snapshot_v1';
 const SIDEPANEL_RECOMMEND_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const RECOMMEND_POOL_CURSOR_KEY = 'bb_recommend_pool_cursor_v1';
 const RECOMMEND_BATCH_SIZE = 3;
 const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
@@ -173,6 +212,7 @@ const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
 const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
+const QUICK_REVIEW_OPEN_MODE_STORAGE_KEY = 'quickReviewOpenMode';
 const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
 const FLIP_HISTORY_STORAGE_KEY = 'flipHistory';
 const HEATMAP_DAILY_INDEX_STORAGE_KEY = 'flipHistoryDailyIndexV1';
@@ -180,6 +220,13 @@ const FLIP_HISTORY_MAX_ITEMS = 12000;
 const FLIP_HISTORY_RETENTION_DAYS = 420;
 const FLIP_HISTORY_DAY_RECORDS_MAX = 300;
 const HEATMAP_BOOKMARK_MAP_CACHE_TTL_MS = 2 * 60 * 1000;
+const WIDGETS_WEEK_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
+const WIDGETS_ADDITIONS_VIEW_MODE_KEY = 'widgetsAdditionsViewMode';
+const WIDGETS_ADDITIONS_RANGE_KEY = 'widgetsAdditionsRange';
+const WIDGETS_HISTORY_VIEW_MODE_KEY = 'widgetsHistoryViewMode';
+const WIDGETS_HISTORY_RANGE_KEY = 'widgetsHistoryRange';
+const WIDGETS_RANKING_VISUAL_MODE_KEY = 'widgetsRankingVisualMode';
+const WIDGETS_OPEN_FULL_REFRESH_TS_KEY = 'bb_widgets_open_full_refresh_ts_v1';
 
 let additionsCacheRestored = false;
 let heatmapBookmarkMapCache = {
@@ -187,8 +234,10 @@ let heatmapBookmarkMapCache = {
     map: null
 };
 let saveAdditionsCacheTimer = null;
+let saveAdditionsWidgetsSnapshotTimer = null;
 let browsingHistoryRefreshPromise = null;
 let additionsTreeRefreshInFlight = null;
+let additionsCacheLoadPromise = null;
 
 function readLocalNumber(key, fallback = 0) {
     try {
@@ -441,25 +490,116 @@ function normalizeBookmarkCacheEntry(entry) {
     };
 }
 
+function getAdditionsSnapshotDateKey(value) {
+    const date = value instanceof Date ? new Date(value) : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function buildAdditionsWidgetsSnapshotFromEntries(entries = []) {
+    const safeDays = Math.max(14, Number(ADDITIONS_WIDGETS_SNAPSHOT_DAYS) || 45);
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+
+    const countByKey = Object.create(null);
+    for (let i = safeDays - 1; i >= 0; i -= 1) {
+        const date = new Date(base);
+        date.setDate(base.getDate() - i);
+        countByKey[getAdditionsSnapshotDateKey(date)] = 0;
+    }
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const rawTs = Number(entry?.dateAdded || 0);
+        if (!Number.isFinite(rawTs) || rawTs <= 0) return;
+        const key = getAdditionsSnapshotDateKey(rawTs);
+        if (!key || !Object.prototype.hasOwnProperty.call(countByKey, key)) return;
+        countByKey[key] = Number(countByKey[key] || 0) + 1;
+    });
+
+    return {
+        ts: Date.now(),
+        days: safeDays,
+        countByKey
+    };
+}
+
+function readAdditionsWidgetsSnapshot() {
+    try {
+        const raw = localStorage.getItem(ADDITIONS_WIDGETS_SNAPSHOT_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        if (!parsed.countByKey || typeof parsed.countByKey !== 'object') return null;
+        return {
+            ts: Number(parsed.ts || 0),
+            days: Number(parsed.days || 0),
+            countByKey: parsed.countByKey
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function persistAdditionsWidgetsSnapshot(entries = allBookmarks) {
+    try {
+        const snapshot = buildAdditionsWidgetsSnapshotFromEntries(entries);
+        localStorage.setItem(ADDITIONS_WIDGETS_SNAPSHOT_KEY, JSON.stringify(snapshot));
+        return snapshot;
+    } catch (_) {
+        return null;
+    }
+}
+
+function scheduleAdditionsWidgetsSnapshotSave() {
+    if (saveAdditionsWidgetsSnapshotTimer) {
+        clearTimeout(saveAdditionsWidgetsSnapshotTimer);
+    }
+    saveAdditionsWidgetsSnapshotTimer = setTimeout(() => {
+        saveAdditionsWidgetsSnapshotTimer = null;
+        persistAdditionsWidgetsSnapshot(allBookmarks);
+    }, 320);
+}
+
 async function ensureAdditionsCacheLoaded(skipRender) {
     if (additionsCacheRestored || allBookmarks.length > 0) {
         return;
     }
-    try {
-        const cached = await readCachedValue(DATA_CACHE_KEYS.additions);
-        if (cached && Array.isArray(cached.bookmarks)) {
-            allBookmarks = cached.bookmarks
-                .map(normalizeBookmarkCacheEntry)
-                .filter(Boolean);
-            additionsCacheRestored = true;
-            rebuildBookmarkUrlSet();
+    if (additionsCacheLoadPromise) {
+        await additionsCacheLoadPromise;
+        return;
+    }
 
-            if (!skipRender && currentView === 'additions') {
-                renderAdditionsView();
+    additionsCacheLoadPromise = (async () => {
+        try {
+            const cached = await readCachedValue(DATA_CACHE_KEYS.additions);
+            if (cached && Array.isArray(cached.bookmarks)) {
+                allBookmarks = cached.bookmarks
+                    .map(normalizeBookmarkCacheEntry)
+                    .filter(Boolean);
+                additionsCacheRestored = true;
+                rebuildBookmarkUrlSet();
+                persistAdditionsWidgetsSnapshot(allBookmarks);
+
+                if (currentView === 'widgets') {
+                    markWidgetsDirty('additionsWeek', { schedule: false });
+                    updateWidgetsViewData({
+                        targets: ['additionsWeek'],
+                        bypassVisualGate: true,
+                        allowDuringInteraction: true
+                    }).catch(() => { });
+                } else if (!skipRender && currentView === 'additions') {
+                    renderAdditionsView();
+                }
             }
+        } catch (error) {
+            console.warn('[AdditionsCache] 恢复失败:', error);
         }
-    } catch (error) {
-        console.warn('[AdditionsCache] 恢复失败:', error);
+    })();
+
+    try {
+        await additionsCacheLoadPromise;
+    } finally {
+        additionsCacheLoadPromise = null;
     }
 }
 
@@ -498,7 +638,10 @@ function scheduleAdditionsCacheSave() {
 
 function handleAdditionsDataMutation(forceRender = true) {
     additionsCacheRestored = true;
+    clearWidgetsTrendDataCaches({ additionsOnly: true });
+    markWidgetsDirty('additionsWeek', { delayMs: 120 });
     scheduleAdditionsCacheSave();
+    scheduleAdditionsWidgetsSnapshotSave();
     if (forceRender && currentView === 'additions') {
         renderAdditionsView();
     }
@@ -665,6 +808,13 @@ let storageListenerRegistered = false;
 let lastRecommendCardsRefreshAt = 0;
 let recommendCardsRefreshDebounceMs = 900;
 let lastStorageChanges = null;
+let quickReviewActionInFlight = false;
+let quickReviewOpenMode = readQuickReviewOpenMode();
+let recommendCandidatesPreloadTimer = null;
+let recommendCandidatesPreloadInFlight = false;
+let recommendCandidatesPreloadQueuedLimit = 0;
+let recommendCandidatesPreloadLastRunAt = 0;
+syncQuickReviewOpenModeToBackground(quickReviewOpenMode);
 
 function ensureHistoryPolling() {
     if (historyPollingTimer) return;
@@ -731,7 +881,9 @@ async function refreshBrowsingHistoryData(options = {}) {
                 inst.updateSelectModeButton();
             }
 
-            browsingClickRankingStats = null;
+            resetBrowsingRankingDerivedCache();
+            clearWidgetsTrendDataCaches({ historyOnly: true });
+            markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
         } catch (error) {
             if (!silent) {
                 console.warn('[BrowsingHistory] 刷新失败:', error);
@@ -773,7 +925,9 @@ async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
             }
         }
 
-        browsingClickRankingStats = null;
+        resetBrowsingRankingDerivedCache();
+        clearWidgetsTrendDataCaches({ historyOnly: true });
+        markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
         document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
     } catch (error) {
         if (!silent) {
@@ -961,8 +1115,37 @@ const FaviconCache = {
     dbVersion: 1,
     storeName: 'favicons',
     failureStoreName: 'failures',
-    memoryCache: new Map(), // {url: faviconDataUrl}
-    failureCache: new Set(), // 失败的域名集合
+    failureTtlMs: 90 * 1000,
+    requestTimeoutMs: 2200,
+    maxFetchedBytes: 512 * 1024,
+    minFaviconDimensionPx: 16,
+    minFallbackFaviconDimensionPx: 16,
+    minTerminalFallbackFaviconDimensionPx: 16,
+    browserFaviconSizeCandidates: [16, 32, 64, 96, 128],
+    publicFaviconSizeCandidates: [64, 96, 128, 192, 256],
+    googleS2SizeCandidates: [64, 128],
+    cravatarSizeCandidates: [64, 128],
+    domesticBranchProbeWindowSize: 12,
+    domesticBranchHardFailureThreshold: 8,
+    domesticBranchConsecutiveHardFailureThreshold: 5,
+    networkBranchMode: 'overseas',
+    networkBranchLocked: false,
+    networkBranchPendingReevaluation: true,
+    networkBranchWindow: [],
+    networkBranchHardFailureCount: 0,
+    networkBranchConsecutiveHardFailureCount: 0,
+    networkBranchLastReevaluationAt: 0,
+    networkBranchReevaluationCooldownMs: 3000,
+    networkBranchSwitchReason: '',
+    networkBranchLastReevaluationReason: '',
+    cacheQualityVersion: 6,
+    cacheQualityVersionKey: 'bb_favicon_quality_version',
+    firstInstallFastPathKey: 'bb_favicon_first_install_fast_path_done',
+    firstInstallSkipDbReadsRemaining: 0,
+    memoryCache: new Map(), // {domain: faviconDataUrl}
+    dimensionCache: new Map(), // {faviconDataUrl: {width, height}}
+    visualProfileCache: new Map(), // {faviconDataUrl: visual profile}
+    failureCache: new Map(), // {domain: timestamp}
     pendingRequests: new Map(), // 正在请求的URL，避免重复请求
 
     // 初始化 IndexedDB
@@ -978,7 +1161,13 @@ const FaviconCache = {
 
             request.onsuccess = () => {
                 this.db = request.result;
-                resolve();
+                Promise.resolve()
+                    .then(() => this._ensureQualityCacheVersion())
+                    .then(() => this._initializeFirstInstallFastPath())
+                    .catch(() => {
+                        // ignore init errors
+                    })
+                    .finally(() => resolve());
             };
 
             request.onupgradeneeded = (event) => {
@@ -997,6 +1186,90 @@ const FaviconCache = {
                 }
             };
         });
+    },
+
+    async _countStoreEntries(storeName) {
+        if (!this.db) return 0;
+        return new Promise((resolve) => {
+            try {
+                const tx = this.db.transaction([storeName], 'readonly');
+                const req = tx.objectStore(storeName).count();
+                req.onsuccess = () => resolve(Number(req.result) || 0);
+                req.onerror = () => resolve(0);
+            } catch (_) {
+                resolve(0);
+            }
+        });
+    },
+
+    async _initializeFirstInstallFastPath() {
+        let alreadyHandled = false;
+        try {
+            alreadyHandled = localStorage.getItem(this.firstInstallFastPathKey) === '1';
+        } catch (_) {
+            alreadyHandled = false;
+        }
+
+        if (alreadyHandled) {
+            this.firstInstallSkipDbReadsRemaining = 0;
+            return;
+        }
+
+        const [faviconCount, failureCount] = await Promise.all([
+            this._countStoreEntries(this.storeName),
+            this._countStoreEntries(this.failureStoreName)
+        ]);
+
+        // 仅首次安装：当持久化缓存完全为空时，仅跳过第 1 次 DB 读取。
+        this.firstInstallSkipDbReadsRemaining = (faviconCount === 0 && failureCount === 0) ? 1 : 0;
+
+        try {
+            localStorage.setItem(this.firstInstallFastPathKey, '1');
+        } catch (_) {
+            // ignore
+        }
+    },
+
+    async _ensureQualityCacheVersion() {
+        const currentVersion = Number(this.cacheQualityVersion) || 1;
+        let storedVersion = 0;
+
+        try {
+            storedVersion = Number(localStorage.getItem(this.cacheQualityVersionKey) || 0);
+            if (!Number.isFinite(storedVersion)) storedVersion = 0;
+        } catch (_) {
+            storedVersion = 0;
+        }
+
+        if (storedVersion >= currentVersion) {
+            return;
+        }
+
+        this.memoryCache.clear();
+        this.dimensionCache.clear();
+        this.visualProfileCache.clear();
+        this.failureCache.clear();
+
+        if (this.db) {
+            await new Promise((resolve) => {
+                try {
+                    const tx = this.db.transaction([this.storeName, this.failureStoreName], 'readwrite');
+                    tx.objectStore(this.storeName).clear();
+                    tx.objectStore(this.failureStoreName).clear();
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => resolve();
+                    tx.onabort = () => resolve();
+                } catch (_) {
+                    resolve();
+                }
+            });
+        }
+
+        try {
+            localStorage.setItem(this.cacheQualityVersionKey, String(currentVersion));
+        } catch (_) {
+            // ignore
+        }
     },
 
     // 检查URL是否为本地/内网/明显无效
@@ -1033,6 +1306,32 @@ const FaviconCache = {
         }
     },
 
+    isStoredFaviconData(dataUrl) {
+        return typeof dataUrl === 'string' && dataUrl.startsWith('data:image/');
+    },
+
+    _markFailureDomain(domain, timestamp = Date.now()) {
+        if (!domain) return;
+        const ts = Number(timestamp) || Date.now();
+        this.failureCache.set(domain, ts);
+    },
+
+    _clearFailureDomain(domain) {
+        if (!domain) return;
+        this.failureCache.delete(domain);
+    },
+
+    _isFailureDomainActive(domain) {
+        if (!domain) return false;
+        const ts = Number(this.failureCache.get(domain) || 0);
+        if (!ts) return false;
+        if ((Date.now() - ts) < this.failureTtlMs) {
+            return true;
+        }
+        this.failureCache.delete(domain);
+        return false;
+    },
+
     // 从缓存获取favicon
     async get(url) {
         if (this.isInvalidUrl(url)) {
@@ -1044,13 +1343,19 @@ const FaviconCache = {
             const domain = urlObj.hostname;
 
             // 检查失败缓存
-            if (this.failureCache.has(domain)) {
+            if (this._isFailureDomainActive(domain)) {
                 return 'failed';
             }
 
             // 检查内存缓存
             if (this.memoryCache.has(domain)) {
                 return this.memoryCache.get(domain);
+            }
+
+            // 首次安装快速路径：仅第 1 次读取跳过 IndexedDB，后续恢复正常。
+            if (this.firstInstallSkipDbReadsRemaining > 0) {
+                this.firstInstallSkipDbReadsRemaining -= 1;
+                return null;
             }
 
             // 从 IndexedDB 读取
@@ -1065,10 +1370,10 @@ const FaviconCache = {
 
                 failureRequest.onsuccess = () => {
                     if (failureRequest.result) {
-                        // 检查失败缓存是否过期（7天）
+                        // 检查失败缓存是否过期（默认 24 小时）
                         const age = Date.now() - failureRequest.result.timestamp;
-                        if (age < 7 * 24 * 60 * 60 * 1000) {
-                            this.failureCache.add(domain);
+                        if (age < this.failureTtlMs) {
+                            this._markFailureDomain(domain, failureRequest.result.timestamp);
                             resolve('failed');
                             return;
                         }
@@ -1079,10 +1384,18 @@ const FaviconCache = {
                     const request = store.get(domain);
 
                     request.onsuccess = () => {
-                        if (request.result) {
+                        if (request.result && this.isStoredFaviconData(request.result.dataUrl)) {
                             // 永久缓存，不检查过期（只有删除书签时才删除缓存）
                             this.memoryCache.set(domain, request.result.dataUrl);
                             resolve(request.result.dataUrl);
+                        } else if (request.result) {
+                            try {
+                                const cleanupTx = this.db.transaction([this.storeName], 'readwrite');
+                                cleanupTx.objectStore(this.storeName).delete(domain);
+                            } catch (_) {
+                                // ignore
+                            }
+                            resolve(null);
                         } else {
                             resolve(null);
                         }
@@ -1100,7 +1413,7 @@ const FaviconCache = {
 
     // 保存favicon到缓存
     async save(url, dataUrl) {
-        if (this.isInvalidUrl(url)) return;
+        if (this.isInvalidUrl(url) || !this.isStoredFaviconData(dataUrl)) return;
 
         try {
             const urlObj = new URL(url);
@@ -1122,7 +1435,7 @@ const FaviconCache = {
             });
 
             // 从失败缓存中移除（如果存在）
-            this.failureCache.delete(domain);
+            this._clearFailureDomain(domain);
             this.removeFailure(domain);
 
         } catch (e) {
@@ -1139,7 +1452,7 @@ const FaviconCache = {
             const domain = urlObj.hostname;
 
             // 更新内存缓存
-            this.failureCache.add(domain);
+            this._markFailureDomain(domain);
 
             // 保存到 IndexedDB
             if (!this.db) await this.init();
@@ -1180,7 +1493,9 @@ const FaviconCache = {
 
             // 清除内存缓存
             this.memoryCache.delete(domain);
-            this.failureCache.delete(domain);
+            this.dimensionCache.clear();
+            this.visualProfileCache.clear();
+            this._clearFailureDomain(domain);
 
             // 清除 IndexedDB
             if (!this.db) await this.init();
@@ -1194,8 +1509,362 @@ const FaviconCache = {
         }
     },
 
+    async getDataUrlDimensions(dataUrl) {
+        if (!this.isStoredFaviconData(dataUrl)) return null;
+        if (this.dimensionCache.has(dataUrl)) {
+            return this.dimensionCache.get(dataUrl);
+        }
+
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const width = Number(img.naturalWidth || img.width || 0);
+                const height = Number(img.naturalHeight || img.height || 0);
+                if (width > 0 && height > 0) {
+                    const dimensions = { width, height };
+                    this.dimensionCache.set(dataUrl, dimensions);
+                    resolve(dimensions);
+                    return;
+                }
+                resolve(null);
+            };
+            img.onerror = () => resolve(null);
+            img.src = dataUrl;
+        });
+    },
+
+    async isDataUrlAtLeast(dataUrl, minDimensionPx = 1) {
+        const min = Math.max(1, Number(minDimensionPx) || 1);
+        if (!this.isStoredFaviconData(dataUrl)) return false;
+        const dimensions = await this.getDataUrlDimensions(dataUrl);
+        if (!dimensions) return false;
+        return Number(dimensions.width) >= min && Number(dimensions.height) >= min;
+    },
+
+    async getDataUrlVisualProfile(dataUrl) {
+        if (!this.isStoredFaviconData(dataUrl)) return null;
+        if (this.visualProfileCache.has(dataUrl)) {
+            return this.visualProfileCache.get(dataUrl);
+        }
+
+        const profile = await new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const width = Number(img.naturalWidth || img.width || 0);
+                const height = Number(img.naturalHeight || img.height || 0);
+                if (width <= 0 || height <= 0) {
+                    resolve(null);
+                    return;
+                }
+
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        resolve({
+                            width,
+                            height,
+                            minDimension: Math.min(width, height),
+                            sampleCount: 0,
+                            transparentRatio: 0,
+                            whiteOpaqueRatio: 0,
+                            nearWhiteOpaqueRatio: 0
+                        });
+                        return;
+                    }
+                    ctx.drawImage(img, 0, 0);
+                    const pixels = ctx.getImageData(0, 0, width, height).data;
+
+                    const step = Math.max(1, Math.floor(Math.min(width, height) / 64));
+                    let sampleCount = 0;
+                    let transparentCount = 0;
+                    let whiteOpaqueCount = 0;
+                    let nearWhiteOpaqueCount = 0;
+
+                    for (let y = 0; y < height; y += step) {
+                        for (let x = 0; x < width; x += step) {
+                            const idx = ((y * width) + x) * 4;
+                            const r = pixels[idx];
+                            const g = pixels[idx + 1];
+                            const b = pixels[idx + 2];
+                            const a = pixels[idx + 3];
+                            sampleCount += 1;
+
+                            if (a <= 8) {
+                                transparentCount += 1;
+                                continue;
+                            }
+
+                            if (a >= 245) {
+                                if (r >= 250 && g >= 250 && b >= 250) {
+                                    whiteOpaqueCount += 1;
+                                }
+                                if (r >= 240 && g >= 240 && b >= 240) {
+                                    nearWhiteOpaqueCount += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    resolve({
+                        width,
+                        height,
+                        minDimension: Math.min(width, height),
+                        sampleCount,
+                        transparentRatio: sampleCount > 0 ? (transparentCount / sampleCount) : 0,
+                        whiteOpaqueRatio: sampleCount > 0 ? (whiteOpaqueCount / sampleCount) : 0,
+                        nearWhiteOpaqueRatio: sampleCount > 0 ? (nearWhiteOpaqueCount / sampleCount) : 0
+                    });
+                } catch (_) {
+                    resolve({
+                        width,
+                        height,
+                        minDimension: Math.min(width, height),
+                        sampleCount: 0,
+                        transparentRatio: 0,
+                        whiteOpaqueRatio: 0,
+                        nearWhiteOpaqueRatio: 0
+                    });
+                }
+            };
+            img.onerror = () => resolve(null);
+            img.src = dataUrl;
+        });
+
+        if (profile) {
+            // 轻量上限，避免在低性能机器上出现无界增长。
+            if (this.visualProfileCache.size > 1500) {
+                this.visualProfileCache.clear();
+            }
+            this.visualProfileCache.set(dataUrl, profile);
+        }
+        return profile;
+    },
+
+    _classifyFaviconSource(sourceUrl = '') {
+        const safe = String(sourceUrl || '');
+        if (safe.includes('icons.duckduckgo.com/ip3/')) return 'duckduckgo';
+        if (safe.includes('faviconV2?client=SOCIAL')) return 'gstatic';
+        if (safe.includes('cn.cravatar.com/favicon/')) return 'cravatar';
+        if (safe.includes('google.com/s2/favicons')) return 'google-s2';
+        if (safe.includes('/_favicon/')) return 'browser';
+        return 'other';
+    },
+
+    _getSourceTimeoutMs(sourceUrl = '', minDimensionPx = this.minFaviconDimensionPx) {
+        const sourceKind = this._classifyFaviconSource(sourceUrl);
+        const baseTimeout = Math.max(500, Number(this.requestTimeoutMs) || 2200);
+
+        if (sourceKind === 'duckduckgo') return Math.min(baseTimeout, 1200);
+        if (sourceKind === 'google-s2') return Math.min(baseTimeout, 1300);
+        if (sourceKind === 'gstatic') return Math.min(baseTimeout, 1500);
+        if (sourceKind === 'cravatar') return Math.min(baseTimeout, 1200);
+        if (sourceKind === 'browser') return Math.min(baseTimeout, 1000);
+        return baseTimeout;
+    },
+
+    _isWhitePlateProfile(profile) {
+        if (!profile || typeof profile !== 'object') return false;
+        const nearWhite = Number(profile.nearWhiteOpaqueRatio || 0);
+        const transparent = Number(profile.transparentRatio || 0);
+        return nearWhite >= 0.22 && transparent <= 0.10;
+    },
+
+    _isTransparentPreferredProfile(profile) {
+        if (!profile || typeof profile !== 'object') return false;
+        const transparent = Number(profile.transparentRatio || 0);
+        return transparent >= 0.04;
+    },
+
+    _scoreFaviconCandidate(profile, sourceKind = '') {
+        if (!profile || typeof profile !== 'object') return -Infinity;
+        const minDimension = Math.max(0, Number(profile.minDimension || 0));
+        const transparentRatio = Math.max(0, Math.min(1, Number(profile.transparentRatio || 0)));
+        const nearWhiteRatio = Math.max(0, Math.min(1, Number(profile.nearWhiteOpaqueRatio || 0)));
+
+        let score = 0;
+        score += Math.min(200, minDimension);
+        score += transparentRatio * 60;
+        score -= nearWhiteRatio * 90;
+
+        if (sourceKind === 'duckduckgo') score += 8;
+        else if (sourceKind === 'gstatic') score += 4;
+        else if (sourceKind === 'google-s2') score += 3;
+        else if (sourceKind === 'cravatar') score += 2;
+        else if (sourceKind === 'browser') score += 1;
+
+        return score;
+    },
+
+    async _buildFaviconCandidate(dataUrl, sourceUrl, minDimensionPx, options = {}) {
+        if (!this.isStoredFaviconData(dataUrl)) return null;
+        const dimensions = await this.getDataUrlDimensions(dataUrl);
+        if (!dimensions) return null;
+
+        const minDimension = Math.max(0, Math.min(
+            Number(dimensions.width) || 0,
+            Number(dimensions.height) || 0
+        ));
+        const reachedMin = minDimension >= Math.max(1, Number(minDimensionPx) || 1);
+        const sourceKind = this._classifyFaviconSource(sourceUrl);
+        const includeVisualProfile = !!(options && options.includeVisualProfile === true);
+
+        let profile = null;
+        let isWhitePlate = false;
+        let score = minDimension;
+
+        if (includeVisualProfile) {
+            profile = await this.getDataUrlVisualProfile(dataUrl);
+            if (profile) {
+                isWhitePlate = this._isWhitePlateProfile(profile);
+                score = this._scoreFaviconCandidate(profile, sourceKind);
+            }
+        }
+
+        return {
+            dataUrl,
+            sourceUrl,
+            sourceKind,
+            profile,
+            score,
+            isWhitePlate,
+            reachedMin,
+            minDimension,
+            width: Number(dimensions.width) || 0,
+            height: Number(dimensions.height) || 0
+        };
+    },
+
+    async _selectBestCandidateWithConflictRule(candidates = []) {
+        const validCandidates = Array.isArray(candidates)
+            ? candidates.filter((candidate) => candidate && candidate.reachedMin)
+            : [];
+        if (validCandidates.length === 0) return null;
+
+        let topMinDimension = 0;
+        for (const candidate of validCandidates) {
+            const candidateMin = Math.max(0, Number(candidate.minDimension) || 0);
+            if (candidateMin > topMinDimension) topMinDimension = candidateMin;
+        }
+
+        const topCandidates = validCandidates.filter((candidate) => {
+            const candidateMin = Math.max(0, Number(candidate.minDimension) || 0);
+            return candidateMin === topMinDimension;
+        });
+
+        if (topCandidates.length <= 1) {
+            return topCandidates[0] || validCandidates[0];
+        }
+
+        let bestTransparentCandidate = null;
+        let bestNonWhiteCandidate = null;
+        let bestAnyCandidate = null;
+
+        for (const rawCandidate of topCandidates) {
+            const candidate = await this._buildFaviconCandidate(
+                rawCandidate.dataUrl,
+                rawCandidate.sourceUrl,
+                1,
+                { includeVisualProfile: true }
+            ) || rawCandidate;
+
+            if (!bestAnyCandidate || candidate.score > bestAnyCandidate.score) {
+                bestAnyCandidate = candidate;
+            }
+
+            if (candidate.isWhitePlate) {
+                continue;
+            }
+
+            if (!bestNonWhiteCandidate || candidate.score > bestNonWhiteCandidate.score) {
+                bestNonWhiteCandidate = candidate;
+            }
+
+            if (this._isTransparentPreferredProfile(candidate.profile)) {
+                if (!bestTransparentCandidate || candidate.score > bestTransparentCandidate.score) {
+                    bestTransparentCandidate = candidate;
+                }
+            }
+        }
+
+        return bestTransparentCandidate || bestNonWhiteCandidate || bestAnyCandidate || topCandidates[0] || validCandidates[0];
+    },
+
+    _normalizeNetworkBranchMode(mode = '') {
+        return String(mode || '').toLowerCase() === 'domestic' ? 'domestic' : 'overseas';
+    },
+
+    _resolveNetworkLanguageBucket() {
+        const normalizedCurrentLang = String((typeof currentLang === 'string' ? currentLang : '') || '').toLowerCase();
+        if (normalizedCurrentLang.startsWith('zh')) return 'zh';
+        try {
+            const uiLang = String(chrome?.i18n?.getUILanguage?.() || navigator?.language || '').toLowerCase();
+            return uiLang.startsWith('zh') ? 'zh' : 'non_zh';
+        } catch (_) {
+            return 'non_zh';
+        }
+    },
+
+    _resetNetworkBranchProbeStats() {
+        this.networkBranchWindow = [];
+        this.networkBranchHardFailureCount = 0;
+        this.networkBranchConsecutiveHardFailureCount = 0;
+    },
+
+    markNetworkBranchReevaluation(reason = '') {
+        this.networkBranchLastReevaluationReason = String(reason || '');
+        // no-op: branch selection is language-driven now.
+    },
+
+    requestNetworkBranchReevaluation(reason = '') {
+        this.networkBranchLastReevaluationAt = Date.now();
+        this.markNetworkBranchReevaluation(reason);
+        return false;
+    },
+
+    _resolveNetworkBranchForFetch() {
+        const languageBucket = this._resolveNetworkLanguageBucket();
+        const branchMode = languageBucket === 'zh' ? 'domestic' : 'overseas';
+        this.networkBranchMode = branchMode;
+        return branchMode;
+    },
+
+    _isHardFailureStatus(statusCode) {
+        const code = Number(statusCode);
+        if (!Number.isFinite(code)) return false;
+        if (code === 0 || code === 408) return true;
+        return code >= 500 && code <= 599;
+    },
+
+    _isHardFailureMeta(meta) {
+        if (!meta || typeof meta !== 'object') return false;
+        if (meta.hardFailure === true) return true;
+        if (this._isHardFailureStatus(meta.statusCode)) return true;
+        const errorCode = String(meta.errorCode || '').toLowerCase();
+        return errorCode === 'timeout'
+            || errorCode === 'abort'
+            || errorCode === 'network_error'
+            || errorCode === 'fetch_failed'
+            || errorCode === 'proxy_error'
+            || errorCode === 'http_0';
+    },
+
+    _switchToDomesticBranch(reason = '') {
+        this.networkBranchMode = 'domestic';
+        this.networkBranchLocked = true;
+        this.networkBranchPendingReevaluation = false;
+        this.networkBranchSwitchReason = String(reason || '');
+    },
+
+    _recordBranchProbeResult({ branchMode = '', sourceUrl = '', meta = null } = {}) {
+        // no-op: probe-based branch switching is disabled.
+        return;
+    },
+
     // 获取favicon（带缓存和请求合并）
-    async fetch(url) {
+    async fetch(url, options = {}) {
         if (this.isInvalidUrl(url)) {
             return fallbackIcon;
         }
@@ -1203,6 +1872,20 @@ const FaviconCache = {
         try {
             const urlObj = new URL(url);
             const domain = urlObj.hostname;
+            const requestedMinDimension = Math.max(0, Number(options?.minDimensionPx) || 0);
+            const strictMinDimension = requestedMinDimension > 0
+                ? Math.max(Math.max(1, Number(this.minFaviconDimensionPx) || 96), requestedMinDimension)
+                : Math.max(1, Number(this.minFaviconDimensionPx) || 96);
+            const fallbackMinCandidate = Number(options?.fallbackMinDimensionPx);
+            const fallbackMinBase = Number.isFinite(fallbackMinCandidate) && fallbackMinCandidate > 0
+                ? fallbackMinCandidate
+                : (Number(this.minFallbackFaviconDimensionPx) || 32);
+            const fallbackMinDimension = Math.max(1, Math.min(strictMinDimension, fallbackMinBase));
+            const cacheMinDimension = requestedMinDimension > 0
+                ? Math.max(1, Number(options?.cacheMinDimensionPx) || fallbackMinDimension)
+                : 0;
+            const branchMode = this._resolveNetworkBranchForFetch();
+            const requestKey = `${domain}|${branchMode}|${strictMinDimension}|${fallbackMinDimension}`;
 
             // 1. 检查缓存
             const cached = await this.get(url);
@@ -1210,23 +1893,29 @@ const FaviconCache = {
                 return fallbackIcon;
             }
             if (cached) {
-                return cached;
+                if (cacheMinDimension <= 0 || await this.isDataUrlAtLeast(cached, cacheMinDimension)) {
+                    return cached;
+                }
             }
 
             // 2. 检查是否已有相同请求在进行中（避免重复请求）
-            if (this.pendingRequests.has(domain)) {
-                return this.pendingRequests.get(domain);
+            if (this.pendingRequests.has(requestKey)) {
+                return this.pendingRequests.get(requestKey);
             }
 
             // 3. 发起新请求
-            const requestPromise = this._fetchFavicon(url);
-            this.pendingRequests.set(domain, requestPromise);
+            const requestPromise = this._fetchFavicon(url, {
+                strictMinDimensionPx: strictMinDimension,
+                fallbackMinDimensionPx: fallbackMinDimension,
+                branchMode
+            });
+            this.pendingRequests.set(requestKey, requestPromise);
 
             try {
                 const result = await requestPromise;
                 return result;
             } finally {
-                this.pendingRequests.delete(domain);
+                this.pendingRequests.delete(requestKey);
             }
 
         } catch (e) {
@@ -1234,95 +1923,443 @@ const FaviconCache = {
         }
     },
 
-    // 实际请求favicon - 多源降级策略
-    // 注意：不再直接请求网站的 /favicon.ico，因为某些网站（如需要认证的网站）
-    // 可能返回 HTML 页面而非图标，导致浏览器解析其中的 preload 标签并产生警告
-    async _fetchFavicon(url) {
+    // 实际请求favicon - 语言分支固定瀑布策略：
+    // 中文分支：Cravatar -> /_favicon -> Google S2
+    // 非中文分支：Google S2 -> DuckDuckGo -> t3.gstatic.cn -> /_favicon
+    async _fetchFavicon(url, options = {}) {
         return new Promise(async (resolve) => {
             try {
                 const urlObj = new URL(url);
                 const domain = urlObj.hostname;
 
-                // 定义多个 favicon 源，按优先级尝试
-                // 只使用第三方服务，避免直接请求可能返回 HTML 的网站
-                const faviconSources = [
-                    // 1. DuckDuckGo（全球可用，国内可访问，推荐首选）
-                    `https://icons.duckduckgo.com/ip3/${domain}.ico`,
-                    // 2. Google S2（功能强大，但中国大陆被墙）
-                    `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
-                ];
+                const strictMinDimension = Math.max(
+                    1,
+                    Number(options?.strictMinDimensionPx) || Number(this.minFaviconDimensionPx) || 96
+                );
+                const fallbackMinCandidate = Number(options?.fallbackMinDimensionPx);
+                const fallbackMinDimension = Math.max(
+                    1,
+                    Math.min(
+                        strictMinDimension,
+                        (Number.isFinite(fallbackMinCandidate) && fallbackMinCandidate > 0)
+                            ? fallbackMinCandidate
+                            : (Number(this.minFallbackFaviconDimensionPx) || 32)
+                    )
+                );
 
-                // 尝试每个源
-                for (let i = 0; i < faviconSources.length; i++) {
-                    const faviconUrl = faviconSources[i];
-                    const sourceName = ['DuckDuckGo', 'Google S2'][i];
+                let activeBranchMode = this._normalizeNetworkBranchMode(options?.branchMode || this._resolveNetworkBranchForFetch());
 
-                    const result = await this._tryLoadFavicon(faviconUrl, url, sourceName);
-                    if (result && result !== fallbackIcon) {
-                        resolve(result);
-                        return;
+                const strictFaviconSources = this._buildFaviconSourceList(url, domain, {
+                    branchMode: activeBranchMode,
+                    minDimensionPx: strictMinDimension,
+                    maxDomesticGstaticSizes: 2,
+                    maxOverseasGoogleSizes: 1,
+                    maxDomesticCravatarSizes: 1,
+                    maxBrowserSizes: 1
+                });
+
+                if (strictFaviconSources.length === 0) {
+                    this.saveFailure(url);
+                    resolve(fallbackIcon);
+                    return;
+                }
+
+                const attemptedSourceUrls = new Set();
+                let sawHardFailure = false;
+
+                const tryCandidateFromSource = async (faviconUrl, minDimensionPx, candidateBucket) => {
+                    const minDimensionKey = Math.max(1, Number(minDimensionPx) || 1);
+                    const attemptKey = `${faviconUrl}|${minDimensionKey}`;
+                    if (!faviconUrl || attemptedSourceUrls.has(attemptKey)) {
+                        return false;
+                    }
+                    attemptedSourceUrls.add(attemptKey);
+
+                    const loadResult = await this._tryLoadFavicon(faviconUrl, minDimensionPx, {
+                        timeoutMs: this._getSourceTimeoutMs(faviconUrl, minDimensionPx)
+                    });
+                    this._recordBranchProbeResult({
+                        branchMode: activeBranchMode,
+                        sourceUrl: faviconUrl,
+                        meta: loadResult && loadResult.meta ? loadResult.meta : null
+                    });
+                    if (this._isHardFailureMeta(loadResult && loadResult.meta ? loadResult.meta : null)) {
+                        sawHardFailure = true;
+                    }
+
+                    const result = loadResult && typeof loadResult.dataUrl === 'string' ? loadResult.dataUrl : '';
+                    if (!result || result === fallbackIcon) {
+                        if (activeBranchMode === 'overseas' && this.networkBranchMode === 'domestic') {
+                            return 'switch_branch';
+                        }
+                        return false;
+                    }
+
+                    const candidate = await this._buildFaviconCandidate(result, faviconUrl, minDimensionPx);
+                    if (!candidate || !candidate.reachedMin) {
+                        return false;
+                    }
+
+                    if (Array.isArray(candidateBucket)) {
+                        candidateBucket.push(candidate);
+                    }
+                    return false;
+                };
+
+                const runCandidateRound = async (sourceList, minDimensionPx, candidateBucket, options = {}) => {
+                    const safeList = Array.isArray(sourceList) ? sourceList : [];
+                    const parallelCount = Math.max(1, Number(options.parallelCount) || 1);
+                    const stopOnFirstCandidate = options.stopOnFirstCandidate !== false;
+
+                    for (let i = 0; i < safeList.length; i += parallelCount) {
+                        const chunk = safeList.slice(i, i + parallelCount);
+                        if (chunk.length === 0) break;
+                        const results = await Promise.all(
+                            chunk.map((sourceUrl) => tryCandidateFromSource(sourceUrl, minDimensionPx, candidateBucket))
+                        );
+                        if (results.includes('switch_branch')) return 'switch_branch';
+                        if (stopOnFirstCandidate && candidateBucket.length > 0) return 'found';
+                    }
+
+                    return candidateBucket.length > 0 ? 'found' : 'none';
+                };
+
+                // 第一轮：默认走极速链路（>=16）；高分辨率请求会自动拉高 strictMinDimension。
+                const strictCandidates = [];
+                await runCandidateRound(strictFaviconSources, strictMinDimension, strictCandidates, {
+                    parallelCount: 3,
+                    stopOnFirstCandidate: true
+                });
+
+                activeBranchMode = this._normalizeNetworkBranchMode(this.networkBranchMode || activeBranchMode);
+                const useFastFirstCandidate = strictMinDimension <= Math.max(16, Number(this.minFaviconDimensionPx) || 16);
+                let chosenCandidate = useFastFirstCandidate
+                    ? (strictCandidates[0] || null)
+                    : await this._selectBestCandidateWithConflictRule(strictCandidates);
+
+                // 第二轮：放宽到兜底阈值（默认 >= 32，拒绝 16x16）
+                if (!chosenCandidate && fallbackMinDimension < strictMinDimension) {
+                    const fallbackFaviconSources = this._buildFaviconSourceList(url, domain, {
+                        branchMode: activeBranchMode,
+                        minDimensionPx: fallbackMinDimension,
+                        maxDomesticGstaticSizes: 1,
+                        maxOverseasGoogleSizes: 1,
+                        maxDomesticCravatarSizes: 1,
+                        maxBrowserSizes: 1
+                    });
+                    const fallbackCandidates = [];
+                    await runCandidateRound(fallbackFaviconSources, fallbackMinDimension, fallbackCandidates, {
+                        parallelCount: 2,
+                        stopOnFirstCandidate: true
+                    });
+                    chosenCandidate = await this._selectBestCandidateWithConflictRule(fallbackCandidates);
+                }
+
+                // 第三轮（终极兜底）：仅在前两轮都拿不到任何可用候选时，放宽到 >=16。
+                if (!chosenCandidate) {
+                    const terminalFallbackMinDimension = Math.max(
+                        1,
+                        Math.min(
+                            fallbackMinDimension,
+                            Number(this.minTerminalFallbackFaviconDimensionPx) || 16
+                        )
+                    );
+                    if (terminalFallbackMinDimension < fallbackMinDimension) {
+                        const terminalFallbackSources = this._buildFaviconSourceList(url, domain, {
+                            branchMode: activeBranchMode,
+                            minDimensionPx: terminalFallbackMinDimension,
+                            maxDomesticGstaticSizes: 1,
+                            maxOverseasGoogleSizes: 1,
+                            maxDomesticCravatarSizes: 1,
+                            maxBrowserSizes: 1
+                        });
+                        const terminalCandidates = [];
+                        await runCandidateRound(terminalFallbackSources, terminalFallbackMinDimension, terminalCandidates, {
+                            parallelCount: 2,
+                            stopOnFirstCandidate: true
+                        });
+                        chosenCandidate = await this._selectBestCandidateWithConflictRule(terminalCandidates);
                     }
                 }
 
+                if (chosenCandidate && chosenCandidate.dataUrl) {
+                    await this.save(url, chosenCandidate.dataUrl);
+                    resolve(chosenCandidate.dataUrl);
+                    return;
+                }
+
                 // 所有源都失败，记录失败并返回 fallback（静默）
-                this.saveFailure(url);
+                if (!sawHardFailure) {
+                    this.saveFailure(url);
+                }
                 resolve(fallbackIcon);
 
             } catch (e) {
                 // 静默处理错误
-                this.saveFailure(url);
                 resolve(fallbackIcon);
             }
         });
     },
 
-    // 尝试从单个源加载 favicon
-    async _tryLoadFavicon(faviconUrl, originalUrl, sourceName) {
-        return new Promise((resolve) => {
-            const img = new Image();
-            // 不设置 crossOrigin，避免 CORS 预检请求导致的错误
-            // img.crossOrigin = 'anonymous';
+    _pickCandidateSizes(candidates, minDimensionPx = 1, maxCount = 2) {
+        const min = Math.max(1, Number(minDimensionPx) || 1);
+        const limit = Math.max(1, Number(maxCount) || 1);
+        const list = Array.isArray(candidates)
+            ? candidates.map((size) => Number(size)).filter((size) => Number.isFinite(size) && size > 0)
+            : [];
+        if (list.length === 0) return [];
+        const filtered = list.filter((size) => size >= min);
+        const source = filtered.length > 0 ? filtered : list;
+        return source.slice(0, limit);
+    },
 
-            const timeout = setTimeout(() => {
-                img.src = '';
-                resolve(null); // 超时，尝试下一个源
-            }, 3000); // 每个源最多等待3秒
+    _buildFaviconSourceList(url, domain, options = {}) {
+        const branchMode = this._normalizeNetworkBranchMode(options?.branchMode || this._resolveNetworkBranchForFetch());
+        const minDimensionPx = Math.max(1, Number(options?.minDimensionPx) || 1);
+        const maxBrowserSizes = Math.max(1, Number(options?.maxBrowserSizes) || 1);
+        const maxOverseasGoogleSizes = Math.max(1, Number(options?.maxOverseasGoogleSizes) || 1);
+        const maxDomesticGstaticSizes = Math.max(1, Number(options?.maxDomesticGstaticSizes) || 2);
+        const maxDomesticCravatarSizes = Math.max(1, Number(options?.maxDomesticCravatarSizes) || 1);
 
-            img.onload = () => {
-                clearTimeout(timeout);
+        const sources = [];
+        const seen = new Set();
+        const addSource = (sourceUrl) => {
+            if (!sourceUrl || seen.has(sourceUrl)) return;
+            seen.add(sourceUrl);
+            sources.push(sourceUrl);
+        };
 
-                // 检查是否是有效的图片（某些服务器返回1x1的占位图）
-                if (img.width < 8 || img.height < 8) {
-                    resolve(null);
+        const gstaticSizes = this._pickCandidateSizes(this.publicFaviconSizeCandidates, minDimensionPx, maxDomesticGstaticSizes);
+        const googleSizes = this._pickCandidateSizes(this.googleS2SizeCandidates, minDimensionPx, maxOverseasGoogleSizes);
+        const cravatarSizes = this._pickCandidateSizes(this.cravatarSizeCandidates, minDimensionPx, maxDomesticCravatarSizes);
+        const browserSizes = this._pickCandidateSizes(this.browserFaviconSizeCandidates, minDimensionPx, maxBrowserSizes);
+
+        if (branchMode === 'domestic') {
+            for (const size of cravatarSizes) {
+                addSource(this._getCravatarFaviconUrl(domain, size));
+            }
+            for (const size of browserSizes) {
+                addSource(this._getBrowserFaviconServiceUrl(url, size));
+            }
+            for (const size of googleSizes) {
+                addSource(this._getGoogleS2FaviconUrl(url, size));
+            }
+        } else {
+            for (const size of googleSizes) {
+                addSource(this._getGoogleS2FaviconUrl(url, size));
+            }
+            addSource(`https://icons.duckduckgo.com/ip3/${domain}.ico`);
+            for (const size of gstaticSizes) {
+                addSource(this._getGstaticCnFaviconUrl(url, size));
+            }
+            for (const size of browserSizes) {
+                addSource(this._getBrowserFaviconServiceUrl(url, size));
+            }
+        }
+
+        return sources;
+    },
+
+    _getBrowserFaviconServiceUrl(url, size = 64) {
+        try {
+            if (!browserAPI?.runtime?.getURL) return null;
+            const baseUrl = browserAPI.runtime.getURL('/_favicon/');
+            return `${baseUrl}?pageUrl=${encodeURIComponent(url)}&size=${encodeURIComponent(size)}`;
+        } catch (e) {
+            return null;
+        }
+    },
+
+    _getGstaticCnFaviconUrl(url, size = 128) {
+        return `https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=${encodeURIComponent(size)}&url=${encodeURIComponent(url)}`;
+    },
+
+    _getCravatarFaviconUrl(domain, size = 64) {
+        return `https://cn.cravatar.com/favicon/api/index.php?url=${encodeURIComponent(domain)}&size=${encodeURIComponent(size)}`;
+    },
+
+    _getGoogleS2FaviconUrl(url, size = 64) {
+        return `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(url)}&sz=${encodeURIComponent(size)}`;
+    },
+
+    async _blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                if (typeof reader.result === 'string' && reader.result.startsWith('data:image/')) {
+                    resolve(reader.result);
                     return;
                 }
+                reject(new Error('invalid_data_url'));
+            };
+            reader.onerror = () => reject(reader.error || new Error('read_failed'));
+            reader.readAsDataURL(blob);
+        });
+    },
 
-                // 尝试转换为 Base64（可能因 CORS 失败，但不显示错误）
+    async _readBlobDimensions(blob) {
+        return new Promise((resolve) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const img = new Image();
+
+            const cleanup = () => {
                 try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    const dataUrl = canvas.toDataURL('image/png');
-
-                    // 保存到缓存
-                    this.save(originalUrl, dataUrl);
-                    resolve(dataUrl);
-                } catch (e) {
-                    // CORS 限制，直接使用原 URL（静默处理，不输出日志）
-                    this.save(originalUrl, faviconUrl);
-                    resolve(faviconUrl);
+                    URL.revokeObjectURL(objectUrl);
+                } catch (_) {
+                    // ignore
                 }
+            };
+
+            img.onload = () => {
+                const width = img.naturalWidth || img.width || 0;
+                const height = img.naturalHeight || img.height || 0;
+                cleanup();
+                resolve({ width, height });
             };
 
             img.onerror = () => {
-                clearTimeout(timeout);
-                resolve(null); // 失败，尝试下一个源
+                cleanup();
+                resolve(null);
             };
 
-            img.src = faviconUrl;
+            img.src = objectUrl;
         });
+    },
+
+    async _fetchImageAsDataUrl(faviconUrl, minDimensionPx = this.minFaviconDimensionPx, options = {}) {
+        try {
+            const timeoutMs = Math.max(500, Number(options?.timeoutMs) || Number(this.requestTimeoutMs) || 3000);
+            if (browserAPI?.runtime?.sendMessage) {
+                const requiredDimension = Math.max(1, Number(minDimensionPx) || this.minFaviconDimensionPx);
+                const response = await browserAPI.runtime.sendMessage({
+                    action: 'canvasFetchFaviconDataUrl',
+                    url: String(faviconUrl || ''),
+                    minDimensionPx: requiredDimension,
+                    maxBytes: Number(this.maxFetchedBytes) || (512 * 1024),
+                    timeoutMs,
+                    includeMeta: true
+                });
+
+                const dataUrl = response && response.success ? response.dataUrl : '';
+                const safeMeta = response && response.meta && typeof response.meta === 'object'
+                    ? response.meta
+                    : null;
+
+                if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+                    return {
+                        dataUrl,
+                        meta: safeMeta || { attempted: true, hardFailure: false, errorCode: '' }
+                    };
+                }
+
+                return {
+                    dataUrl: '',
+                    meta: safeMeta || {
+                        attempted: true,
+                        hardFailure: false,
+                        errorCode: response && response.success === false ? 'proxy_error' : 'proxy_empty_result'
+                    }
+                };
+            }
+        } catch (_) {
+            // 若后台代理不可用，回退到页面内 fetch 路径
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(faviconUrl, {
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                const statusCode = Number(response.status) || 0;
+                return {
+                    dataUrl: '',
+                    meta: {
+                        attempted: true,
+                        statusCode,
+                        hardFailure: this._isHardFailureStatus(statusCode),
+                        errorCode: `http_${statusCode || 0}`
+                    }
+                };
+            }
+
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+            if (contentType && !contentType.startsWith('image/')) {
+                return {
+                    dataUrl: '',
+                    meta: { attempted: true, hardFailure: false, errorCode: 'non_image_content' }
+                };
+            }
+
+            const declaredLength = Number(response.headers.get('content-length') || 0);
+            if (Number.isFinite(declaredLength) && declaredLength > this.maxFetchedBytes) {
+                return {
+                    dataUrl: '',
+                    meta: { attempted: true, hardFailure: false, errorCode: 'payload_too_large' }
+                };
+            }
+
+            const blob = await response.blob();
+            if (!blob || blob.size === 0 || blob.size > this.maxFetchedBytes) {
+                return {
+                    dataUrl: '',
+                    meta: { attempted: true, hardFailure: false, errorCode: 'invalid_blob' }
+                };
+            }
+
+            const dimensions = await this._readBlobDimensions(blob);
+            const requiredDimension = Math.max(1, Number(minDimensionPx) || this.minFaviconDimensionPx);
+            if (!dimensions || dimensions.width < requiredDimension || dimensions.height < requiredDimension) {
+                return {
+                    dataUrl: '',
+                    meta: { attempted: true, hardFailure: false, errorCode: 'dimension_too_small' }
+                };
+            }
+
+            const dataUrl = await this._blobToDataUrl(blob);
+            return {
+                dataUrl,
+                meta: { attempted: true, hardFailure: false, statusCode: Number(response.status) || 200, errorCode: '' }
+            };
+        } catch (e) {
+            const errorCode = e && e.name === 'AbortError' ? 'timeout' : 'fetch_failed';
+            return {
+                dataUrl: '',
+                meta: {
+                    attempted: true,
+                    hardFailure: errorCode === 'timeout' || errorCode === 'fetch_failed',
+                    errorCode
+                }
+            };
+        } finally {
+            clearTimeout(timeout);
+        }
+    },
+
+    // 尝试从单个源加载 favicon，仅返回 dataURL，不在此阶段写缓存
+    async _tryLoadFavicon(faviconUrl, minDimensionPx = this.minFaviconDimensionPx, options = {}) {
+        try {
+            const result = await this._fetchImageAsDataUrl(faviconUrl, minDimensionPx, options);
+            const dataUrl = result && typeof result.dataUrl === 'string' ? result.dataUrl : '';
+            if (!dataUrl || !this.isStoredFaviconData(dataUrl)) {
+                return {
+                    dataUrl: '',
+                    meta: result && result.meta ? result.meta : { attempted: true, hardFailure: false, errorCode: 'empty_data_url' }
+                };
+            }
+            return {
+                dataUrl,
+                meta: result && result.meta ? result.meta : { attempted: true, hardFailure: false, errorCode: '' }
+            };
+        } catch (e) {
+            return {
+                dataUrl: '',
+                meta: { attempted: true, hardFailure: true, errorCode: 'fetch_failed' }
+            };
+        }
     }
 };
 
@@ -1369,7 +2406,7 @@ function getFaviconUrl(url) {
         }
 
         // 检查失败缓存
-        if (FaviconCache.failureCache.has(domain)) {
+        if (FaviconCache._isFailureDomainActive(domain)) {
             return fallbackIcon;
         }
 
@@ -1390,6 +2427,33 @@ function getFaviconUrl(url) {
     }
 }
 
+function resolveFaviconBindingUrlFromElement(element) {
+    if (!element) return '';
+
+    const readFrom = (node) => {
+        if (!node) return '';
+        if (node.dataset) {
+            if (node.dataset.bookmarkUrl) return node.dataset.bookmarkUrl;
+            if (node.dataset.nodeUrl) return node.dataset.nodeUrl;
+            if (node.dataset.url) return node.dataset.url;
+        }
+        if (typeof node.getAttribute === 'function') {
+            return node.getAttribute('data-bookmark-url')
+                || node.getAttribute('data-node-url')
+                || node.getAttribute('data-url')
+                || '';
+        }
+        return '';
+    };
+
+    let itemUrl = readFrom(element);
+    if (!itemUrl && typeof element.closest === 'function') {
+        const item = element.closest('[data-node-url], [data-bookmark-url], [data-url]');
+        itemUrl = readFrom(item);
+    }
+    return typeof itemUrl === 'string' ? itemUrl.trim() : '';
+}
+
 // 更新页面上所有指定URL的favicon图片
 function updateFaviconImages(url, dataUrl) {
     let updatedCount = 0;
@@ -1397,55 +2461,51 @@ function updateFaviconImages(url, dataUrl) {
         const urlObj = new URL(url);
         const domain = urlObj.hostname;
 
-        // 查找所有相关的img标签（通过data-favicon-domain或父元素的data-node-url/data-bookmark-url）
-        const allImages = document.querySelectorAll('img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon');
+        const allImages = document.querySelectorAll(
+            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img[data-bookmark-url], img[data-node-url], img[data-url], image.widgets-pie-slice-icon[data-bookmark-url]'
+        );
 
         allImages.forEach(img => {
-            // 优先检查 img 元素自身的 data-bookmark-url 属性（搜索结果场景）
-            let itemUrl = img.dataset.bookmarkUrl;
+            const itemUrl = resolveFaviconBindingUrlFromElement(img);
+            if (!itemUrl) return;
 
-            // 如果 img 自身没有，再检查父元素
-            if (!itemUrl) {
-                const item = img.closest('[data-node-url], [data-bookmark-url]');
-                if (item) {
-                    itemUrl = item.dataset.nodeUrl || item.dataset.bookmarkUrl;
+            try {
+                const itemDomain = new URL(itemUrl).hostname;
+                if (itemDomain !== domain) return;
+
+                const tagName = String(img.tagName || '').toLowerCase();
+                if (tagName === 'image') {
+                    img.setAttribute('href', dataUrl);
+                    if (typeof img.setAttributeNS === 'function') {
+                        img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', dataUrl);
+                    }
+                    updatedCount++;
+                    return;
                 }
-            }
 
-            if (itemUrl) {
-                try {
-                    const itemDomain = new URL(itemUrl).hostname;
-                    if (itemDomain === domain) {
-                        // 更新图标
-                        img.src = dataUrl;
-
-                        // 如果图片之前是隐藏的（被黄色书签图标替代），现在显示它
-                        if (img.style.display === 'none') {
-                            img.style.display = '';
-                            // 隐藏相邻的 fallback 图标（可能是 previousSibling 或在同一父容器中）
-                            const prevSibling = img.previousElementSibling;
-                            if (prevSibling && prevSibling.classList.contains('search-result-icon-box-inline')) {
-                                prevSibling.style.display = 'none';
-                            } else {
-                                // 在父容器中查找 fallback 图标
-                                const parent = img.parentElement;
-                                if (parent) {
-                                    const fallbackIcon = parent.querySelector('.search-result-icon-box-inline');
-                                    if (fallbackIcon) {
-                                        fallbackIcon.style.display = 'none';
-                                    }
-                                }
+                img.src = dataUrl;
+                if (img.style.display === 'none') {
+                    img.style.display = '';
+                    const prevSibling = img.previousElementSibling;
+                    if (prevSibling && prevSibling.classList.contains('search-result-icon-box-inline')) {
+                        prevSibling.style.display = 'none';
+                    } else {
+                        const parent = img.parentElement;
+                        if (parent) {
+                            const inlineFallbackIcon = parent.querySelector('.search-result-icon-box-inline');
+                            if (inlineFallbackIcon) {
+                                inlineFallbackIcon.style.display = 'none';
                             }
                         }
-
-                        updatedCount++;
                     }
-                } catch (e) {
-                    // 忽略无效URL
                 }
+
+                updatedCount++;
+            } catch (_) {
+                // 忽略无效URL
             }
         });
-    } catch (e) {
+    } catch (_) {
         // 静默处理
     }
     return updatedCount;
@@ -1460,8 +2520,13 @@ function setupGlobalImageErrorHandler() {
                 e.target.classList.contains('card-favicon') ||
                 e.target.classList.contains('ranking-favicon') ||
                 e.target.classList.contains('add-result-favicon') ||
+                e.target.classList.contains('add-bookmark-favicon') ||
+                e.target.classList.contains('block-item-icon') ||
+                e.target.classList.contains('postponed-item-icon') ||
                 e.target.classList.contains('heatmap-detail-favicon') ||
-                e.target.classList.contains('search-result-favicon'))) {
+                e.target.classList.contains('search-result-favicon') ||
+                e.target.classList.contains('related-history-favicon') ||
+                e.target.classList.contains('widgets-pie-tooltip-icon'))) {
             // 只在src不是fallbackIcon时才替换，避免无限循环
             // fallbackIcon 是 data URL，不会加载失败
             if (e.target.src !== fallbackIcon && !e.target.src.startsWith('data:image/svg+xml')) {
@@ -1472,14 +2537,14 @@ function setupGlobalImageErrorHandler() {
 }
 
 // 异步获取favicon（推荐使用，支持完整缓存）
-async function getFaviconUrlAsync(url) {
+async function getFaviconUrlAsync(url, options = {}) {
     if (!url) return fallbackIcon;
 
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
         return fallbackIcon;
     }
 
-    return await FaviconCache.fetch(url);
+    return await FaviconCache.fetch(url, options);
 }
 
 // Fallback 图标 - 星标书签图标
@@ -1507,6 +2572,33 @@ const i18n = {pageTitle: {
     },helpTooltip: {
         'zh_CN': '问题反馈与快捷键',
         'en': 'Feedback & Shortcuts'
+    },settingsQuickReviewText: {
+        'zh_CN': '快捷复习设置',
+        'en': 'Quick Review Settings'
+    },quickReviewShortcutLabel: {
+        'zh_CN': '当前快捷键',
+        'en': 'Current Shortcut'
+    },openShortcutsSettingsText: {
+        'zh_CN': '读取中...',
+        'en': 'Loading...'
+    },quickReviewShortcutUnset: {
+        'zh_CN': '未设置',
+        'en': 'Not Set'
+    },quickReviewShortcutRefreshHint: {
+        'zh_CN': '如修改了浏览器快捷键，请关闭并重新打开本设置弹窗以刷新显示。',
+        'en': 'After changing browser shortcuts, close and reopen this settings dialog to refresh.'
+    },quickReviewOpenModeLabel: {
+        'zh_CN': '打开模式',
+        'en': 'Open Mode'
+    },quickReviewModeSingleText: {
+        'zh_CN': '固定单页',
+        'en': 'Fixed Tab'
+    },quickReviewModeNewTabText: {
+        'zh_CN': '新标签',
+        'en': 'New Tab'
+    },quickReviewTooltip: {
+        'zh_CN': '快捷复习',
+        'en': 'Quick Review'
     },headerToggleCollapseTooltip: {
         'zh_CN': '收起标题栏',
         'en': 'Collapse header'
@@ -1562,10 +2654,10 @@ const i18n = {pageTitle: {
         'zh_CN': '书签',
         'en': 'Bmk'
     },widgetsRankingModeFolder: {
-        'zh_CN': '文件',
+        'zh_CN': '文件夹',
         'en': 'Fld'
     },widgetsRankingModeDomain: {
-        'zh_CN': '域名',
+        'zh_CN': '全域',
         'en': 'Dom'
     },widgetsRankingModeSubdomain: {
         'zh_CN': '子域',
@@ -1574,10 +2666,10 @@ const i18n = {pageTitle: {
         'zh_CN': '书签推荐',
         'en': 'Bookmark Recommend'
     },widgetsAdditionsWeekWidgetTitle: {
-        'zh_CN': '书签添加记录',
-        'en': 'Bookmark Additions'
+        'zh_CN': '添加记录',
+        'en': 'Additions'
     },widgetsAdditionsWeekWidgetEmpty: {
-        'zh_CN': '暂无本周书签添加记录',
+        'zh_CN': '暂无本周添加记录',
         'en': 'No additions this week'
     },widgetsHistoryWeekWidgetTitle: {
         'zh_CN': '点击记录',
@@ -1585,6 +2677,39 @@ const i18n = {pageTitle: {
     },widgetsHistoryWeekWidgetEmpty: {
         'zh_CN': '暂无本周点击记录',
         'en': 'No clicks this week'
+    },widgetsChartViewToggle: {
+        'zh_CN': '切换视图',
+        'en': 'Switch view'
+    },widgetsChartViewLine: {
+        'zh_CN': '曲线',
+        'en': 'Line'
+    },widgetsChartViewWeekGrid: {
+        'zh_CN': '周格',
+        'en': 'Grid'
+    },widgetsChartViewMonthGrid: {
+        'zh_CN': '月格',
+        'en': 'M-Grid'
+    },widgetsChartRangeToggle: {
+        'zh_CN': '切换范围',
+        'en': 'Switch range'
+    },widgetsChartRangeWeek: {
+        'zh_CN': '本周',
+        'en': 'Week'
+    },widgetsChartRangeMonth30: {
+        'zh_CN': '本月',
+        'en': 'Month'
+    },widgetsRankingVisualToggle: {
+        'zh_CN': '切换图表',
+        'en': 'Switch chart'
+    },widgetsRankingVisualList: {
+        'zh_CN': '列表',
+        'en': 'List'
+    },widgetsRankingVisualPie: {
+        'zh_CN': '饼图',
+        'en': 'Pie'
+    },widgetsPieOther: {
+        'zh_CN': '其他',
+        'en': 'Other'
     },widgetsWeekTotal: {
         'zh_CN': '本周合计 {count} 条',
         'en': '{count} this week'
@@ -1603,6 +2728,9 @@ const i18n = {pageTitle: {
     },widgetsCardRefreshText: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh Cards'
+    },widgetsQuickReviewText: {
+        'zh_CN': '快捷复习',
+        'en': 'Quick Review'
     },widgetsSmartSortToggle: {
         'zh_CN': '智能排序',
         'en': 'Smart Sort'
@@ -1840,6 +2968,9 @@ const i18n = {pageTitle: {
     },shortcutsTitle: {
         'zh_CN': '当前可用快捷键',
         'en': 'Available Shortcuts'
+    },shortcutsRefreshHint: {
+        'zh_CN': '如修改了浏览器快捷键，请关闭并重新打开本窗口以刷新显示。',
+        'en': 'After changing browser shortcuts, close and reopen this window to refresh.'
     },shortcutsTableHeaderKey: {
         'zh_CN': '按键',
         'en': 'Key'
@@ -1855,6 +2986,9 @@ const i18n = {pageTitle: {
     },shortcutRecommend: {
         'zh_CN': '打开「书签推荐」视图',
         'en': 'Open "Bookmark Recommend" view'
+    },shortcutQuickReviewNext: {
+        'zh_CN': '快捷复习：开始或下一张',
+        'en': 'Quick review: start or next card'
     },closeShortcutsText: {
         'zh_CN': '关闭',
         'en': 'Close'
@@ -1987,6 +3121,15 @@ const i18n = {pageTitle: {
     },trackingNoData: {
         'zh_CN': '暂无活跃时间数据',
         'en': 'No active time data'
+    },trackingNoDataRange: {
+        'zh_CN': '该时间范围暂无数据（旧数据请查看“全部”）',
+        'en': 'No data in this range yet (older data is available in "All Time").'
+    },trackingRangeDataHintFrom: {
+        'zh_CN': '区间统计起始于 {date}（旧数据仅计入“全部”）',
+        'en': 'Range stats start from {date} (older data is available in "All Time" only).'
+    },trackingRangeDataHintPending: {
+        'zh_CN': '区间统计仅记录新版本后的数据（旧数据仅计入“全部”）',
+        'en': 'Range stats only include data after this version update (older data is in "All Time" only).'
     },trackingClearRangeConfirm: {
         'zh_CN': '确定要清除{range}以前的综合排行数据吗？',
         'en': 'Are you sure you want to clear ranking data older than {range}?'
@@ -2089,9 +3232,15 @@ const i18n = {pageTitle: {
     },cardRefreshText: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh'
+    },cardQuickReviewText: {
+        'zh_CN': '快捷复习',
+        'en': 'Quick Review'
     },refreshSettingsTitle: {
+        'zh_CN': '书签推荐设置',
+        'en': 'Bookmark Recommend Settings'
+    },settingsAutoRefreshText: {
         'zh_CN': '自动刷新设置',
-        'en': 'Auto Refresh Settings'
+        'en': 'Auto Refresh'
     },refreshEveryNOpensLabel: {
         'zh_CN': '每打开',
         'en': 'Every'
@@ -2471,22 +3620,35 @@ document.addEventListener('DOMContentLoaded', async () => {
         initAddTrackingBlockBookmarkModal();
     }
 
-    // 侧边栏：先用本地快照秒显推荐卡片，避免二次打开闪烁
+    // 侧边栏：优先尝试快照秒显，后续由 storage/current round 做校准。
     if (isSidePanelMode) {
         try {
-            hydrateRecommendCardsFromSnapshotForSidePanel();
+            await hydrateRecommendCardsFromSnapshotForSidePanel();
         } catch (_) { }
     }
 
     // 注册消息监听
     setupRealtimeMessageListener();
 
+    let renderedCurrentViewEarly = false;
+    if (isSidePanelMode && currentView === 'widgets') {
+        if (widgetsSmartSortEnabled) {
+            widgetsSortApplyDeferredInteractionsOnOpen = true;
+            syncWidgetsOpenStabilizingState();
+        }
+        await renderCurrentView();
+        renderedCurrentViewEarly = true;
+    }
+
     // 先加载基础数据
 
     if (isSidePanelMode) {
         await ensureAdditionsCacheLoaded(true);
         const hasFastCache = additionsCacheRestored && Array.isArray(allBookmarks) && allBookmarks.length > 0;
-        if (hasFastCache) {
+        if (currentView === 'widgets') {
+            // widgets 首开的数据源预热统一由 startWidgetsViewRefresh 执行，
+            // 这里不再重复触发 loadAllData，避免首开链路并发打架导致延迟波动。
+        } else if (hasFastCache) {
             loadAllData({ skipRender: true }).catch((error) => {
                 console.warn('[初始化] 侧边栏后台刷新失败:', error);
             });
@@ -2503,10 +3665,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const shouldRefreshFromSidePanelOpen = await checkAndIncrementOpenCount({ source: 'sidepanel' });
             if (shouldRefreshFromSidePanelOpen) {
-                await refreshRecommendCards(true);
-                try {
-                    lastWidgetsRecommendCardSignature = '';
-                } catch (_) { }
+                const hasPendingRound = await hasPendingRecommendRoundState();
+                if (!hasPendingRound) {
+                    await refreshRecommendCards(true);
+                    try {
+                        lastWidgetsRecommendCardSignature = '';
+                    } catch (_) { }
+                }
             }
         } catch (error) {
             console.warn('[侧边栏] 处理推荐刷新阈值失败:', error);
@@ -2516,14 +3681,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 使用智能等待：尝试渲染，如果数据不完整则等待后重试
     // 初始化时强制刷新缓存，确保显示最新数据
 
-    if (isSidePanelMode && currentView === 'widgets' && widgetsSmartSortEnabled) {
-        widgetsSortApplyDeferredInteractionsOnOpen = true;
-        syncWidgetsOpenStabilizingState();
+    if (!renderedCurrentViewEarly) {
+        if (isSidePanelMode && currentView === 'widgets' && widgetsSmartSortEnabled) {
+            widgetsSortApplyDeferredInteractionsOnOpen = true;
+            syncWidgetsOpenStabilizingState();
+        }
+
+        // 根据当前视图渲染
+        await renderCurrentView();
     }
-
-
-    // 根据当前视图渲染
-    await renderCurrentView();
 
     try {
         await applyPendingWidgetsJumpContextFromNavToken(urlParams.get('nav'));
@@ -2829,18 +3995,32 @@ function applyLanguage() {
     const widgetsCardRefreshText = document.getElementById('widgetsCardRefreshText');
     if (widgetsCardRefreshText) widgetsCardRefreshText.textContent = i18n.widgetsCardRefreshText[currentLang];
     const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
-    if (widgetsCardRefreshBtn) widgetsCardRefreshBtn.title = i18n.widgetsCardRefreshText[currentLang];
+    if (widgetsCardRefreshBtn) {
+        widgetsCardRefreshBtn.title = i18n.widgetsCardRefreshText[currentLang];
+        widgetsCardRefreshBtn.setAttribute('aria-label', i18n.widgetsCardRefreshText[currentLang]);
+    }
+    const widgetsQuickReviewBtn = document.getElementById('widgetsQuickReviewBtn');
+    if (widgetsQuickReviewBtn) {
+        widgetsQuickReviewBtn.dataset.instantTooltip = i18n.widgetsQuickReviewText[currentLang];
+        widgetsQuickReviewBtn.removeAttribute('title');
+        widgetsQuickReviewBtn.setAttribute('aria-label', i18n.widgetsQuickReviewText[currentLang]);
+    }
+    const widgetsQuickReviewSettingsBtn = document.getElementById('widgetsQuickReviewSettingsBtn');
+    if (widgetsQuickReviewSettingsBtn) {
+        widgetsQuickReviewSettingsBtn.title = i18n.refreshSettingsTitle[currentLang];
+        widgetsQuickReviewSettingsBtn.setAttribute('aria-label', i18n.refreshSettingsTitle[currentLang]);
+    }
+    syncRecommendLastUpdatedFromState();
 
     updateWidgetsRankingRangeToggleLabel();
     updateWidgetsRankingModeToggleLabel();
+    updateWidgetsRankingVisualToggleLabel();
+    updateWidgetsAdditionsToggleLabel();
+    updateWidgetsHistoryToggleLabel();
     updateWidgetsSmartSortToggleUI(currentView);
     updateWidgetsRelatedDepthButtonsState();
-    try {
-        const maybePromise = updateWidgetsRelatedWidget();
-        if (maybePromise && typeof maybePromise.catch === 'function') {
-            maybePromise.catch(() => { });
-        }
-    } catch (_) { }
+    markWidgetsDirty(['recommend', 'ranking', 'related', 'tracking', 'additionsWeek', 'historyWeek'], { schedule: false });
+    updateWidgetsViewData({ targets: ['recommend', 'ranking', 'related', 'tracking', 'additionsWeek', 'historyWeek'] }).catch(() => { });
 
     const isEn = currentLang === 'en';
 
@@ -2850,9 +4030,16 @@ function applyLanguage() {
     if (langTooltip) langTooltip.textContent = i18n.langTooltip[currentLang];
     const helpTooltip = document.getElementById('helpTooltip');
     if (helpTooltip) helpTooltip.textContent = i18n.helpTooltip[currentLang];
+    const quickReviewTooltip = document.getElementById('quickReviewTooltip');
+    if (quickReviewTooltip) quickReviewTooltip.textContent = i18n.quickReviewTooltip[currentLang];
 
     const settingsToggle = document.getElementById('settingsToggle');
     if (settingsToggle) settingsToggle.setAttribute('aria-label', isEn ? 'Settings' : '设置');
+    const quickReviewBtn = document.getElementById('quickReviewBtn');
+    if (quickReviewBtn) {
+        quickReviewBtn.setAttribute('aria-label', i18n.quickReviewTooltip[currentLang]);
+        quickReviewBtn.setAttribute('title', i18n.quickReviewTooltip[currentLang]);
+    }
     const settingsTooltip = document.getElementById('settingsTooltip');
     if (settingsTooltip) settingsTooltip.textContent = isEn ? 'Settings' : '设置';
 
@@ -2862,6 +4049,23 @@ function applyLanguage() {
     if (settingsLanguageText) settingsLanguageText.textContent = '中文 - English';
     const settingsHelpText = document.getElementById('settingsHelpText');
     if (settingsHelpText) settingsHelpText.textContent = isEn ? 'Feedback & Shortcuts' : '问题反馈与快捷键';
+    const settingsRecommendSettingsText = document.getElementById('settingsRecommendSettingsText');
+    if (settingsRecommendSettingsText) settingsRecommendSettingsText.textContent = i18n.refreshSettingsTitle[currentLang];
+    const settingsQuickReviewText = document.getElementById('settingsQuickReviewText');
+    if (settingsQuickReviewText) settingsQuickReviewText.textContent = i18n.settingsQuickReviewText[currentLang];
+    const quickReviewShortcutLabel = document.getElementById('quickReviewShortcutLabel');
+    if (quickReviewShortcutLabel) quickReviewShortcutLabel.textContent = i18n.quickReviewShortcutLabel[currentLang];
+    const openShortcutsSettingsText = document.getElementById('openShortcutsSettingsText');
+    if (openShortcutsSettingsText) openShortcutsSettingsText.textContent = i18n.openShortcutsSettingsText[currentLang];
+    const quickReviewShortcutRefreshHint = document.getElementById('quickReviewShortcutRefreshHint');
+    if (quickReviewShortcutRefreshHint) quickReviewShortcutRefreshHint.textContent = i18n.quickReviewShortcutRefreshHint[currentLang];
+    updateQuickReviewShortcutDisplay();
+    const quickReviewOpenModeLabel = document.getElementById('quickReviewOpenModeLabel');
+    if (quickReviewOpenModeLabel) quickReviewOpenModeLabel.textContent = i18n.quickReviewOpenModeLabel[currentLang];
+    const quickReviewModeSingleText = document.getElementById('quickReviewModeSingleText');
+    if (quickReviewModeSingleText) quickReviewModeSingleText.textContent = i18n.quickReviewModeSingleText[currentLang];
+    const quickReviewModeNewTabText = document.getElementById('quickReviewModeNewTabText');
+    if (quickReviewModeNewTabText) quickReviewModeNewTabText.textContent = i18n.quickReviewModeNewTabText[currentLang];
     const settingsSidebarText = document.getElementById('settingsSidebarText');
     if (settingsSidebarText) settingsSidebarText.textContent = isEn ? 'Sidebar Width Settings' : '菜单栏宽度设置';
 
@@ -2946,6 +4150,8 @@ function applyLanguage() {
     if (openSourceIssueLabel) openSourceIssueLabel.textContent = i18n.openSourceIssueLabel[currentLang];
     const openSourceIssueText = document.getElementById('openSourceIssueText');
     if (openSourceIssueText) openSourceIssueText.textContent = i18n.openSourceIssueText[currentLang];
+    const shortcutsRefreshHint = document.getElementById('shortcutsRefreshHint');
+    if (shortcutsRefreshHint) shortcutsRefreshHint.textContent = i18n.shortcutsRefreshHint[currentLang];
     const closeShortcutsText = document.getElementById('closeShortcutsText');
     if (closeShortcutsText) closeShortcutsText.textContent = i18n.closeShortcutsText[currentLang];
 
@@ -3124,6 +4330,11 @@ function applyLanguage() {
     if (trackingRangeAll) trackingRangeAll.textContent = i18n.trackingRangeAll[currentLang];
     const trackingNoDataText = document.getElementById('trackingNoDataText');
     if (trackingNoDataText) trackingNoDataText.textContent = i18n.trackingNoData[currentLang];
+    const trackingRankingHint = document.getElementById('trackingRankingHint');
+    if (trackingRankingHint) {
+        trackingRankingHint.textContent = '';
+        trackingRankingHint.style.display = 'none';
+    }
 
     const recommendViewTitle = document.getElementById('recommendViewTitle');
     if (recommendViewTitle) recommendViewTitle.textContent = i18n.recommendViewTitle[currentLang];
@@ -3184,11 +4395,21 @@ function applyLanguage() {
 
     const resetFormulaText = document.getElementById('resetFormulaText');
     if (resetFormulaText) resetFormulaText.textContent = i18n.resetFormulaText[currentLang];
+    const cardQuickReviewText = document.getElementById('cardQuickReviewText');
+    if (cardQuickReviewText) cardQuickReviewText.textContent = i18n.cardQuickReviewText[currentLang];
+    const cardQuickReviewBtn = document.getElementById('cardQuickReviewBtn');
+    if (cardQuickReviewBtn) {
+        cardQuickReviewBtn.dataset.instantTooltip = i18n.cardQuickReviewText[currentLang];
+        cardQuickReviewBtn.removeAttribute('title');
+        cardQuickReviewBtn.setAttribute('aria-label', i18n.cardQuickReviewText[currentLang]);
+    }
     const cardRefreshText = document.getElementById('cardRefreshText');
     if (cardRefreshText) cardRefreshText.textContent = i18n.cardRefreshText[currentLang];
 
     const refreshSettingsTitle = document.getElementById('refreshSettingsTitle');
     if (refreshSettingsTitle) refreshSettingsTitle.textContent = i18n.refreshSettingsTitle[currentLang];
+    const settingsAutoRefreshText = document.getElementById('settingsAutoRefreshText');
+    if (settingsAutoRefreshText) settingsAutoRefreshText.textContent = i18n.settingsAutoRefreshText[currentLang];
     const refreshEveryNOpensLabel = document.getElementById('refreshEveryNOpensLabel');
     if (refreshEveryNOpensLabel) refreshEveryNOpensLabel.textContent = i18n.refreshEveryNOpensLabel[currentLang];
     const refreshEveryNOpensUnit = document.getElementById('refreshEveryNOpensUnit');
@@ -3329,6 +4550,182 @@ function openShortcutsInfoModal() {
         updateShortcutsDisplay();
     }
     shortcutsModal.classList.add('show');
+    startShortcutsLiveSync();
+}
+
+function isMacLikePlatform() {
+    return navigator.platform?.toUpperCase().includes('MAC') ||
+        navigator.userAgent?.toUpperCase().includes('MAC');
+}
+
+function formatShortcutForDisplay(shortcut) {
+    if (!shortcut) return '';
+    let value = String(shortcut).trim();
+    if (!value) return '';
+
+    value = value
+        .replace(/\bDown\b/gi, '↓')
+        .replace(/\bUp\b/gi, '↑')
+        .replace(/\bLeft\b/gi, '←')
+        .replace(/\bRight\b/gi, '→');
+
+    if (isMacLikePlatform()) {
+        value = value
+            .replace(/Command\+/gi, '⌘')
+            .replace(/Cmd\+/gi, '⌘')
+            .replace(/Ctrl\+/gi, '⌃')
+            .replace(/Alt\+/gi, '⌥')
+            .replace(/Shift\+/gi, '⇧');
+    }
+
+    return value;
+}
+
+function buildQuickReviewTooltipText(shortcutText) {
+    const shortcut = (typeof shortcutText === 'string' && shortcutText.trim())
+        ? shortcutText.trim()
+        : formatShortcutForDisplay(isMacLikePlatform() ? 'Alt+Down' : 'Ctrl+Down');
+    if (currentLang === 'en') {
+        return `Quick Review (${shortcut})`;
+    }
+    return `快捷复习（快捷键：${shortcut}）`;
+}
+
+function applyQuickReviewTooltipForButtons(shortcutText) {
+    const tooltipText = buildQuickReviewTooltipText(shortcutText);
+
+    const quickReviewTooltip = document.getElementById('quickReviewTooltip');
+    if (quickReviewTooltip) {
+        quickReviewTooltip.textContent = tooltipText;
+    }
+
+    const buttonIds = ['quickReviewBtn', 'widgetsQuickReviewBtn', 'cardQuickReviewBtn'];
+    buttonIds.forEach((buttonId) => {
+        const btn = document.getElementById(buttonId);
+        if (!btn) return;
+        const useInstantTooltip = buttonId === 'widgetsQuickReviewBtn' || buttonId === 'cardQuickReviewBtn';
+        if (useInstantTooltip) {
+            btn.dataset.instantTooltip = tooltipText;
+            btn.removeAttribute('title');
+        } else {
+            btn.setAttribute('title', tooltipText);
+        }
+        btn.setAttribute('aria-label', tooltipText);
+    });
+}
+
+function bindQuickReviewTooltipRefreshTriggers() {
+    const buttonIds = ['quickReviewBtn', 'widgetsQuickReviewBtn', 'cardQuickReviewBtn'];
+    buttonIds.forEach((buttonId) => {
+        const btn = document.getElementById(buttonId);
+        if (!btn || btn.dataset.shortcutTooltipBound === 'true') return;
+
+        btn.dataset.shortcutTooltipBound = 'true';
+        const refresh = () => updateQuickReviewShortcutDisplay();
+
+        btn.addEventListener('mouseenter', refresh);
+        btn.addEventListener('focus', refresh);
+    });
+}
+
+function updateQuickReviewShortcutDisplay() {
+    const textEl = document.getElementById('openShortcutsSettingsText');
+
+    const defaultShortcut = formatShortcutForDisplay(isMacLikePlatform() ? 'Alt+Down' : 'Ctrl+Down');
+    const unsetText = i18n.quickReviewShortcutUnset?.[currentLang] || (currentLang === 'en' ? 'Not Set' : '未设置');
+
+    const applyText = (text) => {
+        const resolved = (typeof text === 'string' && text.trim()) ? text.trim() : defaultShortcut;
+        if (textEl) {
+            textEl.textContent = resolved;
+        }
+        const openBtn = document.getElementById('refreshQuickReviewOpenShortcutsBtn');
+        if (openBtn) {
+            openBtn.setAttribute('title', resolved);
+            openBtn.setAttribute('aria-label', resolved);
+        }
+        applyQuickReviewTooltipForButtons(resolved);
+    };
+
+    if (!(browserAPI && browserAPI.commands && browserAPI.commands.getAll)) {
+        applyText(defaultShortcut);
+        return;
+    }
+
+    try {
+        browserAPI.commands.getAll((commands) => {
+            try {
+                let quickReviewShortcut = '';
+                if (Array.isArray(commands)) {
+                    const quickReviewCommand = commands.find((item) => item?.name === 'quick_review_next');
+                    if (quickReviewCommand && typeof quickReviewCommand.shortcut === 'string') {
+                        quickReviewShortcut = quickReviewCommand.shortcut.trim();
+                    }
+                }
+
+                if (!quickReviewShortcut) {
+                    applyText(unsetText);
+                    return;
+                }
+
+                applyText(formatShortcutForDisplay(quickReviewShortcut));
+            } catch (_) {
+                applyText(defaultShortcut);
+            }
+        });
+    } catch (_) {
+        applyText(defaultShortcut);
+    }
+}
+
+function isModalVisibleById(modalId) {
+    const modal = document.getElementById(modalId);
+    return Boolean(modal && modal.classList.contains('show'));
+}
+
+function syncShortcutDisplaysIfNeeded() {
+    const refreshSettingsOpen = isModalVisibleById('refreshSettingsModal');
+    const shortcutsOpen = isModalVisibleById('shortcutsModal');
+    if (!refreshSettingsOpen && !shortcutsOpen) {
+        return false;
+    }
+
+    updateQuickReviewShortcutDisplay();
+
+    if (shortcutsOpen && typeof updateShortcutsDisplay === 'function') {
+        updateShortcutsDisplay();
+    }
+    return true;
+}
+
+function startShortcutsLiveSync() {
+    syncShortcutDisplaysIfNeeded();
+}
+
+function stopShortcutsLiveSyncIfIdle() {
+    // 纯事件驱动同步，无轮询定时器可清理
+}
+
+function hideShortcutsInfoModal() {
+    const shortcutsModal = document.getElementById('shortcutsModal');
+    if (!shortcutsModal) return;
+    shortcutsModal.classList.remove('show');
+    stopShortcutsLiveSyncIfIdle();
+}
+
+function openBrowserShortcutsSettingsPage() {
+    try {
+        const ua = navigator.userAgent || '';
+        const isEdge = ua.includes('Edg/');
+        const url = isEdge
+            ? 'edge://extensions/shortcuts'
+            : 'chrome://extensions/shortcuts';
+        if (browserAPI?.tabs?.create) {
+            browserAPI.tabs.create({ url });
+        }
+    } catch (e) {
+        console.warn('[Shortcuts] 打开浏览器快捷键设置页面失败:', e);
+    }
 }
 
 function updateMainSearchVisibility() {
@@ -3348,6 +4745,8 @@ function updateMainSearchVisibility() {
 }
 
 function initializeUI() {
+    bindQuickReviewTooltipRefreshTriggers();
+
     // 导航标签切换
     document.querySelectorAll('.nav-tab').forEach(tab => {
         tab.addEventListener('click', () => {
@@ -3366,6 +4765,15 @@ function initializeUI() {
     if (themeToggle) themeToggle.addEventListener('click', toggleTheme);
     const langToggle = document.getElementById('langToggle');
     if (langToggle) langToggle.addEventListener('click', toggleLanguage);
+    const quickReviewBtn = document.getElementById('quickReviewBtn');
+    if (quickReviewBtn && quickReviewBtn.dataset.bound !== 'true') {
+        quickReviewBtn.dataset.bound = 'true';
+        quickReviewBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            await quickReviewNext({ source: 'header_button' });
+        });
+    }
 
     const helpToggle = document.getElementById('helpToggle');
     const shortcutsModal = document.getElementById('shortcutsModal');
@@ -3377,13 +4785,13 @@ function initializeUI() {
     }
     if (closeShortcutsModal && shortcutsModal) {
         closeShortcutsModal.addEventListener('click', () => {
-            shortcutsModal.classList.remove('show');
+            hideShortcutsInfoModal();
         });
     }
     if (shortcutsModal) {
         shortcutsModal.addEventListener('click', (e) => {
             if (e.target === shortcutsModal) {
-                shortcutsModal.classList.remove('show');
+                hideShortcutsInfoModal();
             }
         });
     }
@@ -3434,9 +4842,12 @@ async function refreshAdditionsDataFromTree(options = {}) {
         allBookmarks = flattenBookmarkTree(bookmarkTree);
         rebuildBookmarkUrlSet();
         additionsCacheRestored = true;
+        clearWidgetsTrendDataCaches({ additionsOnly: true });
+        markWidgetsDirty('additionsWeek', { delayMs: 120 });
         cachedBookmarkTree = bookmarkTree;
         markAdditionsTreeRefreshTime();
         persistAdditionsCache();
+        persistAdditionsWidgetsSnapshot(allBookmarks);
 
         if (renderAfter && currentView === 'additions') {
             renderAdditionsView();
@@ -5725,6 +7136,20 @@ function renderCurrentView() {
             break;
         case 'additions':
             renderAdditionsView();
+            try {
+                const activeAdditionsTab = document.querySelector('.additions-tab.active')?.dataset?.tab
+                    || localStorage.getItem('additionsActiveTab')
+                    || 'review';
+                if (activeAdditionsTab === 'browsing') {
+                    if (typeof initBrowsingHistoryCalendar === 'function') {
+                        initBrowsingHistoryCalendar();
+                    }
+                } else if (typeof initBookmarkCalendar === 'function') {
+                    initBookmarkCalendar();
+                }
+            } catch (error) {
+                console.warn('[renderCurrentView] 初始化 additions 日历失败:', error);
+            }
             break;
         case 'recommend':
             renderRecommendView();
@@ -5740,13 +7165,54 @@ function renderCurrentView() {
 
 let widgetsViewBound = false;
 let widgetsViewRefreshInterval = null;
+let widgetsViewRefreshStartDelayTimer = null;
+let widgetsInitialHydrationRetryTimer = null;
+let widgetsRecommendBootstrapKickoffTimer = null;
+let widgetsBootstrapRefreshUntil = 0;
+let widgetsFirstVisualOnlyUntil = 0;
+let widgetsLoadingGuardUntil = 0;
+let widgetsSourcePrimePromise = null;
+let widgetsSourcePrimeScheduleTimer = null;
+let widgetsSourcePrimeIdleCallbackId = null;
+let widgetsRankingHydrationPromise = null;
+let widgetsRankingHydrationScheduleTimer = null;
+let widgetsRankingHydrationIdleCallbackId = null;
+let widgetsTrendWarmupScheduleTimer = null;
+let widgetsTrendWarmupIdleCallbackId = null;
+let widgetsRankingFastCache = new Map();
+let widgetsRankingHydrationLastAt = 0;
 let lastWidgetsRecommendCardSignature = '';
 let widgetsRecommendBootstrapAttempted = false;
+let widgetsAdditionsWeekDataCache = null;
+let widgetsHistoryWeekDataCache = null;
+let widgetsAdditionsTrendDataCache = null;
+let widgetsHistoryTrendDataCache = null;
 let widgetsRelatedFolderDepth = 'level1';
 let widgetsRelatedPrimaryRange = 'day';
 let widgetsRelatedSecondaryAvailable = true;
 let widgetsRelatedActiveSecondaryKey = '';
+const WIDGETS_PIE_COLORS = ['#1f77ff', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6'];
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
+const WIDGETS_INITIAL_HYDRATION_RETRY_MS = 1800;
+const WIDGETS_TASK_TIMEOUT_MS = 6500;
+const WIDGETS_BOOTSTRAP_REFRESH_WINDOW_MS = 45 * 1000;
+const WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS = 2200;
+const WIDGETS_LOADING_GUARD_WINDOW_MS = 1200;
+const WIDGETS_SOURCE_PRIME_IDLE_DELAY_MS = 280;
+const WIDGETS_SOURCE_PRIME_IDLE_TIMEOUT_MS = 1800;
+const WIDGETS_RANKING_FAST_CACHE_TTL_MS = 2 * 60 * 1000;
+const WIDGETS_RANKING_HYDRATION_MIN_GAP_MS = 5000;
+const WIDGETS_RANKING_HYDRATION_IDLE_DELAY_MS = 260;
+const WIDGETS_RANKING_HYDRATION_IDLE_TIMEOUT_MS = 1200;
+const WIDGETS_OPEN_FULL_REFRESH_MIN_GAP_MS = 2 * 60 * 1000;
+const WIDGETS_REFRESH_TARGETS = [
+    'recommend',
+    'tracking',
+    'ranking',
+    'additionsWeek',
+    'historyWeek',
+    'related'
+];
 const WIDGETS_SMART_SORT_WIDGET_IDS = [
     'widgetsRecommendWidget',
     'widgetsTrackingWidget',
@@ -5783,6 +7249,19 @@ let widgetsPendingRefreshTimer = null;
 let widgetsViewRefreshRunning = false;
 let widgetsViewRefreshPending = false;
 let widgetsViewRefreshPendingForce = false;
+let widgetsTrackingRenderSignature = '';
+let widgetsAdditionsWeekRenderSignature = '';
+let widgetsHistoryWeekRenderSignature = '';
+let widgetsRankingRenderSignature = '';
+let widgetsRelatedRenderSignature = '';
+let widgetsDirtyFlags = {
+    recommend: true,
+    tracking: true,
+    ranking: true,
+    additionsWeek: true,
+    historyWeek: true,
+    related: true
+};
 
 function shouldStabilizeWidgetsOnOpen() {
     if (!isSidePanelMode) return false;
@@ -5966,9 +7445,16 @@ function flushWidgetsPendingRefresh() {
     widgetsViewRefreshPending = false;
     widgetsViewRefreshPendingForce = false;
 
-    updateWidgetsViewData({ force, reason: 'pending-refresh' }).catch((error) => {
-        console.warn('[Widgets] 交互后补刷失败:', error);
-    });
+    updateWidgetsViewData({ force, reason: 'pending-refresh' })
+        .then((hasVisualUpdate) => {
+            if (hasVisualUpdate) return;
+            if (currentView !== 'widgets') return;
+            if (isWidgetsInteractionActive({ includeCooldown: false })) return;
+            applyWidgetsSmartSort();
+        })
+        .catch((error) => {
+            console.warn('[Widgets] 交互后补刷失败:', error);
+        });
 }
 
 function touchWidgetsInteraction() {
@@ -6005,22 +7491,10 @@ function isWidgetsInteractionActive(options = {}) {
         return true;
     }
 
-    const activeEl = document.activeElement;
-    if (activeEl instanceof Element && activeEl !== document.body && widgetsViewRoot.contains(activeEl)) {
-        return true;
-    }
-
     const hoveredSortUi = document.querySelector(
         '#widgetsSortPanel:hover, #widgetsSortInfoPanel:hover, #widgetsSmartSortToggleBtn:hover, #widgetsSmartSortInfoBtn:hover'
     );
     if (hoveredSortUi) {
-        return true;
-    }
-
-    const hoveredInteractive = widgetsViewRoot.querySelector(
-        'button:hover, a:hover, input:hover, select:hover, textarea:hover, .time-menu-btn:hover, .recommend-debug:hover, [role="button"]:hover, .widgets-widget-card:hover'
-    );
-    if (hoveredInteractive) {
         return true;
     }
 
@@ -6081,6 +7555,53 @@ function normalizeWidgetsRelatedRange(range) {
         return safe;
     }
     return 'day';
+}
+
+function normalizeWidgetsRefreshTarget(target) {
+    const safe = String(target || '').trim();
+    if (WIDGETS_REFRESH_TARGETS.includes(safe)) return safe;
+    return '';
+}
+
+function normalizeWidgetsRefreshTargets(targetsLike) {
+    const list = Array.isArray(targetsLike) ? targetsLike : [targetsLike];
+    const dedup = new Set();
+    list.forEach((item) => {
+        const safe = normalizeWidgetsRefreshTarget(item);
+        if (!safe) return;
+        dedup.add(safe);
+    });
+    return Array.from(dedup);
+}
+
+function markWidgetsDirty(targetsLike, options = {}) {
+    const targets = normalizeWidgetsRefreshTargets(targetsLike);
+    if (!targets.length) return;
+
+    targets.forEach((target) => {
+        widgetsDirtyFlags[target] = true;
+    });
+
+    if (options.schedule === false) return;
+    if (currentView !== 'widgets') return;
+
+    requestWidgetsPendingRefresh({
+        force: options.force === true,
+        delayMs: options.delayMs
+    });
+}
+
+function resolveWidgetsRefreshTargets(options = {}) {
+    const force = options.force === true;
+    const explicitTargets = normalizeWidgetsRefreshTargets(options.targets);
+
+    if (force) {
+        return WIDGETS_REFRESH_TARGETS.slice();
+    }
+    if (explicitTargets.length > 0) {
+        return explicitTargets;
+    }
+    return WIDGETS_REFRESH_TARGETS.filter((target) => widgetsDirtyFlags[target] === true);
 }
 
 function readWidgetsRelatedFolderDepth() {
@@ -6955,12 +8476,8 @@ function setWidgetsRelatedPrimaryRange(range, persist = true, refresh = true) {
     }
 
     if (refresh) {
-        try {
-            const maybePromise = updateWidgetsRelatedWidget();
-            if (maybePromise && typeof maybePromise.catch === 'function') {
-                maybePromise.catch(() => { });
-            }
-        } catch (_) { }
+        markWidgetsDirty('related', { schedule: false });
+        updateWidgetsViewData({ targets: ['related'] }).catch(() => { });
     }
 
     return safe;
@@ -6979,12 +8496,8 @@ function setWidgetsRelatedFolderDepth(mode, persist = true, refresh = true) {
     updateWidgetsRelatedDepthButtonsState();
 
     if (refresh) {
-        try {
-            const maybePromise = updateWidgetsRelatedWidget();
-            if (maybePromise && typeof maybePromise.catch === 'function') {
-                maybePromise.catch(() => { });
-            }
-        } catch (_) { }
+        markWidgetsDirty('related', { schedule: false });
+        updateWidgetsViewData({ targets: ['related'] }).catch(() => { });
     }
 
     return safe;
@@ -7005,6 +8518,199 @@ function updateWidgetsRelatedDepthButtonsState() {
     }
 }
 
+function clearWidgetsTrendDataCaches(options = {}) {
+    const additionsOnly = options?.additionsOnly === true;
+    const historyOnly = options?.historyOnly === true;
+    if (!historyOnly) {
+        widgetsAdditionsWeekDataCache = null;
+        widgetsAdditionsTrendDataCache = null;
+    }
+    if (!additionsOnly) {
+        widgetsHistoryWeekDataCache = null;
+        widgetsHistoryTrendDataCache = null;
+    }
+}
+
+function normalizeWidgetsMiniViewMode(mode) {
+    const safe = String(mode || '').trim().toLowerCase();
+    if (safe === 'week-grid') return 'week-grid';
+    return 'line';
+}
+
+function normalizeWidgetsMiniRange(range) {
+    const safe = String(range || '').trim().toLowerCase();
+    if (safe === 'month30') return 'month30';
+    return 'week';
+}
+
+function normalizeWidgetsRankingVisualMode(mode) {
+    const safe = String(mode || '').trim().toLowerCase();
+    if (safe === 'pie') return 'pie';
+    return 'list';
+}
+
+function readWidgetsAdditionsViewMode() {
+    try {
+        return normalizeWidgetsMiniViewMode(localStorage.getItem(WIDGETS_ADDITIONS_VIEW_MODE_KEY) || 'line');
+    } catch (_) {
+        return 'line';
+    }
+}
+
+function readWidgetsAdditionsRange() {
+    try {
+        return normalizeWidgetsMiniRange(localStorage.getItem(WIDGETS_ADDITIONS_RANGE_KEY) || 'week');
+    } catch (_) {
+        return 'week';
+    }
+}
+
+function readWidgetsHistoryViewMode() {
+    try {
+        return normalizeWidgetsMiniViewMode(localStorage.getItem(WIDGETS_HISTORY_VIEW_MODE_KEY) || 'line');
+    } catch (_) {
+        return 'line';
+    }
+}
+
+function readWidgetsHistoryRange() {
+    try {
+        return normalizeWidgetsMiniRange(localStorage.getItem(WIDGETS_HISTORY_RANGE_KEY) || 'week');
+    } catch (_) {
+        return 'week';
+    }
+}
+
+function readWidgetsRankingVisualMode() {
+    try {
+        return normalizeWidgetsRankingVisualMode(localStorage.getItem(WIDGETS_RANKING_VISUAL_MODE_KEY) || 'list');
+    } catch (_) {
+        return 'list';
+    }
+}
+
+function writeWidgetsAdditionsViewMode(mode) {
+    const safe = normalizeWidgetsMiniViewMode(mode);
+    try { localStorage.setItem(WIDGETS_ADDITIONS_VIEW_MODE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsAdditionsRange(range) {
+    const safe = normalizeWidgetsMiniRange(range);
+    try { localStorage.setItem(WIDGETS_ADDITIONS_RANGE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsHistoryViewMode(mode) {
+    const safe = normalizeWidgetsMiniViewMode(mode);
+    try { localStorage.setItem(WIDGETS_HISTORY_VIEW_MODE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsHistoryRange(range) {
+    const safe = normalizeWidgetsMiniRange(range);
+    try { localStorage.setItem(WIDGETS_HISTORY_RANGE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsRankingVisualMode(mode) {
+    const safe = normalizeWidgetsRankingVisualMode(mode);
+    try { localStorage.setItem(WIDGETS_RANKING_VISUAL_MODE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function getWidgetsMiniRangeLabel(range) {
+    const safe = normalizeWidgetsMiniRange(range);
+    return safe === 'month30'
+        ? i18n.widgetsChartRangeMonth30[currentLang]
+        : i18n.widgetsChartRangeWeek[currentLang];
+}
+
+function getWidgetsMiniViewModeLabel(mode, range = 'week') {
+    const safe = normalizeWidgetsMiniViewMode(mode);
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (safe === 'week-grid' && safeRange === 'month30' && i18n.widgetsChartViewMonthGrid?.[currentLang]) {
+        return i18n.widgetsChartViewMonthGrid[currentLang];
+    }
+    return safe === 'week-grid'
+        ? i18n.widgetsChartViewWeekGrid[currentLang]
+        : i18n.widgetsChartViewLine[currentLang];
+}
+
+function getWidgetsEffectiveMiniViewMode(mode, range) {
+    const safeMode = normalizeWidgetsMiniViewMode(mode);
+    return safeMode;
+}
+
+function getToggleToTitle(label) {
+    if (currentLang === 'zh_CN') {
+        return `切换至${label}`;
+    }
+    return `Switch to ${label}`;
+}
+
+function updateWidgetsAdditionsToggleLabel() {
+    const safeRange = readWidgetsAdditionsRange();
+    const rangeBtn = document.getElementById('widgetsAdditionsRangeToggleBtn');
+    if (rangeBtn) {
+        const currentLabel = getWidgetsMiniRangeLabel(safeRange);
+        const nextRange = safeRange === 'week' ? 'month30' : 'week';
+        const nextLabel = getWidgetsMiniRangeLabel(nextRange);
+        rangeBtn.textContent = currentLabel;
+        rangeBtn.title = getToggleToTitle(nextLabel);
+        rangeBtn.setAttribute('aria-label', rangeBtn.title);
+    }
+
+    const viewBtn = document.getElementById('widgetsAdditionsViewToggleBtn');
+    if (viewBtn) {
+        const safeMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), safeRange);
+        const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
+        const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
+        viewBtn.textContent = nextLabel;
+        viewBtn.title = getToggleToTitle(nextLabel);
+        viewBtn.setAttribute('aria-label', viewBtn.title);
+    }
+}
+
+function updateWidgetsHistoryToggleLabel() {
+    const safeRange = readWidgetsHistoryRange();
+    const rangeBtn = document.getElementById('widgetsHistoryRangeToggleBtn');
+    if (rangeBtn) {
+        const currentLabel = getWidgetsMiniRangeLabel(safeRange);
+        const nextRange = safeRange === 'week' ? 'month30' : 'week';
+        const nextLabel = getWidgetsMiniRangeLabel(nextRange);
+        rangeBtn.textContent = currentLabel;
+        rangeBtn.title = getToggleToTitle(nextLabel);
+        rangeBtn.setAttribute('aria-label', rangeBtn.title);
+    }
+
+    const viewBtn = document.getElementById('widgetsHistoryViewToggleBtn');
+    if (viewBtn) {
+        const safeMode = getWidgetsEffectiveMiniViewMode(readWidgetsHistoryViewMode(), safeRange);
+        const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
+        const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
+        viewBtn.textContent = nextLabel;
+        viewBtn.title = getToggleToTitle(nextLabel);
+        viewBtn.setAttribute('aria-label', viewBtn.title);
+    }
+}
+
+function updateWidgetsRankingVisualToggleLabel(mode) {
+    const btn = document.getElementById('widgetsRankingVisualToggleBtn');
+    if (!btn) return;
+
+    const safeMode = mode
+        ? normalizeWidgetsRankingVisualMode(mode)
+        : readWidgetsRankingVisualMode();
+    const nextMode = safeMode === 'pie' ? 'list' : 'pie';
+    const label = nextMode === 'pie'
+        ? i18n.widgetsRankingVisualPie[currentLang]
+        : i18n.widgetsRankingVisualList[currentLang];
+    btn.textContent = label;
+    btn.title = getToggleToTitle(label);
+    btn.setAttribute('aria-label', btn.title);
+}
+
 function getWidgetsRankingRangeConfig(range) {
     const safeRange = normalizeWidgetsRankingRange(range);
     const map = {
@@ -7017,10 +8723,27 @@ function getWidgetsRankingRangeConfig(range) {
     return map[safeRange] || map.day;
 }
 
+function getNextWidgetsRankingRange(range) {
+    const ranges = ['day', 'week', 'month', 'year', 'all'];
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const currentIndex = Math.max(0, ranges.indexOf(safeRange));
+    return ranges[(currentIndex + 1) % ranges.length];
+}
+
 function normalizeWidgetsRankingViewMode(mode) {
     const safe = normalizeBrowsingRankingViewMode(mode);
     if (safe === 'bookmark' || safe === 'folder' || safe === 'domain' || safe === 'subdomain') return safe;
     return 'bookmark';
+}
+
+function readWidgetsRankingViewModePreference(fallback = 'bookmark') {
+    try {
+        const saved = localStorage.getItem('browsingRankingViewMode');
+        if (saved) {
+            return normalizeWidgetsRankingViewMode(saved);
+        }
+    } catch (_) { }
+    return normalizeWidgetsRankingViewMode(browsingRankingViewMode || fallback);
 }
 
 function getWidgetsRankingModeConfig(mode) {
@@ -7034,6 +8757,14 @@ function getWidgetsRankingModeConfig(mode) {
     return map[safeMode] || map.bookmark;
 }
 
+function getNextWidgetsRankingModeForToggle(mode) {
+    const modes = ['bookmark', 'folder', 'domain'];
+    const safeMode = normalizeWidgetsRankingViewMode(mode);
+    const currentIndex = Math.max(0, modes.indexOf(safeMode === 'subdomain' ? 'domain' : safeMode));
+    if (safeMode === 'subdomain') return 'domain';
+    return modes[(currentIndex + 1) % modes.length];
+}
+
 function updateWidgetsRankingRangeToggleLabel(range) {
     const btn = document.getElementById('widgetsRankingRangeToggleBtn');
     if (!btn) return;
@@ -7041,13 +8772,11 @@ function updateWidgetsRankingRangeToggleLabel(range) {
     const safeRange = normalizeWidgetsRankingRange(
         range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day'
     );
-    const activeConfig = getWidgetsRankingRangeConfig(safeRange);
-    const toggleLabel = i18n.widgetsRankingRangeToggle
-        ? i18n.widgetsRankingRangeToggle[currentLang]
-        : (currentLang === 'zh_CN' ? '切换范围' : 'Switch range');
-
-    btn.textContent = activeConfig.text;
-    btn.title = `${toggleLabel} (${activeConfig.text})`;
+    const currentConfig = getWidgetsRankingRangeConfig(safeRange);
+    const nextRange = getNextWidgetsRankingRange(safeRange);
+    const nextConfig = getWidgetsRankingRangeConfig(nextRange);
+    btn.textContent = currentConfig.text;
+    btn.title = getToggleToTitle(nextConfig.text);
     btn.setAttribute('aria-label', btn.title);
 }
 
@@ -7057,26 +8786,28 @@ function updateWidgetsRankingModeToggleLabel(mode) {
     const titleEl = document.getElementById('widgetsRankingWidgetTitle');
     if (!modeBtn && !subdomainBtn) return;
 
-    const safeMode = normalizeWidgetsRankingViewMode(mode || browsingRankingViewMode || localStorage.getItem('browsingRankingViewMode') || 'bookmark');
-    const primaryMode = safeMode === 'subdomain' ? 'domain' : safeMode;
-    const modeConfig = getWidgetsRankingModeConfig(primaryMode);
-    const subdomainConfig = getWidgetsRankingModeConfig('subdomain');
-    const toggleLabel = i18n.widgetsRankingModeToggle
-        ? i18n.widgetsRankingModeToggle[currentLang]
-        : (currentLang === 'zh_CN' ? '切换模式' : 'Switch mode');
-
+    const safeMode = mode
+        ? normalizeWidgetsRankingViewMode(mode)
+        : readWidgetsRankingViewModePreference('bookmark');
+    const currentPrimaryMode = safeMode === 'subdomain' ? 'domain' : safeMode;
+    const currentModeConfig = getWidgetsRankingModeConfig(currentPrimaryMode);
+    const nextPrimaryMode = getNextWidgetsRankingModeForToggle(safeMode);
+    const nextModeConfig = getWidgetsRankingModeConfig(nextPrimaryMode);
     if (modeBtn) {
-        modeBtn.textContent = modeConfig.text;
-        modeBtn.title = `${toggleLabel} (${modeConfig.text})`;
+        modeBtn.textContent = currentModeConfig.text;
+        modeBtn.title = getToggleToTitle(nextModeConfig.text);
         modeBtn.setAttribute('aria-label', modeBtn.title);
         modeBtn.style.marginLeft = (safeMode === 'domain' || safeMode === 'subdomain') ? '2px' : 'auto';
     }
 
     if (subdomainBtn) {
         const shouldShowSubdomainBtn = safeMode === 'domain' || safeMode === 'subdomain';
+        const currentSubdomainConfig = getWidgetsRankingModeConfig('subdomain');
+        const nextSubdomainMode = safeMode === 'subdomain' ? 'domain' : 'subdomain';
+        const nextSubdomainConfig = getWidgetsRankingModeConfig(nextSubdomainMode);
         subdomainBtn.style.display = shouldShowSubdomainBtn ? 'inline-flex' : 'none';
-        subdomainBtn.textContent = subdomainConfig.text;
-        subdomainBtn.title = `${toggleLabel} (${subdomainConfig.text})`;
+        subdomainBtn.textContent = currentSubdomainConfig.text;
+        subdomainBtn.title = getToggleToTitle(nextSubdomainConfig.text);
         subdomainBtn.setAttribute('aria-label', subdomainBtn.title);
         subdomainBtn.style.color = safeMode === 'subdomain' ? 'var(--accent-primary)' : 'var(--text-tertiary)';
     }
@@ -7093,13 +8824,377 @@ function updateWidgetsRankingModeToggleLabel(mode) {
     }
 }
 
+function getWidgetsRankingFastCacheKey(range, mode) {
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const safeMode = normalizeWidgetsRankingViewMode(mode);
+    return `${safeRange}::${safeMode}`;
+}
+
+function readWidgetsRankingFastItems(range, mode) {
+    if (!(widgetsRankingFastCache instanceof Map)) {
+        widgetsRankingFastCache = new Map();
+        return null;
+    }
+
+    const key = getWidgetsRankingFastCacheKey(range, mode);
+    const cached = widgetsRankingFastCache.get(key);
+    if (!cached || !Array.isArray(cached.items)) return null;
+
+    const loadedAt = Number(cached.loadedAt || 0);
+    if (!loadedAt || (Date.now() - loadedAt) > WIDGETS_RANKING_FAST_CACHE_TTL_MS) {
+        widgetsRankingFastCache.delete(key);
+        return null;
+    }
+
+    return cached.items;
+}
+
+function writeWidgetsRankingFastItems(range, mode, items = []) {
+    if (!(widgetsRankingFastCache instanceof Map)) {
+        widgetsRankingFastCache = new Map();
+    }
+
+    const key = getWidgetsRankingFastCacheKey(range, mode);
+    const safeItems = (Array.isArray(items) ? items : [])
+        .slice(0, 5)
+        .map((item) => ({
+            title: item?.title || '',
+            hint: item?.hint || '',
+            count: Number(item?.count) || 0,
+            url: item?.url || '',
+            rowType: item?.rowType || ''
+        }));
+
+    widgetsRankingFastCache.set(key, {
+        loadedAt: Date.now(),
+        items: safeItems
+    });
+}
+
+function clearWidgetsRankingFastItems() {
+    if (widgetsRankingFastCache instanceof Map) {
+        widgetsRankingFastCache.clear();
+        return;
+    }
+    widgetsRankingFastCache = new Map();
+}
+
+function getWidgetsRankingRangeStartMs(range, boundaries) {
+    const safeRange = normalizeWidgetsRankingRange(range);
+    if (safeRange === 'day') return Number(boundaries?.dayStart || 0);
+    if (safeRange === 'week') return Number(boundaries?.weekStart || 0);
+    if (safeRange === 'year') return Number(boundaries?.yearStart || 0);
+    if (safeRange === 'all') return 0;
+    return Number(boundaries?.monthStart || 0);
+}
+
+function isWidgetsInFirstVisualOnlyWindow(options = {}) {
+    if (options?.bypassVisualGate === true) return false;
+    if (currentView !== 'widgets') return false;
+    if (!widgetsFirstVisualOnlyUntil) return false;
+    return Date.now() < widgetsFirstVisualOnlyUntil;
+}
+
+function isWidgetsInLoadingGuardWindow() {
+    if (currentView !== 'widgets') return false;
+    if (!widgetsLoadingGuardUntil) return false;
+    return Date.now() < widgetsLoadingGuardUntil;
+}
+
+function isWidgetsBrowsingSourceStillLoading() {
+    const calendar = window.browsingHistoryCalendarInstance;
+    if (!calendar) return true;
+    if (!calendar.bookmarksByDate || typeof calendar.bookmarksByDate.size !== 'number') return true;
+    if (calendar.initCompleted === false) return true;
+    if (calendar.useNewArchitecture && calendar.dbManager && calendar.initCompleted !== true) return true;
+    return false;
+}
+
+function isWidgetsAdditionsSourceStillLoading() {
+    const hasCachedBookmarks = additionsCacheRestored && Array.isArray(allBookmarks) && allBookmarks.length >= 0;
+    if (hasCachedBookmarks && allBookmarks.length > 0) return false;
+
+    const calendar = window.bookmarkCalendarInstance;
+    if (!calendar) {
+        return !additionsCacheRestored;
+    }
+    if (!calendar.bookmarksByDate || typeof calendar.bookmarksByDate.size !== 'number') return true;
+    if (calendar.initCompleted === false) return true;
+    if (calendar.useNewArchitecture && calendar.dbManager && calendar.initCompleted !== true) return true;
+    return false;
+}
+
+function getWidgetsLoadingText() {
+    if (i18n.loading && i18n.loading[currentLang]) {
+        return i18n.loading[currentLang];
+    }
+    return currentLang === 'zh_CN' ? '加载中...' : 'Loading...';
+}
+
+function isWidgetsRankingStatsTransientLoading(stats) {
+    return Boolean(
+        stats
+        && stats.error === 'noBookmarks'
+        && stats.transient === true
+    );
+}
+
+function hasWidgetsRankingVisualRows(widgetList) {
+    if (!widgetList) return false;
+    return Boolean(widgetList.querySelector('.ranking-item, .widgets-pie-shell'));
+}
+
+function hasWidgetsWeekVisualRows(widgetList) {
+    if (!widgetList) return false;
+    return Boolean(widgetList.querySelector('.widgets-week-days-row, .widgets-mini-chart-wrap'));
+}
+
+function hasWidgetsAnyVisualRows() {
+    return Boolean(
+        document.querySelector('#widgetsTrackingWidgetList .time-tracking-widget-item')
+        || document.querySelector('#widgetsRankingWidgetList .ranking-item')
+        || document.querySelector('#widgetsRankingWidgetList .widgets-pie-shell')
+        || document.querySelector('#widgetsAdditionsWeekWidgetList .widgets-week-days-row')
+        || document.querySelector('#widgetsAdditionsWeekWidgetList .widgets-mini-chart-wrap')
+        || document.querySelector('#widgetsHistoryWeekWidgetList .widgets-week-days-row')
+        || document.querySelector('#widgetsHistoryWeekWidgetList .widgets-mini-chart-wrap')
+        || document.querySelector('#widgetsRelatedList .widgets-related-level-row')
+    );
+}
+
+function shouldRunWidgetsFullRefreshOnOpen(hasVisualRows = false) {
+    if (!hasVisualRows) return true;
+    const lastFullRefreshTs = readLocalNumber(WIDGETS_OPEN_FULL_REFRESH_TS_KEY, 0);
+    if (!lastFullRefreshTs) return true;
+    return (Date.now() - lastFullRefreshTs) >= WIDGETS_OPEN_FULL_REFRESH_MIN_GAP_MS;
+}
+
+function markWidgetsFullRefreshOnOpenNow(ts = Date.now()) {
+    writeLocalNumber(WIDGETS_OPEN_FULL_REFRESH_TS_KEY, ts);
+}
+
+function paintWidgetsLoadingPlaceholders(targetsLike) {
+    const targets = normalizeWidgetsRefreshTargets(targetsLike);
+    if (!targets.length) return;
+    const loadingText = getWidgetsLoadingText();
+
+    if (targets.includes('tracking')) {
+        const widgetList = document.getElementById('widgetsTrackingWidgetList');
+        if (widgetList && !widgetList.querySelector('.time-tracking-widget-item')) {
+            const nextSignature = `loading::prefill::${currentLang}`;
+            if (widgetsTrackingRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsTrackingRenderSignature = nextSignature;
+            }
+        }
+    }
+
+    if (targets.includes('ranking')) {
+        const widgetList = document.getElementById('widgetsRankingWidgetList');
+        if (widgetList && !hasWidgetsRankingVisualRows(widgetList)) {
+            const nextSignature = `loading::prefill::${currentLang}`;
+            if (widgetsRankingRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsRankingRenderSignature = nextSignature;
+            }
+        }
+    }
+
+    if (targets.includes('additionsWeek')) {
+        const widgetList = document.getElementById('widgetsAdditionsWeekWidgetList');
+        if (widgetList && !hasWidgetsWeekVisualRows(widgetList)) {
+            const currentRange = readWidgetsAdditionsRange();
+            const currentViewMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), currentRange);
+            const snapshotRendered = tryRenderWidgetsAdditionsSnapshot(widgetList, {
+                range: currentRange,
+                viewMode: currentViewMode,
+                emptyText: getWidgetsAdditionsEmptyText()
+            });
+            if (!snapshotRendered.rendered) {
+                const nextSignature = `loading::prefill::${currentLang}`;
+                if (widgetsAdditionsWeekRenderSignature !== nextSignature) {
+                    widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                    widgetsAdditionsWeekRenderSignature = nextSignature;
+                }
+            }
+        }
+    }
+
+    if (targets.includes('historyWeek')) {
+        const widgetList = document.getElementById('widgetsHistoryWeekWidgetList');
+        if (widgetList && !hasWidgetsWeekVisualRows(widgetList)) {
+            const nextSignature = `loading::prefill::${currentLang}`;
+            if (widgetsHistoryWeekRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsHistoryWeekRenderSignature = nextSignature;
+            }
+        }
+    }
+
+    if (targets.includes('related')) {
+        const listEl = document.getElementById('widgetsRelatedList');
+        if (listEl && !listEl.querySelector('.widgets-related-level-row')) {
+            const nextSignature = `loading::prefill::${currentLang}`;
+            if (widgetsRelatedRenderSignature !== nextSignature) {
+                listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsRelatedRenderSignature = nextSignature;
+            }
+        }
+    }
+}
+
+async function buildWidgetsRankingFastStats(range) {
+    if (typeof readHistoryCacheRange !== 'function') return null;
+
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const boundaries = getBrowsingClickRankingBoundaries();
+    const nowMs = Number(boundaries?.now || Date.now());
+    const rangeStartMs = Math.max(0, getWidgetsRankingRangeStartMs(safeRange, boundaries));
+    const startKey = getWidgetsDateKey(rangeStartMs);
+    const endKey = getWidgetsDateKey(nowMs);
+    if (!startKey || !endKey) return null;
+
+    let cached = null;
+    try {
+        cached = await readHistoryCacheRange(startKey, endKey);
+    } catch (_) {
+        return null;
+    }
+
+    const statsMap = new Map();
+    const rows = Array.isArray(cached?.records) ? cached.records : [];
+    rows.forEach(([dateKey, records]) => {
+        if (!Array.isArray(records) || records.length === 0) return;
+
+        records.forEach((record) => {
+            const url = String(record?.url || '').trim();
+            if (!url) return;
+
+            const titleText = typeof record?.title === 'string' ? record.title.trim() : '';
+            const key = titleText ? `title:${titleText}` : `url:${url}`;
+            const fallbackDate = dateKey ? new Date(dateKey).getTime() : 0;
+            const visitTime = Number(record?.visitTime || record?.dateAdded || fallbackDate || 0);
+            if (!Number.isFinite(visitTime) || visitTime <= 0) return;
+            if (visitTime < rangeStartMs || visitTime > nowMs) return;
+
+            if (!statsMap.has(key)) {
+                statsMap.set(key, {
+                    url,
+                    title: titleText || url,
+                    lastVisitTime: 0,
+                    filteredCount: 0
+                });
+            }
+
+            const stat = statsMap.get(key);
+            stat.filteredCount += 1;
+            if (visitTime > stat.lastVisitTime) {
+                stat.lastVisitTime = visitTime;
+            }
+            if (!stat.url && url) {
+                stat.url = url;
+            }
+            if ((!stat.title || stat.title === stat.url) && titleText) {
+                stat.title = titleText;
+            }
+        });
+    });
+
+    return {
+        items: Array.from(statsMap.values()),
+        boundaries,
+        filteredRange: safeRange,
+        source: 'history-cache'
+    };
+}
+
+function clearWidgetsRankingHydrationSchedule() {
+    if (widgetsRankingHydrationScheduleTimer) {
+        clearTimeout(widgetsRankingHydrationScheduleTimer);
+        widgetsRankingHydrationScheduleTimer = null;
+    }
+    if (
+        widgetsRankingHydrationIdleCallbackId !== null &&
+        typeof window !== 'undefined' &&
+        typeof window.cancelIdleCallback === 'function'
+    ) {
+        try {
+            window.cancelIdleCallback(widgetsRankingHydrationIdleCallbackId);
+        } catch (_) { }
+    }
+    widgetsRankingHydrationIdleCallbackId = null;
+}
+
+function runWidgetsRankingHydration(reason = 'widgets-fast-path') {
+    if (widgetsRankingHydrationPromise) return widgetsRankingHydrationPromise;
+
+    widgetsRankingHydrationPromise = (async () => {
+        try {
+            await ensureBrowsingClickRankingStats();
+            clearWidgetsRankingFastItems();
+            if (currentView === 'widgets') {
+                markWidgetsDirty('ranking', { delayMs: 120 });
+            }
+        } catch (error) {
+            console.warn('[Widgets] 点击排行后台补算失败:', reason, error);
+        } finally {
+            widgetsRankingHydrationPromise = null;
+        }
+    })();
+
+    return widgetsRankingHydrationPromise;
+}
+
+function scheduleWidgetsRankingHydration(reason = 'widgets-fast-path') {
+    if (widgetsRankingHydrationPromise) return widgetsRankingHydrationPromise;
+    if (widgetsRankingHydrationScheduleTimer || widgetsRankingHydrationIdleCallbackId !== null) {
+        return null;
+    }
+
+    const now = Date.now();
+    if ((now - widgetsRankingHydrationLastAt) < WIDGETS_RANKING_HYDRATION_MIN_GAP_MS) {
+        return null;
+    }
+    widgetsRankingHydrationLastAt = now;
+
+    const runHydration = () => {
+        clearWidgetsRankingHydrationSchedule();
+        if (currentView !== 'widgets') return null;
+        return runWidgetsRankingHydration(reason);
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        widgetsRankingHydrationIdleCallbackId = window.requestIdleCallback(
+            () => {
+                runHydration();
+            },
+            { timeout: WIDGETS_RANKING_HYDRATION_IDLE_TIMEOUT_MS }
+        );
+        widgetsRankingHydrationScheduleTimer = setTimeout(() => {
+            if (widgetsRankingHydrationIdleCallbackId === null) return;
+            runHydration();
+        }, WIDGETS_RANKING_HYDRATION_IDLE_TIMEOUT_MS + 100);
+        return null;
+    }
+
+    widgetsRankingHydrationScheduleTimer = setTimeout(() => {
+        runHydration();
+    }, WIDGETS_RANKING_HYDRATION_IDLE_DELAY_MS);
+    return null;
+}
+
 async function getWidgetsRankingModeItems(range, stats, mode) {
-    if (!stats || stats.error || !Array.isArray(stats.items)) {
+    const sourceStats = (stats && !stats.error && Array.isArray(stats.items))
+        ? stats
+        : ((browsingClickRankingStats && !browsingClickRankingStats.error && Array.isArray(browsingClickRankingStats.items))
+            ? browsingClickRankingStats
+            : null);
+    if (!sourceStats || !Array.isArray(sourceStats.items)) {
         return [];
     }
 
     const safeMode = normalizeWidgetsRankingViewMode(mode);
-    const baseItems = getBrowsingRankingItemsForRange(range);
+    const baseItems = getBrowsingRankingItemsForRangeFromStats(sourceStats, range);
     if (!baseItems.length) return [];
 
     if (safeMode === 'bookmark') {
@@ -7278,7 +9373,9 @@ function getWidgetsWeekDates() {
     return dates;
 }
 
-function getWidgetsDateKey(date) {
+function getWidgetsDateKey(dateInput) {
+    const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return '';
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
@@ -7342,10 +9439,12 @@ function getWidgetsWeekdayLabel(date) {
     return date.toLocaleDateString('en-US', { weekday: 'short' });
 }
 
-function formatWidgetsWeekTotal(total) {
+function formatWidgetsRangeTotal(total, range = 'week') {
     const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
-    if (currentLang === 'zh_CN') return `本周合集${safeTotal}条`;
-    return `This week total ${safeTotal}`;
+    if (currentLang === 'zh_CN') {
+        return `合计${safeTotal}条`;
+    }
+    return `Total ${safeTotal}`;
 }
 
 function computeWidgetsWeekDailyCounts(bookmarksByDate) {
@@ -7362,6 +9461,993 @@ function computeWidgetsWeekDailyCounts(bookmarksByDate) {
 
     const total = dailyCounts.reduce((sum, item) => sum + item.count, 0);
     return { dailyCounts, total };
+}
+
+function computeWidgetsWeekDailyCountsFromBookmarkEntries(entries = []) {
+    const weekDates = getWidgetsWeekDates();
+    const weekKeys = weekDates.map((date) => getWidgetsDateKey(date));
+    const countByKey = new Map(weekKeys.map((key) => [key, 0]));
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const rawDateAdded = Number(entry?.dateAdded || 0);
+        if (!Number.isFinite(rawDateAdded) || rawDateAdded <= 0) return;
+        const dateKey = getWidgetsDateKey(rawDateAdded);
+        if (!countByKey.has(dateKey)) return;
+        countByKey.set(dateKey, Number(countByKey.get(dateKey) || 0) + 1);
+    });
+
+    const dailyCounts = weekDates.map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        return {
+            date,
+            label: getWidgetsWeekdayLabel(date),
+            count: Number(countByKey.get(dateKey) || 0)
+        };
+    });
+
+    const total = dailyCounts.reduce((sum, item) => sum + item.count, 0);
+    return { dailyCounts, total };
+}
+
+function getWidgetsRecentDates(days = 30) {
+    const safeDays = Math.max(1, Number.isFinite(Number(days)) ? Math.floor(Number(days)) : 30);
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    const dates = [];
+    for (let i = safeDays - 1; i >= 0; i -= 1) {
+        const date = new Date(base);
+        date.setDate(base.getDate() - i);
+        dates.push(date);
+    }
+    return dates;
+}
+
+function getWidgetsTrendDates(range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (safeRange === 'month30') return getWidgetsRecentDates(30);
+    return getWidgetsWeekDates();
+}
+
+function formatWidgetsChartDateLabel(dateInput, range = 'week') {
+    const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return '--';
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (safeRange === 'week') {
+        if (currentLang === 'zh_CN') {
+            return getWidgetsWeekdayLabel(date).replace(/^周/, '');
+        }
+        return date.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+
+    if (currentLang === 'zh_CN') {
+        return `${date.getMonth() + 1}/${date.getDate()}`;
+    }
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatWidgetsChartDateTooltip(dateInput) {
+    const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return '--';
+    if (currentLang === 'zh_CN') {
+        return `${date.getMonth() + 1}月${date.getDate()}日`;
+    }
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function buildWidgetsTrendPointsFromCountMap(dates = [], countByKey = new Map(), range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    return (Array.isArray(dates) ? dates : []).map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        const count = Number(countByKey.get(dateKey) || 0);
+        return {
+            date,
+            dateKey,
+            xLabel: formatWidgetsChartDateLabel(date, safeRange),
+            xTooltip: formatWidgetsChartDateTooltip(date),
+            count: Number.isFinite(count) && count > 0 ? Math.floor(count) : 0
+        };
+    });
+}
+
+function buildWidgetsTrendCountMapFromEntries(entries = [], dateField = 'dateAdded', validDateKeys = new Set()) {
+    const countByKey = new Map();
+    validDateKeys.forEach((key) => countByKey.set(key, 0));
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const raw = Number(entry?.[dateField] || 0);
+        if (!Number.isFinite(raw) || raw <= 0) return;
+        const dateKey = getWidgetsDateKey(raw);
+        if (!countByKey.has(dateKey)) return;
+        countByKey.set(dateKey, Number(countByKey.get(dateKey) || 0) + 1);
+    });
+    return countByKey;
+}
+
+function readAdditionsSnapshotCountByDate(snapshot, dateKey = '') {
+    if (!snapshot || !snapshot.countByKey || typeof snapshot.countByKey !== 'object') return 0;
+    const safeDateKey = String(dateKey || '');
+    const rawValue = snapshot.countByKey[safeDateKey];
+    const count = Number(rawValue || 0);
+    return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, range = 'week') {
+    if (!snapshot || !snapshot.countByKey || typeof snapshot.countByKey !== 'object') return null;
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const dates = getWidgetsTrendDates(safeRange);
+    const points = dates.map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        const count = readAdditionsSnapshotCountByDate(snapshot, dateKey);
+        return {
+            date,
+            dateKey,
+            xLabel: formatWidgetsChartDateLabel(date, safeRange),
+            xTooltip: formatWidgetsChartDateTooltip(date),
+            count
+        };
+    });
+    const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    return {
+        range: safeRange,
+        points,
+        total,
+        loadedAt: Number(snapshot.ts || Date.now())
+    };
+}
+
+function buildWidgetsWeekDailyCountsFromAdditionsSnapshot(snapshot) {
+    if (!snapshot || !snapshot.countByKey || typeof snapshot.countByKey !== 'object') {
+        return { dailyCounts: [], total: 0 };
+    }
+    const weekDates = getWidgetsWeekDates();
+    const dailyCounts = weekDates.map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        const count = readAdditionsSnapshotCountByDate(snapshot, dateKey);
+        return {
+            date,
+            label: getWidgetsWeekdayLabel(date),
+            count
+        };
+    });
+    const total = dailyCounts.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    return { dailyCounts, total };
+}
+
+function getWidgetsAdditionsEmptyText() {
+    if (i18n.widgetsAdditionsWeekWidgetEmpty && i18n.widgetsAdditionsWeekWidgetEmpty[currentLang]) {
+        return i18n.widgetsAdditionsWeekWidgetEmpty[currentLang];
+    }
+    return currentLang === 'zh_CN' ? '暂无本周添加记录' : 'No additions this week';
+}
+
+function buildWidgetsAdditionsSnapshotRenderData(range = 'week', viewMode = 'week-grid') {
+    const snapshot = readAdditionsWidgetsSnapshot();
+    if (!snapshot) return null;
+
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const safeViewMode = getWidgetsEffectiveMiniViewMode(viewMode, safeRange);
+
+    if (safeViewMode === 'week-grid') {
+        if (safeRange === 'month30') {
+            const trendPayload = buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, safeRange) || { range: safeRange, points: [], total: 0 };
+            const monthGridPayload = buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload.points || [], { range: safeRange });
+            const total = Number(trendPayload?.total || 0);
+            const signature = getWidgetsMonthGridSignature(monthGridPayload, safeRange, safeViewMode);
+            return {
+                snapshot,
+                range: safeRange,
+                viewMode: safeViewMode,
+                total,
+                signature,
+                trendPayload,
+                monthGridPayload
+            };
+        }
+
+        const weekPayload = buildWidgetsWeekDailyCountsFromAdditionsSnapshot(snapshot);
+        const dailyCounts = Array.isArray(weekPayload?.dailyCounts) ? weekPayload.dailyCounts : [];
+        const total = Number(weekPayload?.total || 0);
+        const signature = `range:${safeRange}::view:${safeViewMode}::${currentLang}::${dailyCounts.map((item) => Number(item?.count || 0)).join(',')}::${total}`;
+        return {
+            snapshot,
+            range: safeRange,
+            viewMode: safeViewMode,
+            total,
+            signature,
+            dailyCounts
+        };
+    }
+
+    const trendPayload = buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, safeRange) || { range: safeRange, points: [], total: 0 };
+    const total = Number(trendPayload?.total || 0);
+    const signature = `range:${safeRange}::view:${safeViewMode}::${currentLang}::${(trendPayload?.points || []).map((item) => `${item?.dateKey || ''}:${Number(item?.count || 0)}`).join(',')}::${total}`;
+    return {
+        snapshot,
+        range: safeRange,
+        viewMode: safeViewMode,
+        total,
+        signature,
+        trendPayload
+    };
+}
+
+function tryRenderWidgetsAdditionsSnapshot(widgetList, options = {}) {
+    if (!widgetList) return { rendered: false, changed: false, total: 0, signature: '' };
+
+    const safeRange = normalizeWidgetsMiniRange(options.range || readWidgetsAdditionsRange());
+    const safeViewMode = getWidgetsEffectiveMiniViewMode(
+        options.viewMode || readWidgetsAdditionsViewMode(),
+        safeRange
+    );
+    const emptyText = options.emptyText || getWidgetsAdditionsEmptyText();
+
+    const payload = buildWidgetsAdditionsSnapshotRenderData(safeRange, safeViewMode);
+    if (!payload) return { rendered: false, changed: false, total: 0, signature: '' };
+
+    const hasChanged = widgetsAdditionsWeekRenderSignature !== payload.signature;
+    if (hasChanged) {
+        setWidgetsWeekWidgetHeaderCount('additions', payload.total, safeRange);
+        if (payload.viewMode === 'week-grid') {
+            if (payload.range === 'month30') {
+                renderWidgetsMiniMonthGrid(widgetList, payload.monthGridPayload || null, {
+                    range: safeRange,
+                    emptyText,
+                    onDayClick: (dayItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
+                        if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
+                        navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                    }
+                });
+            } else {
+                renderWidgetsWeekSummary(widgetList, payload.dailyCounts || [], payload.total, emptyText, 'additions');
+            }
+        } else {
+            renderWidgetsMiniLineChart(widgetList, payload.trendPayload || { range: safeRange, points: [], total: 0 }, {
+                range: safeRange,
+                emptyText,
+                onPointClick: (point) => {
+                    const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
+                    if (!targetDateKey || Number(point?.count || 0) <= 0) return;
+                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                }
+            });
+        }
+        widgetsAdditionsWeekRenderSignature = payload.signature;
+    }
+
+    return {
+        rendered: true,
+        changed: hasChanged,
+        total: payload.total,
+        signature: payload.signature
+    };
+}
+
+function buildWidgetsTrendPayloadFromBookmarksByDate(bookmarksByDate, range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const dates = getWidgetsTrendDates(safeRange);
+    const dateKeys = dates.map((date) => getWidgetsDateKey(date));
+    const countByKey = new Map(dateKeys.map((key) => [key, 0]));
+
+    if (bookmarksByDate && typeof bookmarksByDate.get === 'function') {
+        dateKeys.forEach((dateKey) => {
+            const records = bookmarksByDate.get(dateKey) || [];
+            countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
+        });
+    }
+
+    const points = buildWidgetsTrendPointsFromCountMap(dates, countByKey, safeRange);
+    const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    return {
+        range: safeRange,
+        points,
+        total,
+        loadedAt: Date.now()
+    };
+}
+
+function getWidgetsMiniCalendarWeekdayLabels() {
+    const fallback = currentLang === 'zh_CN'
+        ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+        : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const source = Array.isArray(i18n.calendarWeekdays?.[currentLang])
+        ? i18n.calendarWeekdays[currentLang]
+        : fallback;
+    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0;
+    return source.slice(weekStartDay).concat(source.slice(0, weekStartDay));
+}
+
+function buildWidgetsMiniMonthGridPayloadFromTrendPoints(points = [], options = {}) {
+    const safeRange = normalizeWidgetsMiniRange(options.range || 'month30');
+    const safePoints = Array.isArray(points) ? points : [];
+    const countByKey = new Map();
+    let anchorDate = null;
+
+    safePoints.forEach((point) => {
+        const dateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
+        if (!dateKey) return;
+        const count = Number(point?.count || 0);
+        const safeCount = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+        countByKey.set(dateKey, safeCount);
+        const parsed = parseWidgetsDateKey(dateKey);
+        if (!parsed) return;
+        if (!anchorDate || parsed.getTime() > anchorDate.getTime()) {
+            anchorDate = parsed;
+        }
+    });
+
+    if (!anchorDate) {
+        anchorDate = new Date();
+        anchorDate.setHours(0, 0, 0, 0);
+    }
+
+    const year = anchorDate.getFullYear();
+    const month = anchorDate.getMonth();
+    const monthStart = new Date(year, month, 1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(year, month + 1, 0);
+    monthEnd.setHours(0, 0, 0, 0);
+
+    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0;
+    const leading = (monthStart.getDay() - weekStartDay + 7) % 7;
+    const totalDays = monthEnd.getDate();
+    const todayKey = getWidgetsDateKey(new Date());
+    const cells = [];
+
+    for (let i = 0; i < leading; i += 1) {
+        cells.push({
+            key: `empty-head-${i}`,
+            empty: true
+        });
+    }
+
+    for (let day = 1; day <= totalDays; day += 1) {
+        const date = new Date(year, month, day);
+        date.setHours(0, 0, 0, 0);
+        const dateKey = getWidgetsDateKey(date);
+        const count = Number(countByKey.get(dateKey) || 0);
+        const inSourceWindow = countByKey.has(dateKey);
+        cells.push({
+            key: dateKey,
+            empty: false,
+            date,
+            dateKey,
+            day,
+            count,
+            inSourceWindow,
+            isToday: dateKey === todayKey
+        });
+    }
+
+    while (cells.length % 7 !== 0) {
+        cells.push({
+            key: `empty-tail-${cells.length}`,
+            empty: true
+        });
+    }
+
+    const monthNames = Array.isArray(i18n.calendarMonthNames?.[currentLang])
+        ? i18n.calendarMonthNames[currentLang]
+        : (currentLang === 'zh_CN'
+            ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+            : ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']);
+    const monthName = monthNames[month] || `${month + 1}`;
+    const monthLabel = currentLang === 'zh_CN' ? `${year}年${month + 1}月` : `${monthName} ${year}`;
+    const total = safePoints.reduce((sum, point) => sum + Math.max(0, Number(point?.count || 0)), 0);
+
+    return {
+        range: safeRange,
+        monthLabel,
+        weekdayLabels: getWidgetsMiniCalendarWeekdayLabels(),
+        cells,
+        total
+    };
+}
+
+function getWidgetsMonthGridSignature(monthPayload = null, range = 'month30', viewMode = 'week-grid') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const safeMode = normalizeWidgetsMiniViewMode(viewMode);
+    if (!monthPayload || !Array.isArray(monthPayload.cells)) {
+        return `range:${safeRange}::view:${safeMode}::${currentLang}::month-grid:empty`;
+    }
+
+    const cellSignature = monthPayload.cells.map((item) => {
+        if (item?.empty) return 'E';
+        const dateKey = normalizeWidgetsDateKey(item?.dateKey || '');
+        const count = Number(item?.count || 0);
+        const sourceFlag = item?.inSourceWindow ? 1 : 0;
+        return `${dateKey}:${count}:${sourceFlag}`;
+    }).join(',');
+    const total = Number(monthPayload.total || 0);
+    const monthLabel = String(monthPayload.monthLabel || '');
+    return `range:${safeRange}::view:${safeMode}::${currentLang}::month:${monthLabel}::${cellSignature}::${total}`;
+}
+
+function readWidgetsAdditionsTrendData(range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const now = Date.now();
+    if (
+        widgetsAdditionsTrendDataCache
+        && widgetsAdditionsTrendDataCache.range === safeRange
+        && (now - Number(widgetsAdditionsTrendDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
+    ) {
+        return widgetsAdditionsTrendDataCache;
+    }
+
+    const dates = getWidgetsTrendDates(safeRange);
+    const validKeys = new Set(dates.map((date) => getWidgetsDateKey(date)));
+    const countByKey = buildWidgetsTrendCountMapFromEntries(allBookmarks, 'dateAdded', validKeys);
+    const points = buildWidgetsTrendPointsFromCountMap(dates, countByKey, safeRange);
+    const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    widgetsAdditionsTrendDataCache = {
+        range: safeRange,
+        points,
+        total,
+        loadedAt: now
+    };
+    return widgetsAdditionsTrendDataCache;
+}
+
+async function readWidgetsHistoryTrendData(range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const now = Date.now();
+    if (
+        widgetsHistoryTrendDataCache
+        && widgetsHistoryTrendDataCache.range === safeRange
+        && (now - Number(widgetsHistoryTrendDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
+    ) {
+        return widgetsHistoryTrendDataCache;
+    }
+
+    const dates = getWidgetsTrendDates(safeRange);
+    const dateKeys = dates.map((date) => getWidgetsDateKey(date));
+    const countByKey = new Map(dateKeys.map((key) => [key, 0]));
+
+    const liveCalendar = window.browsingHistoryCalendarInstance;
+    if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.get === 'function') {
+        dateKeys.forEach((dateKey) => {
+            const records = liveCalendar.bookmarksByDate.get(dateKey) || [];
+            countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
+        });
+    } else {
+        const startKey = dateKeys[0] || '';
+        const endKey = dateKeys[dateKeys.length - 1] || '';
+        try {
+            if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
+                const cached = await readHistoryCacheRange(startKey, endKey);
+                if (cached && Array.isArray(cached.records)) {
+                    cached.records.forEach(([dateKey, records]) => {
+                        if (!countByKey.has(dateKey)) return;
+                        countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
+                    });
+                }
+            }
+        } catch (_) { }
+    }
+
+    const points = buildWidgetsTrendPointsFromCountMap(dates, countByKey, safeRange);
+    const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    widgetsHistoryTrendDataCache = {
+        range: safeRange,
+        points,
+        total,
+        loadedAt: now
+    };
+    return widgetsHistoryTrendDataCache;
+}
+
+function createWidgetsSvgElement(tagName) {
+    return document.createElementNS('http://www.w3.org/2000/svg', tagName);
+}
+
+function buildWidgetsSmoothPath(points = []) {
+    if (!Array.isArray(points) || points.length === 0) return '';
+    if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 0; i < points.length - 1; i += 1) {
+        const p0 = i > 0 ? points[i - 1] : points[i];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = i !== points.length - 2 ? points[i + 2] : p2;
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        let cp1y = p1.y + (p2.y - p0.y) / 6;
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        let cp2y = p2.y - (p3.y - p1.y) / 6;
+
+        // 防止平滑曲线在突变点“过冲”到端点范围之外（例如跌破 0 线）
+        const segmentMinY = Math.min(p1.y, p2.y);
+        const segmentMaxY = Math.max(p1.y, p2.y);
+        cp1y = clamp(cp1y, segmentMinY, segmentMaxY);
+        cp2y = clamp(cp2y, segmentMinY, segmentMaxY);
+
+        d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    return d;
+}
+
+function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
+    if (!widgetList) return;
+    const points = Array.isArray(payload?.points) ? payload.points : [];
+    const total = Number(payload?.total || 0);
+    const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'week');
+    const isMonthRange = safeRange === 'month30';
+    const emptyText = options.emptyText || (currentLang === 'zh_CN' ? '暂无记录' : 'No records');
+    const onPointClick = typeof options.onPointClick === 'function' ? options.onPointClick : null;
+
+    if (!points.length) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    widgetList.innerHTML = '';
+
+    const chartWrap = document.createElement('div');
+    chartWrap.className = 'widgets-mini-chart-wrap';
+
+    const tooltip = document.createElement('div');
+    tooltip.className = 'widgets-mini-chart-tooltip';
+    chartWrap.appendChild(tooltip);
+
+    const svg = createWidgetsSvgElement('svg');
+    svg.setAttribute('class', 'widgets-mini-chart-svg');
+    svg.setAttribute('viewBox', '0 0 320 116');
+    svg.setAttribute('preserveAspectRatio', 'none');
+
+    const defs = createWidgetsSvgElement('defs');
+    const gradient = createWidgetsSvgElement('linearGradient');
+    const gradientId = `widgetsMiniChartGradient-${safeRange}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    gradient.setAttribute('id', gradientId);
+    gradient.setAttribute('x1', '0');
+    gradient.setAttribute('x2', '0');
+    gradient.setAttribute('y1', '0');
+    gradient.setAttribute('y2', '1');
+    const stop1 = createWidgetsSvgElement('stop');
+    stop1.setAttribute('offset', '0%');
+    stop1.setAttribute('stop-color', 'var(--accent-primary)');
+    stop1.setAttribute('stop-opacity', '0.42');
+    const stop2 = createWidgetsSvgElement('stop');
+    stop2.setAttribute('offset', '100%');
+    stop2.setAttribute('stop-color', 'var(--accent-primary)');
+    stop2.setAttribute('stop-opacity', '0.02');
+    gradient.appendChild(stop1);
+    gradient.appendChild(stop2);
+    defs.appendChild(gradient);
+    svg.appendChild(defs);
+
+    const chartLeft = 20;
+    const chartRight = 6;
+    const chartTop = 8;
+    const chartBottom = 95;
+    const chartWidth = 320 - chartLeft - chartRight;
+    const chartHeight = chartBottom - chartTop;
+    const safeMax = Math.max(1, ...points.map((point) => Number(point.count || 0)));
+
+    for (let i = 0; i <= 3; i += 1) {
+        const y = chartBottom - (chartHeight * (i / 3));
+        const line = createWidgetsSvgElement('line');
+        line.setAttribute('class', 'widgets-mini-chart-grid-line');
+        line.setAttribute('x1', String(chartLeft));
+        line.setAttribute('x2', String(320 - chartRight));
+        line.setAttribute('y1', String(y));
+        line.setAttribute('y2', String(y));
+        svg.appendChild(line);
+
+        if (i === 0 || i === 3) {
+            const yLabel = createWidgetsSvgElement('text');
+            yLabel.setAttribute('class', 'widgets-mini-chart-axis-text');
+            yLabel.setAttribute('x', '2');
+            yLabel.setAttribute('y', String(y + 3));
+            yLabel.textContent = String(Math.round(i === 0 ? 0 : safeMax));
+            svg.appendChild(yLabel);
+        }
+    }
+
+    const chartPoints = points.map((point, index) => {
+        const ratioX = points.length <= 1 ? 0 : (index / (points.length - 1));
+        const x = chartLeft + chartWidth * ratioX;
+        const yRatio = safeMax <= 0 ? 0 : (Number(point.count || 0) / safeMax);
+        const y = chartBottom - chartHeight * yRatio;
+        return { ...point, x, y };
+    });
+
+    const linePath = buildWidgetsSmoothPath(chartPoints);
+    if (linePath) {
+        const area = createWidgetsSvgElement('path');
+        area.setAttribute('class', 'widgets-mini-chart-area');
+        area.setAttribute('fill', `url(#${gradientId})`);
+        area.setAttribute('d', `${linePath} L ${chartPoints[chartPoints.length - 1].x} ${chartBottom} L ${chartPoints[0].x} ${chartBottom} Z`);
+        svg.appendChild(area);
+    }
+
+    if (linePath) {
+        const path = createWidgetsSvgElement('path');
+        path.setAttribute('class', 'widgets-mini-chart-line');
+        path.setAttribute('d', linePath);
+        svg.appendChild(path);
+    } else {
+        const emptyLine = createWidgetsSvgElement('line');
+        emptyLine.setAttribute('class', 'widgets-mini-chart-empty-line');
+        emptyLine.setAttribute('x1', String(chartLeft));
+        emptyLine.setAttribute('x2', String(320 - chartRight));
+        emptyLine.setAttribute('y1', String(chartBottom));
+        emptyLine.setAttribute('y2', String(chartBottom));
+        svg.appendChild(emptyLine);
+    }
+
+    const lastPointIndex = Math.max(0, chartPoints.length - 1);
+    const xLabelIndexes = isMonthRange
+        ? new Set([0, Math.floor(lastPointIndex * 0.33), Math.floor(lastPointIndex * 0.66), lastPointIndex])
+        : new Set([0, Math.floor(lastPointIndex / 2), lastPointIndex]);
+    chartPoints.forEach((point, index) => {
+        const circle = createWidgetsSvgElement('circle');
+        circle.setAttribute('class', 'widgets-mini-chart-point');
+        circle.setAttribute('cx', String(point.x));
+        circle.setAttribute('cy', String(point.y));
+        if (isMonthRange) {
+            const monthRadius = Number(point.count || 0) > 0 ? 2.25 : 1.35;
+            circle.setAttribute('r', String(monthRadius));
+            circle.classList.add('is-month');
+            if (Number(point.count || 0) <= 0) {
+                circle.classList.add('is-zero');
+            }
+        } else {
+            circle.setAttribute('r', '3.2');
+        }
+        circle.setAttribute('tabindex', point.count > 0 ? '0' : '-1');
+
+        const showTip = () => {
+            const xText = currentLang === 'zh_CN' ? `X: ${point.xTooltip}` : `X: ${point.xTooltip}`;
+            const yText = currentLang === 'zh_CN' ? `Y: ${point.count} 条` : `Y: ${point.count}`;
+            tooltip.innerHTML = `<div>${xText}</div><div>${yText}</div>`;
+            const xRatio = chartWidth <= 0 ? 0 : (point.x - chartLeft) / chartWidth;
+            const left = 8 + (chartWrap.clientWidth - 16) * xRatio;
+            const top = Math.max(16, ((point.y / 116) * chartWrap.clientHeight) - 8);
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${top}px`;
+            tooltip.classList.add('is-visible');
+        };
+
+        const hideTip = () => {
+            tooltip.classList.remove('is-visible');
+        };
+
+        circle.addEventListener('mouseenter', showTip);
+        circle.addEventListener('focus', showTip);
+        circle.addEventListener('mouseleave', hideTip);
+        circle.addEventListener('blur', hideTip);
+        circle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (point.count <= 0 || !onPointClick) return;
+            onPointClick(point);
+        });
+        circle.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (point.count <= 0 || !onPointClick) return;
+            onPointClick(point);
+        });
+        svg.appendChild(circle);
+
+        if (xLabelIndexes.has(index)) {
+            const text = createWidgetsSvgElement('text');
+            text.setAttribute('class', 'widgets-mini-chart-axis-text');
+            text.setAttribute('x', String(point.x));
+            text.setAttribute('y', '112');
+            text.setAttribute('text-anchor', index === 0 ? 'start' : (index === chartPoints.length - 1 ? 'end' : 'middle'));
+            text.textContent = point.xLabel;
+            svg.appendChild(text);
+        }
+    });
+
+    chartWrap.appendChild(svg);
+    widgetList.appendChild(chartWrap);
+
+    const meta = document.createElement('div');
+    meta.className = 'widgets-mini-chart-meta';
+    const rangeText = document.createElement('span');
+    rangeText.className = 'widgets-mini-chart-range';
+    rangeText.textContent = getWidgetsMiniRangeLabel(safeRange);
+    const totalText = document.createElement('span');
+    totalText.className = 'widgets-mini-chart-total';
+    totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
+    meta.appendChild(rangeText);
+    meta.appendChild(totalText);
+    widgetList.appendChild(meta);
+}
+
+function describeWidgetsPieItem(item, total) {
+    const value = Number(item?.count || 0);
+    const percent = total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
+    const safeTitle = String(item?.title || '--');
+    if (currentLang === 'zh_CN') {
+        return `${safeTitle} · ${value} 次 · ${percent}%`;
+    }
+    return `${safeTitle} · ${value} · ${percent}%`;
+}
+
+function fillWidgetsPieTooltip(tooltip, item, total) {
+    if (!tooltip) return;
+
+    const titleText = String(item?.title || '--');
+    const value = Number(item?.count || 0);
+    const percent = total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
+    const iconUrl = item?.url ? getFaviconUrl(item.url) : '';
+
+    tooltip.textContent = '';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'widgets-pie-tooltip-title-row';
+    if (iconUrl) {
+        const icon = document.createElement('img');
+        icon.className = 'widgets-pie-tooltip-icon';
+        icon.src = iconUrl;
+        icon.alt = '';
+        icon.loading = 'lazy';
+        if (item?.url) {
+            icon.dataset.bookmarkUrl = String(item.url);
+        }
+        titleRow.appendChild(icon);
+    }
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'widgets-pie-tooltip-title';
+    titleSpan.textContent = titleText;
+    titleRow.appendChild(titleSpan);
+
+    const metaRow = document.createElement('div');
+    metaRow.className = 'widgets-pie-tooltip-meta';
+    metaRow.textContent = currentLang === 'zh_CN'
+        ? `${value} 次 · ${percent}%`
+        : `${value} · ${percent}%`;
+
+    tooltip.appendChild(titleRow);
+    tooltip.appendChild(metaRow);
+}
+
+function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
+    if (!widgetList) return;
+    const sourceItems = Array.isArray(items) ? items.filter(item => Number(item?.count || 0) > 0) : [];
+    if (!sourceItems.length) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    const maxSlices = 5;
+    const topItems = sourceItems.slice(0, maxSlices);
+    const remainCount = sourceItems.slice(maxSlices).reduce((sum, item) => sum + Number(item?.count || 0), 0);
+    if (remainCount > 0) {
+        topItems.push({
+            title: i18n.widgetsPieOther[currentLang],
+            count: remainCount,
+            url: '',
+            rowType: 'other'
+        });
+    }
+
+    const total = topItems.reduce((sum, item) => sum + Number(item?.count || 0), 0);
+    if (total <= 0) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    widgetList.innerHTML = '';
+    const shell = document.createElement('div');
+    shell.className = 'widgets-pie-shell';
+
+    const chartWrap = document.createElement('div');
+    chartWrap.className = 'widgets-mini-chart-wrap widgets-mini-chart-wrap-pie';
+    const tooltip = document.createElement('div');
+    tooltip.className = 'widgets-mini-chart-tooltip widgets-pie-tooltip';
+    chartWrap.appendChild(tooltip);
+
+    const svg = createWidgetsSvgElement('svg');
+    svg.setAttribute('class', 'widgets-pie-svg');
+    svg.setAttribute('viewBox', '0 0 148 148');
+
+    const cx = 74;
+    const cy = 74;
+    const radius = 62;
+    let startAngle = -Math.PI / 2;
+    topItems.forEach((item, index) => {
+        const value = Number(item?.count || 0);
+        if (value <= 0) return;
+        const ratio = value / total;
+        const sweep = ratio * Math.PI * 2;
+        const endAngle = startAngle + sweep;
+        const midAngle = startAngle + (sweep / 2);
+        const segmentColor = WIDGETS_PIE_COLORS[index % WIDGETS_PIE_COLORS.length];
+        let segment = null;
+
+        if (ratio >= 0.9995) {
+            segment = createWidgetsSvgElement('circle');
+            segment.setAttribute('class', 'widgets-pie-segment');
+            segment.setAttribute('cx', String(cx));
+            segment.setAttribute('cy', String(cy));
+            segment.setAttribute('r', String(radius));
+            segment.setAttribute('fill', segmentColor);
+            segment.setAttribute('stroke', 'color-mix(in srgb, var(--bg-primary) 92%, transparent)');
+            segment.setAttribute('stroke-width', '1.4');
+            segment.setAttribute('tabindex', '0');
+        } else {
+            const x1 = cx + radius * Math.cos(startAngle);
+            const y1 = cy + radius * Math.sin(startAngle);
+            const x2 = cx + radius * Math.cos(endAngle);
+            const y2 = cy + radius * Math.sin(endAngle);
+            const largeArcFlag = sweep > Math.PI ? 1 : 0;
+            segment = createWidgetsSvgElement('path');
+            segment.setAttribute('class', 'widgets-pie-segment');
+            segment.setAttribute('d', `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`);
+            segment.setAttribute('fill', segmentColor);
+            segment.setAttribute('stroke', 'color-mix(in srgb, var(--bg-primary) 92%, transparent)');
+            segment.setAttribute('stroke-width', '1.4');
+            segment.setAttribute('tabindex', '0');
+        }
+        segment.style.animationDelay = `${index * 44}ms`;
+
+        const showTip = () => {
+            fillWidgetsPieTooltip(tooltip, item, total);
+            tooltip.style.left = '50%';
+            tooltip.style.top = '18px';
+            tooltip.classList.add('is-visible');
+        };
+        const hideTip = () => tooltip.classList.remove('is-visible');
+        segment.addEventListener('mouseenter', showTip);
+        segment.addEventListener('mouseleave', hideTip);
+        segment.addEventListener('focus', showTip);
+        segment.addEventListener('blur', hideTip);
+        segment.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (!item?.url) return;
+            openBookmarkFromWidgets(item.url, item.title || '');
+        });
+        segment.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (!item?.url) return;
+            openBookmarkFromWidgets(item.url, item.title || '');
+        });
+        svg.appendChild(segment);
+
+        if (ratio >= 0.07) {
+            const labelRadius = radius * 0.62;
+            const labelX = cx + Math.cos(midAngle) * labelRadius;
+            const labelY = cy + Math.sin(midAngle) * labelRadius;
+            const labelText = `${Math.round(ratio * 100)}%`;
+            const showLabelIcon = Boolean(item?.url) && ratio >= 0.11;
+            const iconSize = ratio >= 0.24 ? 11 : 10;
+            const iconGap = 2.4;
+
+            let textX = labelX;
+            let textAnchor = 'middle';
+
+            if (showLabelIcon) {
+                textAnchor = 'start';
+                textX = labelX - 2.5;
+                const iconUrl = getFaviconUrl(item.url);
+                const iconX = textX - iconGap - iconSize;
+                const iconY = labelY - (iconSize / 2);
+
+                const iconBg = createWidgetsSvgElement('circle');
+                iconBg.setAttribute('class', 'widgets-pie-slice-icon-bg');
+                iconBg.setAttribute('cx', String(iconX + (iconSize / 2)));
+                iconBg.setAttribute('cy', String(labelY));
+                iconBg.setAttribute('r', String((iconSize / 2) + 1.4));
+                svg.appendChild(iconBg);
+
+                const icon = createWidgetsSvgElement('image');
+                icon.setAttribute('class', 'widgets-pie-slice-icon');
+                icon.setAttribute('x', String(iconX));
+                icon.setAttribute('y', String(iconY));
+                icon.setAttribute('width', String(iconSize));
+                icon.setAttribute('height', String(iconSize));
+                icon.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+                icon.setAttribute('href', iconUrl);
+                icon.setAttributeNS('http://www.w3.org/1999/xlink', 'href', iconUrl);
+                if (item?.url) {
+                    icon.setAttribute('data-bookmark-url', String(item.url));
+                }
+                svg.appendChild(icon);
+            }
+
+            const percentLabel = createWidgetsSvgElement('text');
+            percentLabel.setAttribute('class', 'widgets-pie-slice-percent');
+            percentLabel.setAttribute('x', String(textX));
+            percentLabel.setAttribute('y', String(labelY));
+            percentLabel.setAttribute('text-anchor', textAnchor);
+            percentLabel.setAttribute('dominant-baseline', 'central');
+            percentLabel.textContent = labelText;
+            svg.appendChild(percentLabel);
+        }
+
+        startAngle = endAngle;
+    });
+
+    chartWrap.appendChild(svg);
+
+    const meta = document.createElement('div');
+    meta.className = 'widgets-mini-chart-meta';
+    const hintText = document.createElement('span');
+    hintText.className = 'widgets-mini-chart-range';
+    hintText.textContent = currentLang === 'zh_CN' ? '悬停查看占比' : 'Hover to view ratio';
+    const totalText = document.createElement('span');
+    totalText.className = 'widgets-mini-chart-total';
+    totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
+    meta.appendChild(hintText);
+    meta.appendChild(totalText);
+    chartWrap.appendChild(meta);
+
+    shell.appendChild(chartWrap);
+
+    widgetList.appendChild(shell);
+}
+
+function readWidgetsAdditionsWeekDataFromCache() {
+    const now = Date.now();
+    if (
+        widgetsAdditionsWeekDataCache
+        && (now - Number(widgetsAdditionsWeekDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
+    ) {
+        return widgetsAdditionsWeekDataCache;
+    }
+
+    const payload = computeWidgetsWeekDailyCountsFromBookmarkEntries(allBookmarks);
+    widgetsAdditionsWeekDataCache = {
+        ...payload,
+        loadedAt: now
+    };
+    return widgetsAdditionsWeekDataCache;
+}
+
+async function readWidgetsHistoryWeekDataFromCache() {
+    const now = Date.now();
+    if (
+        widgetsHistoryWeekDataCache
+        && (now - Number(widgetsHistoryWeekDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
+    ) {
+        return widgetsHistoryWeekDataCache;
+    }
+
+    const weekDates = getWidgetsWeekDates();
+    const dateKeys = weekDates.map((date) => getWidgetsDateKey(date));
+    const countByKey = new Map(dateKeys.map((key) => [key, 0]));
+    const startKey = dateKeys[0] || '';
+    const endKey = dateKeys[dateKeys.length - 1] || '';
+
+    let hasRawData = false;
+    try {
+        if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
+            const cached = await readHistoryCacheRange(startKey, endKey);
+            if (cached && Array.isArray(cached.records)) {
+                cached.records.forEach(([dateKey, records]) => {
+                    if (!countByKey.has(dateKey)) return;
+                    const size = Array.isArray(records) ? records.length : 0;
+                    if (size > 0) hasRawData = true;
+                    countByKey.set(dateKey, size);
+                });
+            }
+        }
+    } catch (_) { }
+
+    const dailyCounts = weekDates.map((date) => {
+        const dateKey = getWidgetsDateKey(date);
+        return {
+            date,
+            label: getWidgetsWeekdayLabel(date),
+            count: Number(countByKey.get(dateKey) || 0)
+        };
+    });
+    const total = dailyCounts.reduce((sum, item) => sum + item.count, 0);
+
+    widgetsHistoryWeekDataCache = {
+        dailyCounts,
+        total,
+        loadedAt: now,
+        hasRawData: hasRawData || total > 0
+    };
+    return widgetsHistoryWeekDataCache;
 }
 
 function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, widgetType = 'additions') {
@@ -7426,17 +10512,141 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, wid
     widgetList.appendChild(daysRow);
 }
 
-function setWidgetsWeekWidgetHeaderCount(widgetType, total) {
+function renderWidgetsMiniMonthGrid(widgetList, payload, options = {}) {
+    if (!widgetList) return;
+
+    const emptyText = options.emptyText || (currentLang === 'zh_CN' ? '暂无记录' : 'No records');
+    const onDayClick = typeof options.onDayClick === 'function' ? options.onDayClick : null;
+    const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'month30');
+
+    if (!payload || !Array.isArray(payload.cells) || payload.cells.length === 0 || Number(payload.total || 0) <= 0) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    widgetList.innerHTML = '';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'widgets-mini-chart-wrap widgets-mini-month-grid-wrap';
+
+    const weekdaysRow = document.createElement('div');
+    weekdaysRow.className = 'widgets-mini-month-grid-weekdays';
+    const weekdayLabels = Array.isArray(payload.weekdayLabels) ? payload.weekdayLabels : getWidgetsMiniCalendarWeekdayLabels();
+    weekdayLabels.forEach((labelText) => {
+        const label = document.createElement('div');
+        label.className = 'widgets-mini-month-grid-weekday';
+        label.textContent = String(labelText || '');
+        weekdaysRow.appendChild(label);
+    });
+    wrap.appendChild(weekdaysRow);
+
+    const daysGrid = document.createElement('div');
+    daysGrid.className = 'widgets-mini-month-grid-days';
+
+    payload.cells.forEach((cellData) => {
+        const cell = document.createElement('div');
+        cell.className = 'widgets-mini-month-grid-day';
+
+        if (cellData?.empty) {
+            cell.classList.add('is-empty');
+            daysGrid.appendChild(cell);
+            return;
+        }
+
+        if (!cellData?.inSourceWindow) {
+            cell.classList.add('is-outside-window');
+        }
+        if (cellData?.isToday) {
+            cell.classList.add('is-today');
+        }
+
+        const dayNumber = document.createElement('span');
+        dayNumber.className = 'widgets-mini-month-grid-day-number';
+        dayNumber.textContent = String(Number(cellData?.day || 0) || '');
+
+        const dayCount = document.createElement('span');
+        dayCount.className = 'widgets-mini-month-grid-day-count';
+        const count = Number(cellData?.count || 0);
+        if (count > 0) {
+            dayCount.textContent = String(count);
+        } else {
+            dayCount.textContent = '';
+            dayCount.classList.add('is-zero');
+        }
+
+        const safeDateKey = normalizeWidgetsDateKey(cellData?.dateKey || cellData?.date || '');
+        if (safeDateKey) {
+            const date = parseWidgetsDateKey(safeDateKey);
+            if (date) {
+                cell.title = currentLang === 'zh_CN'
+                    ? `${date.getMonth() + 1}月${date.getDate()}日 · ${count} 条`
+                    : `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${count}`;
+            }
+        }
+
+        if (count > 0 && safeDateKey) {
+            const handleJump = () => {
+                if (!onDayClick) return;
+                onDayClick({
+                    ...cellData,
+                    dateKey: safeDateKey,
+                    count
+                });
+            };
+            cell.classList.add('is-clickable');
+            cell.tabIndex = 0;
+            cell.setAttribute('role', 'button');
+            cell.addEventListener('click', (event) => {
+                event.stopPropagation();
+                handleJump();
+            });
+            cell.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                event.stopPropagation();
+                handleJump();
+            });
+        }
+
+        cell.appendChild(dayNumber);
+        cell.appendChild(dayCount);
+        daysGrid.appendChild(cell);
+    });
+
+    wrap.appendChild(daysGrid);
+    widgetList.appendChild(wrap);
+
+    const meta = document.createElement('div');
+    meta.className = 'widgets-mini-chart-meta widgets-mini-month-grid-meta';
+
+    const rangeText = document.createElement('span');
+    rangeText.className = 'widgets-mini-chart-range';
+    const monthLabel = String(payload.monthLabel || '').trim();
+    rangeText.textContent = monthLabel
+        ? `${getWidgetsMiniRangeLabel(safeRange)} · ${monthLabel}`
+        : getWidgetsMiniRangeLabel(safeRange);
+
+    const totalText = document.createElement('span');
+    totalText.className = 'widgets-mini-chart-total';
+    const total = Number(payload.total || 0);
+    totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
+
+    meta.appendChild(rangeText);
+    meta.appendChild(totalText);
+    widgetList.appendChild(meta);
+}
+
+function setWidgetsWeekWidgetHeaderCount(widgetType, total, range = 'week') {
     const safeType = widgetType === 'history' ? 'history' : 'additions';
     const titleId = safeType === 'history' ? 'widgetsHistoryWeekWidgetTitle' : 'widgetsAdditionsWeekWidgetTitle';
     const titleEl = document.getElementById(titleId);
     if (!titleEl) return;
 
     const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
-    const totalText = formatWidgetsWeekTotal(safeTotal);
+    const totalText = formatWidgetsRangeTotal(safeTotal, range);
     const base = currentLang === 'zh_CN'
-        ? (safeType === 'history' ? '点击记录' : '书签添加记录')
-        : (safeType === 'history' ? 'Click History' : 'Bookmark Additions');
+        ? (safeType === 'history' ? '点击记录' : '添加记录')
+        : (safeType === 'history' ? 'Click History' : 'Additions');
     const openBracket = currentLang === 'zh_CN' ? '（' : ' (';
     const closeBracket = currentLang === 'zh_CN' ? '）' : ')';
 
@@ -7971,7 +11181,15 @@ async function getWidgetsRelatedSecondaryItems(range, stats) {
     const boundaries = stats && stats.boundaries ? stats.boundaries : null;
     if (!boundaries) return [];
 
-    const calendar = await waitForBrowsingCalendarForWidgets();
+    let calendar = window.browsingHistoryCalendarInstance;
+    const calendarReady = calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0;
+    if (!calendarReady) {
+        if (currentView === 'widgets' && isSidePanelMode) {
+            // 小组件场景优先走缓存，避免为二级分组强制拉起点击记录日历。
+            return [];
+        }
+        calendar = await waitForBrowsingCalendarForWidgets(1200);
+    }
     if (!calendar || !calendar.bookmarksByDate || calendar.bookmarksByDate.size === 0) {
         return [];
     }
@@ -8145,19 +11363,68 @@ async function getWidgetsRelatedFolderItems(depth = 'level1') {
     };
 }
 
-async function updateWidgetsRelatedWidget() {
+async function updateWidgetsRelatedWidget(options = {}) {
     const listEl = document.getElementById('widgetsRelatedList');
-    if (!listEl) return;
+    if (!listEl) return false;
+    const bypassVisualGate = options?.bypassVisualGate === true;
+    const loadingText = getWidgetsLoadingText();
 
     const emptyText = (i18n.widgetsRelatedEmpty && i18n.widgetsRelatedEmpty[currentLang])
         ? i18n.widgetsRelatedEmpty[currentLang]
         : (currentLang === 'zh_CN' ? '暂无目录记录' : 'No folder records');
 
+    if (!widgetsRelatedRenderSignature && !listEl.querySelector('.widgets-related-level-row')) {
+        const nextSignature = `loading::cold::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+        listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsRelatedRenderSignature = nextSignature;
+    }
+
+    if (isWidgetsInFirstVisualOnlyWindow({ bypassVisualGate }) && !shouldReuseBrowsingRankingStatsCache()) {
+        const nextSignature = `loading::defer::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+        widgetsRelatedSecondaryAvailable = false;
+        updateWidgetsRelatedDepthButtonsState();
+        if (widgetsRelatedRenderSignature === nextSignature) return false;
+        listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsRelatedRenderSignature = nextSignature;
+        markWidgetsDirty('related', { delayMs: WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS + 320 });
+        scheduleWidgetsRankingHydration('related-visual-gate');
+        return true;
+    }
+
     try {
         const stats = await ensureBrowsingClickRankingStats();
+        if (isWidgetsInLoadingGuardWindow() && (!stats || stats.error === 'noBookmarks') && isWidgetsBrowsingSourceStillLoading()) {
+            const nextSignature = `loading::warmup::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+            widgetsRelatedSecondaryAvailable = false;
+            updateWidgetsRelatedDepthButtonsState();
+            if (widgetsRelatedRenderSignature !== nextSignature) {
+                listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsRelatedRenderSignature = nextSignature;
+            }
+            markWidgetsDirty('related', { delayMs: 420 });
+            return true;
+        }
+
+        if (isWidgetsRankingStatsTransientLoading(stats)) {
+            const nextSignature = `loading::transient::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+            widgetsRelatedSecondaryAvailable = false;
+            updateWidgetsRelatedDepthButtonsState();
+            if (widgetsRelatedRenderSignature !== nextSignature) {
+                listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsRelatedRenderSignature = nextSignature;
+            }
+            markWidgetsDirty('related', { delayMs: 260 });
+            return true;
+        }
+
         if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
+            const nextSignature = `empty::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+            widgetsRelatedSecondaryAvailable = false;
+            updateWidgetsRelatedDepthButtonsState();
+            if (widgetsRelatedRenderSignature === nextSignature) return false;
             listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-            return;
+            widgetsRelatedRenderSignature = nextSignature;
+            return true;
         }
 
         const primaryItems = getWidgetsRelatedPrimaryRangeItems();
@@ -8166,9 +11433,30 @@ async function updateWidgetsRelatedWidget() {
         updateWidgetsRelatedDepthButtonsState();
 
         if (!primaryItems.length) {
+            const nextSignature = `empty-primary::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+            if (widgetsRelatedRenderSignature === nextSignature) return false;
             listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-            return;
+            widgetsRelatedRenderSignature = nextSignature;
+            return true;
         }
+
+        const primarySignature = primaryItems
+            .slice(0, 5)
+            .map((folder) => `${folder.range}:${Number(folder.count) || 0}`)
+            .join('|');
+        const secondarySignature = secondaryItems
+            .slice(0, 8)
+            .map((folder) => `${getWidgetsRelatedFilterKey(folder.filter)}:${Number(folder.count) || 0}`)
+            .join('|');
+        const nextSignature = [
+            `lang:${currentLang}`,
+            `range:${widgetsRelatedPrimaryRange}`,
+            `depth:${widgetsRelatedFolderDepth}`,
+            `active:${widgetsRelatedActiveSecondaryKey || ''}`,
+            `l1:${primarySignature}`,
+            `l2:${secondarySignature}`
+        ].join('::');
+        if (widgetsRelatedRenderSignature === nextSignature) return false;
 
         listEl.style.display = '';
         listEl.innerHTML = '';
@@ -8208,12 +11496,8 @@ async function updateWidgetsRelatedWidget() {
                 widgetsRelatedActiveSecondaryKey = '';
                 setWidgetsRelatedFolderDepth('level1', true, false);
 
-                try {
-                    const maybePromise = updateWidgetsRelatedWidget();
-                    if (maybePromise && typeof maybePromise.catch === 'function') {
-                        maybePromise.catch(() => { });
-                    }
-                } catch (_) { }
+                markWidgetsDirty('related', { schedule: false });
+                updateWidgetsViewData({ targets: ['related'], bypassVisualGate: true }).catch(() => { });
             });
 
             primaryRow.appendChild(row);
@@ -8222,7 +11506,8 @@ async function updateWidgetsRelatedWidget() {
         listEl.appendChild(primaryRow);
 
         if (!secondaryItems.length) {
-            return;
+            widgetsRelatedRenderSignature = nextSignature;
+            return true;
         }
 
         const secondaryRow = document.createElement('div');
@@ -8266,21 +11551,34 @@ async function updateWidgetsRelatedWidget() {
         });
 
         listEl.appendChild(secondaryRow);
+        widgetsRelatedRenderSignature = nextSignature;
+        return true;
     } catch (error) {
         console.warn('[Widgets] 更新关联记录小组件失败:', error);
+        const nextSignature = `error::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
+        if (widgetsRelatedRenderSignature === nextSignature) return false;
         listEl.style.display = '';
         listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsRelatedRenderSignature = nextSignature;
+        return true;
     }
 }
 
 
 async function updateWidgetsTrackingWidget() {
     const widgetList = document.getElementById('widgetsTrackingWidgetList');
-    if (!widgetList) return;
+    if (!widgetList) return false;
+    const loadingText = getWidgetsLoadingText();
 
     const emptyText = (i18n.widgetsTrackingWidgetEmpty && i18n.widgetsTrackingWidgetEmpty[currentLang])
         ? i18n.widgetsTrackingWidgetEmpty[currentLang]
         : (i18n.timeTrackingWidgetEmpty ? i18n.timeTrackingWidgetEmpty[currentLang] : (currentLang === 'zh_CN' ? '暂无追踪中的书签' : 'No bookmarks being tracked'));
+
+    if (!widgetsTrackingRenderSignature && !widgetList.querySelector('.time-tracking-widget-item')) {
+        const nextSignature = `loading::cold::${currentLang}`;
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsTrackingRenderSignature = nextSignature;
+    }
 
     let isTrackingEnabled = true;
     try {
@@ -8291,9 +11589,12 @@ async function updateWidgetsTrackingWidget() {
     } catch (_) { }
 
     if (!isTrackingEnabled) {
+        const nextSignature = `disabled::${currentLang}`;
+        if (widgetsTrackingRenderSignature === nextSignature) return false;
         const disabledText = currentLang === 'zh_CN' ? '时间追踪已关闭' : 'Time Tracking Disabled';
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${disabledText}</span></div>`;
-        return;
+        widgetsTrackingRenderSignature = nextSignature;
+        return true;
     }
 
     try {
@@ -8303,8 +11604,11 @@ async function updateWidgetsTrackingWidget() {
             : [];
 
         if (!sessions.length) {
+            const nextSignature = `empty::${currentLang}`;
+            if (widgetsTrackingRenderSignature === nextSignature) return false;
             widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-            return;
+            widgetsTrackingRenderSignature = nextSignature;
+            return true;
         }
 
         const groupedSessions = new Map();
@@ -8336,6 +11640,14 @@ async function updateWidgetsTrackingWidget() {
         displayItems.sort((a, b) => b.compositeMs - a.compositeMs);
         const showItems = displayItems.slice(0, 5);
         const remaining = displayItems.length - showItems.length;
+        const nextSignature = `items::${currentLang}::${showItems.map((item) => [
+            item.url || '',
+            item.title || '',
+            item.state || '',
+            Number(item.compositeMs) || 0,
+            Number(item.count) || 0
+        ].join('~')).join('|')}::${remaining}`;
+        if (widgetsTrackingRenderSignature === nextSignature) return false;
 
         widgetList.innerHTML = '';
 
@@ -8384,19 +11696,33 @@ async function updateWidgetsTrackingWidget() {
             more.textContent = moreTextTpl ? moreTextTpl.replace('{count}', remaining) : `${remaining}`;
             widgetList.appendChild(more);
         }
+        widgetsTrackingRenderSignature = nextSignature;
+        return true;
     } catch (error) {
         console.warn('[Widgets] 更新时间捕捉小组件失败:', error);
+        const nextSignature = `error::${currentLang}`;
+        if (widgetsTrackingRenderSignature === nextSignature) return false;
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsTrackingRenderSignature = nextSignature;
+        return true;
     }
 }
 
-async function updateWidgetsRankingWidget() {
+async function updateWidgetsRankingWidget(options = {}) {
     const widgetList = document.getElementById('widgetsRankingWidgetList');
-    if (!widgetList) return;
+    if (!widgetList) return false;
+    const bypassVisualGate = options?.bypassVisualGate === true;
+    const loadingText = getWidgetsLoadingText();
 
     const emptyText = (i18n.widgetsRankingWidgetEmpty && i18n.widgetsRankingWidgetEmpty[currentLang])
         ? i18n.widgetsRankingWidgetEmpty[currentLang]
         : (currentLang === 'zh_CN' ? '暂无点击记录' : 'No click records');
+
+    if (!widgetsRankingRenderSignature && !hasWidgetsRankingVisualRows(widgetList)) {
+        const nextSignature = `loading::cold::${currentLang}`;
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsRankingRenderSignature = nextSignature;
+    }
 
     if (!window.timeTrackingWidgetRankingRange) {
         window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
@@ -8407,212 +11733,541 @@ async function updateWidgetsRankingWidget() {
     const currentRange = window.timeTrackingWidgetRankingRange;
     updateWidgetsRankingRangeToggleLabel(currentRange);
 
-    const currentMode = normalizeWidgetsRankingViewMode(
-        browsingRankingViewMode || localStorage.getItem('browsingRankingViewMode') || 'bookmark'
-    );
+    const currentMode = readWidgetsRankingViewModePreference('bookmark');
     browsingRankingViewMode = normalizeBrowsingRankingViewMode(currentMode);
     updateWidgetsRankingModeToggleLabel(currentMode);
+    const currentVisualMode = normalizeWidgetsRankingVisualMode(readWidgetsRankingVisualMode());
+    updateWidgetsRankingVisualToggleLabel(currentVisualMode);
 
     try {
-        const stats = await ensureBrowsingClickRankingStats();
-        const items = await getWidgetsRankingModeItems(currentRange, stats, currentMode);
+        let items = [];
+        const hasHydratedStats = shouldReuseBrowsingRankingStatsCache();
+        const fastOnlyWindow = isWidgetsInFirstVisualOnlyWindow({ bypassVisualGate }) && !hasHydratedStats;
+        let usedFastPath = false;
+
+        if (!hasHydratedStats) {
+            const cachedFastItems = readWidgetsRankingFastItems(currentRange, currentMode);
+            if (Array.isArray(cachedFastItems)) {
+                items = cachedFastItems;
+                usedFastPath = true;
+            } else {
+                const fastStats = await buildWidgetsRankingFastStats(currentRange);
+                if (fastStats && Array.isArray(fastStats.items)) {
+                    items = await getWidgetsRankingModeItems(currentRange, fastStats, currentMode);
+                    writeWidgetsRankingFastItems(currentRange, currentMode, items);
+                    usedFastPath = true;
+                }
+            }
+        }
+
+        if (!usedFastPath && fastOnlyWindow) {
+            const nextSignature = `loading::defer::${currentRange}::${currentMode}::${currentVisualMode}::${currentLang}`;
+            if (widgetsRankingRenderSignature === nextSignature) return false;
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+            widgetsRankingRenderSignature = nextSignature;
+            markWidgetsDirty('ranking', { delayMs: WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS + 260 });
+            scheduleWidgetsRankingHydration(`defer:${currentRange}:${currentMode}`);
+            return true;
+        }
+
+        if (!usedFastPath) {
+            const stats = await ensureBrowsingClickRankingStats();
+            if (isWidgetsInLoadingGuardWindow() && (!stats || stats.error === 'noBookmarks') && isWidgetsBrowsingSourceStillLoading()) {
+                const nextSignature = `loading::warmup::${currentRange}::${currentMode}::${currentVisualMode}::${currentLang}`;
+                if (widgetsRankingRenderSignature !== nextSignature) {
+                    widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                    widgetsRankingRenderSignature = nextSignature;
+                }
+                markWidgetsDirty('ranking', { delayMs: 420 });
+                return true;
+            }
+
+            if (isWidgetsRankingStatsTransientLoading(stats)) {
+                const nextSignature = `loading::transient::${currentRange}::${currentMode}::${currentVisualMode}::${currentLang}`;
+                if (widgetsRankingRenderSignature !== nextSignature) {
+                    widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                    widgetsRankingRenderSignature = nextSignature;
+                }
+                markWidgetsDirty('ranking', { delayMs: 260 });
+                return true;
+            }
+            items = await getWidgetsRankingModeItems(currentRange, stats, currentMode);
+            writeWidgetsRankingFastItems(currentRange, currentMode, items);
+        } else if (!hasHydratedStats) {
+            scheduleWidgetsRankingHydration(`${currentRange}:${currentMode}`);
+        }
+
+        if (isWidgetsInLoadingGuardWindow() && (!Array.isArray(items) || items.length === 0) && isWidgetsBrowsingSourceStillLoading()) {
+            const nextSignature = `loading::warmup-fast::${currentRange}::${currentMode}::${currentVisualMode}::${currentLang}`;
+            if (widgetsRankingRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsRankingRenderSignature = nextSignature;
+            }
+            markWidgetsDirty('ranking', { delayMs: 420 });
+            return true;
+        }
+
+        const safeItems = Array.isArray(items) ? items : [];
+        const topItems = safeItems.slice(0, 8);
+        const nextSignature = `range:${currentRange}::mode:${currentMode}::visual:${currentVisualMode}::lang:${currentLang}::${topItems.map((item) => [
+            item?.url || '',
+            item?.title || '',
+            item?.hint || '',
+            Number(item?.count) || 0,
+            item?.rowType || ''
+        ].join('~')).join('|')}::len:${topItems.length}`;
+        if (widgetsRankingRenderSignature === nextSignature) return false;
 
         widgetList.innerHTML = '';
 
-        if (items.length > 0) {
-            items.forEach((item, index) => {
-                const row = document.createElement('div');
-                row.className = 'time-tracking-widget-item ranking-item';
+        if (safeItems.length > 0) {
+            if (currentVisualMode === 'pie') {
+                renderWidgetsMiniPieChart(widgetList, safeItems, emptyText);
+            } else {
+                safeItems.forEach((item, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'time-tracking-widget-item ranking-item';
 
-                const rankNum = document.createElement('span');
-                rankNum.className = 'item-rank';
-                rankNum.textContent = `${index + 1}`;
+                    const rankNum = document.createElement('span');
+                    rankNum.className = 'item-rank';
+                    rankNum.textContent = `${index + 1}`;
 
-                const title = document.createElement('span');
-                title.className = 'item-title';
-                title.textContent = item.title || '--';
-                title.title = item.hint || item.title || item.url || '--';
+                    const title = document.createElement('span');
+                    title.className = 'item-title';
+                    title.textContent = item.title || '--';
+                    title.title = item.hint || item.title || item.url || '--';
 
-                const count = document.createElement('span');
-                count.className = 'item-time';
-                count.textContent = `${item.count || 0}${currentLang === 'zh_CN' ? '次' : 'x'}`;
+                    const count = document.createElement('span');
+                    count.className = 'item-time';
+                    count.textContent = `${item.count || 0}${currentLang === 'zh_CN' ? '次' : 'x'}`;
 
-                row.appendChild(rankNum);
-                row.appendChild(title);
-                row.appendChild(count);
+                    row.appendChild(rankNum);
+                    row.appendChild(title);
+                    row.appendChild(count);
 
-                row.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (item.url) {
-                        openBookmarkFromWidgets(item.url, item.title || '');
-                    }
+                    row.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (item.url) {
+                            openBookmarkFromWidgets(item.url, item.title || '');
+                        }
+                    });
+
+                    widgetList.appendChild(row);
                 });
-
-                widgetList.appendChild(row);
-            });
+            }
         } else {
             widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
         }
+        widgetsRankingRenderSignature = nextSignature;
+        return true;
 
     } catch (error) {
         console.warn('[Widgets] 更新点击排行小组件失败:', error);
+        const nextSignature = `error::${currentLang}::${currentRange}::${currentMode}::${currentVisualMode}`;
+        if (widgetsRankingRenderSignature === nextSignature) return false;
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsRankingRenderSignature = nextSignature;
+        return true;
     }
 }
 
 async function updateWidgetsAdditionsWeekWidget() {
     const widgetList = document.getElementById('widgetsAdditionsWeekWidgetList');
-    if (!widgetList) return;
+    if (!widgetList) return false;
+    const loadingText = getWidgetsLoadingText();
 
-    const emptyText = (i18n.widgetsAdditionsWeekWidgetEmpty && i18n.widgetsAdditionsWeekWidgetEmpty[currentLang])
-        ? i18n.widgetsAdditionsWeekWidgetEmpty[currentLang]
-        : (currentLang === 'zh_CN' ? '暂无本周书签添加记录' : 'No additions this week');
+    const emptyText = getWidgetsAdditionsEmptyText();
+    const currentRange = readWidgetsAdditionsRange();
+    const currentViewMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), currentRange);
+    const useMonthGrid = currentViewMode === 'week-grid' && currentRange === 'month30';
+    updateWidgetsAdditionsToggleLabel();
 
     try {
-        const calendar = await waitForBookmarkCalendarForWidgets();
-        if (!calendar || !calendar.bookmarksByDate) {
-            setWidgetsWeekWidgetHeaderCount('additions', 0);
-            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-            return;
+        const hasInMemoryAdditions = Array.isArray(allBookmarks) && allBookmarks.length > 0;
+        const snapshotState = !hasInMemoryAdditions
+            ? tryRenderWidgetsAdditionsSnapshot(widgetList, {
+                range: currentRange,
+                viewMode: currentViewMode,
+                emptyText
+            })
+            : { rendered: false, changed: false, total: 0, signature: '' };
+
+        if (!widgetsAdditionsWeekRenderSignature && !hasWidgetsWeekVisualRows(widgetList) && !snapshotState.rendered) {
+            const nextSignature = `loading::cold::${currentLang}`;
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+            widgetsAdditionsWeekRenderSignature = nextSignature;
         }
 
-        const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
-        setWidgetsWeekWidgetHeaderCount('additions', total);
-        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'additions');
+        const hasCalendarSnapshot = Boolean(window.bookmarkCalendarInstance?.bookmarksByDate);
+        if (!hasInMemoryAdditions && !hasCalendarSnapshot) {
+            ensureAdditionsCacheLoaded(true).catch((error) => {
+                console.warn('[Widgets] 书签添加数据异步加载失败:', error);
+            });
+        }
+
+        const additionsSourceLoading = isWidgetsAdditionsSourceStillLoading();
+        if (!hasInMemoryAdditions && additionsSourceLoading) {
+            if (snapshotState.rendered) {
+                markWidgetsDirty('additionsWeek', { delayMs: 180 });
+                return true;
+            }
+
+            const loadingSignature = `loading::await-cache::${currentLang}::${currentRange}::${currentViewMode}`;
+            if (widgetsAdditionsWeekRenderSignature !== loadingSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsAdditionsWeekRenderSignature = loadingSignature;
+            }
+            markWidgetsDirty('additionsWeek', { delayMs: 220 });
+            return true;
+        }
+
+        let dailyCounts = [];
+        let total = 0;
+        let trendPayload = null;
+        const additionsCalendar = window.bookmarkCalendarInstance?.bookmarksByDate || null;
+
+        if (currentViewMode === 'week-grid') {
+            if (useMonthGrid) {
+                if (Array.isArray(allBookmarks) && allBookmarks.length > 0) {
+                    trendPayload = readWidgetsAdditionsTrendData(currentRange);
+                    total = Number(trendPayload?.total || 0);
+                } else {
+                    if (!additionsCalendar && snapshotState.rendered) {
+                        // 当前尚无可用增量源时，保留最近一次快照视图，避免反复回退到“空线/空态”。
+                        markWidgetsDirty('additionsWeek', { delayMs: 260 });
+                        return snapshotState.changed;
+                    }
+                    trendPayload = buildWidgetsTrendPayloadFromBookmarksByDate(additionsCalendar, currentRange);
+                    total = Number(trendPayload?.total || 0);
+                }
+            } else if (Array.isArray(allBookmarks) && allBookmarks.length > 0) {
+                const cachedWeekData = readWidgetsAdditionsWeekDataFromCache();
+                dailyCounts = Array.isArray(cachedWeekData?.dailyCounts) ? cachedWeekData.dailyCounts : [];
+                total = Number(cachedWeekData?.total || 0);
+            } else if (additionsCalendar) {
+                const fallback = computeWidgetsWeekDailyCounts(additionsCalendar);
+                dailyCounts = fallback.dailyCounts;
+                total = fallback.total;
+            }
+        } else if (Array.isArray(allBookmarks) && allBookmarks.length > 0) {
+            trendPayload = readWidgetsAdditionsTrendData(currentRange);
+            total = Number(trendPayload?.total || 0);
+        } else {
+            if (!additionsCalendar && snapshotState.rendered) {
+                // 当前尚无可用增量源时，保留最近一次快照视图，避免反复回退到“空线/空态”。
+                markWidgetsDirty('additionsWeek', { delayMs: 260 });
+                return snapshotState.changed;
+            }
+            trendPayload = buildWidgetsTrendPayloadFromBookmarksByDate(additionsCalendar, currentRange);
+            total = Number(trendPayload?.total || 0);
+        }
+
+        if (isWidgetsInLoadingGuardWindow() && Number(total) <= 0 && isWidgetsAdditionsSourceStillLoading()) {
+            const nextSignature = `loading::warmup::${currentLang}`;
+            if (widgetsAdditionsWeekRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsAdditionsWeekRenderSignature = nextSignature;
+            }
+            markWidgetsDirty('additionsWeek', { delayMs: 420 });
+            return true;
+        }
+
+        const monthGridPayload = useMonthGrid
+            ? buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
+            : null;
+        const nextSignature = useMonthGrid
+            ? getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode)
+            : (currentViewMode === 'week-grid'
+                ? `range:${currentRange}::view:${currentViewMode}::${currentLang}::${dailyCounts.map((item) => Number(item?.count || 0)).join(',')}::${Number(total) || 0}`
+                : `range:${currentRange}::view:${currentViewMode}::${currentLang}::${(trendPayload?.points || []).map((item) => `${item?.dateKey || ''}:${Number(item?.count || 0)}`).join(',')}::${Number(total) || 0}`);
+        if (widgetsAdditionsWeekRenderSignature === nextSignature) return false;
+
+        setWidgetsWeekWidgetHeaderCount('additions', total, currentRange);
+        if (currentViewMode === 'week-grid') {
+            if (useMonthGrid) {
+                renderWidgetsMiniMonthGrid(widgetList, monthGridPayload, {
+                    range: currentRange,
+                    emptyText,
+                    onDayClick: (dayItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
+                        if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
+                        navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                    }
+                });
+            } else {
+                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'additions');
+            }
+        } else {
+            renderWidgetsMiniLineChart(widgetList, trendPayload || buildWidgetsTrendPayloadFromBookmarksByDate(null, currentRange), {
+                range: currentRange,
+                emptyText,
+                onPointClick: (point) => {
+                    const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
+                    if (!targetDateKey || Number(point?.count || 0) <= 0) return;
+                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                }
+            });
+        }
+
+        widgetsAdditionsWeekRenderSignature = nextSignature;
+        return true;
     } catch (error) {
         console.warn('[Widgets] 更新书签添加周视图小组件失败:', error);
-        setWidgetsWeekWidgetHeaderCount('additions', 0);
+        const nextSignature = `error::${currentLang}::${currentRange}::${currentViewMode}`;
+        if (widgetsAdditionsWeekRenderSignature === nextSignature) return false;
+        setWidgetsWeekWidgetHeaderCount('additions', 0, currentRange);
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsAdditionsWeekRenderSignature = nextSignature;
+        return true;
     }
 }
 
 async function updateWidgetsHistoryWeekWidget() {
     const widgetList = document.getElementById('widgetsHistoryWeekWidgetList');
-    if (!widgetList) return;
+    if (!widgetList) return false;
+    const loadingText = getWidgetsLoadingText();
 
     const emptyText = (i18n.widgetsHistoryWeekWidgetEmpty && i18n.widgetsHistoryWeekWidgetEmpty[currentLang])
         ? i18n.widgetsHistoryWeekWidgetEmpty[currentLang]
         : (currentLang === 'zh_CN' ? '暂无本周点击记录' : 'No clicks this week');
+    const currentRange = readWidgetsHistoryRange();
+    const currentViewMode = getWidgetsEffectiveMiniViewMode(readWidgetsHistoryViewMode(), currentRange);
+    const useMonthGrid = currentViewMode === 'week-grid' && currentRange === 'month30';
+    updateWidgetsHistoryToggleLabel();
+
+    if (!widgetsHistoryWeekRenderSignature && !hasWidgetsWeekVisualRows(widgetList)) {
+        const nextSignature = `loading::cold::${currentLang}`;
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsHistoryWeekRenderSignature = nextSignature;
+    }
 
     try {
-        const calendar = await waitForBrowsingCalendarForWidgets();
-        if (!calendar || !calendar.bookmarksByDate) {
-            setWidgetsWeekWidgetHeaderCount('history', 0);
-            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-            return;
+        let dailyCounts = [];
+        let total = 0;
+        let trendPayload = null;
+
+        if (currentViewMode === 'week-grid') {
+            if (useMonthGrid) {
+                trendPayload = await readWidgetsHistoryTrendData(currentRange);
+                total = Number(trendPayload?.total || 0);
+            } else if (window.browsingHistoryCalendarInstance?.bookmarksByDate) {
+                const live = computeWidgetsWeekDailyCounts(window.browsingHistoryCalendarInstance.bookmarksByDate);
+                dailyCounts = live.dailyCounts;
+                total = live.total;
+                widgetsHistoryWeekDataCache = {
+                    dailyCounts,
+                    total,
+                    loadedAt: Date.now(),
+                    hasRawData: total > 0
+                };
+            } else {
+                const cachedWeekData = await readWidgetsHistoryWeekDataFromCache();
+                dailyCounts = Array.isArray(cachedWeekData?.dailyCounts) ? cachedWeekData.dailyCounts : [];
+                total = Number(cachedWeekData?.total || 0);
+            }
+        } else {
+            trendPayload = await readWidgetsHistoryTrendData(currentRange);
+            total = Number(trendPayload?.total || 0);
         }
 
-        const { dailyCounts, total } = computeWidgetsWeekDailyCounts(calendar.bookmarksByDate);
-        setWidgetsWeekWidgetHeaderCount('history', total);
-        renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'history');
+        if (isWidgetsInLoadingGuardWindow() && Number(total) <= 0 && isWidgetsBrowsingSourceStillLoading()) {
+            const nextSignature = `loading::warmup::${currentLang}`;
+            if (widgetsHistoryWeekRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsHistoryWeekRenderSignature = nextSignature;
+            }
+            markWidgetsDirty('historyWeek', { delayMs: 420 });
+            return true;
+        }
+
+        const monthGridPayload = useMonthGrid
+            ? buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
+            : null;
+        const nextSignature = useMonthGrid
+            ? getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode)
+            : (currentViewMode === 'week-grid'
+                ? `range:${currentRange}::view:${currentViewMode}::${currentLang}::${dailyCounts.map((item) => Number(item?.count || 0)).join(',')}::${Number(total) || 0}`
+                : `range:${currentRange}::view:${currentViewMode}::${currentLang}::${(trendPayload?.points || []).map((item) => `${item?.dateKey || ''}:${Number(item?.count || 0)}`).join(',')}::${Number(total) || 0}`);
+        if (widgetsHistoryWeekRenderSignature === nextSignature) return false;
+
+        setWidgetsWeekWidgetHeaderCount('history', total, currentRange);
+        if (currentViewMode === 'week-grid') {
+            if (useMonthGrid) {
+                renderWidgetsMiniMonthGrid(widgetList, monthGridPayload, {
+                    range: currentRange,
+                    emptyText,
+                    onDayClick: (dayItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
+                        if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
+                        navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                    }
+                });
+            } else {
+                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'history');
+            }
+        } else {
+            renderWidgetsMiniLineChart(widgetList, trendPayload || buildWidgetsTrendPayloadFromBookmarksByDate(null, currentRange), {
+                range: currentRange,
+                emptyText,
+                onPointClick: (point) => {
+                    const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
+                    if (!targetDateKey || Number(point?.count || 0) <= 0) return;
+                    navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                }
+            });
+        }
+
+        widgetsHistoryWeekRenderSignature = nextSignature;
+        return true;
     } catch (error) {
         console.warn('[Widgets] 更新点击记录周视图小组件失败:', error);
-        setWidgetsWeekWidgetHeaderCount('history', 0);
+        const nextSignature = `error::${currentLang}::${currentRange}::${currentViewMode}`;
+        if (widgetsHistoryWeekRenderSignature === nextSignature) return false;
+        setWidgetsWeekWidgetHeaderCount('history', 0, currentRange);
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsHistoryWeekRenderSignature = nextSignature;
+        return true;
     }
 }
 
 async function renderWidgetsRecommendCards(options = {}) {
     const cardsRow = document.getElementById('widgetsCardsRow');
-    if (!cardsRow) return;
+    if (!cardsRow) return false;
 
     const cards = cardsRow.querySelectorAll('.recommend-card');
-    if (!cards.length) return;
+    if (!cards.length) return false;
 
     const force = Boolean(options.force);
     const allowBootstrap = options.allowBootstrap !== false;
+    const allowDuringInteraction = options.allowDuringInteraction === true;
+    const preferSnapshotFirst = options.preferSnapshotFirst === true;
 
-    if (!force && isWidgetsInteractionActive()) {
-        return;
+    if (!force && !allowDuringInteraction && isWidgetsInteractionActive()) {
+        return false;
     }
 
     let currentCards = null;
-    try {
-        currentCards = await getHistoryCurrentCards();
-        if (Array.isArray(currentCards?.cardData)) {
-            seedFaviconMemoryFromCardData(currentCards.cardData);
+    let seededFromSnapshotFirst = false;
+    if (preferSnapshotFirst && !allowBootstrap && (!Array.isArray(recommendCards) || recommendCards.length === 0)) {
+        try {
+            const snapshot = readRecommendCardsSnapshot();
+            if (snapshot && Array.isArray(snapshot.cards) && snapshot.cards.length > 0) {
+                const snapshotCards = snapshot.cards
+                    .map(normalizeRecommendSnapshotCard)
+                    .filter(Boolean)
+                    .slice(0, 3);
+                if (snapshotCards.length > 0) {
+                    recommendCards = snapshotCards;
+                    const snapshotFlippedIds = Array.isArray(snapshot.flippedIds)
+                        ? snapshot.flippedIds.map(id => String(id || '')).filter(Boolean)
+                        : [];
+                    currentCards = {
+                        cardIds: snapshotCards.map(item => String(item?.id || '')).filter(Boolean),
+                        flippedIds: snapshotFlippedIds,
+                        cardData: snapshotCards,
+                        timestamp: Number(snapshot.ts || Date.now()),
+                        lastUpdated: Number(snapshot.ts || Date.now())
+                    };
+                    seedFaviconMemoryFromCardData(snapshotCards);
+                    seededFromSnapshotFirst = true;
+                }
+            }
+        } catch (_) { }
+    }
+
+    if (!seededFromSnapshotFirst) {
+        try {
+            currentCards = await getHistoryCurrentCards();
+            syncRecommendLastUpdatedFromState(currentCards);
+            if (Array.isArray(currentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(currentCards.cardData);
+            }
+        } catch (_) { }
+    }
+
+    const hydrateRecommendCardsFromCurrentState = (state) => {
+        if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
+            return [];
         }
-    } catch (_) { }
+
+        const cachedCardDataMap = new Map();
+        if (Array.isArray(state.cardData)) {
+            state.cardData.forEach((data) => {
+                if (data && data.id) cachedCardDataMap.set(data.id, data);
+            });
+        }
+        if (cachedCardDataMap.size === 0) {
+            return [];
+        }
+
+        return state.cardIds
+            .map(id => cachedCardDataMap.get(id) || null)
+            .filter(Boolean)
+            .map((bookmark) => {
+                const safeTitle = bookmark.title || bookmark.name || bookmark.url || '';
+                const safeUrl = bookmark.url || '';
+                const safeFavicon = bookmark.favicon || bookmark.faviconUrl || null;
+                const quickPriority = Number(bookmark.priority);
+                return {
+                    ...bookmark,
+                    title: safeTitle,
+                    name: safeTitle,
+                    url: safeUrl,
+                    favicon: safeFavicon,
+                    faviconUrl: safeFavicon,
+                    priority: Number.isFinite(quickPriority) ? quickPriority : 0.5,
+                    factors: bookmark.factors || {}
+                };
+            });
+    };
+
+    // 后台快捷复习可能在 UI 关闭时推进，recommendCards 可能滞后于当前轮次。
+    // 一旦发现不一致，强制丢弃前台缓存，按 storage 的 historyCurrentCards 重建。
+    const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+    const localRecommendIds = normalizeRecommendCardIdList((Array.isArray(recommendCards) ? recommendCards : []).map(item => item?.id));
+    if (currentCardIds.length > 0 && !areRecommendCardIdListsEqual(localRecommendIds, currentCardIds)) {
+        recommendCards = [];
+        lastWidgetsRecommendCardSignature = '';
+    }
 
     if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && currentCards?.cardIds?.length) {
         try {
-            const cachedCardDataMap = new Map();
-            if (Array.isArray(currentCards.cardData)) {
-                currentCards.cardData.forEach(data => {
-                    if (data && data.id) cachedCardDataMap.set(data.id, data);
-                });
+            const quickCards = hydrateRecommendCardsFromCurrentState(currentCards);
+            if (quickCards.length > 0) {
+                recommendCards = quickCards;
+                writeRecommendCardsSnapshot(
+                    recommendCards,
+                    Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []
+                );
             }
+        } catch (_) { }
+    }
 
-            // 侧边栏快速路径：先用已保存卡片秒显，避免打开时闪烁
-            if (cachedCardDataMap.size > 0) {
-                const quickCards = currentCards.cardIds
-                    .map(id => cachedCardDataMap.get(id) || null)
+    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && !allowBootstrap) {
+        try {
+            const snapshot = readRecommendCardsSnapshot();
+            const snapshotIds = normalizeRecommendCardIdList(
+                (Array.isArray(snapshot?.cards) ? snapshot.cards : []).map(item => item?.id)
+            );
+            const canReuseSnapshot = Boolean(
+                snapshot
+                && Array.isArray(snapshot.cards)
+                && snapshot.cards.length > 0
+                && (!currentCardIds.length || areRecommendCardIdListsEqual(snapshotIds, currentCardIds))
+            );
+
+            if (canReuseSnapshot) {
+                recommendCards = snapshot.cards
+                    .map(normalizeRecommendSnapshotCard)
                     .filter(Boolean)
-                    .map((bookmark) => {
-                        const safeTitle = bookmark.title || bookmark.name || bookmark.url || '';
-                        const safeUrl = bookmark.url || '';
-                        const safeFavicon = bookmark.favicon || bookmark.faviconUrl || null;
-                        const quickPriority = Number(bookmark.priority);
-                        return {
-                            ...bookmark,
-                            title: safeTitle,
-                            name: safeTitle,
-                            url: safeUrl,
-                            favicon: safeFavicon,
-                            faviconUrl: safeFavicon,
-                            priority: Number.isFinite(quickPriority) ? quickPriority : 0.5,
-                            factors: bookmark.factors || {}
-                        };
-                    });
-
-                if (quickCards.length > 0) {
-                    recommendCards = quickCards;
-                    writeRecommendCardsSnapshot(recommendCards, Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []);
-                }
-            }
-
-            if ((!Array.isArray(recommendCards) || recommendCards.length === 0)) {
-                const bookmarks = await getAllBookmarksFlat();
-                const bookmarkMap = new Map(bookmarks.map(b => [b.id, b]));
-                const scoresCache = await getScoresCache();
-                const reviewData = await getReviewData();
-
-                recommendCards = currentCards.cardIds
-                    .map(id => bookmarkMap.get(id) || cachedCardDataMap.get(id) || null)
-                    .filter(Boolean)
-                    .map(bookmark => {
-                        const cached = scoresCache[bookmark.id];
-                        const cachedMeta = cachedCardDataMap.get(bookmark.id);
-                        const safeTitle = bookmark.title || bookmark.name || cachedMeta?.title || '';
-                        const safeUrl = bookmark.url || cachedMeta?.url || '';
-                        const safeFavicon = cachedMeta?.favicon || cachedMeta?.faviconUrl || null;
-                        const reviewStatus = getReviewStatus(bookmark.id, reviewData);
-                        if (cached) {
-                            return {
-                                ...bookmark,
-                                title: safeTitle,
-                                url: safeUrl,
-                                favicon: safeFavicon,
-                                faviconUrl: safeFavicon,
-                                priority: cached.S,
-                                factors: cached,
-                                reviewStatus
-                            };
-                        }
-                        return {
-                            ...bookmark,
-                            title: safeTitle,
-                            url: safeUrl,
-                            favicon: safeFavicon,
-                            faviconUrl: safeFavicon,
-                            priority: 0.5,
-                            factors: {},
-                            reviewStatus
-                        };
-                    });
+                    .slice(0, 3);
 
                 if (recommendCards.length > 0) {
-                    writeRecommendCardsSnapshot(recommendCards, Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []);
+                    seedFaviconMemoryFromCardData(recommendCards);
+                    const fallbackFlipped = Array.isArray(currentCards?.flippedIds)
+                        ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean)
+                        : (Array.isArray(snapshot.flippedIds) ? snapshot.flippedIds.map(id => String(id || '')).filter(Boolean) : []);
+                    writeRecommendCardsSnapshot(recommendCards, fallbackFlipped);
                 }
             }
         } catch (_) { }
@@ -8621,8 +12276,36 @@ async function renderWidgetsRecommendCards(options = {}) {
     if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && allowBootstrap && !widgetsRecommendBootstrapAttempted) {
         widgetsRecommendBootstrapAttempted = true;
         try {
-            await refreshRecommendCards(false);
-            currentCards = await getHistoryCurrentCards();
+            const backendRound = await selectRecommendCardsRoundShared(false);
+            if (backendRound && Array.isArray(backendRound.cards)) {
+                recommendCards = backendRound.cards
+                    .map(normalizeRecommendSnapshotCard)
+                    .filter(Boolean)
+                    .slice(0, 3);
+            }
+
+            if (backendRound?.currentCards && typeof backendRound.currentCards === 'object') {
+                currentCards = backendRound.currentCards;
+            } else {
+                currentCards = await getHistoryCurrentCards();
+            }
+            syncRecommendLastUpdatedFromState(currentCards);
+            if (Array.isArray(currentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(currentCards.cardData);
+            }
+
+            if ((!Array.isArray(recommendCards) || recommendCards.length === 0)) {
+                const fallbackCards = hydrateRecommendCardsFromCurrentState(currentCards);
+                if (fallbackCards.length > 0) {
+                    recommendCards = fallbackCards;
+                }
+            }
+            if (Array.isArray(recommendCards) && recommendCards.length > 0) {
+                writeRecommendCardsSnapshot(
+                    recommendCards,
+                    Array.isArray(currentCards?.flippedIds) ? currentCards.flippedIds.map(id => String(id || '')).filter(Boolean) : []
+                );
+            }
         } catch (e) {
             console.warn('[Widgets] 初始化推荐卡片失败:', e);
         }
@@ -8632,7 +12315,7 @@ async function renderWidgetsRecommendCards(options = {}) {
     const signature = buildWidgetsRecommendCardSignature(recommendCards, Array.from(flippedSet), currentLang);
 
     if (!force && signature && signature === lastWidgetsRecommendCardSignature) {
-        return;
+        return false;
     }
     lastWidgetsRecommendCardSignature = signature;
 
@@ -8647,7 +12330,7 @@ async function renderWidgetsRecommendCards(options = {}) {
             }
         });
         clearRecommendCardsSnapshot();
-        return;
+        return true;
     }
 
     cards.forEach((card, index) => {
@@ -8662,12 +12345,22 @@ async function renderWidgetsRecommendCards(options = {}) {
     try {
         writeRecommendCardsSnapshot(recommendCards, Array.from(flippedSet));
     } catch (_) { }
+    return true;
 }
 
 // 小组件总刷新入口：所有自动轮询刷新都先经过交互保护。
 async function updateWidgetsViewData(options = {}) {
     const force = options.force === true;
     const allowDuringInteraction = options.allowDuringInteraction === true;
+    const recommendAllowBootstrap = options.recommendAllowBootstrap !== false;
+    const bypassVisualGate = options.bypassVisualGate === true;
+    const explicitTargets = normalizeWidgetsRefreshTargets(options.targets);
+
+    if (explicitTargets.length > 0) {
+        explicitTargets.forEach((target) => {
+            widgetsDirtyFlags[target] = true;
+        });
+    }
 
     if (currentView !== 'widgets') {
         return false;
@@ -8683,24 +12376,97 @@ async function updateWidgetsViewData(options = {}) {
         return false;
     }
 
+    const targets = resolveWidgetsRefreshTargets({ force, targets: explicitTargets });
+    if (!targets.length) {
+        return false;
+    }
+
     widgetsViewRefreshRunning = true;
     try {
-        const recommendTask = force
-            ? renderWidgetsRecommendCards({ force: true, allowBootstrap: false })
-            : renderWidgetsRecommendCards();
+        const tasks = [];
 
-        const otherWidgetsTask = Promise.all([
-            updateWidgetsTrackingWidget(),
-            updateWidgetsRankingWidget(),
-            updateWidgetsAdditionsWeekWidget(),
-            updateWidgetsHistoryWeekWidget(),
-            updateWidgetsRelatedWidget()
-        ]);
+        if (targets.includes('recommend')) {
+            tasks.push({
+                target: 'recommend',
+                promise: force
+                    ? renderWidgetsRecommendCards({ force: true, allowBootstrap: false })
+                    : renderWidgetsRecommendCards({
+                        allowBootstrap: recommendAllowBootstrap,
+                        allowDuringInteraction,
+                        preferSnapshotFirst: allowDuringInteraction && recommendAllowBootstrap === false
+                    })
+            });
+        }
+        if (targets.includes('tracking')) {
+            tasks.push({
+                target: 'tracking',
+                promise: updateWidgetsTrackingWidget()
+            });
+        }
+        if (targets.includes('ranking')) {
+            tasks.push({
+                target: 'ranking',
+                promise: updateWidgetsRankingWidget({ bypassVisualGate })
+            });
+        }
+        if (targets.includes('additionsWeek')) {
+            tasks.push({
+                target: 'additionsWeek',
+                promise: updateWidgetsAdditionsWeekWidget()
+            });
+        }
+        if (targets.includes('historyWeek')) {
+            tasks.push({
+                target: 'historyWeek',
+                promise: updateWidgetsHistoryWeekWidget()
+            });
+        }
+        if (targets.includes('related')) {
+            tasks.push({
+                target: 'related',
+                promise: updateWidgetsRelatedWidget({ bypassVisualGate })
+            });
+        }
 
-        await recommendTask;
-        await otherWidgetsTask;
-        applyWidgetsSmartSort({ force });
-        return true;
+        let hasVisualUpdate = false;
+        const results = await Promise.all(tasks.map(async (task) => {
+            try {
+                const changed = await Promise.race([
+                    task.promise,
+                    new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error(`[Widgets] ${task.target} refresh timeout`)), WIDGETS_TASK_TIMEOUT_MS);
+                    })
+                ]);
+                return {
+                    target: task.target,
+                    ok: true,
+                    changed: changed === true
+                };
+            } catch (error) {
+                return {
+                    target: task.target,
+                    ok: false,
+                    error
+                };
+            }
+        }));
+
+        results.forEach((result) => {
+            if (result.ok) {
+                widgetsDirtyFlags[result.target] = false;
+                if (result.changed) {
+                    hasVisualUpdate = true;
+                }
+                return;
+            }
+            widgetsDirtyFlags[result.target] = true;
+            console.warn(`[Widgets] 刷新${result.target}失败:`, result.error);
+        });
+
+        if (hasVisualUpdate || force) {
+            applyWidgetsSmartSort({ force });
+        }
+        return hasVisualUpdate;
     } finally {
         widgetsViewRefreshRunning = false;
         if (widgetsViewRefreshPending) {
@@ -8709,25 +12475,258 @@ async function updateWidgetsViewData(options = {}) {
     }
 }
 
+function clearWidgetsSourcePrimeSchedule() {
+    if (widgetsSourcePrimeScheduleTimer) {
+        clearTimeout(widgetsSourcePrimeScheduleTimer);
+        widgetsSourcePrimeScheduleTimer = null;
+    }
+    if (
+        widgetsSourcePrimeIdleCallbackId !== null &&
+        typeof window !== 'undefined' &&
+        typeof window.cancelIdleCallback === 'function'
+    ) {
+        try {
+            window.cancelIdleCallback(widgetsSourcePrimeIdleCallbackId);
+        } catch (_) { }
+    }
+    widgetsSourcePrimeIdleCallbackId = null;
+}
+
+function clearWidgetsTrendWarmupSchedule() {
+    if (widgetsTrendWarmupScheduleTimer) {
+        clearTimeout(widgetsTrendWarmupScheduleTimer);
+        widgetsTrendWarmupScheduleTimer = null;
+    }
+    if (
+        widgetsTrendWarmupIdleCallbackId !== null &&
+        typeof window !== 'undefined' &&
+        typeof window.cancelIdleCallback === 'function'
+    ) {
+        try {
+            window.cancelIdleCallback(widgetsTrendWarmupIdleCallbackId);
+        } catch (_) { }
+    }
+    widgetsTrendWarmupIdleCallbackId = null;
+}
+
+function scheduleWidgetsTrendWarmup() {
+    if (currentView !== 'widgets') return null;
+    if (widgetsTrendWarmupScheduleTimer || widgetsTrendWarmupIdleCallbackId !== null) return null;
+
+    const runWarmup = () => {
+        clearWidgetsTrendWarmupSchedule();
+        if (currentView !== 'widgets') return null;
+        try {
+            readWidgetsAdditionsTrendData('month30');
+        } catch (_) { }
+        readWidgetsHistoryTrendData('month30').catch(() => { });
+        return null;
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        widgetsTrendWarmupIdleCallbackId = window.requestIdleCallback(
+            () => {
+                runWarmup();
+            },
+            { timeout: 1500 }
+        );
+        widgetsTrendWarmupScheduleTimer = setTimeout(() => {
+            if (widgetsTrendWarmupIdleCallbackId === null) return;
+            runWarmup();
+        }, 1650);
+        return null;
+    }
+
+    widgetsTrendWarmupScheduleTimer = setTimeout(() => {
+        runWarmup();
+    }, 420);
+    return null;
+}
+
+function runWidgetsSourcePrime(reason = 'widgets-idle-prime') {
+    if (widgetsSourcePrimePromise) return widgetsSourcePrimePromise;
+
+    widgetsSourcePrimePromise = (async () => {
+        try {
+            if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+                initBrowsingHistoryCalendar();
+            }
+
+            await Promise.allSettled([
+                loadAllData({ skipRender: true }),
+                (async () => {
+                    const calendar = await waitForBrowsingHistoryCalendar({
+                        timeout: 1600,
+                        pollMs: 80
+                    });
+                    if (calendar) {
+                        await refreshBrowsingHistoryFromCache({ silent: true });
+                    }
+                })()
+            ]);
+
+            clearWidgetsTrendDataCaches();
+            resetBrowsingRankingDerivedCache();
+            markWidgetsDirty(WIDGETS_REFRESH_TARGETS, { schedule: false });
+            if (currentView === 'widgets') {
+                await updateWidgetsViewData();
+            }
+
+            // 首屏优先用缓存秒开，增量同步放后台慢慢跑。
+            refreshBrowsingHistoryData({ forceFull: false, silent: true }).catch(() => { });
+        } catch (error) {
+            console.warn('[Widgets] 首次数据源预热失败:', reason, error);
+        } finally {
+            widgetsSourcePrimePromise = null;
+        }
+    })();
+
+    return widgetsSourcePrimePromise;
+}
+
+function scheduleWidgetsSourcePrime(reason = 'widgets-open') {
+    if (currentView !== 'widgets') return null;
+    if (widgetsSourcePrimePromise) return widgetsSourcePrimePromise;
+    if (widgetsSourcePrimeScheduleTimer || widgetsSourcePrimeIdleCallbackId !== null) {
+        return null;
+    }
+
+    const runPrime = () => {
+        clearWidgetsSourcePrimeSchedule();
+        if (currentView !== 'widgets') return null;
+
+        if (
+            widgetsViewRefreshRunning ||
+            isWidgetsInteractionActive() ||
+            document.body.classList.contains('sidebar-resizing') ||
+            document.documentElement.classList.contains('layout-resizing')
+        ) {
+            widgetsSourcePrimeScheduleTimer = setTimeout(() => {
+                widgetsSourcePrimeScheduleTimer = null;
+                scheduleWidgetsSourcePrime(`${reason}:retry-busy`);
+            }, WIDGETS_PENDING_REFRESH_RETRY_MS);
+            return null;
+        }
+
+        return runWidgetsSourcePrime(reason);
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        widgetsSourcePrimeIdleCallbackId = window.requestIdleCallback(
+            () => {
+                runPrime();
+            },
+            { timeout: WIDGETS_SOURCE_PRIME_IDLE_TIMEOUT_MS }
+        );
+        widgetsSourcePrimeScheduleTimer = setTimeout(() => {
+            if (widgetsSourcePrimeIdleCallbackId === null) return;
+            runPrime();
+        }, WIDGETS_SOURCE_PRIME_IDLE_TIMEOUT_MS + 120);
+        return null;
+    }
+
+    widgetsSourcePrimeScheduleTimer = setTimeout(() => {
+        runPrime();
+    }, WIDGETS_SOURCE_PRIME_IDLE_DELAY_MS);
+    return null;
+}
+
 function startWidgetsViewRefresh() {
     if (widgetsViewRefreshInterval) return;
+    if (widgetsViewRefreshStartDelayTimer) return;
 
-    updateWidgetsViewData().catch((error) => {
-        console.warn('[Widgets] 初次刷新失败:', error);
-        setWidgetsOpenStabilizing(false, { releaseDelayMs: 0 });
+    widgetsFirstVisualOnlyUntil = Date.now() + WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS;
+    widgetsLoadingGuardUntil = Date.now() + WIDGETS_LOADING_GUARD_WINDOW_MS;
+    widgetsBootstrapRefreshUntil = Date.now() + WIDGETS_BOOTSTRAP_REFRESH_WINDOW_MS;
+
+    const fastTargets = ['recommend', 'ranking', 'additionsWeek', 'historyWeek', 'tracking', 'related'];
+    const hasVisualRows = hasWidgetsAnyVisualRows();
+    const shouldRunFullRefresh = shouldRunWidgetsFullRefreshOnOpen(hasVisualRows);
+    const initialTargets = shouldRunFullRefresh ? fastTargets : ['tracking'];
+
+    if (shouldRunFullRefresh) {
+        markWidgetsFullRefreshOnOpenNow();
+    }
+    markWidgetsDirty(initialTargets, { schedule: false });
+    if (!hasVisualRows) {
+        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'additionsWeek', 'historyWeek', 'related']);
+    }
+
+    requestAnimationFrame(() => {
+        if (currentView !== 'widgets') return;
+        updateWidgetsViewData({
+            targets: initialTargets,
+            recommendAllowBootstrap: false
+        }).catch((error) => {
+            console.warn('[Widgets] 初次刷新失败:', error);
+            setWidgetsOpenStabilizing(false, { releaseDelayMs: 0 });
+        });
     });
 
-    widgetsViewRefreshInterval = setInterval(() => {
+    if (widgetsRecommendBootstrapKickoffTimer) {
+        clearTimeout(widgetsRecommendBootstrapKickoffTimer);
+        widgetsRecommendBootstrapKickoffTimer = null;
+    }
+    if (shouldRunFullRefresh) {
+        widgetsRecommendBootstrapKickoffTimer = setTimeout(() => {
+            widgetsRecommendBootstrapKickoffTimer = null;
+            if (currentView !== 'widgets') return;
+            markWidgetsDirty('recommend', { schedule: false });
+            updateWidgetsViewData({
+                targets: ['recommend'],
+                recommendAllowBootstrap: true
+            }).catch((error) => {
+                console.warn('[Widgets] 推荐预热补刷失败:', error);
+            });
+        }, 120);
+    }
+
+    if (widgetsInitialHydrationRetryTimer) {
+        clearTimeout(widgetsInitialHydrationRetryTimer);
+        widgetsInitialHydrationRetryTimer = null;
+    }
+
+    if (shouldRunFullRefresh) {
+        widgetsInitialHydrationRetryTimer = setTimeout(() => {
+            widgetsInitialHydrationRetryTimer = null;
+            if (currentView !== 'widgets') return;
+            markWidgetsDirty(WIDGETS_REFRESH_TARGETS, { schedule: false });
+            updateWidgetsViewData().catch((error) => {
+                console.warn('[Widgets] 首次补刷失败:', error);
+            });
+        }, WIDGETS_INITIAL_HYDRATION_RETRY_MS);
+    }
+
+    widgetsViewRefreshStartDelayTimer = setTimeout(() => {
+        widgetsViewRefreshStartDelayTimer = null;
         if (currentView !== 'widgets') return;
-        if (document.body.classList.contains('sidebar-resizing')) return;
-        if (document.documentElement.classList.contains('layout-resizing')) return;
-        updateWidgetsViewData().catch((error) => {
-            console.warn('[Widgets] 周期刷新失败:', error);
-        });
-    }, WIDGETS_VIEW_REFRESH_INTERVAL_MS);
+        if (widgetsViewRefreshInterval) return;
+
+        widgetsViewRefreshInterval = setInterval(() => {
+            if (currentView !== 'widgets') return;
+            if (document.body.classList.contains('sidebar-resizing')) return;
+            if (document.documentElement.classList.contains('layout-resizing')) return;
+
+            // 周期任务收窄：常驻只刷追踪状态，其他统计走点到即算/后台补算。
+            markWidgetsDirty('tracking', { schedule: false });
+            updateWidgetsViewData().catch((error) => {
+                console.warn('[Widgets] 周期刷新失败:', error);
+            });
+        }, WIDGETS_VIEW_REFRESH_INTERVAL_MS);
+    }, WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS + 240);
+
+    if (shouldRunFullRefresh) {
+        scheduleWidgetsSourcePrime('widgets-open');
+    }
+    scheduleWidgetsTrendWarmup();
 }
 
 function stopWidgetsViewRefresh() {
+    if (widgetsViewRefreshStartDelayTimer) {
+        clearTimeout(widgetsViewRefreshStartDelayTimer);
+        widgetsViewRefreshStartDelayTimer = null;
+    }
+
     if (widgetsViewRefreshInterval) {
         clearInterval(widgetsViewRefreshInterval);
         widgetsViewRefreshInterval = null;
@@ -8738,10 +12737,27 @@ function stopWidgetsViewRefresh() {
         widgetsPendingRefreshTimer = null;
     }
 
+    if (widgetsInitialHydrationRetryTimer) {
+        clearTimeout(widgetsInitialHydrationRetryTimer);
+        widgetsInitialHydrationRetryTimer = null;
+    }
+
+    if (widgetsRecommendBootstrapKickoffTimer) {
+        clearTimeout(widgetsRecommendBootstrapKickoffTimer);
+        widgetsRecommendBootstrapKickoffTimer = null;
+    }
+
+    clearWidgetsSourcePrimeSchedule();
+    clearWidgetsRankingHydrationSchedule();
+    clearWidgetsTrendWarmupSchedule();
+
     widgetsViewRefreshPending = false;
     widgetsViewRefreshPendingForce = false;
     widgetsViewRefreshRunning = false;
     widgetsInteractionPointerDown = false;
+    widgetsBootstrapRefreshUntil = 0;
+    widgetsFirstVisualOnlyUntil = 0;
+    widgetsLoadingGuardUntil = 0;
 }
 
 function cycleWidgetsRankingRange() {
@@ -8754,16 +12770,72 @@ function cycleWidgetsRankingRange() {
     try { localStorage.setItem('timeTrackingWidgetRankingRange', nextRange); } catch (_) { }
     updateWidgetsRankingRangeToggleLabel(nextRange);
 
-    updateWidgetsRankingWidget().catch((error) => {
+    markWidgetsDirty('ranking', { schedule: false });
+    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
         console.warn('[Widgets] 切换排行范围失败:', error);
+    });
+}
+
+function cycleWidgetsAdditionsRange() {
+    const currentRange = readWidgetsAdditionsRange();
+    const nextRange = currentRange === 'week' ? 'month30' : 'week';
+    writeWidgetsAdditionsRange(nextRange);
+    updateWidgetsAdditionsToggleLabel();
+    markWidgetsDirty('additionsWeek', { schedule: false });
+    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换书签添加记录范围失败:', error);
+    });
+}
+
+function cycleWidgetsAdditionsViewMode() {
+    const currentRange = readWidgetsAdditionsRange();
+    const currentMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), currentRange);
+    const nextMode = currentMode === 'line' ? 'week-grid' : 'line';
+    writeWidgetsAdditionsViewMode(nextMode);
+    updateWidgetsAdditionsToggleLabel();
+    markWidgetsDirty('additionsWeek', { schedule: false });
+    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换书签添加记录视图失败:', error);
+    });
+}
+
+function cycleWidgetsHistoryRange() {
+    const currentRange = readWidgetsHistoryRange();
+    const nextRange = currentRange === 'week' ? 'month30' : 'week';
+    writeWidgetsHistoryRange(nextRange);
+    updateWidgetsHistoryToggleLabel();
+    markWidgetsDirty('historyWeek', { schedule: false });
+    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换点击记录范围失败:', error);
+    });
+}
+
+function cycleWidgetsHistoryViewMode() {
+    const currentRange = readWidgetsHistoryRange();
+    const currentMode = getWidgetsEffectiveMiniViewMode(readWidgetsHistoryViewMode(), currentRange);
+    const nextMode = currentMode === 'line' ? 'week-grid' : 'line';
+    writeWidgetsHistoryViewMode(nextMode);
+    updateWidgetsHistoryToggleLabel();
+    markWidgetsDirty('historyWeek', { schedule: false });
+    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换点击记录视图失败:', error);
+    });
+}
+
+function cycleWidgetsRankingVisualMode() {
+    const currentMode = readWidgetsRankingVisualMode();
+    const nextMode = currentMode === 'pie' ? 'list' : 'pie';
+    writeWidgetsRankingVisualMode(nextMode);
+    updateWidgetsRankingVisualToggleLabel(nextMode);
+    markWidgetsDirty('ranking', { schedule: false });
+    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换点击排行图表失败:', error);
     });
 }
 
 function cycleWidgetsRankingViewMode() {
     const modes = ['bookmark', 'folder', 'domain'];
-    const currentMode = normalizeWidgetsRankingViewMode(
-        browsingRankingViewMode || localStorage.getItem('browsingRankingViewMode') || 'bookmark'
-    );
+    const currentMode = readWidgetsRankingViewModePreference('bookmark');
     const currentIndex = Math.max(0, modes.indexOf(currentMode === 'subdomain' ? 'domain' : currentMode));
     const nextMode = currentMode === 'subdomain'
         ? 'domain'
@@ -8772,15 +12844,14 @@ function cycleWidgetsRankingViewMode() {
     saveBrowsingRankingViewMode(nextMode);
     updateWidgetsRankingModeToggleLabel(nextMode);
 
-    updateWidgetsRankingWidget().catch((error) => {
+    markWidgetsDirty('ranking', { schedule: false });
+    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
         console.warn('[Widgets] 切换排行模式失败:', error);
     });
 }
 
 function switchWidgetsRankingSubdomainMode() {
-    const currentMode = normalizeWidgetsRankingViewMode(
-        browsingRankingViewMode || localStorage.getItem('browsingRankingViewMode') || 'bookmark'
-    );
+    const currentMode = readWidgetsRankingViewModePreference('bookmark');
 
     if (currentMode !== 'domain' && currentMode !== 'subdomain') {
         return;
@@ -8790,7 +12861,8 @@ function switchWidgetsRankingSubdomainMode() {
     saveBrowsingRankingViewMode(nextMode);
     updateWidgetsRankingModeToggleLabel(nextMode);
 
-    updateWidgetsRankingWidget().catch((error) => {
+    markWidgetsDirty('ranking', { schedule: false });
+    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
         console.warn('[Widgets] 切换子域模式失败:', error);
     });
 }
@@ -8805,6 +12877,13 @@ function initWidgetsView() {
     const rankingSubdomainBtn = document.getElementById('widgetsRankingSubdomainToggleBtn');
     const rankingModeBtn = document.getElementById('widgetsRankingModeToggleBtn');
     const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
+    const rankingVisualBtn = document.getElementById('widgetsRankingVisualToggleBtn');
+    const additionsRangeBtn = document.getElementById('widgetsAdditionsRangeToggleBtn');
+    const additionsViewBtn = document.getElementById('widgetsAdditionsViewToggleBtn');
+    const historyRangeBtn = document.getElementById('widgetsHistoryRangeToggleBtn');
+    const historyViewBtn = document.getElementById('widgetsHistoryViewToggleBtn');
+    const widgetsQuickReviewBtn = document.getElementById('widgetsQuickReviewBtn');
+    const widgetsQuickReviewSettingsBtn = document.getElementById('widgetsQuickReviewSettingsBtn');
     const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
     const widgetsSmartSortToggleBtn = document.getElementById('widgetsSmartSortToggleBtn');
     const widgetsSmartSortInfoBtn = document.getElementById('widgetsSmartSortInfoBtn');
@@ -8906,7 +12985,7 @@ function initWidgetsView() {
     if (rankingWidget) {
         rankingWidget.addEventListener('click', (e) => {
             const target = e.target instanceof Element ? e.target : null;
-            if (target && (target.closest('#widgetsRankingSubdomainToggleBtn') || target.closest('#widgetsRankingModeToggleBtn') || target.closest('#widgetsRankingRangeToggleBtn') || target.closest('.time-tracking-widget-item') || target.closest('a'))) return;
+            if (target && (target.closest('#widgetsRankingSubdomainToggleBtn') || target.closest('#widgetsRankingModeToggleBtn') || target.closest('#widgetsRankingRangeToggleBtn') || target.closest('#widgetsRankingVisualToggleBtn') || target.closest('.time-tracking-widget-item') || target.closest('.widgets-pie-shell') || target.closest('a'))) return;
             navigateToAdditionsRankingFromWidgets();
         });
     }
@@ -8948,6 +13027,54 @@ function initWidgetsView() {
         });
     }
 
+    if (rankingVisualBtn) {
+        rankingVisualBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsRankingVisualMode();
+        });
+    }
+
+    if (additionsRangeBtn) {
+        additionsRangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsAdditionsRange();
+        });
+    }
+
+    if (additionsViewBtn) {
+        additionsViewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsAdditionsViewMode();
+        });
+    }
+
+    if (historyRangeBtn) {
+        historyRangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsHistoryRange();
+        });
+    }
+
+    if (historyViewBtn) {
+        historyViewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsHistoryViewMode();
+        });
+    }
+
+    if (widgetsQuickReviewBtn) {
+        widgetsQuickReviewBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await quickReviewNext({ source: 'widgets_button' });
+        });
+    }
+
+    if (widgetsQuickReviewSettingsBtn) {
+        widgetsQuickReviewSettingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showRefreshSettingsModal();
+        });
+    }
 
     if (widgetsCardRefreshBtn) {
         widgetsCardRefreshBtn.addEventListener('click', async (e) => {
@@ -8955,6 +13082,7 @@ function initWidgetsView() {
             try {
                 widgetsRecommendBootstrapAttempted = false;
                 await refreshRecommendCards(true);
+                scheduleRecommendCandidatesPreload(18);
                 lastWidgetsRecommendCardSignature = '';
                 await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
                 applyWidgetsSmartSort({ force: true });
@@ -9076,6 +13204,11 @@ function initWidgetsView() {
         setWidgetsSortInfoPanelOpen(false);
     });
 
+    updateWidgetsRankingRangeToggleLabel();
+    updateWidgetsRankingModeToggleLabel();
+    updateWidgetsRankingVisualToggleLabel();
+    updateWidgetsAdditionsToggleLabel();
+    updateWidgetsHistoryToggleLabel();
     updateWidgetsSmartSortToggleUI(currentView);
     widgetsViewBound = true;
 }
@@ -9085,6 +13218,13 @@ function renderWidgetsView() {
         initWidgetsView();
     }
     updateWidgetsSmartSortToggleUI(currentView);
+
+    const hasVisualRows = hasWidgetsAnyVisualRows();
+    if (!hasVisualRows) {
+        widgetsLoadingGuardUntil = Date.now() + WIDGETS_LOADING_GUARD_WINDOW_MS;
+        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'additionsWeek', 'historyWeek', 'related']);
+    }
+
     startWidgetsViewRefresh();
 }
 
@@ -9524,6 +13664,28 @@ function seedFaviconMemoryFromCardData(cardData = []) {
     });
 }
 
+function getFaviconRenderTargetPx(imgElement) {
+    if (!imgElement) return 16;
+
+    const dpr = Math.max(1, Number(window?.devicePixelRatio) || 1);
+    const rectWidth = Number(imgElement.getBoundingClientRect?.().width || 0);
+    const clientWidth = Number(imgElement.clientWidth || 0);
+    let cssWidth = rectWidth > 0 ? rectWidth : clientWidth;
+
+    if (cssWidth <= 0 && window?.getComputedStyle) {
+        const computedWidth = parseFloat(window.getComputedStyle(imgElement).width || '0');
+        if (Number.isFinite(computedWidth) && computedWidth > 0) {
+            cssWidth = computedWidth;
+        }
+    }
+
+    if (cssWidth <= 0) {
+        cssWidth = Number(imgElement.width || 16) || 16;
+    }
+
+    return Math.max(16, Math.ceil(cssWidth * dpr));
+}
+
 // 设置 favicon（使用现有的 FaviconCache 系统）
 function setHighResFavicon(imgElement, url, preferredFavicon = null) {
     if (!imgElement) return;
@@ -9535,6 +13697,12 @@ function setHighResFavicon(imgElement, url, preferredFavicon = null) {
     }
 
     imgElement.dataset.faviconUrl = url;
+    const targetPx = getFaviconRenderTargetPx(imgElement);
+    const requestedMinDimension = Math.max(96, targetPx);
+    const requestedFallbackDimension = Math.max(
+        32,
+        Math.min(requestedMinDimension, Math.ceil(requestedMinDimension * 0.75))
+    );
 
     let domain = '';
     try {
@@ -9556,11 +13724,12 @@ function setHighResFavicon(imgElement, url, preferredFavicon = null) {
         imgElement.src = syncIcon;
     }
 
-    const canSkipAsync = hasPreferred && domain && FaviconCache.memoryCache.has(domain);
-    if (canSkipAsync) return;
-
     // 异步获取更高质量版本
-    getFaviconUrlAsync(url).then(dataUrl => {
+    getFaviconUrlAsync(url, {
+        minDimensionPx: requestedMinDimension,
+        fallbackMinDimensionPx: requestedFallbackDimension,
+        cacheMinDimensionPx: requestedFallbackDimension
+    }).then(dataUrl => {
         if (imgElement.dataset.faviconUrl !== url) return;
         if (dataUrl && dataUrl !== fallbackIcon) {
             imgElement.src = dataUrl;
@@ -9867,6 +14036,11 @@ function setupSettingsMenu() {
     const manualCompactBtn = document.getElementById('sidebarManualStateCompactBtn');
     const manualHiddenBtn = document.getElementById('sidebarManualStateHiddenBtn');
 
+    const quickReviewSettingsToggle = document.getElementById('quickReviewSettingsToggle');
+    const quickReviewSettingsPanel = document.getElementById('quickReviewSettingsPanel');
+    const quickReviewModeSingleBtn = document.getElementById('quickReviewModeSingleBtn');
+    const quickReviewModeNewTabBtn = document.getElementById('quickReviewModeNewTabBtn');
+
     function getSidebarController() {
         const controller = window.__historySidebarController;
         if (!controller || typeof controller.getState !== 'function') return null;
@@ -9888,16 +14062,39 @@ function setupSettingsMenu() {
         }
     }
 
+    function closeQuickReviewSettingsPanel() {
+        if (!quickReviewSettingsPanel) return;
+        quickReviewSettingsPanel.setAttribute('hidden', '');
+        if (quickReviewSettingsToggle) {
+            quickReviewSettingsToggle.setAttribute('aria-expanded', 'false');
+        }
+    }
+
     function toggleJumpSettingsPanel() {
         if (!jumpSettingsPanel) return;
         if (jumpSettingsPanel.hasAttribute('hidden')) {
             closeSidebarPanel();
+            closeQuickReviewSettingsPanel();
             jumpSettingsPanel.removeAttribute('hidden');
             if (jumpSettingsToggle) {
                 jumpSettingsToggle.setAttribute('aria-expanded', 'true');
             }
         } else {
             closeJumpSettingsPanel();
+        }
+    }
+
+    function toggleQuickReviewSettingsPanel() {
+        if (!quickReviewSettingsPanel) return;
+        if (quickReviewSettingsPanel.hasAttribute('hidden')) {
+            closeSidebarPanel();
+            closeJumpSettingsPanel();
+            quickReviewSettingsPanel.removeAttribute('hidden');
+            if (quickReviewSettingsToggle) {
+                quickReviewSettingsToggle.setAttribute('aria-expanded', 'true');
+            }
+        } else {
+            closeQuickReviewSettingsPanel();
         }
     }
 
@@ -9913,6 +14110,7 @@ function setupSettingsMenu() {
         if (!sidebarPanel) return;
         if (sidebarPanel.hasAttribute('hidden')) {
             closeJumpSettingsPanel();
+            closeQuickReviewSettingsPanel();
             sidebarPanel.removeAttribute('hidden');
             if (sidebarPanelToggle) {
                 sidebarPanelToggle.setAttribute('aria-expanded', 'true');
@@ -9925,6 +14123,7 @@ function setupSettingsMenu() {
     function closeMenu() {
         closeSidebarPanel();
         closeJumpSettingsPanel();
+        closeQuickReviewSettingsPanel();
         if (!menu.hasAttribute('hidden')) {
             menu.setAttribute('hidden', '');
         }
@@ -9975,6 +14174,14 @@ function setupSettingsMenu() {
         if (jumpSettingsToggle) {
             jumpSettingsToggle.setAttribute('aria-expanded', jumpSettingsPanel && !jumpSettingsPanel.hasAttribute('hidden') ? 'true' : 'false');
         }
+        if (quickReviewSettingsToggle) {
+            quickReviewSettingsToggle.setAttribute('aria-expanded', quickReviewSettingsPanel && !quickReviewSettingsPanel.hasAttribute('hidden') ? 'true' : 'false');
+        }
+
+        quickReviewOpenMode = readQuickReviewOpenMode();
+        const useSingleTab = quickReviewOpenMode !== 'new_tab';
+        setPressed(quickReviewModeSingleBtn, useSingleTab);
+        setPressed(quickReviewModeNewTabBtn, !useSingleTab);
 
         if (sidebarPanelToggle) {
             sidebarPanelToggle.disabled = !controller;
@@ -10025,6 +14232,33 @@ function setupSettingsMenu() {
         if (action === 'open-help') {
             closeMenu();
             openShortcutsInfoModal();
+            return;
+        }
+
+        if (action === 'open-recommend-settings') {
+            closeMenu();
+            showRefreshSettingsModal();
+            return;
+        }
+
+        if (action === 'toggle-quick-review-settings') {
+            e.preventDefault();
+            toggleQuickReviewSettingsPanel();
+            syncSidebarSettingsControls();
+            return;
+        }
+
+        if (action === 'open-shortcuts-settings') {
+            e.preventDefault();
+            closeMenu();
+            openBrowserShortcutsSettingsPage();
+            return;
+        }
+
+        if (action === 'set-quick-review-mode') {
+            e.preventDefault();
+            quickReviewOpenMode = writeQuickReviewOpenMode(target.dataset.mode || 'single_tab');
+            syncSidebarSettingsControls();
             return;
         }
 
@@ -10196,11 +14430,6 @@ async function saveSharedRecommendWindowId(windowId) {
 let historyLastSaveTime = 0;
 
 // 在推荐窗口中打开链接
-const RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS = 2200;
-const RECOMMEND_OPEN_TRACKING_VERIFY_INTERVAL_MS = 180;
-const RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS = 1600;
-const RECOMMEND_OPEN_HISTORY_VERIFY_INTERVAL_MS = 220;
-const RECOMMEND_OPEN_HISTORY_VERIFY_GRACE_MS = 6000;
 const recommendOpenInFlightKeys = new Set();
 
 function buildRecommendOpenInFlightKey({ bookmarkId = '', url = '' } = {}) {
@@ -10226,193 +14455,6 @@ function normalizeRecommendOpenCheckUrl(url) {
     } catch (_) {
         return String(url || '').trim();
     }
-}
-
-function buildRecommendOpenComparableUrls(url) {
-    const normalized = normalizeRecommendOpenCheckUrl(url);
-    if (!normalized) return [];
-
-    const values = new Set([normalized]);
-
-    try {
-        const parsed = new URL(normalized);
-        parsed.hash = '';
-        const canonical = parsed.href;
-        values.add(canonical);
-
-        if (canonical.endsWith('/')) {
-            values.add(canonical.slice(0, -1));
-        } else {
-            values.add(`${canonical}/`);
-        }
-    } catch (_) { }
-
-    return Array.from(values)
-        .map(item => String(item || '').trim())
-        .filter(Boolean);
-}
-
-function areRecommendOpenUrlsEquivalent(urlA, urlB) {
-    const variantsA = buildRecommendOpenComparableUrls(urlA);
-    if (variantsA.length === 0) return false;
-
-    const setA = new Set(variantsA);
-    const variantsB = buildRecommendOpenComparableUrls(urlB);
-    return variantsB.some(variant => setA.has(variant));
-}
-
-function isRecommendOpenTrackedBySessions(sessions = [], { tabId = null, url = '' } = {}) {
-    const normalizedUrl = normalizeRecommendOpenCheckUrl(url);
-    return (Array.isArray(sessions) ? sessions : []).some((session) => {
-        const sessionTabId = Number(session?.tabId);
-        if (tabId != null && Number.isFinite(sessionTabId) && sessionTabId === Number(tabId)) {
-            return true;
-        }
-
-        if (!normalizedUrl) return false;
-
-        const sessionUrl = normalizeRecommendOpenCheckUrl(session?.url || '');
-        if (!sessionUrl) return false;
-
-        return areRecommendOpenUrlsEquivalent(sessionUrl, normalizedUrl);
-    });
-}
-
-function getRecommendOpenHistoryCandidateUrls(url) {
-    const raw = String(url || '').trim();
-    if (!raw) return [];
-
-    const values = new Set([raw]);
-
-    try {
-        const parsed = new URL(raw);
-        parsed.hash = '';
-        const normalized = parsed.href;
-        values.add(normalized);
-
-        if (normalized.endsWith('/')) {
-            values.add(normalized.slice(0, -1));
-        } else {
-            values.add(`${normalized}/`);
-        }
-    } catch (_) { }
-
-    return Array.from(values).map(item => String(item || '').trim()).filter(Boolean);
-}
-
-async function getRecommendOpenVisitsByUrl(url) {
-    if (!browserAPI?.history?.getVisits || !url) return [];
-
-    try {
-        return await new Promise((resolve) => {
-            browserAPI.history.getVisits({ url }, (results) => {
-                if (browserAPI.runtime?.lastError) {
-                    resolve([]);
-                    return;
-                }
-                resolve(Array.isArray(results) ? results : []);
-            });
-        });
-    } catch (_) {
-        return [];
-    }
-}
-
-async function verifyRecommendOpenTrackedByHistory({ url = '', openedAt = 0, timeoutMs = RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS } = {}) {
-    const candidateUrls = getRecommendOpenHistoryCandidateUrls(url);
-    if (candidateUrls.length === 0 || !browserAPI?.history?.getVisits) return false;
-
-    const safeOpenedAt = Number.isFinite(Number(openedAt)) && Number(openedAt) > 0
-        ? Math.floor(Number(openedAt))
-        : Date.now();
-    const minVisitTime = Math.max(0, safeOpenedAt - RECOMMEND_OPEN_HISTORY_VERIFY_GRACE_MS);
-    const safeTimeout = Math.max(500, Math.floor(Number(timeoutMs) || RECOMMEND_OPEN_HISTORY_VERIFY_TIMEOUT_MS));
-    const deadline = Date.now() + safeTimeout;
-
-    while (Date.now() <= deadline) {
-        for (const candidateUrl of candidateUrls) {
-            const visits = await getRecommendOpenVisitsByUrl(candidateUrl);
-            if (visits.some((visit) => Number(visit?.visitTime || 0) >= minVisitTime)) {
-                return true;
-            }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, RECOMMEND_OPEN_HISTORY_VERIFY_INTERVAL_MS));
-    }
-
-    return false;
-}
-
-async function verifyRecommendOpenTracked({ tabId = null, url = '', bookmarkId = '', openedAt = 0, timeoutMs = RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS } = {}) {
-    let trackingEnabled = true;
-
-    try {
-        const enabledResponse = await browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' });
-        if (enabledResponse && enabledResponse.success) {
-            trackingEnabled = enabledResponse.enabled !== false;
-        }
-    } catch (_) { }
-
-    // 时间追踪关闭时，保持原行为：允许继续翻牌/复习
-    if (!trackingEnabled) {
-        return true;
-    }
-
-    // 命中时间追踪屏蔽时，不阻断提前复习（仅影响追踪/T值来源）
-    try {
-        const safeBookmarkId = String(bookmarkId || '').trim();
-        const safeUrl = String(url || '').trim();
-        if (safeBookmarkId || safeUrl) {
-            const blockedSets = await getTrackingBlockedSets();
-            const cache = await getTrackingBookmarkCache();
-            const blocked = await isTrackingItemBlocked({
-                bookmarkId: safeBookmarkId || null,
-                url: safeUrl || null
-            }, blockedSets, cache);
-            if (blocked) {
-                return true;
-            }
-        }
-    } catch (_) { }
-
-    const safeTimeout = Math.max(600, Math.floor(Number(timeoutMs) || RECOMMEND_OPEN_TRACKING_VERIFY_TIMEOUT_MS));
-    const deadline = Date.now() + safeTimeout;
-    let hasReadableTrackingResponse = false;
-
-    while (Date.now() <= deadline) {
-        try {
-            const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
-            const sessions = response && response.success && Array.isArray(response.sessions)
-                ? response.sessions
-                : [];
-
-            if (response && response.success) {
-                hasReadableTrackingResponse = true;
-            }
-
-            if (isRecommendOpenTrackedBySessions(sessions, { tabId, url })) {
-                return true;
-            }
-        } catch (_) { }
-
-        await new Promise(resolve => setTimeout(resolve, RECOMMEND_OPEN_TRACKING_VERIFY_INTERVAL_MS));
-    }
-
-    // 无法读取追踪状态时回退旧行为，避免误伤
-    if (!hasReadableTrackingResponse) {
-        return true;
-    }
-
-    // 追踪会话偶发延迟时，用浏览器历史做一次轻量二次确认
-    const historyConfirmed = await verifyRecommendOpenTrackedByHistory({
-        url,
-        openedAt
-    });
-    if (historyConfirmed) {
-        return true;
-    }
-
-    return false;
 }
 
 // 在推荐窗口中打开链接
@@ -10486,12 +14528,88 @@ async function openInRecommendWindow(url) {
     }
 }
 
+async function quickReviewNext(options = {}) {
+    if (quickReviewActionInFlight) {
+        return { success: false, handled: false, busy: true };
+    }
+
+    quickReviewActionInFlight = true;
+
+    try {
+        quickReviewOpenMode = readQuickReviewOpenMode();
+        const source = String(options.source || 'unknown');
+
+        let response = null;
+        try {
+            response = await browserAPI.runtime.sendMessage({
+                action: 'quickReviewNext',
+                source
+            });
+        } catch (error) {
+            return {
+                success: false,
+                handled: false,
+                source,
+                error: error?.message || String(error)
+            };
+        }
+
+        const success = response?.success !== false;
+        const handled = response?.handled === true;
+        const empty = response?.empty === true;
+
+        if (empty) {
+            const emptyMsg = currentLang === 'en'
+                ? 'No cards available for quick review'
+                : '当前没有可快捷复习的卡片';
+            try { showToast(emptyMsg); } catch (_) { }
+        } else if (!success && response?.reason === 'open_failed') {
+            const openFailMsg = currentLang === 'en'
+                ? 'Open failed, review skipped'
+                : '打开失败，本次不计复习';
+            try { showToast(openFailMsg); } catch (_) { }
+        }
+
+        try {
+            if (currentView === 'recommend') {
+                await refreshRecommendCards(false);
+            } else if (currentView === 'widgets') {
+                await refreshRecommendCards(false);
+                lastWidgetsRecommendCardSignature = '';
+                await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                applyWidgetsSmartSort({ force: true });
+            }
+        } catch (_) { }
+
+        if (handled && !empty) {
+            // 快速复习后预拉下一批候选图标；整轮完成时拉得更多。
+            scheduleRecommendCandidatesPreload(response?.allFlipped ? 18 : 12);
+        }
+
+        return {
+            ...(response || {}),
+            success,
+            handled,
+            empty,
+            source
+        };
+    } finally {
+        quickReviewActionInFlight = false;
+    }
+}
+
 function initCardInteractions() {
+    document.getElementById('cardQuickReviewBtn')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await quickReviewNext({ source: 'recommend_button' });
+    });
+
     // 刷新按钮（直接从缓存读取S值，选择新的Top3卡片）
     document.getElementById('cardRefreshBtn')?.addEventListener('click', async (e) => {
         e.stopPropagation();
         // S值已通过增量更新保持最新，直接从缓存刷新卡片
         await refreshRecommendCards(true);
+        scheduleRecommendCandidatesPreload(18);
     });
 
     // 刷新设置按钮
@@ -10894,6 +15012,7 @@ const RANKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次排行榜，与正在�
 const RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
 const recommendScoreDebugCache = new Map();
 const recommendScoreDebugInFlight = new Map();
+// 推荐选卡统一走后台，前端只展示共享结果
 
 // 跳过和屏蔽数据
 let skippedBookmarks = new Set(); // 已跳过书签（内存镜像 + storage 持久化）
@@ -10904,7 +15023,71 @@ let recommendCardsRefreshPending = false;
 let recommendCardsRefreshFromStateTimer = null;
 let recommendCardsStateRefreshInProgress = false;
 let recommendCardsStateRefreshPending = false;
-let recommendScoresEnsureInFlight = false;
+let recommendLastUpdatedTimestamp = 0;
+
+function normalizeRecommendLastUpdatedTimestamp(value) {
+    const ts = Number(value || 0);
+    return Number.isFinite(ts) && ts > 0 ? Math.floor(ts) : 0;
+}
+
+function formatRecommendLastUpdatedText(timestamp) {
+    const isZh = currentLang === 'zh_CN';
+    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
+    if (!normalized) {
+        return isZh ? '最近更新：--' : 'Updated: --';
+    }
+
+    const locale = isZh ? 'zh-CN' : 'en-US';
+    let timeText = '';
+    try {
+        timeText = new Date(normalized).toLocaleString(locale, {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (_) {
+        timeText = new Date(normalized).toLocaleString(locale);
+    }
+    return isZh ? `最近更新：${timeText}` : `Updated: ${timeText}`;
+}
+
+function applyRecommendLastUpdatedText(timestamp) {
+    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
+    const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+    const label = formatRecommendLastUpdatedText(normalized);
+    let title = '';
+    if (normalized) {
+        try {
+            title = new Date(normalized).toLocaleString(locale);
+        } catch (_) {
+            title = '';
+        }
+    }
+
+    const widgetsEl = document.getElementById('widgetsRecommendLastUpdated');
+    if (widgetsEl) {
+        widgetsEl.textContent = label;
+        widgetsEl.title = title;
+    }
+
+    const recommendEl = document.getElementById('recommendLastUpdated');
+    if (recommendEl) {
+        recommendEl.textContent = label;
+        recommendEl.title = title;
+    }
+}
+
+function syncRecommendLastUpdatedFromState(state = null) {
+    const ts = normalizeRecommendLastUpdatedTimestamp(
+        state?.lastUpdated || state?.timestamp || 0
+    );
+    if (ts > 0) {
+        recommendLastUpdatedTimestamp = ts;
+    }
+    applyRecommendLastUpdatedText(recommendLastUpdatedTimestamp);
+    return recommendLastUpdatedTimestamp;
+}
 
 function normalizeRecommendSnapshotCard(card) {
     if (!card || !card.url) return null;
@@ -10924,6 +15107,47 @@ function normalizeRecommendSnapshotCard(card) {
         forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
         forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
     };
+}
+
+function mergeRecommendSnapshotCardsWithCardData(snapshotCards = [], cardData = []) {
+    const safeSnapshotCards = (Array.isArray(snapshotCards) ? snapshotCards : [])
+        .map(normalizeRecommendSnapshotCard)
+        .filter(Boolean);
+    if (safeSnapshotCards.length === 0) return [];
+
+    const cardDataMap = new Map();
+    (Array.isArray(cardData) ? cardData : []).forEach((item) => {
+        const normalized = normalizeRecommendSnapshotCard(item);
+        const id = String(normalized?.id || '').trim();
+        if (!id || !normalized) return;
+        cardDataMap.set(id, normalized);
+    });
+
+    return safeSnapshotCards.map((card) => {
+        const id = String(card?.id || '').trim();
+        const fromData = id ? cardDataMap.get(id) : null;
+        if (!fromData) return card;
+
+        const title = card.title || card.name || fromData.title || fromData.name || fromData.url || '';
+        const url = card.url || fromData.url || '';
+        const favicon = card.favicon || card.faviconUrl || fromData.favicon || fromData.faviconUrl || null;
+        const priority = Number(card.priority);
+        const fallbackPriority = Number(fromData.priority);
+        const mergedPriority = Number.isFinite(priority)
+            ? priority
+            : (Number.isFinite(fallbackPriority) ? fallbackPriority : 0.5);
+
+        return {
+            ...fromData,
+            ...card,
+            title,
+            name: title,
+            url,
+            favicon,
+            faviconUrl: favicon,
+            priority: mergedPriority
+        };
+    }).filter(Boolean).slice(0, 3);
 }
 
 function readRecommendCardsSnapshot() {
@@ -10985,103 +15209,19 @@ function clearRecommendCardsSnapshot() {
     } catch (_) { }
 }
 
-
-function readRecommendPoolCursor() {
-    return readLocalNumber(RECOMMEND_POOL_CURSOR_KEY, 0);
-}
-
-function writeRecommendPoolCursor(index = 0) {
-    writeLocalNumber(RECOMMEND_POOL_CURSOR_KEY, Math.max(0, Math.floor(Number(index) || 0)));
-}
-
-async function consumeRecommendPoolCursor(poolLength, consumeCount = 0) {
-    const safePoolLength = Math.max(0, Math.floor(Number(poolLength) || 0));
-    const safeConsumeCount = Math.max(0, Math.floor(Number(consumeCount) || 0));
-
-    if (safePoolLength <= 0) {
-        writeRecommendPoolCursor(0);
-        return { success: true, source: 'local-empty', cursorBefore: 0, cursorAfter: 0 };
-    }
-
+async function selectRecommendCardsRoundShared(force = false) {
     try {
         const response = await browserAPI.runtime.sendMessage({
-            action: 'consumeRecommendPoolCursor',
-            poolLength: safePoolLength,
-            consumeCount: safeConsumeCount
+            action: 'selectRecommendCardsRound',
+            force: force === true
         });
 
-        if (response && response.success && Number.isFinite(Number(response.cursorBefore))) {
-            const cursorBefore = Number(response.cursorBefore);
-            const cursorAfter = Number.isFinite(Number(response.cursorAfter))
-                ? Number(response.cursorAfter)
-                : ((cursorBefore + safeConsumeCount) % safePoolLength);
-            return { success: true, source: 'background', cursorBefore, cursorAfter };
+        if (response && response.success && Array.isArray(response.cards)) {
+            return response;
         }
     } catch (_) { }
 
-    const localBefore = ((readRecommendPoolCursor() % safePoolLength) + safePoolLength) % safePoolLength;
-    const localAfter = (localBefore + safeConsumeCount) % safePoolLength;
-    writeRecommendPoolCursor(localAfter);
-    return { success: true, source: 'local', cursorBefore: localBefore, cursorAfter: localAfter };
-}
-
-async function setRecommendPoolCursorShared(poolLength, cursor = 0) {
-    const safePoolLength = Math.max(0, Math.floor(Number(poolLength) || 0));
-    const rawCursor = Math.floor(Number(cursor) || 0);
-    const safeCursor = safePoolLength > 0
-        ? ((rawCursor % safePoolLength) + safePoolLength) % safePoolLength
-        : Math.max(0, rawCursor);
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'setRecommendPoolCursor',
-            poolLength: safePoolLength,
-            cursor: safeCursor
-        });
-
-        if (response && response.success && Number.isFinite(Number(response.cursor))) {
-            return { success: true, source: 'background', cursor: Number(response.cursor) };
-        }
-    } catch (_) { }
-
-    writeRecommendPoolCursor(safeCursor);
-    return { success: true, source: 'local', cursor: safeCursor };
-}
-
-function buildRecommendBatchFromPool(pool = [], startIndex = 0, batchSize = RECOMMEND_BATCH_SIZE) {
-    if (!Array.isArray(pool) || pool.length === 0) return [];
-
-    const size = Math.min(Math.max(1, Math.floor(Number(batchSize) || RECOMMEND_BATCH_SIZE)), pool.length);
-    const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
-    const batch = [];
-
-    for (let step = 0; step < pool.length && batch.length < size; step++) {
-        const idx = (safeStart + step) % pool.length;
-        batch.push(pool[idx]);
-    }
-
-    return batch;
-}
-
-function deriveRecommendStartIndexFromCurrent(pool = [], currentCardIds = [], fallbackCursor = 0) {
-    if (!Array.isArray(pool) || pool.length === 0) return 0;
-
-    const safeFallback = ((Math.floor(Number(fallbackCursor) || 0) % pool.length) + pool.length) % pool.length;
-    const ids = Array.isArray(currentCardIds)
-        ? currentCardIds.map(id => String(id || '').trim()).filter(Boolean)
-        : [];
-
-    if (!ids.length) {
-        return safeFallback;
-    }
-
-    const firstId = ids[0];
-    const firstIndex = pool.findIndex(item => String(item?.id || '').trim() === firstId);
-    if (firstIndex === -1) {
-        return safeFallback;
-    }
-
-    return (firstIndex + ids.length) % pool.length;
+    return null;
 }
 
 function applyRecommendSnapshotToCardRows(snapshot) {
@@ -11122,11 +15262,56 @@ function applyRecommendSnapshotToCardRows(snapshot) {
     return applied;
 }
 
-function hydrateRecommendCardsFromSnapshotForSidePanel() {
+function normalizeRecommendCardIdList(ids = []) {
+    return (Array.isArray(ids) ? ids : [])
+        .map(id => String(id || '').trim())
+        .filter(Boolean);
+}
+
+function areRecommendCardIdListsEqual(a = [], b = []) {
+    const listA = normalizeRecommendCardIdList(a);
+    const listB = normalizeRecommendCardIdList(b);
+    if (listA.length !== listB.length) return false;
+    for (let i = 0; i < listA.length; i++) {
+        if (listA[i] !== listB[i]) return false;
+    }
+    return true;
+}
+
+async function hydrateRecommendCardsFromSnapshotForSidePanel() {
     if (!isSidePanelMode) return false;
     const snapshot = readRecommendCardsSnapshot();
     if (!snapshot) return false;
-    return applyRecommendSnapshotToCardRows(snapshot);
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+        const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        const snapshotCardIds = normalizeRecommendCardIdList((snapshot.cards || []).map(card => card?.id));
+
+        if (!currentCardIds.length) {
+            clearRecommendCardsSnapshot();
+            return false;
+        }
+        if (!areRecommendCardIdListsEqual(snapshotCardIds, currentCardIds)) {
+            clearRecommendCardsSnapshot();
+            return false;
+        }
+
+        const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(snapshot.cards, currentCards?.cardData);
+        if (mergedSnapshotCards.length > 0) {
+            seedFaviconMemoryFromCardData(mergedSnapshotCards);
+        }
+        const currentFlippedIds = normalizeRecommendCardIdList(currentCards?.flippedIds || []);
+        return applyRecommendSnapshotToCardRows({
+            ...snapshot,
+            cards: mergedSnapshotCards.length > 0 ? mergedSnapshotCards : snapshot.cards,
+            flippedIds: currentFlippedIds
+        });
+    } catch (_) {
+        return false;
+    }
 }
 
 // 获取当前显示的卡片状态（本页面共享）
@@ -11136,6 +15321,19 @@ async function getHistoryCurrentCards() {
             resolve(result[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null);
         });
     });
+}
+
+async function hasPendingRecommendRoundState() {
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        const cardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        if (!cardIds.length) return false;
+
+        const flippedSet = new Set(normalizeRecommendCardIdList(currentCards?.flippedIds || []));
+        return cardIds.some(id => !flippedSet.has(id));
+    } catch (_) {
+        return false;
+    }
 }
 
 // 保存当前显示的卡片状态（本页面共享）
@@ -11149,13 +15347,15 @@ async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
         [HISTORY_CURRENT_CARDS_STORAGE_KEY]: {
             cardIds: cardIds,
             flippedIds: flippedIds,
-            timestamp: now
+            timestamp: now,
+            lastUpdated: now
         }
     };
     // 如果提供了卡片数据（包含url和favicon），也保存它们
     if (cardData && cardData.length > 0) {
         dataToSave[HISTORY_CURRENT_CARDS_STORAGE_KEY].cardData = cardData;
     }
+    syncRecommendLastUpdatedFromState(dataToSave[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
     await browserAPI.storage.local.set(dataToSave);
 }
 
@@ -11206,12 +15406,14 @@ async function saveCardFaviconsToStorage(bookmarks) {
         const now = Date.now();
         currentCards.cardData = cardData;
         currentCards.timestamp = now;
+        currentCards.lastUpdated = now;
+        syncRecommendLastUpdatedFromState(currentCards);
         historyLastSaveTime = now; // 防止触发循环刷新
         await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: currentCards });
 
         try {
             const flippedIds = Array.isArray(currentCards.flippedIds) ? currentCards.flippedIds : [];
-            writeRecommendCardsSnapshot(bookmarks, flippedIds);
+            writeRecommendCardsSnapshot(cardData, flippedIds);
         } catch (_) { }
     } catch (error) {
         // 静默处理错误
@@ -11459,21 +15661,6 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
             const openResult = await openInRecommendWindow(bookmark.url);
             if (!openResult || !openResult.success) {
                 const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-
-            const tracked = await verifyRecommendOpenTracked({
-                tabId: openResult.tabId,
-                url: bookmark.url,
-                bookmarkId: bookmark.id,
-                openedAt: openResult.openedAt
-            });
-
-            if (!tracked) {
-                const msg = currentLang === 'en'
-                    ? 'Open not confirmed by tracking, review skipped'
-                    : '未检测到时间追踪记录，本次不计复习';
                 try { showToast(msg); } catch (_) { }
                 return;
             }
@@ -11764,21 +15951,6 @@ async function handleRecommendSearchOpenAndEarlyReview(item, options = {}) {
         const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
         try { showToast(msg); } catch (_) { }
         return { success: false, reason: 'open-failed' };
-    }
-
-    const tracked = await verifyRecommendOpenTracked({
-        tabId: openResult.tabId,
-        url,
-        bookmarkId,
-        openedAt: openResult.openedAt
-    });
-
-    if (!tracked) {
-        const msg = currentLang === 'en'
-            ? 'Open not confirmed by tracking, review skipped'
-            : '未检测到时间追踪记录，本次不计复习';
-        try { showToast(msg); } catch (_) { }
-        return { success: false, reason: 'not-tracked' };
     }
 
     let updated = false;
@@ -12438,9 +16610,10 @@ async function schedulePostponedExpiryRefresh(postponedInput = null) {
             try {
                 await cleanExpiredPostponed();
                 await loadPostponedList();
-                await refreshRecommendCards(true);
+                const shouldForceRefresh = await shouldForceRecommendCardsRefreshFromStorageChange();
+                await refreshRecommendCards(shouldForceRefresh);
                 if (currentView === 'widgets') {
-                    await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
+                    await renderWidgetsRecommendCards({ force: shouldForceRefresh, allowBootstrap: false });
                     applyWidgetsSmartSort();
                 }
             } catch (error) {
@@ -12708,11 +16881,13 @@ async function saveRefreshSettings(settings) {
 // 保留刷新设置UI用于记录上次刷新时间
 
 function showRefreshSettingsModal() {
+    initRefreshSettingsModal();
     const modal = document.getElementById('refreshSettingsModal');
     if (!modal) return;
 
     loadRefreshSettingsToUI();
     modal.classList.add('show');
+    startShortcutsLiveSync();
 }
 
 function hideRefreshSettingsModal() {
@@ -12720,6 +16895,33 @@ function hideRefreshSettingsModal() {
     if (modal) {
         modal.classList.remove('show');
     }
+    stopShortcutsLiveSyncIfIdle();
+}
+
+function setRefreshQuickReviewModeButtons(mode) {
+    const normalized = normalizeQuickReviewOpenMode(mode);
+    const singleBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
+    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+
+    if (singleBtn) {
+        const active = normalized !== 'new_tab';
+        singleBtn.classList.toggle('active', active);
+        singleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+
+    if (newTabBtn) {
+        const active = normalized === 'new_tab';
+        newTabBtn.classList.toggle('active', active);
+        newTabBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+}
+
+function getRefreshQuickReviewModeFromUI() {
+    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+    if (newTabBtn && newTabBtn.classList.contains('active')) {
+        return 'new_tab';
+    }
+    return 'single_tab';
 }
 
 async function loadRefreshSettingsToUI() {
@@ -12742,6 +16944,9 @@ async function loadRefreshSettingsToUI() {
     const daysValue = document.getElementById('refreshAfterDaysValue');
     if (daysEnabled) daysEnabled.checked = settings.refreshAfterDays > 0;
     if (daysValue) daysValue.value = settings.refreshAfterDays || 1;
+
+    setRefreshQuickReviewModeButtons(readQuickReviewOpenMode());
+    updateQuickReviewShortcutDisplay();
 
     // 更新状态显示
     updateRefreshSettingsStatus(settings);
@@ -12766,6 +16971,7 @@ async function saveRefreshSettingsFromUI() {
     settings.refreshAfterDays = daysEnabled?.checked ? parseInt(daysValue?.value) || 1 : 0;
 
     await saveRefreshSettings(settings);
+    quickReviewOpenMode = writeQuickReviewOpenMode(getRefreshQuickReviewModeFromUI());
     hideRefreshSettingsModal();
 }
 
@@ -12817,6 +17023,8 @@ function updateRefreshSettingsStatus(settings) {
 function initRefreshSettingsModal() {
     const modal = document.getElementById('refreshSettingsModal');
     if (!modal) return;
+    if (modal.dataset.bound === 'true') return;
+    modal.dataset.bound = 'true';
 
     // 关闭按钮
     const closeBtn = document.getElementById('refreshSettingsClose');
@@ -12835,6 +17043,22 @@ function initRefreshSettingsModal() {
     const saveBtn = document.getElementById('refreshSettingsSaveBtn');
     if (saveBtn) {
         saveBtn.onclick = saveRefreshSettingsFromUI;
+    }
+
+    const openShortcutsBtn = document.getElementById('refreshQuickReviewOpenShortcutsBtn');
+    if (openShortcutsBtn) {
+        openShortcutsBtn.onclick = () => {
+            openBrowserShortcutsSettingsPage();
+        };
+    }
+
+    const singleModeBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
+    const newTabModeBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+    if (singleModeBtn) {
+        singleModeBtn.onclick = () => setRefreshQuickReviewModeButtons('single_tab');
+    }
+    if (newTabModeBtn) {
+        newTabModeBtn.onclick = () => setRefreshQuickReviewModeButtons('new_tab');
     }
 }
 
@@ -13607,7 +17831,7 @@ async function loadTrackingBlockedBookmarksList(bookmarkIds) {
             const item = document.createElement('div');
             item.className = 'block-item';
             item.innerHTML = `
-                <img class="block-item-icon" src="${getFaviconUrl(bookmark.url)}" alt="">
+                <img class="block-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
                 <div class="block-item-info">
                     <div class="block-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
                 </div>
@@ -14176,7 +18400,7 @@ function renderTrackingBlockBookmarkList(listEl, items) {
         return `
             <div class="add-bookmark-item ${isSelected ? 'selected' : ''}" data-key="${escapeHtml(itemKey)}" data-id="${item.id || ''}" data-url="${escapeHtml(item.url || '')}">
                 <input type="checkbox" ${isSelected ? 'checked' : ''}>
-                <img class="add-bookmark-favicon" src="${faviconUrl}" alt="">
+                <img class="add-bookmark-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${faviconUrl}" alt="">
                 <div class="add-bookmark-info">
                     <div class="add-bookmark-title">${escapeHtml(displayTitle)}</div>
                 </div>
@@ -14544,7 +18768,7 @@ async function searchBookmarksForAdd(keyword) {
         resultsEl.innerHTML = bookmarks.map(b => `
             <div class="add-result-item ${addPostponedSearchSelected.has(b.id) ? 'selected' : ''}" data-id="${b.id}">
                 <input type="checkbox" class="add-result-checkbox" ${addPostponedSearchSelected.has(b.id) ? 'checked' : ''}>
-                <img class="add-result-favicon" src="${getFaviconUrl(b.url)}">
+                <img class="add-result-favicon" data-bookmark-url="${escapeHtml(b.url || '')}" src="${getFaviconUrl(b.url)}">
                 <div class="add-result-info">
                     <div class="add-result-title">${escapeHtml(b.title || b.url)}</div>
                     <div class="add-result-url">${escapeHtml(b.url)}</div>
@@ -14718,6 +18942,7 @@ async function getAllBookmarksFlat(options = {}) {
     additionsCacheRestored = true;
     cachedBookmarkTree = bookmarkTree;
     persistAdditionsCache();
+    persistAdditionsWidgetsSnapshot(allBookmarks);
 
     return flattened
         .map(normalizeRuntimeBookmarkEntry)
@@ -14939,9 +19164,26 @@ async function getBookmarksFromFolder(folderId, includeSubfolders = true) {
 }
 
 async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
+    const safeLimit = Math.max(6, Math.min(30, Number(limit) || 6));
+
     try {
-        const [bookmarks, scoresCache, flippedBookmarks, blocked, postponed, currentCards] = await Promise.all([
-            getAllBookmarksFlat(),
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'peekRecommendPreloadUrls',
+            limit: safeLimit
+        });
+        const urls = Array.isArray(response?.urls)
+            ? response.urls.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+        if (response?.success && urls.length > 0) {
+            preloadHighResFavicons(urls.slice(0, safeLimit));
+            return Math.min(safeLimit, urls.length);
+        }
+    } catch (_) {
+        // 回退到前端本地口径
+    }
+
+    try {
+        const [scoresCache, flippedBookmarks, blocked, postponed, currentCards] = await Promise.all([
             getScoresCache(),
             getFlippedBookmarks(),
             getBlockedBookmarks(),
@@ -14949,8 +19191,35 @@ async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
             getHistoryCurrentCards()
         ]);
 
-        if (!Array.isArray(bookmarks) || bookmarks.length === 0) return 0;
         if (!scoresCache || Object.keys(scoresCache).length === 0) return 0;
+
+        const bookmarks = Object.entries(scoresCache)
+            .map(([bookmarkId, cached]) => {
+                if (!cached || typeof cached !== 'object') return null;
+                const id = String(bookmarkId || '').trim();
+                const url = String(cached.url || '').trim();
+                if (!id || !url) return null;
+
+                const title = String(cached.title || cached.name || url).trim() || url;
+                const parentId = String(cached.parentId || '').trim();
+                const ancestorFolderIds = Array.isArray(cached.ancestorFolderIds)
+                    ? cached.ancestorFolderIds.map(item => String(item || '').trim()).filter(Boolean)
+                    : [];
+                const rawDateAdded = Number(cached.dateAdded || 0);
+
+                return {
+                    id,
+                    url,
+                    title,
+                    name: title,
+                    parentId,
+                    ancestorFolderIds,
+                    dateAdded: Number.isFinite(rawDateAdded) ? rawDateAdded : 0
+                };
+            })
+            .filter(Boolean);
+
+        if (bookmarks.length === 0) return 0;
 
         if (Array.isArray(currentCards?.cardData)) {
             seedFaviconMemoryFromCardData(currentCards.cardData);
@@ -15061,7 +19330,7 @@ async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
                 };
             })
             .sort(compareCandidatePriorityWithSkip)
-            .slice(0, Math.max(3, limit));
+            .slice(0, Math.max(3, safeLimit));
 
         const urlsToPreload = candidates.map(item => item.url).filter(Boolean);
         if (urlsToPreload.length === 0) return 0;
@@ -15072,6 +19341,44 @@ async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
         console.warn('[自动刷新] 预加载下一批推荐 favicon 失败:', error);
         return 0;
     }
+}
+
+function scheduleRecommendCandidatesPreload(limit = 6) {
+    const safeLimit = Math.max(6, Math.min(30, Number(limit) || 6));
+    recommendCandidatesPreloadQueuedLimit = Math.max(recommendCandidatesPreloadQueuedLimit, safeLimit);
+
+    if (recommendCandidatesPreloadTimer) {
+        return;
+    }
+
+    const sinceLastRun = Date.now() - recommendCandidatesPreloadLastRunAt;
+    const delayMs = sinceLastRun >= 1200 ? 0 : (1200 - sinceLastRun);
+
+    recommendCandidatesPreloadTimer = setTimeout(async () => {
+        recommendCandidatesPreloadTimer = null;
+
+        if (recommendCandidatesPreloadInFlight) {
+            scheduleRecommendCandidatesPreload(recommendCandidatesPreloadQueuedLimit || safeLimit);
+            return;
+        }
+
+        recommendCandidatesPreloadInFlight = true;
+        const runLimit = Math.max(6, recommendCandidatesPreloadQueuedLimit || safeLimit);
+        recommendCandidatesPreloadQueuedLimit = 0;
+
+        try {
+            await preloadRecommendCandidatesForNextRefresh(runLimit);
+        } catch (_) {
+            // 静默处理预加载异常
+        } finally {
+            recommendCandidatesPreloadInFlight = false;
+            recommendCandidatesPreloadLastRunAt = Date.now();
+
+            if (recommendCandidatesPreloadQueuedLimit > 0) {
+                scheduleRecommendCandidatesPreload(recommendCandidatesPreloadQueuedLimit);
+            }
+        }
+    }, delayMs);
 }
 
 async function loadRecommendData() {
@@ -15085,6 +19392,13 @@ async function loadRecommendData() {
     } else {
         const settings = await getRefreshSettings();
         updateRefreshSettingsStatus(settings);
+    }
+
+    if (shouldAutoRefresh) {
+        const hasPendingRound = await hasPendingRecommendRoundState();
+        if (hasPendingRound) {
+            shouldAutoRefresh = false;
+        }
     }
 
     // 根据检查结果决定是否强制刷新
@@ -15118,14 +19432,7 @@ async function checkAndIncrementOpenCount(options = {}) {
             updateRefreshSettingsStatus(settings);
 
             if (shouldPreloadCandidates) {
-                setTimeout(async () => {
-                    try {
-                        const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
-                        if (preloadedCount > 0) {
-
-                        }
-                    } catch (_) { }
-                }, 0);
+                scheduleRecommendCandidatesPreload(15);
             }
 
             return shouldRefresh;
@@ -15180,14 +19487,7 @@ async function checkAndIncrementOpenCount(options = {}) {
 
         // 非阻塞预加载：避免侧边栏打开时等待耗时筛选
         if (shouldPreloadCandidates) {
-            setTimeout(async () => {
-                try {
-                    const preloadedCount = await preloadRecommendCandidatesForNextRefresh(6);
-                    if (preloadedCount > 0) {
-
-                    }
-                } catch (_) { }
-            }, 0);
+            scheduleRecommendCandidatesPreload(15);
         }
 
         return shouldRefresh;
@@ -15401,7 +19701,7 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
             : formatPostponeTime(p.postponeUntil);
 
         item.innerHTML = `
-            <img class="postponed-item-icon" src="${getFaviconUrl(bookmark.url)}" alt="">
+            <img class="postponed-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
             <div class="postponed-item-info">
                 <div class="postponed-item-title">${manualBadge}${escapeHtml(bookmark.title || bookmark.url)}</div>
                 <div class="postponed-item-meta">
@@ -15420,21 +19720,6 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
             const openResult = await openInRecommendWindow(bookmark.url);
             if (!openResult || !openResult.success) {
                 const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-
-            const tracked = await verifyRecommendOpenTracked({
-                tabId: openResult.tabId,
-                url: bookmark.url,
-                bookmarkId: bookmark.id,
-                openedAt: openResult.openedAt
-            });
-
-            if (!tracked) {
-                const msg = currentLang === 'en'
-                    ? 'Open not confirmed by tracking, review skipped'
-                    : '未检测到时间追踪记录，本次不计复习';
                 try { showToast(msg); } catch (_) { }
                 return;
             }
@@ -15548,7 +19833,7 @@ async function loadBlockedBookmarksList(bookmarkIds) {
             : '';
 
         item.innerHTML = `
-            <img class="block-item-icon" src="${getFaviconUrl(firstBookmark.url)}" alt="">
+            <img class="block-item-icon" data-bookmark-url="${escapeHtml(firstBookmark.url || '')}" src="${getFaviconUrl(firstBookmark.url)}" alt="">
             <div class="block-item-info">
                 <div class="block-item-title">${escapeHtml(title)}</div>
             </div>
@@ -16283,389 +20568,69 @@ async function refreshRecommendCards(force = false) {
     // 清除所有卡片的 flipped 状态
     cards.forEach(card => card.classList.remove('flipped'));
 
+    let prefetchedCurrentCards = null;
     if (isSidePanelMode && !force) {
         try {
+            prefetchedCurrentCards = await getHistoryCurrentCards();
+            if (Array.isArray(prefetchedCurrentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(prefetchedCurrentCards.cardData);
+            }
             const snapshot = readRecommendCardsSnapshot();
             if (snapshot) {
-                applyRecommendSnapshotToCardRows(snapshot);
+                const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(
+                    snapshot.cards,
+                    prefetchedCurrentCards?.cardData
+                );
+                if (mergedSnapshotCards.length > 0) {
+                    applyRecommendSnapshotToCardRows({ ...snapshot, cards: mergedSnapshotCards });
+                } else {
+                    applyRecommendSnapshotToCardRows(snapshot);
+                }
             }
         } catch (_) { }
     }
 
     try {
-        // 复用共享缓存，避免每次推荐刷新都全量 getTree
-        const bookmarks = await getAllBookmarksFlat();
-        const bookmarkMap = new Map(bookmarks.map(b => [b.id, b]));
-
-        // 一次性获取已计算好的 S 值缓存（页面内不触发重算）
-        let scoresCache = await getScoresCache();
-
-        if (Object.keys(scoresCache).length === 0 && bookmarks.length > 0) {
-            if (!recommendScoresEnsureInFlight) {
-                recommendScoresEnsureInFlight = true;
-                ensureRecommendScoresReadyForView(`${currentView || 'unknown'}:${isSidePanelMode ? 'sidepanel' : 'page'}`)
-                    .then((readiness) => {
-                        if (readiness?.ready) {
-
-                        } else {
-
-                        }
-                    })
-                    .catch(() => { })
-                    .finally(() => {
-                        recommendScoresEnsureInFlight = false;
-                    });
-            }
-        }
-
-        // 检查是否有已保存的卡片状态（供本页面复用）
-        const currentCards = await getHistoryCurrentCards();
+        const currentCards = prefetchedCurrentCards || await getHistoryCurrentCards();
+        syncRecommendLastUpdatedFromState(currentCards);
         if (Array.isArray(currentCards?.cardData)) {
             seedFaviconMemoryFromCardData(currentCards.cardData);
         }
-        const postponed = await getPostponedBookmarks();
-        const reviewData = await getReviewData();
-        const restoreForceDueMap = new Map();
-        const restoreNow = Date.now();
-        for (const item of postponed) {
-            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
-            if (Number(item.postponeUntil || 0) <= restoreNow) {
-                restoreForceDueMap.set(String(item.bookmarkId), item);
+
+        const hydrateRecommendCardsFromCurrentState = (state) => {
+            if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
+                return [];
             }
-        }
 
-        // 如果有保存的卡片且不是全部勾选且不是强制刷新，则显示保存的卡片
-        if (currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
-            const normalizedFlipped = Array.isArray(currentCards.flippedIds)
-                ? currentCards.flippedIds.map(id => String(id || ''))
-                : [];
-            const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
+            const cardDataMap = new Map();
+            if (Array.isArray(state.cardData)) {
+                state.cardData.forEach((item) => {
+                    const id = String(item?.id || '').trim();
+                    if (id) cardDataMap.set(id, item);
+                });
+            }
+            if (cardDataMap.size === 0) {
+                return [];
+            }
 
-            if (!allFlipped) {
-                // 恢复保存的卡片，直接使用缓存（支持 cardData 回填 title/url）
-                const cachedCardDataMap = new Map();
-                if (currentCards.cardData && Array.isArray(currentCards.cardData)) {
-                    currentCards.cardData.forEach(data => {
-                        if (data && data.id) cachedCardDataMap.set(data.id, data);
-                    });
-                }
-
-                const savedBookmarks = currentCards.cardIds
-                    .map(id => bookmarkMap.get(id) || cachedCardDataMap.get(id) || null)
-                    .filter(Boolean);
-
-                recommendCards = savedBookmarks.map(bookmark => {
-                    const cached = scoresCache[bookmark.id];
-                    const cachedMeta = cachedCardDataMap.get(bookmark.id);
-                    const restoreForceDueInfo = restoreForceDueMap.get(String(bookmark?.id || ''));
-                    const safeTitle = bookmark.title || bookmark.name || cachedMeta?.title || '';
-                    const safeUrl = bookmark.url || cachedMeta?.url || '';
-                    const safeFavicon = cachedMeta?.favicon || cachedMeta?.faviconUrl || null;
-                    const reviewStatus = getReviewStatus(bookmark.id, reviewData);
-                    if (cached) {
-                        return {
-                            ...bookmark,
-                            title: safeTitle,
-                            url: safeUrl,
-                            favicon: safeFavicon,
-                            faviconUrl: safeFavicon,
-                            priority: cached.S,
-                            factors: cached,
-                            reviewStatus,
-                            forceDue: !!restoreForceDueInfo,
-                            forceDueAt: Number(restoreForceDueInfo?.postponeUntil || 0),
-                            forceDueMovedAt: Number(restoreForceDueInfo?.dueQueueMovedAt || 0)
-                        };
-                    }
-                    // 缓存不存在时返回默认值
+            return state.cardIds
+                .map(id => cardDataMap.get(String(id || '').trim()) || null)
+                .filter(Boolean)
+                .map((bookmark) => {
+                    const normalized = normalizeRecommendSnapshotCard(bookmark);
+                    if (!normalized) return null;
                     return {
-                        ...bookmark,
-                        title: safeTitle,
-                        url: safeUrl,
-                        favicon: safeFavicon,
-                        faviconUrl: safeFavicon,
-                        priority: 0.5,
-                        factors: {},
-                        reviewStatus,
-                        forceDue: !!restoreForceDueInfo,
-                        forceDueAt: Number(restoreForceDueInfo?.postponeUntil || 0),
-                        forceDueMovedAt: Number(restoreForceDueInfo?.dueQueueMovedAt || 0)
+                        ...normalized,
+                        factors: bookmark?.factors || {}
                     };
-                });
-
-                // 更新卡片显示
-                cards.forEach((card, index) => {
-                    if (index < recommendCards.length) {
-                        const bookmark = recommendCards[index];
-                        updateCardDisplay(card, bookmark, normalizedFlipped.includes(String(bookmark?.id || '')));
-                    } else {
-                        setCardEmpty(card);
-                    }
-                });
-
-                try {
-                    writeRecommendCardsSnapshot(recommendCards, normalizedFlipped);
-                } catch (_) { }
-                return;
-            }
-        }
-
-        // 获取已翻过的书签
-        const flippedBookmarks = await getFlippedBookmarks();
-        const flippedSet = new Set((Array.isArray(flippedBookmarks) ? flippedBookmarks : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const skippedPersisted = await getSkippedBookmarksPersisted();
-        const skippedSet = new Set([
-            ...Array.from(skippedBookmarks),
-            ...skippedPersisted
-        ].map(id => String(id || '').trim()).filter(Boolean));
-        skippedBookmarks = skippedSet;
-        const skippedOrderMap = new Map(
-            skippedPersisted
-                .map((id, index) => [String(id || '').trim(), index])
-                .filter(([id]) => Boolean(id))
-        );
-
-        // 获取已屏蔽的书签、文件夹、域名
-        const blocked = await getBlockedBookmarks();
-        const blockedBookmarkSet = new Set((Array.isArray(blocked.bookmarks) ? blocked.bookmarks : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const blockedFolderSet = new Set((Array.isArray(blocked.folders) ? blocked.folders : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const blockedDomainSet = new Set((Array.isArray(blocked.domains) ? blocked.domains : [])
-            .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
-            .filter(Boolean));
-
-        // 稍后复习拆分：
-        // 1) 未到期：从候选池排除
-        // 2) 已到期：强制插队展示，直到复习后移出
-        const now = Date.now();
-        const postponedWaitingSet = new Set();
-        const forceDuePostponedMap = new Map();
-        for (const item of postponed) {
-            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
-            const bookmarkId = String(item.bookmarkId);
-            const postponeUntil = Number(item.postponeUntil || 0);
-            if (postponeUntil > now) {
-                postponedWaitingSet.add(bookmarkId);
-            } else {
-                forceDuePostponedMap.set(bookmarkId, item);
-            }
-        }
-
-        // 检查书签是否在屏蔽的文件夹中
-        const isInBlockedFolder = (bookmark) => {
-            if (blockedFolderSet.size === 0) return false;
-            const parentId = String(bookmark?.parentId || '').trim();
-            if (parentId && blockedFolderSet.has(parentId)) return true;
-            const ancestorFolderIds = bookmark.ancestorFolderIds || [];
-            for (const folderId of ancestorFolderIds) {
-                const normalizedFolderId = String(folderId || '').trim();
-                if (normalizedFolderId && blockedFolderSet.has(normalizedFolderId)) return true;
-            }
-            return false;
+                })
+                .filter(Boolean)
+                .slice(0, RECOMMEND_BATCH_SIZE);
         };
 
-        // 检查书签是否在屏蔽的域名中
-        const isBlockedDomain = (bookmark) => {
-            if (blockedDomainSet.size === 0 || !bookmark.url) return false;
-            try {
-                const url = new URL(bookmark.url);
-                const hostname = String(url.hostname || '').trim().toLowerCase().replace(/^www\./, '');
-                return blockedDomainSet.has(hostname);
-            } catch {
-                return false;
-            }
-        };
+        const syncRefreshSettingsAfterForce = async () => {
+            if (!force) return;
 
-        // 基础过滤：
-        // - 普通书签：走正常过滤（不因 skip 被移除，skip 只影响排序）
-        // - 到期待复习书签：忽略“已翻过”过滤，强制进入候选池
-        // - 到期待复习书签：忽略“已跳过”过滤，保持插队权限（跳过仅用于队尾轮转）
-        const baseFilter = (b) => {
-            const bookmarkId = String(b?.id || '');
-            const forceDue = forceDuePostponedMap.has(bookmarkId);
-
-            if (!forceDue && flippedSet.has(bookmarkId)) return false;
-            if (blockedBookmarkSet.has(bookmarkId)) return false;
-            if (isInBlockedFolder(b)) return false;
-            if (isBlockedDomain(b)) return false;
-            if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
-            return true;
-        };
-
-        const baseCandidateBookmarks = bookmarks.filter(baseFilter);
-
-        if (baseCandidateBookmarks.length === 0) {
-            await saveHistoryCurrentCards([], []);
-            clearRecommendCardsSnapshot();
-            await setRecommendPoolCursorShared(0, 0);
-            cards.forEach((card) => {
-                card.classList.add('empty');
-                card.querySelector('.card-title').textContent =
-                    currentLang === 'en' ? 'All bookmarks reviewed!' : '所有书签都已翻阅！';
-                card.querySelector('.card-priority').textContent = '';
-                card.onclick = null;
-            });
-            return;
-        }
-
-        // 从缓存读取候选池的 S 值，不重算，只排序后按批次取
-        const sortedPool = baseCandidateBookmarks.map(b => {
-            const bookmarkId = String(b?.id || '');
-            const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
-            const cached = scoresCache[b.id];
-            const reviewStatus = getReviewStatus(b.id, reviewData);
-            if (cached) {
-                return {
-                    ...b,
-                    priority: cached.S,
-                    factors: cached,
-                    reviewStatus,
-                    scoreTemplate: cached?._template === true,
-                    forceDue: !!forceDueInfo,
-                    forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
-                    forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
-                };
-            }
-            return {
-                ...b,
-                priority: 0.5,
-                factors: {},
-                reviewStatus,
-                forceDue: !!forceDueInfo,
-                forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
-                forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
-            };
-        });
-
-        // S 值池排序（高 -> 低）
-        sortedPool.sort(compareRecommendPriority);
-
-        const forceDuePool = sortedPool
-            .filter(item => item.forceDue)
-            .sort((a, b) => {
-                const aMovedAt = Number(a.forceDueMovedAt || 0);
-                const bMovedAt = Number(b.forceDueMovedAt || 0);
-                const aMoved = aMovedAt > 0;
-                const bMoved = bMovedAt > 0;
-
-                if (aMoved !== bMoved) {
-                    return aMoved ? 1 : -1;
-                }
-
-                if (aMoved && bMoved && aMovedAt !== bMovedAt) {
-                    return aMovedAt - bMovedAt;
-                }
-
-                const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
-                if (dueDiff !== 0) return dueDiff;
-                return compareRecommendPriority(a, b);
-            });
-        const compareNormalPoolPriorityWithSkip = (a, b) => {
-            const aId = String(a?.id || '');
-            const bId = String(b?.id || '');
-            const aSkipped = skippedSet.has(aId);
-            const bSkipped = skippedSet.has(bId);
-
-            if (aSkipped !== bSkipped) {
-                return aSkipped ? 1 : -1;
-            }
-
-            if (aSkipped && bSkipped) {
-                const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
-                const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
-                if (aOrder !== bOrder) {
-                    return aOrder - bOrder;
-                }
-            }
-
-            return compareRecommendPriority(a, b);
-        };
-
-        const normalPool = sortedPool
-            .filter(item => !item.forceDue)
-            .sort(compareNormalPoolPriorityWithSkip);
-
-        const currentCardIds = Array.isArray(currentCards?.cardIds)
-            ? currentCards.cardIds.map(id => String(id))
-            : [];
-        const currentNormalCardIds = currentCardIds.filter(id =>
-            normalPool.some(item => String(item?.id || '') === id)
-        );
-        const currentAllFlipped = currentCardIds.length > 0
-            && currentCardIds.every(id => flippedSet.has(id));
-
-        const forceDueBatch = forceDuePool.slice(0, RECOMMEND_BATCH_SIZE);
-        const normalSlots = Math.max(0, RECOMMEND_BATCH_SIZE - forceDueBatch.length);
-        const expectedNormalBatchLen = normalSlots > 0 ? Math.min(normalSlots, normalPool.length) : 0;
-
-        const shouldRotateByCurrent = (force || currentAllFlipped) && currentNormalCardIds.length > 0;
-        let startIndex = 0;
-        let cursorMeta = { success: true, source: 'local-empty', cursorBefore: 0, cursorAfter: 0 };
-
-        if (normalPool.length > 0) {
-            if (shouldRotateByCurrent) {
-                const storedCursor = readRecommendPoolCursor();
-                startIndex = deriveRecommendStartIndexFromCurrent(normalPool, currentNormalCardIds, storedCursor);
-            } else {
-                cursorMeta = await consumeRecommendPoolCursor(normalPool.length, expectedNormalBatchLen);
-                startIndex = Number.isFinite(Number(cursorMeta.cursorBefore))
-                    ? Number(cursorMeta.cursorBefore)
-                    : 0;
-            }
-        }
-
-        const normalBatch = normalSlots > 0
-            ? buildRecommendBatchFromPool(normalPool, startIndex, normalSlots)
-            : [];
-        recommendCards = [...forceDueBatch, ...normalBatch].slice(0, RECOMMEND_BATCH_SIZE);
-
-        const nextCursor = normalPool.length > 0
-            ? (startIndex + normalBatch.length) % normalPool.length
-            : 0;
-
-        if (shouldRotateByCurrent) {
-            await setRecommendPoolCursorShared(normalPool.length, nextCursor);
-        } else if (cursorMeta.source !== 'background') {
-            // 非后台原子路径下，兜底保持本地游标一致
-            writeRecommendPoolCursor(nextCursor);
-        }
-
-        if (force) {
-
-        }
-
-        try {
-            writeRecommendCardsSnapshot(recommendCards, []);
-        } catch (_) { }
-
-        // 保存新的卡片状态
-        const newCardIds = recommendCards.map(b => b.id);
-        await saveHistoryCurrentCards(newCardIds, []);
-
-        // 预加载当前3个 + 下一批6个的 favicon（并行）
-        const urlsToPreload = sortedPool.slice(0, 9).map(b => b.url).filter(Boolean);
-        preloadHighResFavicons(urlsToPreload);
-
-        // 异步保存favicon URLs到storage（供本页面复用，不阻塞UI）
-        saveCardFaviconsToStorage(recommendCards);
-
-        // 更新卡片显示
-        cards.forEach((card, index) => {
-            if (index < recommendCards.length) {
-                const bookmark = recommendCards[index];
-                updateCardDisplay(card, bookmark, false);
-            } else {
-                setCardEmpty(card);
-            }
-        });
-
-        // 更新刷新时间（手动刷新时）
-        if (force) {
             let marked = false;
             try {
                 const response = await browserAPI.runtime.sendMessage({ action: 'markRecommendRefreshExecuted' });
@@ -16683,8 +20648,108 @@ async function refreshRecommendCards(force = false) {
                 await saveRefreshSettings(settings);
                 updateRefreshSettingsStatus(settings);
             }
+        };
 
+        // 有保存的当前轮次就直接显示，不额外做前端聚合计算。
+        if (currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
+            const normalizedFlipped = Array.isArray(currentCards.flippedIds)
+                ? currentCards.flippedIds.map(id => String(id || ''))
+                : [];
+            const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
+
+            if (!allFlipped) {
+                const savedCards = hydrateRecommendCardsFromCurrentState(currentCards);
+                if (savedCards.length > 0) {
+                    recommendCards = savedCards;
+                    const flippedSet = new Set(normalizedFlipped.map(id => String(id || '').trim()));
+                    cards.forEach((card, index) => {
+                        if (index < recommendCards.length) {
+                            const bookmark = recommendCards[index];
+                            updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
+                        } else {
+                            setCardEmpty(card);
+                        }
+                    });
+
+                    try {
+                        writeRecommendCardsSnapshot(recommendCards, normalizedFlipped);
+                    } catch (_) { }
+                    return;
+                }
+            }
         }
+
+        // 统一使用后台选卡路径，和快捷复习共享同一套轮转/游标/过滤逻辑
+        const backendRound = await selectRecommendCardsRoundShared(force);
+        if (backendRound && Array.isArray(backendRound.cards)) {
+            const normalizedCards = backendRound.cards
+                .map(normalizeRecommendSnapshotCard)
+                .filter(Boolean)
+                .slice(0, RECOMMEND_BATCH_SIZE);
+            const backendCurrentCards = backendRound.currentCards && typeof backendRound.currentCards === 'object'
+                ? backendRound.currentCards
+                : null;
+            const backendFlippedIds = Array.isArray(backendCurrentCards?.flippedIds)
+                ? backendCurrentCards.flippedIds.map(id => String(id || '')).filter(Boolean)
+                : [];
+            syncRecommendLastUpdatedFromState(backendCurrentCards);
+
+            if (Array.isArray(backendCurrentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(backendCurrentCards.cardData);
+            }
+
+            if (normalizedCards.length === 0) {
+                await saveHistoryCurrentCards([], []);
+                clearRecommendCardsSnapshot();
+                cards.forEach((card) => {
+                    card.classList.add('empty');
+                    card.querySelector('.card-title').textContent =
+                        currentLang === 'en' ? 'All bookmarks reviewed!' : '所有书签都已翻阅！';
+                    card.querySelector('.card-priority').textContent = '';
+                    card.onclick = null;
+                });
+                await syncRefreshSettingsAfterForce();
+                return;
+            }
+
+            recommendCards = normalizedCards;
+
+            try {
+                writeRecommendCardsSnapshot(recommendCards, backendFlippedIds);
+            } catch (_) { }
+
+            if (!Array.isArray(backendCurrentCards?.cardIds)) {
+                const newCardIds = recommendCards.map(item => String(item?.id || '')).filter(Boolean);
+                await saveHistoryCurrentCards(newCardIds, backendFlippedIds, recommendCards);
+            }
+
+            const preloadUrls = recommendCards.map(item => item.url).filter(Boolean);
+            preloadHighResFavicons(preloadUrls);
+            saveCardFaviconsToStorage(recommendCards);
+
+            const backendFlippedSet = new Set(backendFlippedIds);
+            cards.forEach((card, index) => {
+                if (index < recommendCards.length) {
+                    const bookmark = recommendCards[index];
+                    updateCardDisplay(card, bookmark, backendFlippedSet.has(String(bookmark?.id || '')));
+                } else {
+                    setCardEmpty(card);
+                }
+            });
+
+            await syncRefreshSettingsAfterForce();
+            return;
+        }
+
+        console.warn('[书签推荐] 后台选卡不可用，本次保持当前展示');
+        if (force) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Refresh unavailable, please retry'
+                    : '后台刷新不可用，请重试');
+            } catch (_) { }
+        }
+        return;
 
     } catch (error) {
         console.error('[书签推荐] 刷新卡片失败:', error);
@@ -18019,9 +22084,163 @@ function showTrackingClearMenu(anchorEl) {
 // 综合排行
 // =============================================================================
 
+function normalizeTrackingRankingRange(range) {
+    const safe = String(range || '').toLowerCase();
+    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'all';
+}
+
+function getTrackingRankingRangeBounds(range) {
+    const safeRange = normalizeTrackingRankingRange(range);
+    const now = Date.now();
+
+    if (safeRange === 'all') {
+        return { range: safeRange, startTime: 0, endTime: now };
+    }
+
+    const current = new Date(now);
+    const dayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate());
+    const start = new Date(dayStart);
+
+    if (safeRange === 'week') {
+        const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // zh: Monday, en: Sunday
+        let diff = dayStart.getDay() - weekStartDay;
+        if (diff < 0) diff += 7;
+        start.setDate(dayStart.getDate() - diff);
+    } else if (safeRange === 'month') {
+        start.setDate(1);
+    } else if (safeRange === 'year') {
+        start.setMonth(0, 1);
+    }
+
+    return {
+        range: safeRange,
+        startTime: start.getTime(),
+        endTime: now
+    };
+}
+
+function getTrackingSessionCompositeMs(session) {
+    if (!session || typeof session !== 'object') return 0;
+
+    const directComposite = Number(session.compositeMs);
+    if (Number.isFinite(directComposite) && directComposite > 0) {
+        return directComposite;
+    }
+
+    const activeMs = Number(session.activeMs) || 0;
+    const idleFocusMs = Number(session.idleFocusMs || session.pauseTotalMs) || 0;
+    const visibleMs = Number(session.visibleMs) || 0;
+    const backgroundMs = Number(session.backgroundMs) || 0;
+
+    const fallbackComposite = activeMs + (idleFocusMs * 0.8) + (visibleMs * 0.5) + (backgroundMs * 0.1);
+    return Number.isFinite(fallbackComposite) && fallbackComposite > 0 ? fallbackComposite : 0;
+}
+
+function getTrackingSessionWakeCount(session) {
+    if (!session || typeof session !== 'object') return 0;
+    const wakes = Number(session.wakeCount);
+    return Number.isFinite(wakes) && wakes > 0 ? wakes : 0;
+}
+
+function getTrackingRankingAggregateKey(item) {
+    if (!item || typeof item !== 'object') return '';
+
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (bookmarkId) return `bookmark:${bookmarkId}`;
+
+    const url = String(item.url || '').trim();
+    if (url) return `url:${url}`;
+
+    const title = String(item.title || '').trim();
+    if (title) return `title:${title}`;
+
+    return '';
+}
+
+function getTrackingSessionBounds(session, fallbackEndTime) {
+    if (!session || typeof session !== 'object') return null;
+
+    const safeFallbackEnd = Number(fallbackEndTime) || Date.now();
+    const rawStart = Number(session.startTime || session.originalStartTime || 0);
+    const rawEnd = Number(session.endTime || session.lastUpdate || 0);
+    const rawTotal = Number(session.totalMs || 0);
+
+    let start = Number.isFinite(rawStart) && rawStart > 0 ? rawStart : 0;
+    let end = Number.isFinite(rawEnd) && rawEnd > 0 ? rawEnd : 0;
+    const totalMs = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
+
+    if (start <= 0 && end > 0 && totalMs > 0) {
+        start = Math.max(1, end - totalMs);
+    } else if (start > 0 && end <= 0 && totalMs > 0) {
+        end = start + totalMs;
+    } else if (start <= 0 && end <= 0 && totalMs > 0) {
+        end = safeFallbackEnd;
+        start = Math.max(1, end - totalMs);
+    }
+
+    if (start <= 0 && end > 0) {
+        start = end;
+    } else if (start > 0 && end <= 0) {
+        end = safeFallbackEnd > start ? safeFallbackEnd : (start + 1);
+    } else if (start <= 0 && end <= 0) {
+        start = safeFallbackEnd;
+        end = safeFallbackEnd + 1;
+    }
+
+    const normalizedStart = Math.max(1, start);
+    const normalizedEnd = Math.max(normalizedStart + 1, end);
+    return {
+        startTime: normalizedStart,
+        endTime: normalizedEnd,
+        durationMs: Math.max(1, normalizedEnd - normalizedStart)
+    };
+}
+
+function getTrackingSessionOverlapInfo(session, startTime, endTime) {
+    if (!session || typeof session !== 'object') {
+        return { ratio: 0, overlapMs: 0, durationMs: 1 };
+    }
+
+    const safeStartTime = Number(startTime) || 0;
+    const safeEndTime = Number(endTime) || Date.now();
+    const bounds = getTrackingSessionBounds(session, safeEndTime);
+    if (!bounds) {
+        return { ratio: 0, overlapMs: 0, durationMs: 1 };
+    }
+
+    if (safeStartTime <= 0) {
+        return {
+            ratio: 1,
+            overlapMs: bounds.durationMs,
+            durationMs: bounds.durationMs
+        };
+    }
+
+    const overlapStart = Math.max(bounds.startTime, safeStartTime);
+    const overlapEnd = Math.min(bounds.endTime, safeEndTime);
+    const overlap = overlapEnd - overlapStart;
+    if (overlap <= 0) {
+        return {
+            ratio: 0,
+            overlapMs: 0,
+            durationMs: bounds.durationMs
+        };
+    }
+
+    return {
+        ratio: Math.min(1, overlap / bounds.durationMs),
+        overlapMs: overlap,
+        durationMs: bounds.durationMs
+    };
+}
+
 async function loadActiveTimeRanking() {
     const container = document.getElementById('trackingRankingList');
     if (!container) return;
+    const hintEl = document.getElementById('trackingRankingHint');
 
     // 排行榜刷新时，清除T值缓存，下次计算S值时会获取最新数据
     clearTrackingRankingCache();
@@ -18033,73 +22252,181 @@ async function loadActiveTimeRanking() {
 
         // 获取时间范围
         const rangeSelect = document.getElementById('trackingRankingRange');
-        const range = rangeSelect ? rangeSelect.value : 'week';
+        const range = normalizeTrackingRankingRange(rangeSelect ? rangeSelect.value : 'all');
+        const { startTime, endTime } = getTrackingRankingRangeBounds(range);
 
-        // 并行获取：已保存的统计 + 当前正在追踪的会话
-        const [statsResponse, sessionsResponse] = await Promise.all([
-            browserAPI.runtime.sendMessage({ action: 'getTrackingStats' }),
+        // 并行获取：区间统计（all=累计总账，其它=区间账）+ 当前正在追踪的会话
+        const [statsResponse, activeSessionsResponse] = await Promise.all([
+            browserAPI.runtime.sendMessage({
+                action: 'getTrackingRankingStatsByRange',
+                range,
+                startTime,
+                endTime
+            }),
             browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' })
         ]);
 
-        // 合并数据：已保存的 + 当前正在追踪的
+        // 合并数据：已保存统计（累计/区间）+ 当前活跃会话（仅未落盘部分）
         const titleStats = new Map();
+        const upsertStat = (key, base = {}) => {
+            if (titleStats.has(key)) {
+                const stat = titleStats.get(key);
+                if (!stat.bookmarkId && base.bookmarkId) stat.bookmarkId = base.bookmarkId;
+                if (!stat.url && base.url) stat.url = base.url;
+                if (base.title && (!stat.title || stat.title === stat.url || stat.title === key)) {
+                    stat.title = base.title;
+                }
+                return stat;
+            }
+            const init = {
+                bookmarkId: base.bookmarkId || null,
+                url: base.url || '',
+                title: base.title || base.url || key,
+                totalCompositeMs: 0,
+                wakeCount: 0,
+                sessionCount: 0,
+                lastUpdate: 0
+            };
+            titleStats.set(key, init);
+            return init;
+        };
 
-        // 1. 先加载已保存的统计
-        if (statsResponse?.success && statsResponse.stats) {
-            for (const stat of Object.values(statsResponse.stats)) {
-                const key = stat.title || stat.url;
-                titleStats.set(key, {
-                    url: stat.url,
-                    title: stat.title || stat.url,
-                    totalCompositeMs: stat.totalCompositeMs || 0,
-                    wakeCount: stat.totalWakeCount || 0,
-                    sessionCount: stat.sessionCount || 0,
-                    lastUpdate: stat.lastUpdate
-                });
+        // 1. 已保存统计（all=累计总账；today/week/month/year=区间账）
+        const savedStats = (statsResponse?.success && statsResponse?.stats && typeof statsResponse.stats === 'object')
+            ? statsResponse.stats
+            : {};
+        const statsStartedAt = Number(statsResponse?.startedAt || 0);
+        if (hintEl) {
+            if (range === 'all') {
+                hintEl.textContent = '';
+                hintEl.style.display = 'none';
+            } else if (statsStartedAt > 0) {
+                const dateLabel = (() => {
+                    try {
+                        const dt = new Date(statsStartedAt);
+                        if (currentLang === 'zh_CN') {
+                            return dt.toLocaleDateString('zh-CN');
+                        }
+                        return dt.toLocaleDateString('en-US');
+                    } catch (_) {
+                        return String(statsStartedAt);
+                    }
+                })();
+                hintEl.textContent = i18n.trackingRangeDataHintFrom[currentLang].replace('{date}', dateLabel);
+                hintEl.style.display = '';
+            } else {
+                hintEl.textContent = i18n.trackingRangeDataHintPending[currentLang];
+                hintEl.style.display = '';
             }
         }
+        for (const rawStat of Object.values(savedStats)) {
+            if (!rawStat || typeof rawStat !== 'object') continue;
+            const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId) : '';
+            const key = getTrackingRankingAggregateKey({
+                bookmarkId,
+                url: rawStat?.url || '',
+                title: rawStat?.title || ''
+            });
+            if (!key) continue;
 
-        // 2. 再加上当前正在追踪的会话（只加尚未保存的部分，避免与 trackingStats 重复）
-        if (sessionsResponse?.success && sessionsResponse.sessions) {
-            // 按标题分组，计算每组尚未保存的总和
-            const groupedByTitle = new Map();
-            for (const session of sessionsResponse.sessions) {
-                const key = session.title || session.url;
-                if (!groupedByTitle.has(key)) {
-                    groupedByTitle.set(key, {
-                        url: session.url,
-                        title: session.title || session.url,
+            const stat = upsertStat(key, {
+                bookmarkId: bookmarkId || null,
+                url: rawStat.url || '',
+                title: rawStat.title || rawStat.url || key
+            });
+            stat.totalCompositeMs += Math.max(
+                0,
+                Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0
+            );
+            stat.wakeCount += Math.max(
+                0,
+                Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0
+            );
+            stat.sessionCount += Math.max(0, Number(rawStat.sessionCount || 0) || 0);
+            stat.lastUpdate = Math.max(
+                stat.lastUpdate,
+                Number(rawStat.lastUpdate || 0) || 0
+            );
+        }
+
+        // 2. 当前活跃会话（只加未落盘部分，避免与历史会话重复）
+        const activeSessions = (activeSessionsResponse?.success && Array.isArray(activeSessionsResponse.sessions))
+            ? activeSessionsResponse.sessions
+            : [];
+        if (activeSessions.length > 0) {
+            const groupedByKey = new Map();
+            for (const session of activeSessions) {
+                const bookmarkId = session?.bookmarkId != null ? String(session.bookmarkId) : '';
+                const key = getTrackingRankingAggregateKey({
+                    bookmarkId,
+                    url: session?.url || '',
+                    title: session?.title || ''
+                });
+                if (!key) continue;
+                if (!groupedByKey.has(key)) {
+                    groupedByKey.set(key, {
+                        bookmarkId: bookmarkId || null,
+                        url: session.url || '',
+                        title: session.title || session.url || key,
                         unsavedCompositeMs: 0,
                         unsavedWakeCount: 0
                     });
                 }
-                const group = groupedByTitle.get(key);
-                // 使用 unsavedCompositeMs（尚未保存的时间），避免重复
-                group.unsavedCompositeMs += session.unsavedCompositeMs || 0;
-                group.unsavedWakeCount += session.unsavedWakeCount || 0;
+
+                const unsavedCompositeRaw = Number(session.unsavedCompositeMs);
+                const unsavedWakeRaw = Number(session.unsavedWakeCount);
+                const unsavedCompositeMs = (Number.isFinite(unsavedCompositeRaw) && unsavedCompositeRaw >= 0)
+                    ? unsavedCompositeRaw
+                    : getTrackingSessionCompositeMs(session);
+                const unsavedWakeCount = (Number.isFinite(unsavedWakeRaw) && unsavedWakeRaw >= 0)
+                    ? unsavedWakeRaw
+                    : getTrackingSessionWakeCount(session);
+
+                if (unsavedCompositeMs <= 0 && unsavedWakeCount <= 0) continue;
+
+                // 对活跃会话也按区间做重叠折算（缺失起始时间时按当前区间全计入）
+                const overlapInfo = getTrackingSessionOverlapInfo({
+                    startTime: session.startTime || session.originalStartTime || endTime,
+                    endTime
+                }, startTime, endTime);
+                if (overlapInfo.ratio <= 0) continue;
+
+                const scaledUnsavedComposite = unsavedCompositeMs * overlapInfo.ratio;
+                const boundedUnsavedComposite = overlapInfo.overlapMs > 0
+                    ? Math.min(scaledUnsavedComposite, overlapInfo.overlapMs)
+                    : scaledUnsavedComposite;
+
+                const group = groupedByKey.get(key);
+                group.unsavedCompositeMs += Math.max(0, boundedUnsavedComposite);
+                group.unsavedWakeCount += Math.max(0, unsavedWakeCount * overlapInfo.ratio);
             }
 
             // 合并到排行榜
-            for (const [key, group] of groupedByTitle) {
-                if (titleStats.has(key)) {
-                    const existing = titleStats.get(key);
-                    existing.totalCompositeMs += group.unsavedCompositeMs;
-                    existing.wakeCount += group.unsavedWakeCount;
-                } else {
-                    titleStats.set(key, {
-                        url: group.url,
-                        title: group.title,
-                        totalCompositeMs: group.unsavedCompositeMs,
-                        wakeCount: group.unsavedWakeCount,
-                        sessionCount: 1,
-                        lastUpdate: Date.now()
-                    });
-                }
+            for (const [key, group] of groupedByKey) {
+                if (group.unsavedCompositeMs <= 0 && group.unsavedWakeCount <= 0) continue;
+                const stat = upsertStat(key, {
+                    bookmarkId: group.bookmarkId || null,
+                    url: group.url,
+                    title: group.title
+                });
+                stat.totalCompositeMs += group.unsavedCompositeMs;
+                stat.wakeCount += group.unsavedWakeCount;
+                stat.sessionCount += 1;
+                stat.lastUpdate = Math.max(stat.lastUpdate, endTime);
+            }
+        }
+
+        // 防御性兜底：单条目在当前区间内不应超过区间总时长（例如 today <= 24h）。
+        if (startTime > 0 && endTime > startTime) {
+            const maxCompositePerItem = endTime - startTime;
+            for (const stat of titleStats.values()) {
+                stat.totalCompositeMs = Math.min(stat.totalCompositeMs, maxCompositePerItem);
             }
         }
 
         if (titleStats.size === 0) {
-            container.innerHTML = `<div class="tracking-empty">${i18n.trackingNoData[currentLang]}</div>`;
+            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
+            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
             return;
         }
 
@@ -18126,7 +22453,8 @@ async function loadActiveTimeRanking() {
         window.activeTimeRankingStats = { items: sorted };
 
         if (sorted.length === 0) {
-            container.innerHTML = `<div class="tracking-empty">${i18n.trackingNoData[currentLang]}</div>`;
+            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
+            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
             return;
         }
 
@@ -18154,6 +22482,7 @@ async function loadActiveTimeRanking() {
         // 渲染列表
         container.innerHTML = sorted.map((item, index) => {
             const compositeTime = formatActiveTime(item.totalCompositeMs);
+            const displayWakeCount = Math.max(0, Math.round(item.wakeCount || 0));
             // 根据排行类型计算进度条宽度
             const barWidth = maxValue > 0
                 ? ((rankingType === 'wakes' ? item.wakeCount : item.totalCompositeMs) / maxValue * 100)
@@ -18170,7 +22499,7 @@ async function loadActiveTimeRanking() {
                 timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)}`;
             } else {
                 // 综合时间排行：高频唤醒用橙色，时间用梯度蓝色
-                wakeHighlight = item.wakeCount >= wakeThreshold ? 'wakes-highlight' : '';
+                wakeHighlight = displayWakeCount >= wakeThreshold ? 'wakes-highlight' : '';
                 timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)} ranking-primary`;
             }
 
@@ -18184,7 +22513,7 @@ async function loadActiveTimeRanking() {
                             <div class="ranking-bar-fill" style="width: ${barWidth}%"></div>
                         </div>
                     </div>
-                    <span class="ranking-wakes ${wakeHighlight}">${item.wakeCount}${currentLang === 'en' ? 'x' : '次'}</span>
+                    <span class="ranking-wakes ${wakeHighlight}">${displayWakeCount}${currentLang === 'en' ? 'x' : '次'}</span>
                     <span class="ranking-time ${timeHighlight}">${compositeTime}</span>
                 </div>
             `;
@@ -18207,6 +22536,10 @@ async function loadActiveTimeRanking() {
 
     } catch (error) {
         console.error('[综合排行] 加载失败:', error);
+        if (hintEl) {
+            hintEl.textContent = '';
+            hintEl.style.display = 'none';
+        }
         container.innerHTML = `<div class="tracking-empty">${i18n.trackingLoadFailed[currentLang]}</div>`;
     }
 }
@@ -18472,6 +22805,9 @@ function initAdditionsSubTabs() {
         if (target === 'review') {
             reviewPanel.classList.add('active');
             try {
+                if (typeof initBookmarkCalendar === 'function') {
+                    initBookmarkCalendar();
+                }
                 // If switching back to Review, force refresh might be good but just rendering is enough
                 // Note: The calendar's state is preserved unless refreshed.
                 // We exited locate mode above, so it will be clean.
@@ -18526,6 +22862,8 @@ function initAdditionsSubTabs() {
     const savedTab = localStorage.getItem('additionsActiveTab');
     if (savedTab && ['review', 'browsing', 'tracking'].includes(savedTab)) {
         switchToTab(savedTab, false);
+    } else if (currentView === 'additions') {
+        switchToTab('review', false);
     }
 
     // 初始化浏览记录的子标签
@@ -18585,7 +22923,8 @@ function initBrowsingSubTabs() {
                 }
             } else {
                 refreshBrowsingHistoryData({ forceFull: false, silent: true });
-                browsingClickRankingStats = null;
+                resetBrowsingRankingDerivedCache();
+                markWidgetsDirty(['ranking', 'related', 'historyWeek'], { schedule: false });
                 refreshActiveBrowsingRankingIfVisible();
             }
         } else if (target === 'related') {
@@ -18955,15 +23294,124 @@ function getBrowsingRankingDomainValue(domainParts, mode = 'domain') {
     return parent || child;
 }
 
+function isBrowsingHistoryCalendarReady(inst) {
+    if (!inst) return false;
+    if (inst.useNewArchitecture && inst.dbManager) {
+        if (inst.initCompleted === false) return false;
+        return true;
+    }
+    if (inst.loadedRangeKeys && inst.loadedRangeKeys.startKey && inst.loadedRangeKeys.endKey) return true;
+    if (inst.historyCacheRestored) return true;
+    if (inst.historyCacheMeta && typeof inst.historyCacheMeta.lastSyncTime === 'number' && inst.historyCacheMeta.lastSyncTime > 0) {
+        return true;
+    }
+    return !!inst.initCompleted;
+}
+
+function isBrowsingRankingTransientPending(calendar) {
+    if (!calendar) return true;
+    if (!calendar.bookmarksByDate || typeof calendar.bookmarksByDate.size !== 'number') return true;
+    if (calendar.bookmarksByDate.size === 0) return true;
+    if (calendar.initCompleted === false) return true;
+    if (calendar.useNewArchitecture && calendar.dbManager && calendar.initCompleted !== true) return true;
+    return false;
+}
+
+function clearBrowsingRankingTransientRetryTimer() {
+    if (!browsingClickRankingRetryTimer) return;
+    clearTimeout(browsingClickRankingRetryTimer);
+    browsingClickRankingRetryTimer = null;
+}
+
+function resetBrowsingRankingDerivedCache() {
+    browsingClickRankingStats = null;
+    clearBrowsingRankingTransientRetryTimer();
+    clearWidgetsRankingFastItems();
+}
+
+function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSIENT_RETRY_MS) {
+    if (browsingClickRankingRetryTimer) return;
+    const safeDelay = Number.isFinite(Number(delayMs))
+        ? Math.max(120, Number(delayMs))
+        : BROWSING_RANKING_TRANSIENT_RETRY_MS;
+
+    browsingClickRankingRetryTimer = setTimeout(() => {
+        browsingClickRankingRetryTimer = null;
+        if (!browsingClickRankingStats) return;
+        if (browsingClickRankingStats.error !== 'noBookmarks' || browsingClickRankingStats.transient !== true) return;
+        resetBrowsingRankingDerivedCache();
+        markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
+        try {
+            refreshActiveBrowsingRankingIfVisible();
+            refreshBrowsingRelatedHistory();
+        } catch (_) { }
+    }, safeDelay);
+}
+
+function cacheBrowsingRankingError(error, options = {}) {
+    const safeError = String(error || 'unknown');
+    const transient = options.transient === true;
+    const payload = {
+        items: [],
+        error: safeError
+    };
+
+    if (transient) {
+        payload.transient = true;
+        payload.expiresAt = Date.now() + BROWSING_RANKING_TRANSIENT_CACHE_TTL_MS;
+        scheduleBrowsingRankingTransientRetry(options.retryMs);
+    }
+
+    browsingClickRankingStats = payload;
+    return payload;
+}
+
+function shouldReuseBrowsingRankingStatsCache() {
+    if (!browsingClickRankingStats) return false;
+    if (browsingClickRankingStats.error === 'noBookmarks' && browsingClickRankingStats.transient === true) {
+        const expiresAt = Number(browsingClickRankingStats.expiresAt || 0);
+        if (!expiresAt || Date.now() >= expiresAt) {
+            resetBrowsingRankingDerivedCache();
+            return false;
+        }
+    }
+    return true;
+}
+
+async function waitForBrowsingHistoryCalendar(options = {}) {
+    const {
+        timeout = 5000,
+        pollMs = 100
+    } = options;
+
+    try {
+        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+            initBrowsingHistoryCalendar();
+        }
+    } catch (e) {
+        console.warn('[BrowsingHistoryCalendar] 初始化失败:', e);
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        const inst = window.browsingHistoryCalendarInstance;
+        if (isBrowsingHistoryCalendarReady(inst)) {
+            return inst;
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+
+    return window.browsingHistoryCalendarInstance || null;
+}
+
 async function ensureBrowsingClickRankingStats() {
-    if (browsingClickRankingStats) {
+    if (shouldReuseBrowsingRankingStatsCache()) {
         return browsingClickRankingStats;
     }
 
     // 如果历史记录 API 完全不可用，直接标记为不支持
     if (!browserAPI || !browserAPI.history || typeof browserAPI.history.search !== 'function') {
-        browsingClickRankingStats = { items: [], error: 'noHistoryApi' };
-        return browsingClickRankingStats;
+        return cacheBrowsingRankingError('noHistoryApi');
     }
 
     // 确保「点击记录」日历已初始化
@@ -18975,31 +23423,19 @@ async function ensureBrowsingClickRankingStats() {
         console.warn('[BrowsingRanking] 初始化 BrowsingHistoryCalendar 失败:', e);
     }
 
-    // 等待日历数据（基于 bookmarksByDate）
-    const waitForCalendarData = async () => {
-        const start = Date.now();
-        const timeout = 5000;
-        while (Date.now() - start < timeout) {
-            const inst = window.browsingHistoryCalendarInstance;
-            if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-                return inst;
-            }
-            await new Promise(resolve => setTimeout(resolve, 200));
-        }
-        return window.browsingHistoryCalendarInstance || null;
-    };
+    const calendar = await waitForBrowsingHistoryCalendar({
+        timeout: currentView === 'widgets' ? 1700 : 5000,
+        pollMs: currentView === 'widgets' ? 100 : 200
+    });
 
-    const calendar = await waitForCalendarData();
-
+    const transientPending = isBrowsingRankingTransientPending(calendar);
     if (!calendar || !calendar.bookmarksByDate) {
-        browsingClickRankingStats = { items: [], error: 'noBookmarks' };
-        return browsingClickRankingStats;
+        return cacheBrowsingRankingError('noBookmarks', { transient: transientPending });
     }
 
     // 如果完全没有任何点击记录，则视为无数据
     if (calendar.bookmarksByDate.size === 0) {
-        browsingClickRankingStats = { items: [], error: 'noBookmarks' };
-        return browsingClickRankingStats;
+        return cacheBrowsingRankingError('noBookmarks', { transient: transientPending });
     }
 
     const boundaries = getBrowsingClickRankingBoundaries();
@@ -19011,14 +23447,12 @@ async function ensureBrowsingClickRankingStats() {
         bookmarkData = await getBookmarkUrlsAndTitles();
     } catch (error) {
         console.warn('[BrowsingRanking] 获取书签URL和标题失败:', error);
-        browsingClickRankingStats = { items: [], error: 'noBookmarks' };
-        return browsingClickRankingStats;
+        return cacheBrowsingRankingError('noBookmarks');
     }
 
     const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
     if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
-        browsingClickRankingStats = { items: [], error: 'noBookmarks' };
-        return browsingClickRankingStats;
+        return cacheBrowsingRankingError('noBookmarks');
     }
 
     // 构建 URL/标题 -> 书签主键的映射
@@ -19127,34 +23561,50 @@ async function ensureBrowsingClickRankingStats() {
     const items = Array.from(statsMap.values());
 
     // 保存映射供筛选函数使用
+    if (browsingClickRankingRetryTimer) {
+        clearBrowsingRankingTransientRetryTimer();
+    }
     browsingClickRankingStats = { items, boundaries, bookmarkKeyMap, bookmarkInfoMap };
     return browsingClickRankingStats;
 }
 
 function getBrowsingRankingItemsForRange(range) {
-    if (!browsingClickRankingStats || !Array.isArray(browsingClickRankingStats.items)) {
+    return getBrowsingRankingItemsForRangeFromStats(browsingClickRankingStats, range);
+}
+
+function getBrowsingRankingItemsForRangeFromStats(stats, range) {
+    if (!stats || !Array.isArray(stats.items)) {
         return [];
     }
 
-    const key = range === 'day'
-        ? 'dayCount'
-        : range === 'week'
-            ? 'weekCount'
-            : range === 'year'
-                ? 'yearCount'
-                : range === 'all'
-                    ? 'allCount'
-                    : 'monthCount';
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const hasFilteredRange = String(stats.filteredRange || '') === safeRange;
+    const key = hasFilteredRange
+        ? 'filteredCount'
+        : (safeRange === 'day'
+            ? 'dayCount'
+            : safeRange === 'week'
+                ? 'weekCount'
+                : safeRange === 'year'
+                    ? 'yearCount'
+                    : safeRange === 'all'
+                        ? 'allCount'
+                        : 'monthCount');
 
-    const items = browsingClickRankingStats.items
-        .filter(item => item[key] > 0)
+    const getCount = (item) => {
+        if (hasFilteredRange) {
+            return Number(item?.filteredCount) || 0;
+        }
+        return getBrowsingRankingItemCountByRange(item, safeRange);
+    };
+
+    return stats.items
+        .filter((item) => getCount(item) > 0)
         .sort((a, b) => {
-            if (b[key] !== a[key]) return b[key] - a[key];
-            return (b.lastVisitTime || 0) - (a.lastVisitTime || 0);
+            const countDiff = getCount(b) - getCount(a);
+            if (countDiff !== 0) return countDiff;
+            return (Number(b?.lastVisitTime) || 0) - (Number(a?.lastVisitTime) || 0);
         });
-
-    // 返回完整有序列表，渲染层做懒加载
-    return items;
 }
 
 function getBrowsingRankingItemCountByRange(item, range) {
@@ -19335,7 +23785,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
                 : `${(navigator.userAgent || '').includes('Edg/') ? 'edge' : 'chrome'}://favicon/${item.url || ''}`;
 
             bookmarkItem.innerHTML = `
-                <img class="ranking-favicon" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
+                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
                 <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
                       title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
                 <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
@@ -19535,7 +23985,7 @@ function renderBrowsingDomainRankingList(container, items, range, options = {}) 
                 : `${(navigator.userAgent || '').includes('Edg/') ? 'edge' : 'chrome'}://favicon/${item.url || ''}`;
 
             bookmarkItem.innerHTML = `
-                <img class="ranking-favicon" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
+                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
                 <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
                       title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
                 <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
@@ -20048,33 +24498,11 @@ async function refreshActiveBrowsingRankingIfVisible() {
     const panel = document.getElementById('browsingRankingPanel');
     if (!panel || !panel.classList.contains('active')) return;
 
-    // ✨ 等待日历数据同步完成（防止显示空白）
-    const waitForCalendarData = async () => {
-        const start = Date.now();
-        const timeout = 2000; // 2秒超时
-        while (Date.now() - start < timeout) {
-            const inst = window.browsingHistoryCalendarInstance;
-            if (inst) {
-                if (inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-                    return true;
-                }
-                if (inst.useNewArchitecture && inst.dbManager) {
-                    return true;
-                }
-                if (inst.historyCacheMeta && inst.historyCacheMeta.lastSyncTime) {
-                    return true;
-                }
-                if (inst.historyCacheRestored) {
-                    return true;
-                }
-            }
-            await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        return false;
-    };
-
-    const dataReady = await waitForCalendarData();
-    if (!dataReady) {
+    const calendar = await waitForBrowsingHistoryCalendar({
+        timeout: 2000,
+        pollMs: 50
+    });
+    if (!isBrowsingHistoryCalendarReady(calendar)) {
         console.warn('[BrowsingRanking] 等待日历数据超时');
     }
 
@@ -20521,7 +24949,8 @@ try {
 
 document.addEventListener('browsingHistoryCacheUpdated', () => {
 
-    browsingClickRankingStats = null;
+    resetBrowsingRankingDerivedCache();
+    markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 80 });
     refreshActiveBrowsingRankingIfVisible();
     refreshBrowsingRelatedHistory(); // 同时刷新书签关联页面
 });
@@ -20820,6 +25249,7 @@ function toggleLanguage() {
     }
 
     applyLanguage();
+    refreshTrackingRankingAfterLanguageChange();
 
     // 只更新界面文字，不重新渲染内容（避免图标重新加载）
     // renderCurrentView();
@@ -20842,6 +25272,13 @@ function toggleLanguage() {
 
     // 刷新书签关联记录列表（更新badge文字）
     refreshBrowsingRelatedHistory();
+}
+
+function refreshTrackingRankingAfterLanguageChange() {
+    if (currentView !== 'additions') return;
+    const trackingPanel = document.getElementById('additionsTrackingPanel');
+    if (!trackingPanel || !trackingPanel.classList.contains('active')) return;
+    loadActiveTimeRanking();
 }
 
 // 更新依赖语言的UI元素（不重新渲染内容，避免图标重新加载）
@@ -20900,12 +25337,20 @@ function scheduleRecommendCardsRefreshFromCacheChange() {
         recommendCardsRefreshInProgress = true;
         lastRecommendCardsRefreshAt = Date.now();
         try {
+            const shouldForceRefresh = await shouldForceRecommendCardsRefreshFromStorageChange();
             if (currentView === 'recommend') {
-                await refreshRecommendCards(true);
+                await refreshRecommendCards(shouldForceRefresh);
             } else if (currentView === 'widgets') {
-                await refreshRecommendCards(true);
-                await renderWidgetsRecommendCards({ force: true, allowBootstrap: false });
-                applyWidgetsSmartSort();
+                await refreshRecommendCards(shouldForceRefresh);
+                const rendered = await renderWidgetsRecommendCards({
+                    force: shouldForceRefresh,
+                    allowBootstrap: false
+                });
+                if (!rendered) {
+                    scheduleWidgetsRecommendInteractionRetry({ force: shouldForceRefresh });
+                } else {
+                    applyWidgetsSmartSort({ force: shouldForceRefresh });
+                }
             }
         } catch (error) {
             console.warn('[存储监听] 推荐卡片增量刷新失败:', error);
@@ -20917,6 +25362,55 @@ function scheduleRecommendCardsRefreshFromCacheChange() {
             }
         }
     }, Math.max(600, Math.min(recommendCardsRefreshDebounceMs, 2500)));
+}
+
+function hasPendingRecommendCardsInDom() {
+    const rowSelectors = ['#cardsRow', '#widgetsCardsRow'];
+    for (const selector of rowSelectors) {
+        const cardsRow = document.querySelector(selector);
+        if (!cardsRow) continue;
+        const cards = cardsRow.querySelectorAll('.recommend-card');
+        if (!cards || cards.length === 0) continue;
+
+        for (const card of cards) {
+            if (!(card instanceof HTMLElement)) continue;
+            if (card.classList.contains('empty')) continue;
+            const bookmarkId = String(card.dataset.bookmarkId || '').trim();
+            if (!bookmarkId) continue;
+            if (!card.classList.contains('flipped')) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function scheduleWidgetsRecommendInteractionRetry(options = {}) {
+    if (currentView !== 'widgets') return;
+    if (!isWidgetsInteractionActive()) return;
+
+    markWidgetsDirty('recommend', { schedule: false });
+    requestWidgetsPendingRefresh({
+        force: options.force === true,
+        delayMs: WIDGETS_INTERACTION_COOLDOWN_MS + 80
+    });
+}
+
+async function shouldForceRecommendCardsRefreshFromStorageChange() {
+    try {
+        const hasPendingRound = await hasPendingRecommendRoundState();
+        if (hasPendingRound) {
+            return false;
+        }
+    } catch (_) { }
+
+    // historyCurrentCards 可能被后台临时清空，但前台当前仍展示未复习卡片。
+    // 此时若强制刷新会出现“打开后自动换一批”的观感，优先保持当前轮次稳定。
+    if (hasPendingRecommendCardsInDom()) {
+        return false;
+    }
+
+    return true;
 }
 
 function scheduleRecommendCardsRefreshFromStateSync() {
@@ -20938,8 +25432,15 @@ function scheduleRecommendCardsRefreshFromStateSync() {
                 await refreshRecommendCards(false);
             } else if (currentView === 'widgets') {
                 await refreshRecommendCards(false);
-                await renderWidgetsRecommendCards({ force: false, allowBootstrap: false });
-                applyWidgetsSmartSort();
+                const rendered = await renderWidgetsRecommendCards({
+                    force: false,
+                    allowBootstrap: false
+                });
+                if (!rendered) {
+                    scheduleWidgetsRecommendInteractionRetry({ force: false });
+                } else {
+                    applyWidgetsSmartSort();
+                }
             }
         } catch (error) {
             console.warn('[存储监听] 推荐状态同步刷新失败:', error);
@@ -21016,7 +25517,12 @@ function handleStorageChange(changes, namespace) {
 
     // 当前三卡变化（跨实例同步）
     if (changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]) {
-        const changedTs = Number(changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.timestamp || 0);
+        syncRecommendLastUpdatedFromState(changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue || null);
+        const changedTs = Number(
+            changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.timestamp
+            || changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.lastUpdated
+            || 0
+        );
         const isSelfWrite = historyLastSaveTime > 0
             && changedTs > 0
             && changedTs === historyLastSaveTime;
@@ -21062,6 +25568,7 @@ function handleStorageChange(changes, namespace) {
 
         // 应用新语言到所有UI元素
         applyLanguage();
+        refreshTrackingRankingAfterLanguageChange();
 
         // 重新渲染当前视图以应用语言
         renderCurrentView();
@@ -21182,10 +25689,11 @@ function setupRealtimeMessageListener() {
     if (typeof messageListenerRegistered !== 'undefined' && messageListenerRegistered) return;
     messageListenerRegistered = true;
 
-    browserAPI.runtime.onMessage.addListener((message) => {
+    browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!message || !message.action) return;
 
         if (message.action === 'trackingDataUpdated') {
+            markWidgetsDirty('tracking', { delayMs: 80 });
             // T值数据更新，增量更新缓存
             if (message.url || message.title) {
                 // 增量更新缓存（不清除整个缓存，只更新变化的条目）
@@ -21227,12 +25735,42 @@ function setupRealtimeMessageListener() {
         } else if (message.action === 'updateFaviconFromTab') {
             // 从打开的 tab 更新 favicon（静默）
             if (message.url && message.favIconUrl) {
-                FaviconCache.save(message.url, message.favIconUrl).then(() => {
-                    // 更新页面上对应的 favicon 图标
-                    updateFaviconImages(message.url, message.favIconUrl);
-                }).catch(() => {
-                    // 静默处理错误
-                });
+                if (FaviconCache.isStoredFaviconData(message.favIconUrl)) {
+                    const incomingDataUrl = message.favIconUrl;
+                    Promise.resolve().then(async () => {
+                        const incomingDimensions = await FaviconCache.getDataUrlDimensions(incomingDataUrl);
+                        const incomingMinDimension = incomingDimensions
+                            ? Math.min(
+                                Number(incomingDimensions.width) || 0,
+                                Number(incomingDimensions.height) || 0
+                            )
+                            : 0;
+                        if (incomingMinDimension > 0 && incomingMinDimension < 16) {
+                            return;
+                        }
+
+                        const existing = await FaviconCache.get(message.url);
+                        if (existing && existing !== 'failed' && FaviconCache.isStoredFaviconData(existing)) {
+                            const existingDimensions = await FaviconCache.getDataUrlDimensions(existing);
+                            const existingMinDimension = existingDimensions
+                                ? Math.min(
+                                    Number(existingDimensions.width) || 0,
+                                    Number(existingDimensions.height) || 0
+                                )
+                                : 0;
+                            // 防降级：新图尺寸小于旧图时不覆盖。
+                            if (existingMinDimension > 0 && incomingMinDimension > 0 && incomingMinDimension < existingMinDimension) {
+                                return;
+                            }
+                        }
+
+                        await FaviconCache.save(message.url, incomingDataUrl);
+                        // 更新页面上对应的 favicon 图标
+                        updateFaviconImages(message.url, incomingDataUrl);
+                    }).catch(() => {
+                        // 静默处理错误
+                    });
+                }
             }
         } else if (message.action === 'clearLocalStorage') {
             // 收到来自 background.js 的清除 localStorage 请求（"恢复到初始状态"功能）
@@ -21383,33 +25921,11 @@ async function refreshBrowsingRelatedHistory() {
     browsingRelatedBookmarkTitles = null;
     browsingRelatedBookmarkInfo = null;
 
-    // ✨ 等待日历数据同步完成（确保标题匹配的记录能正确显示）
-    const waitForCalendarData = async () => {
-        const start = Date.now();
-        const timeout = 2000; // 2秒超时
-        while (Date.now() - start < timeout) {
-            const inst = window.browsingHistoryCalendarInstance;
-            if (inst) {
-                if (inst.bookmarksByDate) {
-                    return true;
-                }
-                if (inst.useNewArchitecture && inst.dbManager) {
-                    return true;
-                }
-                if (inst.historyCacheMeta && typeof inst.historyCacheMeta.lastSyncTime === 'number') {
-                    return true;
-                }
-                if (inst.historyCacheRestored) {
-                    return true;
-                }
-            }
-            await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        return false;
-    };
-
-    const dataReady = await waitForCalendarData();
-    if (!dataReady) {
+    const calendar = await waitForBrowsingHistoryCalendar({
+        timeout: 2000,
+        pollMs: 50
+    });
+    if (!isBrowsingHistoryCalendarReady(calendar)) {
         console.warn('[BrowsingRelated] 等待日历数据超时');
     }
 
@@ -21425,6 +25941,42 @@ async function getBookmarkUrlsAndTitles() {
             titles: browsingRelatedBookmarkTitles,
             info: browsingRelatedBookmarkInfo
         };
+    }
+
+    // widgets/侧边栏首开优先走 additions 已恢复的缓存，避免每次先跑 bookmarks.getTree
+    if (Array.isArray(allBookmarks) && allBookmarks.length > 0) {
+        const urls = new Set();
+        const titles = new Set();
+        const info = new Map();
+
+        allBookmarks.forEach((entry) => {
+            const url = String(entry?.url || '').trim();
+            if (!url) return;
+            urls.add(url);
+
+            const title = String(entry?.title || '').trim();
+            if (title) titles.add(title);
+
+            const rawPath = String(entry?.path || '').trim();
+            const pathParts = rawPath ? rawPath.split('/').filter(Boolean) : [];
+            // flattenBookmarkTree 里 path 包含自身标题，这里去掉最后一段作为文件夹路径
+            const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1) : [];
+
+            if (!info.has(url)) {
+                info.set(url, {
+                    url,
+                    title: title || url,
+                    folderPath
+                });
+            }
+        });
+
+        if (urls.size > 0 || info.size > 0) {
+            browsingRelatedBookmarkUrls = urls;
+            browsingRelatedBookmarkTitles = titles;
+            browsingRelatedBookmarkInfo = info;
+            return { urls, titles, info };
+        }
     }
 
     const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
@@ -21478,9 +26030,12 @@ async function getBookmarkUrlsAndTitles() {
         });
 
         collectUrlsAndTitles(tree);
-        browsingRelatedBookmarkUrls = urls;
-        browsingRelatedBookmarkTitles = titles;
-        browsingRelatedBookmarkInfo = info;
+        // 首次侧边栏启动阶段，书签树偶发返回空时不做永久缓存，避免本次生命周期一直空。
+        if (urls.size > 0 || info.size > 0) {
+            browsingRelatedBookmarkUrls = urls;
+            browsingRelatedBookmarkTitles = titles;
+            browsingRelatedBookmarkInfo = info;
+        }
         return { urls, titles, info };
     } catch (error) {
         console.error('[BrowsingRelated] 获取书签URL和标题失败:', error);
@@ -21581,23 +26136,13 @@ async function loadBrowsingRelatedHistory(range = 'day') {
             initBrowsingHistoryCalendar();
         }
 
-        // 等待日历数据加载（最多10秒）
-        const waitForCalendarData = async () => {
-            const start = Date.now();
-            const timeout = 10000;
-            while (Date.now() - start < timeout) {
-                const inst = window.browsingHistoryCalendarInstance;
-                if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size > 0) {
-
-                    return inst;
-                }
-                await new Promise(resolve => setTimeout(resolve, 200));
-            }
+        const calendar = await waitForBrowsingHistoryCalendar({
+            timeout: 10000,
+            pollMs: 200
+        });
+        if (!isBrowsingHistoryCalendarReady(calendar)) {
             console.warn('[BrowsingRelated] 等待日历数据超时');
-            return window.browsingHistoryCalendarInstance || null;
-        };
-
-        const calendar = await waitForCalendarData();
+        }
 
         // 获取时间范围（Phase 4.7: 支持自定义日期范围覆盖）
         const startTime = browsingRelatedCustomBounds ? browsingRelatedCustomBounds.startTime : getTimeRangeStart(range);
@@ -21939,7 +26484,7 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
         itemEl.innerHTML = `
             <div class="related-history-number">${numberStr}</div>
             <div class="related-history-header">
-                <img src="${faviconUrl}" class="related-history-favicon" alt="">
+                <img src="${faviconUrl}" class="related-history-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" alt="">
                 <div class="related-history-info">
                     <div class="related-history-title">${escapeHtml(displayTitle)}</div>
                 </div>
@@ -22534,7 +27079,7 @@ async function showBrowsingRankingTimeMenu(range) {
     });
     const folderBtn = createToggleBtn({
         mode: 'folder',
-        labelZh: '文件',
+        labelZh: '文件夹',
         labelEn: 'Fld',
         iconClass: 'fa-folder'
     });

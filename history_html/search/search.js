@@ -50,6 +50,10 @@ const searchUiState = {
     isHelpOpen: false
 };
 
+const SIDE_PANEL_SEARCH_COLLAPSE_FINISH_MS = 260;
+let sidePanelSearchCollapseCleanupTimer = null;
+let sidePanelSearchCollapseTransitionEndHandler = null;
+
 function isSidePanelModeInSearch() {
     try {
         if (window.__SIDE_PANEL_MODE__ === true) return true;
@@ -66,17 +70,74 @@ function setSidePanelSearchExpanded(expanded) {
     const container = document.querySelector('.search-container');
     if (!container) return;
 
-    const shouldExpand = !!expanded;
     const header = document.querySelector('.history-header');
+    const inputWrap = container.querySelector('.search-input-wrapper');
+    const shouldExpand = !!expanded;
+    const isExpanded = container.classList.contains('side-panel-search-expanded');
+    const isCollapsing = container.classList.contains('side-panel-search-collapsing');
+
+    const clearCollapseCleanupTimer = () => {
+        if (sidePanelSearchCollapseCleanupTimer) {
+            clearTimeout(sidePanelSearchCollapseCleanupTimer);
+            sidePanelSearchCollapseCleanupTimer = null;
+        }
+    };
+
+    const clearCollapseTransitionEndHandler = () => {
+        if (inputWrap && sidePanelSearchCollapseTransitionEndHandler) {
+            inputWrap.removeEventListener('transitionend', sidePanelSearchCollapseTransitionEndHandler);
+        }
+        sidePanelSearchCollapseTransitionEndHandler = null;
+    };
+
+    const finishCollapse = () => {
+        if (!container.classList.contains('side-panel-search-collapsing')) return;
+        container.classList.remove('side-panel-search-collapsing');
+        if (header) header.classList.remove('sidepanel-search-overlay-active');
+        clearCollapseCleanupTimer();
+        clearCollapseTransitionEndHandler();
+    };
+
+    // Compatibility: clear legacy transition helper class if it still exists.
+    container.classList.remove('side-panel-search-expanding');
+    if (shouldExpand) container.classList.remove('side-panel-search-collapsing');
 
     if (shouldExpand) {
-        container.classList.add('side-panel-search-expanded');
+        clearCollapseCleanupTimer();
+        clearCollapseTransitionEndHandler();
         if (header) header.classList.add('sidepanel-search-overlay-active');
+        if (isExpanded && !isCollapsing) return;
+        container.classList.add('side-panel-search-expanded');
         return;
     }
 
-    container.classList.remove('side-panel-search-expanded');
-    if (header) header.classList.remove('sidepanel-search-overlay-active');
+    if (!isExpanded && !isCollapsing) {
+        if (header) header.classList.remove('sidepanel-search-overlay-active');
+        return;
+    }
+    if (isCollapsing) return;
+
+    clearCollapseCleanupTimer();
+    clearCollapseTransitionEndHandler();
+    if (header) header.classList.add('sidepanel-search-overlay-active');
+    container.classList.add('side-panel-search-collapsing');
+
+    requestAnimationFrame(() => {
+        container.classList.remove('side-panel-search-expanded');
+    });
+
+    if (inputWrap && typeof inputWrap.addEventListener === 'function') {
+        sidePanelSearchCollapseTransitionEndHandler = (event) => {
+            if (!event || (event.propertyName !== 'max-width' && event.propertyName !== 'opacity')) return;
+            clearCollapseTransitionEndHandler();
+            finishCollapse();
+        };
+        inputWrap.addEventListener('transitionend', sidePanelSearchCollapseTransitionEndHandler);
+    }
+
+    sidePanelSearchCollapseCleanupTimer = setTimeout(() => {
+        finishCollapse();
+    }, SIDE_PANEL_SEARCH_COLLAPSE_FINISH_MS);
 }
 
 function isSidePanelSearchExpanded() {
@@ -3087,7 +3148,7 @@ function renderEmptyQuerySuggestions() {
 
     const html = items.map((text) => {
         return `
-        <div class="search-result-item suggestion-item" style="pointer-events:none; opacity:0.85; display:flex; align-items:center; padding:6px 10px; border-bottom:1px solid var(--border-color-light);">
+        <div class="search-result-item suggestion-item" style="pointer-events:none; opacity:0.85; display:flex; align-items:center; padding:6px var(--search-candidate-inline-padding, 12px); border-bottom:1px solid var(--border-color-light);">
             <div class="search-result-content" style="flex:1; min-width:0; text-align:left;">
                 <div class="search-result-title" style="font-weight:600; font-size:12px; margin-bottom:0; line-height:1.35;">${escapeHtml(String(text)).replace(/`([^`]+)`/g, '<code>$1</code>')}</div>
             </div>
@@ -3125,8 +3186,8 @@ function renderEmptyQuerySuggestions() {
             </div>`;
 
     const footerHintHtml = dockBottom
-        ? `<div class="search-suggestions-footer" style="position:relative; min-height:34px; padding:6px 10px; border-top:1px solid var(--border-color);">
-                <div class="search-empty-suggestions-hint" data-arrow-direction="down" style="position:absolute; left:10px; bottom:6px; display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:calc(100% - 20px); font-size:10px; line-height:1.2; color:var(--text-tertiary); pointer-events:none;">
+        ? `<div class="search-suggestions-footer" style="position:relative; min-height:34px; padding:6px var(--search-candidate-inline-padding, 12px); border-top:1px solid var(--border-color);">
+                <div class="search-empty-suggestions-hint" data-arrow-direction="down" style="position:absolute; left:var(--search-candidate-inline-padding, 12px); bottom:6px; display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:calc(100% - (var(--search-candidate-inline-padding, 12px) + var(--search-candidate-inline-padding, 12px))); font-size:10px; line-height:1.2; color:var(--text-tertiary); pointer-events:none;">
                     <span style="display:inline-flex; flex:0 0 auto; position:relative; top:1px;">${arrowDownSvg}</span>
                     <span style="min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(hintText)}</span>
                 </div>
@@ -3134,13 +3195,13 @@ function renderEmptyQuerySuggestions() {
         : '';
 
     panel.innerHTML = `
-        <div class="search-suggestions-header" style="position:relative; padding:6px 10px; border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:flex-end; gap:10px;">
+        <div class="search-suggestions-header" style="position:relative; padding:6px var(--search-candidate-inline-padding, 12px); border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:flex-end; gap:10px;">
             ${headerHintHtml}
             <button type="button" class="search-empty-suggestions-hide-btn" style="border:1px solid var(--border-color); background:var(--bg-secondary); padding:3px 10px; border-radius:999px; font-size:10px; color:var(--text-secondary); cursor:pointer; white-space:nowrap;">
                 ${escapeHtml(dontShowLabel)}
             </button>
         </div>
-        <div style="padding:8px 10px 2px; border-bottom:1px solid var(--border-color-light);">
+        <div style="padding:8px var(--search-candidate-inline-padding, 12px) 2px; border-bottom:1px solid var(--border-color-light);">
             <div style="font-size:11px; color:var(--text-secondary); line-height:1.4;">${escapeHtml(contextPrefix + guidance.contextLabel)}</div>
             ${examplesHtml}
         </div>

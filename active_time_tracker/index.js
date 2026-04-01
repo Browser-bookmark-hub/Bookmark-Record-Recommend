@@ -19,6 +19,9 @@ const CONFIG = {
     AUTO_BOOKMARK_ATTRIBUTION_TTL_MS: 6 * 60 * 60 * 1000, // 书签打开归因TTL：6小时
     AUTO_BOOKMARK_REDIRECT_WINDOW_MS: 15000, // 仅把“打开后短时间内的跳转/重定向”算作同一次书签打开
     TRACKING_STATS_MAX_ENTRIES: 0,
+    TRACKING_DAILY_KEEP_DAYS: 550,
+    TRACKING_DAILY_STATS_KEY: 'trackingDailyStatsV1',
+    TRACKING_DAILY_STATS_STARTED_AT_KEY: 'trackingDailyStatsStartedAt',
     DB_NAME: 'BookmarkActiveTimeDB',
     DB_VERSION: 1,
     STORE_NAME: 'active_sessions'
@@ -28,6 +31,164 @@ const normalizeDomain = (domain) => {
     if (!domain || typeof domain !== 'string') return '';
     return domain.trim().toLowerCase().replace(/^www\./, '');
 };
+
+function toNonNegativeNumber(value, fallback = 0) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) return fallback;
+    return num;
+}
+
+function hasPersistedSplitMetrics(data) {
+    if (!data || typeof data !== 'object') return false;
+    return (
+        Object.prototype.hasOwnProperty.call(data, 'unsavedActiveMs')
+        || Object.prototype.hasOwnProperty.call(data, 'unsavedPauseMs')
+        || Object.prototype.hasOwnProperty.call(data, 'unsavedVisibleMs')
+        || Object.prototype.hasOwnProperty.call(data, 'unsavedBackgroundMs')
+        || Object.prototype.hasOwnProperty.call(data, 'unsavedWakeCount')
+        || Object.prototype.hasOwnProperty.call(data, 'savedActiveMs')
+        || Object.prototype.hasOwnProperty.call(data, 'savedPauseMs')
+        || Object.prototype.hasOwnProperty.call(data, 'savedVisibleMs')
+        || Object.prototype.hasOwnProperty.call(data, 'savedBackgroundMs')
+        || Object.prototype.hasOwnProperty.call(data, 'savedWakeCount')
+    );
+}
+
+function resolvePersistedSplitMetric(totalValue, unsavedValue, savedValue, hasSplitData) {
+    const total = toNonNegativeNumber(totalValue, 0);
+
+    if (!hasSplitData) {
+        return {
+            total,
+            unsaved: total,
+            saved: 0
+        };
+    }
+
+    const rawUnsaved = Number(unsavedValue);
+    const rawSaved = Number(savedValue);
+    const hasUnsaved = Number.isFinite(rawUnsaved) && rawUnsaved >= 0;
+    const hasSaved = Number.isFinite(rawSaved) && rawSaved >= 0;
+
+    let unsaved = hasUnsaved ? rawUnsaved : NaN;
+    let saved = hasSaved ? rawSaved : NaN;
+
+    if (!Number.isFinite(unsaved) && !Number.isFinite(saved)) {
+        unsaved = total;
+        saved = 0;
+    } else if (!Number.isFinite(unsaved)) {
+        unsaved = Math.max(0, total - saved);
+    } else if (!Number.isFinite(saved)) {
+        saved = Math.max(0, total - unsaved);
+    }
+
+    unsaved = Math.max(0, unsaved);
+    saved = Math.max(0, saved);
+
+    return {
+        total: Math.max(total, unsaved + saved),
+        unsaved,
+        saved
+    };
+}
+
+const TRACKING_DAY_MS = 24 * 60 * 60 * 1000;
+
+function getTrackingDayStartTime(timeValue) {
+    const base = toNonNegativeNumber(timeValue, Date.now());
+    const date = new Date(base);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+}
+
+function getTrackingDayKey(timeValue) {
+    const date = new Date(toNonNegativeNumber(timeValue, Date.now()));
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function getTrackingDailyItemKey(record) {
+    const bookmarkId = String(record?.bookmarkId || '').trim();
+    if (bookmarkId) return `bookmark:${bookmarkId}`;
+
+    const normalizedUrl = normalizeUrl(record?.url || '');
+    if (normalizedUrl) return `url:${normalizedUrl}`;
+
+    const normalizedTitle = normalizeTitle(record?.title || '');
+    if (normalizedTitle) return `title:${normalizedTitle}`;
+
+    return '';
+}
+
+function splitTrackingRecordByDay(record) {
+    if (!record || typeof record !== 'object') return null;
+
+    const itemKey = getTrackingDailyItemKey(record);
+    if (!itemKey) return null;
+
+    const startTime = toNonNegativeNumber(record.startTime, 0);
+    const rawEndTime = toNonNegativeNumber(record.endTime, 0);
+    const safeEndTime = rawEndTime > startTime
+        ? rawEndTime
+        : (startTime + Math.max(1, toNonNegativeNumber(record.totalMs, 1)));
+    const durationMs = Math.max(1, safeEndTime - startTime);
+
+    const totalCompositeMs = toNonNegativeNumber(record.compositeMs, 0);
+    const totalWakeCount = toNonNegativeNumber(record.wakeCount, 0);
+    const bookmarkId = String(record.bookmarkId || '').trim() || null;
+    const normalizedUrl = normalizeUrl(record.url || '') || '';
+    const normalizedTitle = normalizeTitle(record.title || '') || normalizedUrl || itemKey;
+
+    const segments = [];
+    let cursor = getTrackingDayStartTime(startTime);
+    while (cursor < safeEndTime) {
+        const dayStart = cursor;
+        const dayEnd = dayStart + TRACKING_DAY_MS;
+        const overlapStart = Math.max(startTime, dayStart);
+        const overlapEnd = Math.min(safeEndTime, dayEnd);
+        const overlapMs = overlapEnd - overlapStart;
+
+        if (overlapMs > 0) {
+            const ratio = Math.min(1, overlapMs / durationMs);
+            segments.push({
+                dayKey: getTrackingDayKey(dayStart),
+                compositeMs: totalCompositeMs * ratio,
+                wakeCount: totalWakeCount * ratio,
+                overlapMs
+            });
+        }
+
+        cursor = dayEnd;
+    }
+
+    if (segments.length === 0) return null;
+
+    return {
+        itemKey,
+        bookmarkId,
+        url: normalizedUrl,
+        title: normalizedTitle,
+        endTime: safeEndTime,
+        segments
+    };
+}
+
+function pruneTrackingDailyStatsByRetention(dailyStats, keepDays = 550) {
+    if (!dailyStats || typeof dailyStats !== 'object') return dailyStats || {};
+    const safeKeepDays = Math.max(30, Math.floor(toNonNegativeNumber(keepDays, 550)));
+    const minDayStart = getTrackingDayStartTime(Date.now()) - ((safeKeepDays - 1) * TRACKING_DAY_MS);
+    const minDayKey = getTrackingDayKey(minDayStart);
+
+    for (const dayKey of Object.keys(dailyStats)) {
+        if (dayKey < minDayKey) {
+            delete dailyStats[dayKey];
+        }
+    }
+
+    return dailyStats;
+}
 
 let trackingBlockedCache = {
     bookmarks: new Set(),
@@ -278,8 +439,14 @@ async function saveSession(session) {
 // 更新永久存储中的累积统计（供「综合排行」使用）
 async function updateTrackingStats(record) {
     try {
-        const result = await browserAPI.storage.local.get(['trackingStats']);
+        const result = await browserAPI.storage.local.get([
+            'trackingStats',
+            CONFIG.TRACKING_DAILY_STATS_KEY,
+            CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY
+        ]);
         const stats = result.trackingStats || {};
+        const dailyStats = result[CONFIG.TRACKING_DAILY_STATS_KEY] || {};
+        const currentDailyStartedAt = toNonNegativeNumber(result[CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY], 0);
 
         const key = record.title || record.url;
         const now = Date.now();
@@ -311,7 +478,53 @@ async function updateTrackingStats(record) {
 
         pruneTrackingStats(stats, now);
 
-        await browserAPI.storage.local.set({ trackingStats: stats });
+        const updates = { trackingStats: stats };
+
+        const dailyUpdate = splitTrackingRecordByDay(record);
+        if (dailyUpdate) {
+            for (const segment of dailyUpdate.segments) {
+                if (!dailyStats[segment.dayKey] || typeof dailyStats[segment.dayKey] !== 'object') {
+                    dailyStats[segment.dayKey] = {};
+                }
+
+                const dayBucket = dailyStats[segment.dayKey];
+                if (!dayBucket[dailyUpdate.itemKey]) {
+                    dayBucket[dailyUpdate.itemKey] = {
+                        bookmarkId: dailyUpdate.bookmarkId,
+                        url: dailyUpdate.url,
+                        title: dailyUpdate.title,
+                        totalCompositeMs: 0,
+                        totalWakeCount: 0,
+                        sessionCount: 0,
+                        lastUpdate: dailyUpdate.endTime
+                    };
+                }
+
+                const bucket = dayBucket[dailyUpdate.itemKey];
+                if (!bucket.bookmarkId && dailyUpdate.bookmarkId) {
+                    bucket.bookmarkId = dailyUpdate.bookmarkId;
+                }
+                if (!bucket.url && dailyUpdate.url) {
+                    bucket.url = dailyUpdate.url;
+                }
+                if ((!bucket.title || bucket.title === bucket.url || bucket.title === dailyUpdate.itemKey) && dailyUpdate.title) {
+                    bucket.title = dailyUpdate.title;
+                }
+
+                bucket.totalCompositeMs = toNonNegativeNumber(bucket.totalCompositeMs, 0) + toNonNegativeNumber(segment.compositeMs, 0);
+                bucket.totalWakeCount = toNonNegativeNumber(bucket.totalWakeCount, 0) + toNonNegativeNumber(segment.wakeCount, 0);
+                bucket.sessionCount = toNonNegativeNumber(bucket.sessionCount, 0) + 1;
+                bucket.lastUpdate = Math.max(toNonNegativeNumber(bucket.lastUpdate, 0), dailyUpdate.endTime);
+            }
+
+            pruneTrackingDailyStatsByRetention(dailyStats, CONFIG.TRACKING_DAILY_KEEP_DAYS);
+            updates[CONFIG.TRACKING_DAILY_STATS_KEY] = dailyStats;
+            updates[CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY] = currentDailyStartedAt > 0
+                ? Math.min(currentDailyStartedAt, toNonNegativeNumber(record.startTime, now))
+                : toNonNegativeNumber(record.startTime, now);
+        }
+
+        await browserAPI.storage.local.set(updates);
         console.log('[ActiveTimeTracker] 累积统计已更新:', key);
     } catch (error) {
         console.warn('[ActiveTimeTracker] 更新累积统计失败:', error);
@@ -369,11 +582,23 @@ async function getSessionsByTimeRange(startTime, endTime) {
 
             request.onsuccess = () => {
                 let results = request.result || [];
-                if (startTime) {
-                    results = results.filter(r => r.startTime >= startTime);
-                }
-                if (endTime) {
-                    results = results.filter(r => r.endTime <= endTime);
+                const hasStart = Number.isFinite(Number(startTime)) && Number(startTime) > 0;
+                const hasEnd = Number.isFinite(Number(endTime)) && Number(endTime) > 0;
+                const safeStart = hasStart ? Number(startTime) : 0;
+                const safeEnd = hasEnd ? Number(endTime) : Date.now();
+
+                if (hasStart || hasEnd) {
+                    results = results.filter((record) => {
+                        if (!record) return false;
+                        const recordStart = Number(record.startTime || 0);
+                        const rawRecordEnd = Number(record.endTime || 0);
+                        const recordEnd = Number.isFinite(rawRecordEnd) && rawRecordEnd > 0
+                            ? rawRecordEnd
+                            : recordStart;
+
+                        // 使用时间区间“重叠”匹配，避免跨日/跨周会话被漏掉。
+                        return recordEnd >= safeStart && recordStart <= safeEnd;
+                    });
                 }
                 resolve(results);
             };
@@ -430,11 +655,20 @@ async function clearCurrentTrackingSessions() {
 // range: 'week' | 'month' | 'year' | 'all'
 async function clearTrackingStatsByRange(range) {
     try {
-        const result = await browserAPI.storage.local.get(['trackingStats']);
+        const result = await browserAPI.storage.local.get([
+            'trackingStats',
+            CONFIG.TRACKING_DAILY_STATS_KEY,
+            CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY
+        ]);
         const stats = result.trackingStats || {};
+        const dailyStats = result[CONFIG.TRACKING_DAILY_STATS_KEY] || {};
 
         if (range === 'all') {
-            await browserAPI.storage.local.remove(['trackingStats']);
+            await browserAPI.storage.local.remove([
+                'trackingStats',
+                CONFIG.TRACKING_DAILY_STATS_KEY,
+                CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY
+            ]);
             // 同时清除 IndexedDB
             await clearAllSessions();
             console.log('[ActiveTimeTracker] 已清除全部综合排行数据');
@@ -464,7 +698,18 @@ async function clearTrackingStatsByRange(range) {
             }
         }
 
-        await browserAPI.storage.local.set({ trackingStats: newStats });
+        const newDailyStats = { ...dailyStats };
+        const cutoffDayKey = getTrackingDayKey(cutoffTime);
+        for (const dayKey of Object.keys(newDailyStats)) {
+            if (dayKey < cutoffDayKey) {
+                delete newDailyStats[dayKey];
+            }
+        }
+
+        await browserAPI.storage.local.set({
+            trackingStats: newStats,
+            [CONFIG.TRACKING_DAILY_STATS_KEY]: newDailyStats
+        });
 
         // 同时清除 IndexedDB 中对应时间范围的数据
         await clearSessionsByTimeRange(0, cutoffTime);
@@ -594,6 +839,88 @@ async function getTrackingStats() {
     }
 }
 
+async function getTrackingDailyStatsByRange(startTime, endTime) {
+    try {
+        const result = await browserAPI.storage.local.get([
+            CONFIG.TRACKING_DAILY_STATS_KEY,
+            CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY
+        ]);
+
+        const dailyStats = result[CONFIG.TRACKING_DAILY_STATS_KEY] || {};
+        const startedAt = toNonNegativeNumber(result[CONFIG.TRACKING_DAILY_STATS_STARTED_AT_KEY], 0);
+        const safeStart = toNonNegativeNumber(startTime, 0);
+        const safeEnd = toNonNegativeNumber(endTime, Date.now());
+        if (safeEnd <= safeStart) {
+            return { stats: {}, startedAt };
+        }
+
+        const aggregated = {};
+        let cursor = getTrackingDayStartTime(safeStart);
+        while (cursor <= safeEnd) {
+            const dayKey = getTrackingDayKey(cursor);
+            const dayStats = dailyStats[dayKey];
+            if (dayStats && typeof dayStats === 'object') {
+                for (const [itemKey, entry] of Object.entries(dayStats)) {
+                    if (!entry || typeof entry !== 'object') continue;
+                    if (!aggregated[itemKey]) {
+                        aggregated[itemKey] = {
+                            bookmarkId: entry.bookmarkId || null,
+                            url: entry.url || '',
+                            title: entry.title || entry.url || itemKey,
+                            totalCompositeMs: 0,
+                            totalWakeCount: 0,
+                            sessionCount: 0,
+                            lastUpdate: 0
+                        };
+                    }
+                    const target = aggregated[itemKey];
+                    if (!target.bookmarkId && entry.bookmarkId) {
+                        target.bookmarkId = entry.bookmarkId;
+                    }
+                    if (!target.url && entry.url) {
+                        target.url = entry.url;
+                    }
+                    if ((!target.title || target.title === target.url || target.title === itemKey) && entry.title) {
+                        target.title = entry.title;
+                    }
+                    target.totalCompositeMs += toNonNegativeNumber(entry.totalCompositeMs, 0);
+                    target.totalWakeCount += toNonNegativeNumber(entry.totalWakeCount, 0);
+                    target.sessionCount += toNonNegativeNumber(entry.sessionCount, 0);
+                    target.lastUpdate = Math.max(target.lastUpdate, toNonNegativeNumber(entry.lastUpdate, 0));
+                }
+            }
+            cursor += TRACKING_DAY_MS;
+        }
+
+        return { stats: aggregated, startedAt };
+    } catch (error) {
+        console.warn('[ActiveTimeTracker] 获取区间统计失败:', error);
+        return { stats: {}, startedAt: 0 };
+    }
+}
+
+function normalizeTrackingRange(range) {
+    const safe = String(range || '').toLowerCase();
+    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'all';
+}
+
+async function getTrackingRankingStatsByRange(range, startTime, endTime) {
+    const safeRange = normalizeTrackingRange(range);
+    if (safeRange === 'all') {
+        const stats = await getTrackingStats();
+        return { stats, startedAt: 0, source: 'total' };
+    }
+    const daily = await getTrackingDailyStatsByRange(startTime, endTime);
+    return {
+        stats: daily.stats || {},
+        startedAt: toNonNegativeNumber(daily.startedAt, 0),
+        source: 'daily'
+    };
+}
+
 // =============================================================================
 // 会话状态持久化（写入永久存储，防止 Service Worker 休眠丢失）
 // =============================================================================
@@ -626,6 +953,12 @@ async function persistActiveSessionsToStorage() {
                     }
                 }
 
+                const totalActiveMs = currentActiveMs + session.savedActiveMs;
+                const totalPauseMs = currentPauseMs + session.savedPauseMs;
+                const totalVisibleMs = currentVisibleMs + session.savedVisibleMs;
+                const totalBackgroundMs = currentBackgroundMs + session.savedBackgroundMs;
+                const totalWakeCount = session.wakeCount + session.savedWakeCount;
+
                 sessionsData.push({
                     tabId: session.tabId,
                     windowId: session.windowId,
@@ -637,12 +970,23 @@ async function persistActiveSessionsToStorage() {
                     matchType: session.matchType,
                     state: session.state,
                     startTime: session.startTime,
-                    // 保存累积时间（包含当前正在进行的 + 已保存的）
-                    accumulatedActiveMs: currentActiveMs + session.savedActiveMs,
-                    pauseTotalMs: currentPauseMs + session.savedPauseMs,
-                    visibleTotalMs: currentVisibleMs + session.savedVisibleMs,
-                    backgroundTotalMs: currentBackgroundMs + session.savedBackgroundMs,
-                    wakeCount: session.wakeCount + session.savedWakeCount,
+                    // 保存总累积时间（向后兼容旧字段）
+                    accumulatedActiveMs: totalActiveMs,
+                    pauseTotalMs: totalPauseMs,
+                    visibleTotalMs: totalVisibleMs,
+                    backgroundTotalMs: totalBackgroundMs,
+                    wakeCount: totalWakeCount,
+                    // 显式保存“未落盘”与“已落盘”拆分，避免统计端误把总量当增量
+                    unsavedActiveMs: currentActiveMs,
+                    unsavedPauseMs: currentPauseMs,
+                    unsavedVisibleMs: currentVisibleMs,
+                    unsavedBackgroundMs: currentBackgroundMs,
+                    unsavedWakeCount: session.wakeCount,
+                    savedActiveMs: session.savedActiveMs,
+                    savedPauseMs: session.savedPauseMs,
+                    savedVisibleMs: session.savedVisibleMs,
+                    savedBackgroundMs: session.savedBackgroundMs,
+                    savedWakeCount: session.savedWakeCount,
                     isBackground: session.isBackground,
                     isVisible: session.isVisible,
                     isSleeping: session.isSleeping,
@@ -719,18 +1063,56 @@ async function restoreActiveSessionsFromStorage() {
 
                 // 恢复会话
                 const session = new SessionData(data.tabId, data.windowId, currentTabUrl, data.title);
+                const hasSplitMetrics = hasPersistedSplitMetrics(data);
+                const activeMetric = resolvePersistedSplitMetric(
+                    data.accumulatedActiveMs,
+                    data.unsavedActiveMs,
+                    data.savedActiveMs,
+                    hasSplitMetrics
+                );
+                const pauseMetric = resolvePersistedSplitMetric(
+                    data.pauseTotalMs,
+                    data.unsavedPauseMs,
+                    data.savedPauseMs,
+                    hasSplitMetrics
+                );
+                const visibleMetric = resolvePersistedSplitMetric(
+                    data.visibleTotalMs,
+                    data.unsavedVisibleMs,
+                    data.savedVisibleMs,
+                    hasSplitMetrics
+                );
+                const backgroundMetric = resolvePersistedSplitMetric(
+                    data.backgroundTotalMs,
+                    data.unsavedBackgroundMs,
+                    data.savedBackgroundMs,
+                    hasSplitMetrics
+                );
+                const wakeMetric = resolvePersistedSplitMetric(
+                    data.wakeCount,
+                    data.unsavedWakeCount,
+                    data.savedWakeCount,
+                    hasSplitMetrics
+                );
+
                 session.trackedUrl = data.trackedUrl || null;
                 session.autoBookmarkAttributionSetAt = data.autoBookmarkAttributionSetAt || null;
                 session.bookmarkId = data.bookmarkId;
                 session.matchType = data.matchType;
                 session.forceBookmarkTracking = data.matchType === 'auto_bookmark' || !!data.trackedUrl;
                 session.state = data.state;
-                session.startTime = data.startTime;
-                session.accumulatedActiveMs = data.accumulatedActiveMs;
-                session.pauseTotalMs = data.pauseTotalMs;
-                session.visibleTotalMs = data.visibleTotalMs;
-                session.backgroundTotalMs = data.backgroundTotalMs;
-                session.wakeCount = data.wakeCount;
+                session.startTime = toNonNegativeNumber(data.startTime, now);
+                session.originalStartTime = toNonNegativeNumber(data.originalStartTime, session.startTime);
+                session.accumulatedActiveMs = activeMetric.unsaved;
+                session.pauseTotalMs = pauseMetric.unsaved;
+                session.visibleTotalMs = visibleMetric.unsaved;
+                session.backgroundTotalMs = backgroundMetric.unsaved;
+                session.wakeCount = wakeMetric.unsaved;
+                session.savedActiveMs = activeMetric.saved;
+                session.savedPauseMs = pauseMetric.saved;
+                session.savedVisibleMs = visibleMetric.saved;
+                session.savedBackgroundMs = backgroundMetric.saved;
+                session.savedWakeCount = wakeMetric.saved;
                 session.isBackground = data.isBackground;
                 session.isVisible = data.isVisible;
                 session.isSleeping = data.isSleeping;
@@ -747,7 +1129,7 @@ async function restoreActiveSessionsFromStorage() {
                 restoredCount++;
 
                 console.log('[ActiveTimeTracker] 恢复会话:', data.title || data.url,
-                    '累积时间:', Math.round(data.accumulatedActiveMs / 1000), '秒');
+                    '累积时间:', Math.round(activeMetric.total / 1000), '秒');
             } catch (e) {
                 // 标签页不存在，跳过
             }
@@ -2026,23 +2408,87 @@ async function getCurrentActiveSessions() {
                         continue;
                     }
                     // 计算时间差（从存储时间到现在的时间）
-                    const timeSinceUpdate = now - updatedAt;
+                    const timeSinceUpdate = Math.max(0, now - updatedAt);
+                    const hasSplitMetrics = hasPersistedSplitMetrics(data);
+                    const activeMetric = resolvePersistedSplitMetric(
+                        data.accumulatedActiveMs,
+                        data.unsavedActiveMs,
+                        data.savedActiveMs,
+                        hasSplitMetrics
+                    );
+                    const idleMetric = resolvePersistedSplitMetric(
+                        data.pauseTotalMs,
+                        data.unsavedPauseMs,
+                        data.savedPauseMs,
+                        hasSplitMetrics
+                    );
+                    const visibleMetric = resolvePersistedSplitMetric(
+                        data.visibleTotalMs,
+                        data.unsavedVisibleMs,
+                        data.savedVisibleMs,
+                        hasSplitMetrics
+                    );
+                    const backgroundMetric = resolvePersistedSplitMetric(
+                        data.backgroundTotalMs,
+                        data.unsavedBackgroundMs,
+                        data.savedBackgroundMs,
+                        hasSplitMetrics
+                    );
+                    const wakeMetric = resolvePersistedSplitMetric(
+                        data.wakeCount,
+                        data.unsavedWakeCount,
+                        data.savedWakeCount,
+                        hasSplitMetrics
+                    );
 
-                    let currentActiveMs = data.accumulatedActiveMs || 0;
-                    let currentIdleFocusMs = data.pauseTotalMs || 0;
-                    let currentVisibleMs = data.visibleTotalMs || 0;
-                    let currentBackgroundMs = data.backgroundTotalMs || 0;
+                    let currentActiveMs = activeMetric.total;
+                    let currentIdleFocusMs = idleMetric.total;
+                    let currentVisibleMs = visibleMetric.total;
+                    let currentBackgroundMs = backgroundMetric.total;
+                    let unsavedActiveMs = hasSplitMetrics ? activeMetric.unsaved : 0;
+                    let unsavedIdleFocusMs = hasSplitMetrics ? idleMetric.unsaved : 0;
+                    let unsavedVisibleMs = hasSplitMetrics ? visibleMetric.unsaved : 0;
+                    let unsavedBackgroundMs = hasSplitMetrics ? backgroundMetric.unsaved : 0;
+
+                    // 兼容老数据：没有拆分字段时，避免把总累计值当作“未落盘增量”并入排行榜
+                    if (!hasSplitMetrics) {
+                        const safeStartTime = toNonNegativeNumber(data.startTime, now);
+                        const segmentElapsed = Math.max(0, now - safeStartTime);
+                        if (data.state === SessionState.ACTIVE) {
+                            unsavedActiveMs = segmentElapsed;
+                        } else if (data.state === SessionState.PAUSED && !data.isSleeping) {
+                            if (data.isBackground) {
+                                unsavedBackgroundMs = segmentElapsed;
+                            } else if (data.isVisible) {
+                                unsavedVisibleMs = segmentElapsed;
+                            } else {
+                                unsavedIdleFocusMs = segmentElapsed;
+                            }
+                        }
+                    }
 
                     // 根据存储时的状态，累加从存储到现在的时间
                     if (data.state === SessionState.ACTIVE) {
                         currentActiveMs += timeSinceUpdate;
+                        if (hasSplitMetrics) {
+                            unsavedActiveMs += timeSinceUpdate;
+                        }
                     } else if (data.state === SessionState.PAUSED) {
                         if (data.isBackground && !data.isSleeping) {
                             currentBackgroundMs += timeSinceUpdate;
+                            if (hasSplitMetrics) {
+                                unsavedBackgroundMs += timeSinceUpdate;
+                            }
                         } else if (data.isVisible) {
                             currentVisibleMs += timeSinceUpdate;
+                            if (hasSplitMetrics) {
+                                unsavedVisibleMs += timeSinceUpdate;
+                            }
                         } else if (!data.isSleeping) {
                             currentIdleFocusMs += timeSinceUpdate;
+                            if (hasSplitMetrics) {
+                                unsavedIdleFocusMs += timeSinceUpdate;
+                            }
                         }
                     }
 
@@ -2051,9 +2497,17 @@ async function getCurrentActiveSessions() {
                         (currentIdleFocusMs * 0.8) +
                         (currentVisibleMs * 0.5) +
                         (currentBackgroundMs * 0.1);
+                    const unsavedCompositeMs = unsavedActiveMs +
+                        (unsavedIdleFocusMs * 0.8) +
+                        (unsavedVisibleMs * 0.5) +
+                        (unsavedBackgroundMs * 0.1);
+                    const unsavedWakeCount = hasSplitMetrics ? wakeMetric.unsaved : 0;
+                    const wakeCount = wakeMetric.total;
 
                     // 使用原始开始时间计算总时长
-                    const totalMs = now - (data.originalStartTime || data.startTime || now);
+                    const startTime = toNonNegativeNumber(data.startTime, now);
+                    const originalStartTime = toNonNegativeNumber(data.originalStartTime || data.startTime, startTime);
+                    const totalMs = now - originalStartTime;
                     const activeRatio = totalMs > 0 ? currentActiveMs / totalMs : 0;
 
                     // 区分显示状态
@@ -2067,14 +2521,18 @@ async function getCurrentActiveSessions() {
                         url: data.trackedUrl || data.url,
                         title: data.title,
                         bookmarkId: data.bookmarkId,
+                        startTime,
+                        originalStartTime,
                         state: displayState,
                         activeMs: currentActiveMs,
                         idleFocusMs: currentIdleFocusMs,
                         visibleMs: currentVisibleMs,
                         backgroundMs: currentBackgroundMs,
                         compositeMs: compositeMs,
+                        unsavedCompositeMs: unsavedCompositeMs,
+                        unsavedWakeCount: unsavedWakeCount,
                         totalMs: totalMs,
-                        wakeCount: data.wakeCount || 0,
+                        wakeCount: wakeCount,
                         activeRatio: activeRatio,
                         isIdle: totalMs > 30 * 60 * 1000 && activeRatio < 0.15,
                         fromStorage: true  // 标记数据来源
@@ -2145,6 +2603,8 @@ async function getCurrentActiveSessions() {
                 url: session.getRecordUrl(),
                 title: session.title,
                 bookmarkId: session.bookmarkId,
+                startTime: session.startTime || now,
+                originalStartTime: session.originalStartTime || session.startTime || now,
                 state: displayState,
                 activeMs: currentActiveMs,
                 idleFocusMs: currentIdleFocusMs,
@@ -2510,6 +2970,7 @@ export {
     getSessionsByTimeRange,
     getBookmarkActiveTimeStats,
     getTrackingStats,  // 获取累积统计（综合排行）
+    getTrackingRankingStatsByRange,  // 获取区间排行统计（today/week/month/year）
     clearAllSessions,  // 清除 IndexedDB（书签推荐用的数据）
     clearTrackingDisplayData,  // 清除显示数据（正在追踪 + 综合排行）- 兼容旧接口
     clearCurrentTrackingSessions,  // 仅清除正在追踪

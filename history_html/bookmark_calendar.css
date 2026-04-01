@@ -402,6 +402,27 @@ body.header-dock-bottom:not(.header-compact) .bookmark-calendar-view .calendar-a
     border-color: var(--accent-primary);
 }
 
+.week-day-card.week-day-card-empty {
+    cursor: default;
+    opacity: 0.45;
+    border-style: dashed;
+}
+
+.week-day-card.week-day-card-empty:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--border-color);
+}
+
+.week-day-card.week-day-card-empty .week-day-name,
+.week-day-card.week-day-card-empty .week-day-date {
+    color: var(--text-tertiary);
+}
+
+.week-day-card .week-day-count-empty {
+    visibility: hidden;
+}
+
 .week-day-header {
     text-align: center;
     margin-bottom: 12px;
@@ -1158,7 +1179,7 @@ html.side-panel-mode .bookmark-calendar-view .timeline-hour {
 
 html.side-panel-mode .bookmark-calendar-view .calendar-split-layout {
     display: grid !important;
-    grid-template-columns: minmax(116px, 136px) minmax(0, 1fr);
+    grid-template-columns: clamp(92px, 20%, 220px) minmax(0, 1fr);
     gap: 10px !important;
     min-height: 320px !important;
 }
@@ -1284,8 +1305,23 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-
     --calendar-split-content-min-width: 0px;
 }
 
+/* HTML 主页面：四视图（年/月/周/日）容器按可用宽度 80% 显示，并增加硬上限避免超宽屏拉伸 */
+html:not(.side-panel-mode) #bookmarkCalendarView,
+html:not(.side-panel-mode) #browsingCalendarView {
+    --calendar-available-width: calc(100vw - var(--sidebar-width, 264px) - 28px);
+    --calendar-main-max-width: 1040px;
+    --calendar-main-width: clamp(780px, calc(var(--calendar-available-width) * 0.68), var(--calendar-main-max-width));
+    width: min(100%, var(--calendar-main-width));
+    max-width: var(--calendar-main-width);
+    min-height: 0;
+    margin-left: auto;
+    margin-right: auto;
+    overflow: visible;
+    box-sizing: border-box;
+}
+
 .bookmark-calendar-view .week-view-container {
-    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-week-card-min), 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: var(--calendar-week-card-gap);
 }
 
@@ -1295,7 +1331,7 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-
 }
 
 .bookmark-calendar-view .year-view-grid {
-    grid-template-columns: repeat(auto-fit, minmax(var(--calendar-year-card-min), 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--calendar-year-card-gap);
     padding: var(--calendar-year-grid-padding);
 }
@@ -1314,6 +1350,25 @@ html.side-panel-mode .bookmark-calendar-view .calendar-split-sidebar [data-week-
 
 .bookmark-calendar-view .timeline-hour {
     height: var(--calendar-day-hour-height);
+}
+
+/* HTML 主页面：核心块限制可读宽度，避免左右区域过宽导致观感松散 */
+html:not(.side-panel-mode) .bookmark-calendar-view .calendar-month-top-section,
+html:not(.side-panel-mode) .bookmark-calendar-view .week-view-container,
+html:not(.side-panel-mode) .bookmark-calendar-view .year-view-grid,
+html:not(.side-panel-mode) .bookmark-calendar-view .day-view-timeline,
+html:not(.side-panel-mode) .bookmark-calendar-view .calendar-split-layout {
+    max-width: min(980px, 100%);
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* 主页面月视图：右侧日历主体再限制一层，避免 34 寸全屏下日期格子过大 */
+html:not(.side-panel-mode) .bookmark-calendar-view [data-calendar-wrapper] {
+    width: 100%;
+    max-width: 920px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 html.side-panel-mode .bookmark-calendar-view {
@@ -1339,4 +1394,10 @@ html.side-panel-mode .bookmark-calendar-view .week-view-container {
 
 html.side-panel-mode .bookmark-calendar-view .year-view-grid {
     grid-template-columns: repeat(auto-fit, minmax(var(--calendar-year-card-min), 1fr));
+}
+
+@media (max-width: 1360px) {
+    html:not(.side-panel-mode) .bookmark-calendar-view .year-view-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
 }

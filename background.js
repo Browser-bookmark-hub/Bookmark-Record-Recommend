@@ -9,6 +9,7 @@ import {
   getCurrentActiveSessions,
   getSessionsByTimeRange,
   getTrackingStats,
+  getTrackingRankingStatsByRange,
   clearTrackingDisplayData,
   clearCurrentTrackingSessions,
   clearTrackingStatsByRange,
@@ -38,6 +39,1090 @@ function openView(view) {
   const baseUrl = browserAPI.runtime.getURL('history_html/history.html');
   const url = `${baseUrl}?view=${safeView}`;
   browserAPI.tabs.create({ url });
+}
+
+const QUICK_REVIEW_OPEN_MODE_STORAGE_KEY = 'quickReviewOpenMode';
+const QUICK_REVIEW_TAB_ID_STORAGE_KEY = 'quickReviewTabId';
+const QUICK_REVIEW_RECOMMEND_BATCH_SIZE = 3;
+let quickReviewCommandChain = Promise.resolve();
+
+function runSerializedQuickReviewCommand(task) {
+  const previous = quickReviewCommandChain;
+  const next = previous
+    .catch(() => {})
+    .then(async () => task());
+
+  quickReviewCommandChain = next.finally(() => {
+    if (quickReviewCommandChain === next) {
+      quickReviewCommandChain = Promise.resolve();
+    }
+  });
+
+  return next;
+}
+
+function normalizeQuickReviewOpenMode(mode) {
+  return String(mode || '').trim().toLowerCase() === 'new_tab' ? 'new_tab' : 'single_tab';
+}
+
+async function getQuickReviewOpenModeState() {
+  try {
+    const result = await browserAPI.storage.local.get([QUICK_REVIEW_OPEN_MODE_STORAGE_KEY]);
+    return normalizeQuickReviewOpenMode(result?.[QUICK_REVIEW_OPEN_MODE_STORAGE_KEY]);
+  } catch (_) {
+    return 'single_tab';
+  }
+}
+
+async function setQuickReviewOpenModeState(mode) {
+  const normalized = normalizeQuickReviewOpenMode(mode);
+  try {
+    await browserAPI.storage.local.set({ [QUICK_REVIEW_OPEN_MODE_STORAGE_KEY]: normalized });
+  } catch (_) {}
+  return normalized;
+}
+
+async function getQuickReviewTabIdState() {
+  try {
+    const result = await browserAPI.storage.local.get([QUICK_REVIEW_TAB_ID_STORAGE_KEY]);
+    const id = Number(result?.[QUICK_REVIEW_TAB_ID_STORAGE_KEY]);
+    return Number.isFinite(id) ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function saveQuickReviewTabIdState(tabId) {
+  try {
+    const payload = Number.isFinite(Number(tabId)) ? Number(tabId) : null;
+    await browserAPI.storage.local.set({ [QUICK_REVIEW_TAB_ID_STORAGE_KEY]: payload });
+  } catch (_) {}
+}
+
+async function getTabByIdSafe(tabId) {
+  if (!browserAPI?.tabs?.get || !Number.isFinite(Number(tabId))) return null;
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.tabs.get(Number(tabId), (tab) => {
+        if (browserAPI?.runtime?.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(tab || null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function updateTabSafe(tabId, updateProperties) {
+  if (!browserAPI?.tabs?.update || !Number.isFinite(Number(tabId))) return null;
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.tabs.update(Number(tabId), updateProperties || {}, (tab) => {
+        if (browserAPI?.runtime?.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(tab || null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function createTabSafe(createProperties) {
+  if (!browserAPI?.tabs?.create) return null;
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.tabs.create(createProperties || {}, (tab) => {
+        if (browserAPI?.runtime?.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(tab || null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function focusWindowSafe(windowId) {
+  if (!browserAPI?.windows?.update || !Number.isFinite(Number(windowId))) return;
+  await new Promise((resolve) => {
+    try {
+      browserAPI.windows.update(Number(windowId), { focused: true }, () => resolve());
+    } catch (_) {
+      resolve();
+    }
+  });
+}
+
+function noteQuickReviewBookmarkOpen({ tabId = null, url = '', title = '', bookmarkId = null } = {}) {
+  if (!url || typeof url !== 'string') return;
+  if (!Number.isFinite(Number(tabId))) return;
+
+  try {
+    noteAutoBookmarkNavigation({
+      tabId: Number(tabId),
+      bookmarkUrl: url,
+      bookmarkId: bookmarkId ? String(bookmarkId) : null,
+      bookmarkTitle: String(title || ''),
+      timeStamp: Date.now(),
+      source: 'quick_review'
+    });
+  } catch (_) {}
+}
+
+async function openInQuickReviewTabState(url, bookmark = {}) {
+  if (!url) return { success: false, tabId: null, error: 'missing_url' };
+
+  const safeBookmarkId = String(bookmark?.id || '').trim();
+  const safeTitle = String(bookmark?.title || bookmark?.name || '').trim();
+
+  try {
+    let tabId = await getQuickReviewTabIdState();
+
+    if (tabId != null) {
+      const existing = await getTabByIdSafe(tabId);
+      if (existing && Number.isFinite(Number(existing.id))) {
+        const updatedTab = await updateTabSafe(existing.id, { url, active: true });
+        if (updatedTab && Number.isFinite(Number(updatedTab.id))) {
+          const targetTabId = Number(updatedTab.id);
+          const targetWindowId = Number(updatedTab.windowId);
+          if (Number.isFinite(targetWindowId)) {
+            await focusWindowSafe(targetWindowId);
+          }
+          noteQuickReviewBookmarkOpen({
+            tabId: targetTabId,
+            url,
+            title: safeTitle,
+            bookmarkId: safeBookmarkId || null
+          });
+          await saveQuickReviewTabIdState(targetTabId);
+          return {
+            success: true,
+            tabId: targetTabId,
+            windowId: Number.isFinite(targetWindowId) ? targetWindowId : null,
+            reused: true,
+            openedAt: Date.now()
+          };
+        }
+      }
+      await saveQuickReviewTabIdState(null);
+      tabId = null;
+    }
+
+    const createdTab = await createTabSafe({ url, active: true });
+    const createdTabId = Number(createdTab?.id);
+    const createdWindowId = Number(createdTab?.windowId);
+    if (!Number.isFinite(createdTabId)) {
+      return { success: false, tabId: null, error: 'create_tab_failed' };
+    }
+
+    await saveQuickReviewTabIdState(createdTabId);
+    noteQuickReviewBookmarkOpen({
+      tabId: createdTabId,
+      url,
+      title: safeTitle,
+      bookmarkId: safeBookmarkId || null
+    });
+
+    if (Number.isFinite(createdWindowId)) {
+      await focusWindowSafe(createdWindowId);
+    }
+
+    return {
+      success: true,
+      tabId: createdTabId,
+      windowId: Number.isFinite(createdWindowId) ? createdWindowId : null,
+      openedAt: Date.now()
+    };
+  } catch (error) {
+    return { success: false, tabId: null, error: error?.message || String(error) };
+  }
+}
+
+async function openInQuickReviewNewTabState(url, bookmark = {}) {
+  if (!url) return { success: false, tabId: null, error: 'missing_url' };
+
+  const safeBookmarkId = String(bookmark?.id || '').trim();
+  const safeTitle = String(bookmark?.title || bookmark?.name || '').trim();
+
+  try {
+    const tab = await createTabSafe({ url, active: true });
+    const tabId = Number(tab?.id);
+    const windowId = Number(tab?.windowId);
+    if (!Number.isFinite(tabId)) {
+      return { success: false, tabId: null, error: 'create_tab_failed' };
+    }
+
+    noteQuickReviewBookmarkOpen({
+      tabId,
+      url,
+      title: safeTitle,
+      bookmarkId: safeBookmarkId || null
+    });
+
+    if (Number.isFinite(windowId)) {
+      await focusWindowSafe(windowId);
+    }
+
+    return {
+      success: true,
+      tabId,
+      windowId: Number.isFinite(windowId) ? windowId : null,
+      openedAt: Date.now()
+    };
+  } catch (error) {
+    return { success: false, tabId: null, error: error?.message || String(error) };
+  }
+}
+
+function normalizeRecommendCardDataEntry(entry) {
+  const id = String(entry?.id || '').trim();
+  const url = String(entry?.url || '').trim();
+  if (!id || !url) return null;
+
+  const title = String(entry?.title || entry?.name || url).trim() || url;
+  const priority = Number(entry?.priority);
+  const forceDueAt = Number(entry?.forceDueAt || 0);
+  const forceDueMovedAt = Number(entry?.forceDueMovedAt || 0);
+
+  return {
+    id,
+    title,
+    name: title,
+    url,
+    favicon: null,
+    faviconUrl: null,
+    priority: Number.isFinite(priority) ? priority : 0.5,
+    forceDue: entry?.forceDue === true,
+    forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
+    forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
+  };
+}
+
+function normalizeHistoryCurrentCardsState(state) {
+  const source = state && typeof state === 'object' ? state : {};
+  const cardIds = normalizeBookmarkIdList(source.cardIds || []);
+  const flippedIds = normalizeBookmarkIdList(source.flippedIds || []);
+  const cardData = Array.isArray(source.cardData)
+    ? source.cardData
+      .map(normalizeRecommendCardDataEntry)
+      .filter(Boolean)
+    : [];
+  const timestamp = Number(source.timestamp || source.lastUpdated || 0);
+  const lastUpdated = Number(source.lastUpdated || source.timestamp || 0);
+
+  return {
+    cardIds,
+    flippedIds,
+    cardData,
+    timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+    lastUpdated: Number.isFinite(lastUpdated) ? lastUpdated : 0
+  };
+}
+
+async function saveHistoryCurrentCardsState(cardIds = [], flippedIds = [], cardData = []) {
+  const now = Date.now();
+  const payload = {
+    [HISTORY_CURRENT_CARDS_STORAGE_KEY]: {
+      cardIds: normalizeBookmarkIdList(cardIds),
+      flippedIds: normalizeBookmarkIdList(flippedIds),
+      cardData: (Array.isArray(cardData) ? cardData : [])
+        .map(normalizeRecommendCardDataEntry)
+        .filter(Boolean),
+      timestamp: now,
+      lastUpdated: now
+    }
+  };
+  await browserAPI.storage.local.set(payload);
+  return payload[HISTORY_CURRENT_CARDS_STORAGE_KEY];
+}
+
+async function getRecommendPoolCursorValueForQuickReview(poolLength = 0) {
+  const safePoolLength = normalizeRecommendPoolLength(poolLength);
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_POOL_CURSOR_STORAGE_KEY]);
+    return normalizeRecommendPoolCursorValue(result?.[RECOMMEND_POOL_CURSOR_STORAGE_KEY], safePoolLength);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function compareRecommendPriorityForQuickReview(a, b) {
+  const aTemplate = a?.scoreTemplate === true;
+  const bTemplate = b?.scoreTemplate === true;
+  if (aTemplate !== bTemplate) {
+    return aTemplate ? 1 : -1;
+  }
+
+  const diff = (b?.priority ?? 0) - (a?.priority ?? 0);
+  if (Math.abs(diff) >= 0.01) return diff;
+
+  const bAdded = Number(b?.dateAdded || 0);
+  const aAdded = Number(a?.dateAdded || 0);
+  if (bAdded !== aAdded) return bAdded - aAdded;
+
+  const aTitle = String(a?.title || a?.name || '').toLowerCase();
+  const bTitle = String(b?.title || b?.name || '').toLowerCase();
+  if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function getQuickReviewDomainKey(bookmark) {
+  if (!bookmark?.url) return '';
+  try {
+    return String(new URL(bookmark.url).hostname || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function pickWeightedQuickReviewEntry(entries = []) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  let totalWeight = 0;
+  for (const entry of entries) {
+    const weight = Number(entry?.weight || 0);
+    if (Number.isFinite(weight) && weight > 0) {
+      totalWeight += weight;
+    }
+  }
+
+  if (!(totalWeight > 0)) {
+    return entries[Math.floor(Math.random() * entries.length)] || null;
+  }
+
+  let roll = Math.random() * totalWeight;
+  for (const entry of entries) {
+    const weight = Number(entry?.weight || 0);
+    if (!(Number.isFinite(weight) && weight > 0)) continue;
+    roll -= weight;
+    if (roll <= 0) return entry;
+  }
+  return entries[entries.length - 1] || null;
+}
+
+function buildRecommendBatchFromPoolForQuickReview(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE) {
+  if (!Array.isArray(pool) || pool.length === 0) return [];
+
+  const size = Math.min(Math.max(1, Math.floor(Number(batchSize) || QUICK_REVIEW_RECOMMEND_BATCH_SIZE)), pool.length);
+  const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
+  const topRangeSize = Math.min(pool.length, Math.max(size * 6, 18));
+  const exploreRangeSize = Math.min(pool.length, Math.max(size * 10, 30));
+  const candidateIndexSet = new Set();
+
+  for (let i = 0; i < topRangeSize; i++) {
+    candidateIndexSet.add(i);
+  }
+  for (let step = 0; step < exploreRangeSize; step++) {
+    candidateIndexSet.add((safeStart + step) % pool.length);
+  }
+
+  const candidateIndexes = Array.from(candidateIndexSet);
+  const selectedIds = new Set();
+  const selectedDomains = new Set();
+  const batch = [];
+
+  while (batch.length < size) {
+    const available = candidateIndexes
+      .map((index) => ({ index, item: pool[index] }))
+      .filter((entry) => {
+        const id = String(entry?.item?.id || '').trim();
+        return !!id && !selectedIds.has(id);
+      });
+
+    if (available.length === 0) break;
+
+    const hasAlternativeDomain = available.some((entry) => {
+      const domain = getQuickReviewDomainKey(entry.item);
+      return domain && !selectedDomains.has(domain);
+    });
+
+    const weighted = available.map((entry) => {
+      const rank = Number(entry.index) + 1;
+      const rankWeight = 1 / Math.pow(rank, 0.55);
+      const priority = Number(entry?.item?.priority);
+      const normalizedPriority = Number.isFinite(priority)
+        ? Math.max(0, Math.min(1, priority))
+        : 0.5;
+      const priorityWeight = 0.6 + normalizedPriority;
+
+      const domain = getQuickReviewDomainKey(entry.item);
+      const domainPenalty = (hasAlternativeDomain && domain && selectedDomains.has(domain)) ? 0.45 : 1;
+      const jitter = 0.92 + (Math.random() * 0.16);
+      const weight = rankWeight * priorityWeight * domainPenalty * jitter;
+      return { ...entry, weight };
+    });
+
+    const picked = pickWeightedQuickReviewEntry(weighted);
+    if (!picked?.item) break;
+
+    const pickedId = String(picked.item.id || '').trim();
+    if (!pickedId || selectedIds.has(pickedId)) continue;
+
+    selectedIds.add(pickedId);
+    const pickedDomain = getQuickReviewDomainKey(picked.item);
+    if (pickedDomain) selectedDomains.add(pickedDomain);
+    batch.push(picked.item);
+  }
+
+  if (batch.length < size) {
+    for (let step = 0; step < pool.length && batch.length < size; step++) {
+      const idx = (safeStart + step) % pool.length;
+      const item = pool[idx];
+      const id = String(item?.id || '').trim();
+      if (!id || selectedIds.has(id)) continue;
+      selectedIds.add(id);
+      batch.push(item);
+    }
+  }
+
+  return batch;
+}
+
+function deriveRecommendStartIndexFromCurrentForQuickReview(pool = [], currentCardIds = [], fallbackCursor = 0) {
+  if (!Array.isArray(pool) || pool.length === 0) return 0;
+
+  const safeFallback = ((Math.floor(Number(fallbackCursor) || 0) % pool.length) + pool.length) % pool.length;
+  const ids = normalizeBookmarkIdList(currentCardIds);
+  if (!ids.length) return safeFallback;
+
+  const firstId = ids[0];
+  const firstIndex = pool.findIndex(item => String(item?.id || '').trim() === firstId);
+  if (firstIndex === -1) return safeFallback;
+
+  return (firstIndex + ids.length) % pool.length;
+}
+
+function normalizeQuickReviewBookmarkEntry(bookmark, meta = null) {
+  const id = String(bookmark?.id || meta?.id || '').trim();
+  const url = String(bookmark?.url || meta?.url || '').trim();
+  if (!id || !url) return null;
+
+  const priority = Number(meta?.priority ?? bookmark?.priority);
+  const forceDueAt = Number(meta?.forceDueAt ?? bookmark?.forceDueAt ?? 0);
+  const forceDueMovedAt = Number(meta?.forceDueMovedAt ?? bookmark?.forceDueMovedAt ?? 0);
+  const title = String(
+    bookmark?.title
+    || bookmark?.name
+    || meta?.title
+    || meta?.name
+    || url
+  ).trim() || url;
+
+  return {
+    id,
+    url,
+    title,
+    name: title,
+    parentId: bookmark?.parentId ? String(bookmark.parentId) : '',
+    ancestorFolderIds: Array.isArray(bookmark?.ancestorFolderIds)
+      ? bookmark.ancestorFolderIds.map(item => String(item || '').trim()).filter(Boolean)
+      : [],
+    dateAdded: Number(bookmark?.dateAdded || 0),
+    priority: Number.isFinite(priority) ? priority : 0.5,
+    scoreTemplate: (bookmark?.scoreTemplate === true) || (meta?.scoreTemplate === true),
+    forceDue: (meta?.forceDue === true) || (bookmark?.forceDue === true),
+    forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
+    forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
+  };
+}
+
+function normalizeScoreCacheAncestorFolderIds(value) {
+  if (!Array.isArray(value)) return [];
+  const normalized = [];
+  for (const folderId of value) {
+    const id = String(folderId || '').trim();
+    if (id) normalized.push(id);
+  }
+  return normalized;
+}
+
+function normalizeScoreCacheMetadata(source, fallback = null) {
+  const primary = source && typeof source === 'object' ? source : {};
+  const secondary = fallback && typeof fallback === 'object' ? fallback : {};
+  const url = String(primary.url || secondary.url || '').trim();
+  if (!url) return null;
+
+  const title = String(
+    primary.title
+    || primary.name
+    || secondary.title
+    || secondary.name
+    || url
+  ).trim() || url;
+
+  const parentId = String(primary.parentId || secondary.parentId || '').trim();
+  const rawDateAdded = Number(primary.dateAdded ?? secondary.dateAdded ?? 0);
+  const dateAdded = Number.isFinite(rawDateAdded) ? rawDateAdded : 0;
+  const ancestorFolderIds = normalizeScoreCacheAncestorFolderIds(
+    Array.isArray(primary.ancestorFolderIds) ? primary.ancestorFolderIds : secondary.ancestorFolderIds
+  );
+
+  return {
+    url,
+    title,
+    parentId,
+    dateAdded,
+    ancestorFolderIds
+  };
+}
+
+function buildQuickReviewBookmarksFromScoresCache(scoresCache) {
+  const source = scoresCache && typeof scoresCache === 'object' ? scoresCache : {};
+  const result = [];
+
+  for (const [bookmarkId, cachedEntry] of Object.entries(source)) {
+    const id = String(bookmarkId || '').trim();
+    if (!id || !cachedEntry || typeof cachedEntry !== 'object') continue;
+
+    const metadata = normalizeScoreCacheMetadata(cachedEntry);
+    if (!metadata) continue;
+
+    const normalized = normalizeQuickReviewBookmarkEntry({
+      id,
+      url: metadata.url,
+      title: metadata.title,
+      name: metadata.title,
+      parentId: metadata.parentId,
+      ancestorFolderIds: metadata.ancestorFolderIds,
+      dateAdded: metadata.dateAdded,
+      priority: Number.isFinite(Number(cachedEntry.S)) ? Number(cachedEntry.S) : 0.5,
+      scoreTemplate: cachedEntry._template === true
+    });
+
+    if (normalized) {
+      result.push(normalized);
+    }
+  }
+
+  return result;
+}
+
+function isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet) {
+  if (!blockedFolderSet || blockedFolderSet.size === 0) return false;
+  const parentId = String(bookmark?.parentId || '').trim();
+  if (parentId && blockedFolderSet.has(parentId)) return true;
+
+  const ancestors = Array.isArray(bookmark?.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
+  for (const folderId of ancestors) {
+    const normalized = String(folderId || '').trim();
+    if (normalized && blockedFolderSet.has(normalized)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet) {
+  if (!blockedDomainSet || blockedDomainSet.size === 0) return false;
+  if (!bookmark?.url) return false;
+  try {
+    const hostname = String(new URL(bookmark.url).hostname || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, '');
+    return blockedDomainSet.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function selectQuickReviewCardsRoundState(options = {}) {
+  await ensureScoreAlgoVersionReady();
+  const force = options?.force === true;
+
+  try {
+    await ensureRecommendScoresReady({ reason: force ? 'quick-review-force' : 'quick-review-normal' });
+  } catch (_) {}
+
+  const [scoresCache, blocked, postponed, skippedIds, flippedResult, historyCardsResult] = await Promise.all([
+    getScoresCache(),
+    getRecommendBlockedState(),
+    getRecommendPostponedList(),
+    getRecommendSkippedIds(),
+    browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]),
+    options?.currentCards
+      ? Promise.resolve({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: options.currentCards })
+      : browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
+  ]);
+
+  const bookmarks = buildQuickReviewBookmarksFromScoresCache(scoresCache);
+  const currentCards = normalizeHistoryCurrentCardsState(historyCardsResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+  const flippedSet = new Set(normalizeBookmarkIdList(flippedResult?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []));
+  const skipped = normalizeRecommendSkippedIds(skippedIds || []);
+  const skippedSet = new Set(skipped);
+  const skippedOrderMap = new Map(skipped.map((id, index) => [id, index]));
+
+  const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
+  const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
+  const blockedDomainSet = new Set(
+    (Array.isArray(blocked?.domains) ? blocked.domains : [])
+      .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+      .filter(Boolean)
+  );
+
+  const now = Date.now();
+  const postponedWaitingSet = new Set();
+  const forceDuePostponedMap = new Map();
+  for (const item of normalizeRecommendPostponedList(postponed || [])) {
+    if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (!bookmarkId) continue;
+    const postponeUntil = Number(item.postponeUntil || 0);
+    if (postponeUntil > now) {
+      postponedWaitingSet.add(bookmarkId);
+    } else {
+      forceDuePostponedMap.set(bookmarkId, item);
+    }
+  }
+
+  const baseCandidateBookmarks = bookmarks.filter((bookmark) => {
+    const bookmarkId = String(bookmark?.id || '').trim();
+    const forceDue = forceDuePostponedMap.has(bookmarkId);
+
+    if (!forceDue && flippedSet.has(bookmarkId)) return false;
+    if (blockedBookmarkSet.has(bookmarkId)) return false;
+    if (isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet)) return false;
+    if (isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet)) return false;
+    if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
+    return true;
+  });
+
+  if (baseCandidateBookmarks.length === 0) {
+    await saveHistoryCurrentCardsState([], [], []);
+    await setRecommendPoolCursorState(0, 0);
+    return { success: true, cards: [], currentCards: normalizeHistoryCurrentCardsState(null) };
+  }
+
+  const sortedPool = baseCandidateBookmarks.map((bookmark) => {
+    const bookmarkId = String(bookmark?.id || '').trim();
+    const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
+    const cached = scoresCache?.[bookmarkId];
+    return normalizeQuickReviewBookmarkEntry({
+      ...bookmark,
+      priority: cached && Number.isFinite(Number(cached.S)) ? Number(cached.S) : 0.5,
+      scoreTemplate: cached?._template === true,
+      forceDue: !!forceDueInfo,
+      forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
+      forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+    });
+  }).filter(Boolean);
+
+  sortedPool.sort(compareRecommendPriorityForQuickReview);
+
+  const forceDuePool = sortedPool
+    .filter(item => item.forceDue)
+    .sort((a, b) => {
+      const aMovedAt = Number(a.forceDueMovedAt || 0);
+      const bMovedAt = Number(b.forceDueMovedAt || 0);
+      const aMoved = aMovedAt > 0;
+      const bMoved = bMovedAt > 0;
+
+      if (aMoved !== bMoved) {
+        return aMoved ? 1 : -1;
+      }
+      if (aMoved && bMoved && aMovedAt !== bMovedAt) {
+        return aMovedAt - bMovedAt;
+      }
+
+      const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
+      if (dueDiff !== 0) return dueDiff;
+      return compareRecommendPriorityForQuickReview(a, b);
+    });
+
+  const compareNormalPoolPriorityWithSkip = (a, b) => {
+    const aId = String(a?.id || '').trim();
+    const bId = String(b?.id || '').trim();
+    const aSkipped = skippedSet.has(aId);
+    const bSkipped = skippedSet.has(bId);
+
+    if (aSkipped !== bSkipped) {
+      return aSkipped ? 1 : -1;
+    }
+
+    if (aSkipped && bSkipped) {
+      const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+      const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+    }
+
+    return compareRecommendPriorityForQuickReview(a, b);
+  };
+
+  const normalPool = sortedPool
+    .filter(item => !item.forceDue)
+    .sort(compareNormalPoolPriorityWithSkip);
+
+  const currentCardIds = normalizeBookmarkIdList(currentCards.cardIds || []);
+  const currentNormalCardIds = currentCardIds.filter(id =>
+    normalPool.some(item => String(item?.id || '').trim() === id)
+  );
+  const currentAllFlipped = currentCardIds.length > 0
+    && currentCardIds.every(id => flippedSet.has(id));
+
+  const forceDueBatch = forceDuePool.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+  const normalSlots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - forceDueBatch.length);
+  const expectedNormalBatchLen = normalSlots > 0 ? Math.min(normalSlots, normalPool.length) : 0;
+
+  const shouldRotateByCurrent = (force || currentAllFlipped) && currentNormalCardIds.length > 0;
+  let startIndex = 0;
+
+  if (normalPool.length > 0) {
+    if (shouldRotateByCurrent) {
+      const storedCursor = await getRecommendPoolCursorValueForQuickReview(normalPool.length);
+      startIndex = deriveRecommendStartIndexFromCurrentForQuickReview(normalPool, currentNormalCardIds, storedCursor);
+    } else {
+      const cursorMeta = await consumeRecommendPoolCursorState(normalPool.length, expectedNormalBatchLen);
+      startIndex = Number.isFinite(Number(cursorMeta?.cursorBefore))
+        ? Number(cursorMeta.cursorBefore)
+        : 0;
+    }
+  }
+
+  const normalBatch = normalSlots > 0
+    ? buildRecommendBatchFromPoolForQuickReview(normalPool, startIndex, normalSlots)
+    : [];
+
+  const cards = [...forceDueBatch, ...normalBatch].slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+  const nextCursor = normalPool.length > 0
+    ? (startIndex + normalBatch.length) % normalPool.length
+    : 0;
+
+  if (shouldRotateByCurrent) {
+    await setRecommendPoolCursorState(normalPool.length, nextCursor);
+  }
+
+  const cardIds = cards.map(item => String(item?.id || '').trim()).filter(Boolean);
+  const cardData = cards.map(item => normalizeRecommendCardDataEntry(item)).filter(Boolean);
+  const saved = await saveHistoryCurrentCardsState(cardIds, [], cardData);
+
+  return {
+    success: true,
+    cards,
+    currentCards: saved
+  };
+}
+
+async function peekQuickReviewPreloadUrlsState(options = {}) {
+  await ensureScoreAlgoVersionReady();
+  const limit = Math.max(6, Math.min(30, Number(options?.limit) || 12));
+
+  try {
+    await ensureRecommendScoresReady({ reason: 'quick-review-preload' });
+  } catch (_) {}
+
+  const [scoresCache, blocked, postponed, skippedIds, flippedResult, historyCardsResult] = await Promise.all([
+    getScoresCache(),
+    getRecommendBlockedState(),
+    getRecommendPostponedList(),
+    getRecommendSkippedIds(),
+    browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]),
+    browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
+  ]);
+
+  const bookmarks = buildQuickReviewBookmarksFromScoresCache(scoresCache);
+  const currentCards = normalizeHistoryCurrentCardsState(historyCardsResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+  const currentCardSet = new Set(normalizeBookmarkIdList(currentCards.cardIds || []));
+  const flippedSet = new Set(normalizeBookmarkIdList(flippedResult?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []));
+  const skipped = normalizeRecommendSkippedIds(skippedIds || []);
+  const skippedSet = new Set(skipped);
+  const skippedOrderMap = new Map(skipped.map((id, index) => [id, index]));
+
+  const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
+  const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
+  const blockedDomainSet = new Set(
+    (Array.isArray(blocked?.domains) ? blocked.domains : [])
+      .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+      .filter(Boolean)
+  );
+
+  const now = Date.now();
+  const postponedWaitingSet = new Set();
+  const forceDuePostponedMap = new Map();
+  for (const item of normalizeRecommendPostponedList(postponed || [])) {
+    if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (!bookmarkId) continue;
+    const postponeUntil = Number(item.postponeUntil || 0);
+    if (postponeUntil > now) {
+      postponedWaitingSet.add(bookmarkId);
+    } else {
+      forceDuePostponedMap.set(bookmarkId, item);
+    }
+  }
+
+  const baseCandidateBookmarks = bookmarks.filter((bookmark) => {
+    const bookmarkId = String(bookmark?.id || '').trim();
+    const forceDue = forceDuePostponedMap.has(bookmarkId);
+
+    if (currentCardSet.has(bookmarkId)) return false;
+    if (!forceDue && flippedSet.has(bookmarkId)) return false;
+    if (blockedBookmarkSet.has(bookmarkId)) return false;
+    if (isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet)) return false;
+    if (isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet)) return false;
+    if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
+    return true;
+  });
+
+  if (baseCandidateBookmarks.length === 0) {
+    return { success: true, urls: [] };
+  }
+
+  const sortedPool = baseCandidateBookmarks.map((bookmark) => {
+    const bookmarkId = String(bookmark?.id || '').trim();
+    const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
+    const cached = scoresCache?.[bookmarkId];
+    return normalizeQuickReviewBookmarkEntry({
+      ...bookmark,
+      priority: cached && Number.isFinite(Number(cached.S)) ? Number(cached.S) : 0.5,
+      scoreTemplate: cached?._template === true,
+      forceDue: !!forceDueInfo,
+      forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
+      forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+    });
+  }).filter(Boolean);
+
+  sortedPool.sort(compareRecommendPriorityForQuickReview);
+
+  const forceDuePool = sortedPool
+    .filter(item => item.forceDue)
+    .sort((a, b) => {
+      const aMovedAt = Number(a.forceDueMovedAt || 0);
+      const bMovedAt = Number(b.forceDueMovedAt || 0);
+      const aMoved = aMovedAt > 0;
+      const bMoved = bMovedAt > 0;
+
+      if (aMoved !== bMoved) return aMoved ? 1 : -1;
+      if (aMoved && bMoved && aMovedAt !== bMovedAt) return aMovedAt - bMovedAt;
+
+      const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
+      if (dueDiff !== 0) return dueDiff;
+      return compareRecommendPriorityForQuickReview(a, b);
+    });
+
+  const compareNormalPoolPriorityWithSkip = (a, b) => {
+    const aId = String(a?.id || '').trim();
+    const bId = String(b?.id || '').trim();
+    const aSkipped = skippedSet.has(aId);
+    const bSkipped = skippedSet.has(bId);
+
+    if (aSkipped !== bSkipped) return aSkipped ? 1 : -1;
+    if (aSkipped && bSkipped) {
+      const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+      const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+    }
+    return compareRecommendPriorityForQuickReview(a, b);
+  };
+
+  const normalPool = sortedPool
+    .filter(item => !item.forceDue)
+    .sort(compareNormalPoolPriorityWithSkip);
+
+  const urls = [];
+  const seenIds = new Set();
+  let cursor = await getRecommendPoolCursorValueForQuickReview(normalPool.length);
+  const rounds = Math.max(2, Math.ceil(limit / Math.max(1, QUICK_REVIEW_RECOMMEND_BATCH_SIZE)) + 1);
+
+  for (let round = 0; round < rounds && urls.length < limit; round += 1) {
+    const forceDueBatch = forceDuePool.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+    const normalSlots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - forceDueBatch.length);
+    const normalBatch = normalSlots > 0
+      ? buildRecommendBatchFromPoolForQuickReview(normalPool, cursor, normalSlots)
+      : [];
+
+    if (normalPool.length > 0) {
+      cursor = (cursor + normalBatch.length) % normalPool.length;
+    }
+
+    const roundCards = [...forceDueBatch, ...normalBatch].slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+    for (const item of roundCards) {
+      const id = String(item?.id || '').trim();
+      const url = String(item?.url || '').trim();
+      if (!id || !url || seenIds.has(id)) continue;
+      seenIds.add(id);
+      urls.push(url);
+      if (urls.length >= limit) break;
+    }
+  }
+
+  if (urls.length < limit) {
+    for (const item of normalPool) {
+      const id = String(item?.id || '').trim();
+      const url = String(item?.url || '').trim();
+      if (!id || !url || seenIds.has(id)) continue;
+      seenIds.add(id);
+      urls.push(url);
+      if (urls.length >= limit) break;
+    }
+  }
+
+  return { success: true, urls };
+}
+
+async function resolveQuickReviewPendingBookmark(currentCards) {
+  const normalizedCards = normalizeHistoryCurrentCardsState(currentCards);
+  if (normalizedCards.cardIds.length === 0) {
+    return { currentCards: normalizedCards, bookmark: null };
+  }
+
+  const flippedSet = new Set(normalizedCards.flippedIds || []);
+  const pendingIds = normalizedCards.cardIds.filter(id => !flippedSet.has(id));
+  if (pendingIds.length === 0) {
+    return { currentCards: normalizedCards, bookmark: null };
+  }
+
+  const bookmarks = await getBookmarksByIdsForScore(pendingIds);
+  const bookmarkMap = new Map();
+  for (const item of bookmarks) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    bookmarkMap.set(id, item);
+  }
+
+  const cardDataMap = new Map();
+  for (const item of normalizedCards.cardData || []) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    cardDataMap.set(id, item);
+  }
+
+  for (const bookmarkId of pendingIds) {
+    const bookmark = bookmarkMap.get(bookmarkId) || null;
+    const cardData = cardDataMap.get(bookmarkId) || null;
+    const normalized = normalizeQuickReviewBookmarkEntry({
+      id: bookmarkId,
+      url: bookmark?.url || cardData?.url || '',
+      title: bookmark?.title || cardData?.title || bookmark?.url || cardData?.url || '',
+      name: bookmark?.title || cardData?.title || bookmark?.url || cardData?.url || '',
+      parentId: bookmark?.parentId || '',
+      dateAdded: bookmark?.dateAdded || 0,
+      ancestorFolderIds: []
+    }, cardData);
+    if (normalized && normalized.url) {
+      return { currentCards: normalizedCards, bookmark: normalized };
+    }
+  }
+
+  return { currentCards: normalizedCards, bookmark: null };
+}
+
+async function ensureQuickReviewCandidateState() {
+  const currentResult = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+  const currentCards = normalizeHistoryCurrentCardsState(currentResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+
+  const pending = await resolveQuickReviewPendingBookmark(currentCards);
+  if (pending.bookmark) {
+    return { source: 'current', currentCards: pending.currentCards, bookmark: pending.bookmark };
+  }
+
+  const refreshed = await selectQuickReviewCardsRoundState({ force: true, currentCards });
+  const nextCards = normalizeHistoryCurrentCardsState(refreshed?.currentCards);
+  const nextPending = await resolveQuickReviewPendingBookmark(nextCards);
+  if (nextPending.bookmark) {
+    return { source: 'refreshed', currentCards: nextPending.currentCards, bookmark: nextPending.bookmark };
+  }
+
+  return { source: 'empty', currentCards: nextCards, bookmark: null };
+}
+
+async function runQuickReviewNextState(source = 'command') {
+  return runSerializedQuickReviewCommand(async () => {
+    await ensureScoreAlgoVersionReady();
+    const resolvedSource = String(source || 'unknown');
+    const mode = await getQuickReviewOpenModeState();
+    const candidate = await ensureQuickReviewCandidateState();
+    const bookmark = candidate?.bookmark || null;
+
+    if (!bookmark) {
+      return {
+        success: true,
+        handled: false,
+        empty: true,
+        source: resolvedSource,
+        openMode: mode
+      };
+    }
+
+    const openResult = mode === 'new_tab'
+      ? await openInQuickReviewNewTabState(bookmark.url, bookmark)
+      : await openInQuickReviewTabState(bookmark.url, bookmark);
+
+    if (!openResult || !openResult.success) {
+      return {
+        success: false,
+        handled: false,
+        source: resolvedSource,
+        bookmarkId: bookmark.id || null,
+        url: bookmark.url || '',
+        openMode: mode,
+        reason: 'open_failed',
+        error: openResult?.error || 'open_failed'
+      };
+    }
+
+    const bookmarkId = String(bookmark.id || '').trim();
+    let allFlipped = false;
+
+    if (bookmarkId) {
+      try {
+        await appendRecommendFlippedBookmarkState(bookmarkId);
+      } catch (_) {}
+      try {
+        await appendRecommendFlipHistoryRecordState(bookmarkId, Date.now());
+      } catch (_) {}
+      try {
+        await recordRecommendReviewState(bookmarkId);
+      } catch (_) {}
+      try {
+        const markResult = await markHistoryCurrentCardFlippedState(bookmarkId);
+        allFlipped = markResult?.allFlipped === true;
+      } catch (_) {}
+    }
+
+    let roundRefreshed = false;
+    let refreshMarked = false;
+    if (allFlipped) {
+      try {
+        await selectQuickReviewCardsRoundState({ force: true });
+        roundRefreshed = true;
+        try {
+          await markRecommendRefreshExecutedState();
+          refreshMarked = true;
+        } catch (_) {}
+      } catch (_) {}
+    }
+
+    return {
+      success: true,
+      handled: true,
+      source: resolvedSource,
+      bookmarkId: bookmarkId || null,
+      url: bookmark.url || '',
+      openMode: mode,
+      tabId: Number.isFinite(Number(openResult?.tabId)) ? Number(openResult.tabId) : null,
+      allFlipped,
+      roundRefreshed,
+      refreshMarked
+    };
+  });
+}
+
+async function handleQuickReviewNextCommand() {
+  triggerRecommendBackgroundRefresh('quick-review-command', { requireIdle: true });
+  await runQuickReviewNextState('command');
 }
 
 function initSidePanel() {
@@ -323,6 +1408,17 @@ if (browserAPI?.runtime?.onInstalled) {
   browserAPI.runtime.onInstalled.addListener(() => {
     initSidePanel();
     refreshSidePanelOpenWindows().catch(() => {});
+    ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    scheduleRecommendStartupSelfHeal('on-installed').catch(() => {});
+    triggerRecommendBackgroundRefresh('on-installed', { requireIdle: true });
+  });
+}
+
+if (browserAPI?.runtime?.onStartup) {
+  browserAPI.runtime.onStartup.addListener(() => {
+    ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    scheduleRecommendStartupSelfHeal('on-startup').catch(() => {});
+    triggerRecommendBackgroundRefresh('on-startup', { requireIdle: true });
   });
 }
 
@@ -330,10 +1426,20 @@ initSidePanel();
 registerSidePanelTogglePortListener();
 refreshSidePanelOpenWindows().catch(() => {});
 
+if (browserAPI?.alarms?.onAlarm) {
+  browserAPI.alarms.onAlarm.addListener((alarm) => {
+    if (!alarm || alarm.name !== RECOMMEND_BACKGROUND_REFRESH_ALARM) return;
+    triggerRecommendBackgroundRefresh('alarm', { requireIdle: true });
+  });
+}
+
 if (browserAPI.commands && browserAPI.commands.onCommand) {
   browserAPI.commands.onCommand.addListener((command) => {
     if (command === 'open_additions_view') openView('additions');
     if (command === 'open_recommend_view') openView('recommend');
+    if (command === 'quick_review_next') {
+      handleQuickReviewNextCommand().catch(() => {});
+    }
   });
 }
 
@@ -1019,13 +2125,37 @@ let recommendScoresReadyPromise = null;
 let removedRecommendPruneTimer = null;
 let pendingRemovedBookmarkIds = new Set();
 let pendingRemovedFolderIds = new Set();
+let pendingMovedBookmarkIds = new Set();
+let recommendBackgroundRefreshInProgress = false;
+let recommendBackgroundRefreshLastAttemptAt = 0;
+let ensureRecommendBackgroundRefreshAlarmPromise = null;
+let ensureRecommendBackgroundRefreshAlarmLastCheckAt = 0;
+let bookmarkMutationFlushTimer = null;
+let bookmarkMutationFlushQueuedAt = 0;
+let bookmarkMutationFlushInProgress = false;
+let bookmarkMutationInFlightState = null;
+let bookmarkMutationQueuePersistTimer = null;
+let restoreBookmarkMutationQueuePromise = null;
+let startupRecommendSelfHealPromise = null;
+let pendingCreatedScoreBookmarkIds = new Set();
+let pendingChangedScoreBookmarkIds = new Set();
+let pendingChangedBookmarkUrls = new Set();
 
 const BOOKMARK_BULK_WINDOW_MS = 800;
-const BOOKMARK_BULK_THRESHOLD = 8;
+const BOOKMARK_BULK_THRESHOLD = 120;
 const BOOKMARK_BULK_QUIET_MS = 5000;
+const BOOKMARK_MUTATION_FLUSH_DEBOUNCE_MS = 1400;
+const BOOKMARK_MUTATION_FLUSH_MAX_WAIT_MS = 30000;
+const BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE = 200;
+const BOOKMARK_MUTATION_QUEUE_STORAGE_KEY = 'bb_recommend_mutation_queue_v1';
+const BOOKMARK_MUTATION_QUEUE_SAVE_DEBOUNCE_MS = 900;
+const BOOKMARK_MUTATION_QUEUE_MAX_ITEMS = 6000;
+const BOOKMARK_BULK_CHANGE_FLAG_KEY = 'bookmarkBulkChangeFlag';
+const BOOKMARK_BULK_CHANGE_META_KEY = 'bookmarkBulkChangeMeta';
+const BOOKMARK_BULK_CHANGE_STALE_MAX_MS = 2 * 60 * 60 * 1000;
 
 const SCORE_ALGO_VERSION_KEY = 'recommend_scores_algo_version';
-const SCORE_ALGO_VERSION = 6.2;
+const SCORE_ALGO_VERSION = 6.3;
 
 const SCORE_CACHE_MODE_KEY = 'recommend_scores_cache_mode';
 const SCORE_CACHE_MODE_FULL = 'full';
@@ -1041,6 +2171,13 @@ const SCORE_TEMPLATE_REFINE_DEBOUNCE_MS = 400;
 const SCORE_TEMPLATE_REFINE_BATCH_SIZE = 360;
 const BULK_TEMPLATE_RECOVERY_DEBOUNCE_MS = 1200;
 const REMOVED_RECOMMEND_PRUNE_DEBOUNCE_MS = 900;
+const RECOMMEND_BACKGROUND_REFRESH_ALARM = 'bb_recommend_background_refresh_v1';
+const RECOMMEND_BACKGROUND_REFRESH_CHECK_PERIOD_MINUTES = 60;
+const RECOMMEND_BACKGROUND_REFRESH_MIN_ATTEMPT_GAP_MS = 5 * 60 * 1000;
+const RECOMMEND_BACKGROUND_REFRESH_ALARM_CHECK_MIN_GAP_MS = 60 * 1000;
+const RECOMMEND_BACKGROUND_REFRESH_DEFAULT_MAX_STALE_MS = 6 * 60 * 60 * 1000;
+const RECOMMEND_BACKGROUND_REFRESH_MIN_STALE_MS = 30 * 60 * 1000;
+const RECOMMEND_BACKGROUND_REFRESH_MAX_STALE_MS = 14 * 24 * 60 * 60 * 1000;
 
 const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
@@ -1066,12 +2203,70 @@ const DEFAULT_REFRESH_SETTINGS = {
   sidePanelOpenCountSinceRefresh: 0
 };
 
+ensureRecommendBackgroundRefreshAlarm().catch(() => {});
+scheduleRecommendStartupSelfHeal('worker-boot').catch(() => {});
+
 // Tracking cold-start fairness
 const TRACKING_WARMUP_MIN_MS = 30 * 60 * 1000; // 30 minutes
 const TRACKING_WARMUP_MIN_COUNT = 30; // 30 tracked items
 const TRACKING_NEUTRAL_T = 0.5;
 
-async function invalidateRecommendCaches(reason = '') {
+function buildScoreCacheEntry(options = {}) {
+  const mode = options?.mode === SCORE_CACHE_MODE_FULL ? SCORE_CACHE_MODE_FULL : SCORE_CACHE_MODE_COMPACT;
+  const existing = options?.existing && typeof options.existing === 'object' ? options.existing : {};
+  const scores = options?.scores && typeof options.scores === 'object' ? options.scores : null;
+  const template = options?.template === true;
+  const bookmark = options?.bookmark && typeof options.bookmark === 'object' ? options.bookmark : null;
+
+  const fallbackS = Number.isFinite(Number(existing?.S)) ? Number(existing.S) : SCORE_TEMPLATE_DEFAULT_S;
+  const nextS = Number.isFinite(Number(scores?.S)) ? Number(scores.S) : fallbackS;
+  let entry;
+
+  if (mode === SCORE_CACHE_MODE_FULL) {
+    entry = {
+      S: nextS,
+      F: Number.isFinite(Number(scores?.F))
+        ? Number(scores.F)
+        : (Number.isFinite(Number(existing?.F)) ? Number(existing.F) : SCORE_TEMPLATE_DEFAULT_S),
+      C: Number.isFinite(Number(scores?.C))
+        ? Number(scores.C)
+        : (Number.isFinite(Number(existing?.C)) ? Number(existing.C) : SCORE_TEMPLATE_DEFAULT_S),
+      T: Number.isFinite(Number(scores?.T))
+        ? Number(scores.T)
+        : (Number.isFinite(Number(existing?.T)) ? Number(existing.T) : SCORE_TEMPLATE_DEFAULT_S),
+      D: Number.isFinite(Number(scores?.D))
+        ? Number(scores.D)
+        : (Number.isFinite(Number(existing?.D)) ? Number(existing.D) : SCORE_TEMPLATE_DEFAULT_S),
+      L: Number.isFinite(Number(scores?.L))
+        ? Number(scores.L)
+        : (Number.isFinite(Number(existing?.L)) ? Number(existing.L) : 0),
+      R: Number.isFinite(Number(scores?.R))
+        ? Number(scores.R)
+        : (Number.isFinite(Number(existing?.R)) ? Number(existing.R) : 1)
+    };
+  } else {
+    entry = { S: nextS };
+  }
+
+  if (template || (scores == null && existing?._template === true)) {
+    entry._template = true;
+  }
+
+  const metadata = normalizeScoreCacheMetadata(bookmark, existing);
+  if (metadata) {
+    entry.url = metadata.url;
+    entry.title = metadata.title;
+    entry.parentId = metadata.parentId;
+    entry.dateAdded = metadata.dateAdded;
+    entry.ancestorFolderIds = metadata.ancestorFolderIds;
+  }
+
+  return entry;
+}
+
+async function invalidateRecommendCaches(reason = '', options = {}) {
+  const keepCurrentCards = options?.keepCurrentCards === true;
+
   try {
     await browserAPI.storage.local.set({
       recommend_scores_cache: {},
@@ -1087,7 +2282,10 @@ async function invalidateRecommendCaches(reason = '') {
 
   // 推荐卡片状态依赖 bookmarkId：批量导入/删除/移动后可能大量失效
   try {
-    await browserAPI.storage.local.remove([HISTORY_CURRENT_CARDS_STORAGE_KEY, RECOMMEND_POOL_CURSOR_STORAGE_KEY]);
+    const removeKeys = keepCurrentCards
+      ? [RECOMMEND_POOL_CURSOR_STORAGE_KEY]
+      : [HISTORY_CURRENT_CARDS_STORAGE_KEY, RECOMMEND_POOL_CURSOR_STORAGE_KEY];
+    await browserAPI.storage.local.remove(removeKeys);
   } catch (_) { }
 }
 
@@ -1100,7 +2298,17 @@ async function ensureScoreAlgoVersion() {
   } catch (_) { }
 }
 
-ensureScoreAlgoVersion().catch(() => { });
+let ensureScoreAlgoVersionReadyPromise = null;
+function ensureScoreAlgoVersionReady() {
+  if (!ensureScoreAlgoVersionReadyPromise) {
+    ensureScoreAlgoVersionReadyPromise = ensureScoreAlgoVersion()
+      .catch(() => {})
+      .then(() => true);
+  }
+  return ensureScoreAlgoVersionReadyPromise;
+}
+
+ensureScoreAlgoVersionReady().catch(() => { });
 
 function runSerializedRecommendStateMutation(channel, task) {
   const key = String(channel || RECOMMEND_STATE_MUTATION_CHANNEL);
@@ -1448,6 +2656,148 @@ async function markRecommendRefreshExecutedState() {
   });
 }
 
+function getRecommendBackgroundRefreshThresholdMs(settings = null) {
+  const source = settings && typeof settings === 'object' ? settings : DEFAULT_REFRESH_SETTINGS;
+  const refreshAfterHours = Number(source.refreshAfterHours || 0);
+  const refreshAfterDays = Number(source.refreshAfterDays || 0);
+
+  let thresholdMs = RECOMMEND_BACKGROUND_REFRESH_DEFAULT_MAX_STALE_MS;
+  if (Number.isFinite(refreshAfterHours) && refreshAfterHours > 0) {
+    thresholdMs = refreshAfterHours * 60 * 60 * 1000;
+  } else if (Number.isFinite(refreshAfterDays) && refreshAfterDays > 0) {
+    thresholdMs = refreshAfterDays * 24 * 60 * 60 * 1000;
+  }
+
+  return Math.max(
+    RECOMMEND_BACKGROUND_REFRESH_MIN_STALE_MS,
+    Math.min(thresholdMs, RECOMMEND_BACKGROUND_REFRESH_MAX_STALE_MS)
+  );
+}
+
+async function maybeRunRecommendBackgroundRefresh(options = {}) {
+  const reason = String(options?.reason || 'auto');
+  const force = options?.force === true;
+  const requireIdle = options?.requireIdle === true;
+
+  if (recommendBackgroundRefreshInProgress) {
+    return { success: false, refreshed: false, skipped: 'in-progress', reason };
+  }
+
+  const now = Date.now();
+  if (!force && recommendBackgroundRefreshLastAttemptAt > 0) {
+    const sinceLastAttempt = now - recommendBackgroundRefreshLastAttemptAt;
+    if (sinceLastAttempt < RECOMMEND_BACKGROUND_REFRESH_MIN_ATTEMPT_GAP_MS) {
+      return { success: false, refreshed: false, skipped: 'rate-limited', reason };
+    }
+  }
+  recommendBackgroundRefreshLastAttemptAt = now;
+
+  if (!force && (isBookmarkImporting || isBookmarkBulkChanging || isComputingScores || templateRefineRunning)) {
+    return { success: false, refreshed: false, skipped: 'busy', reason };
+  }
+
+  if (!force && requireIdle) {
+    const idleState = await queryIdleStateForBookmarkMutationFlush();
+    if (idleState === 'active') {
+      return { success: false, refreshed: false, skipped: 'active', reason };
+    }
+  }
+
+  const [settings, scoreMeta] = await Promise.all([
+    getRecommendRefreshSettings(),
+    browserAPI.storage.local.get(['recommend_scores_time'])
+  ]);
+  const recommendScoresTime = Number(scoreMeta?.recommend_scores_time || 0);
+  const lastRefreshTime = Number(settings?.lastRefreshTime || 0);
+  const freshnessTime = Math.max(recommendScoresTime, lastRefreshTime);
+  const maxStaleMs = getRecommendBackgroundRefreshThresholdMs(settings);
+
+  if (!force && freshnessTime > 0 && (now - freshnessTime) < maxStaleMs) {
+    return { success: true, refreshed: false, skipped: 'fresh', reason };
+  }
+
+  recommendBackgroundRefreshInProgress = true;
+  try {
+    const ready = await ensureRecommendScoresReady({ reason: `background-refresh:${reason}` });
+    if (ready?.success === false || ready?.ready === false) {
+      return { success: false, refreshed: false, skipped: 'not-ready', reason, ready };
+    }
+
+    const ok = await computeAllBookmarkScores({ forceFull: false });
+    if (!ok) {
+      return { success: false, refreshed: false, skipped: 'compute-failed', reason };
+    }
+    await markRecommendRefreshExecutedState();
+
+    return { success: true, refreshed: true, reason };
+  } catch (error) {
+    console.warn('[S-score] background refresh failed:', error);
+    return { success: false, refreshed: false, skipped: 'error', reason, error: error?.message || String(error) };
+  } finally {
+    recommendBackgroundRefreshInProgress = false;
+  }
+}
+
+function triggerRecommendBackgroundRefresh(reason = 'auto', options = {}) {
+  Promise.resolve()
+    .then(() => maybeRunRecommendBackgroundRefresh({ reason, ...(options || {}) }))
+    .catch(() => {});
+}
+
+async function ensureRecommendBackgroundRefreshAlarm(options = {}) {
+  if (!browserAPI?.alarms?.create || !browserAPI?.alarms?.get) {
+    return { success: false, skipped: 'alarms-api-unavailable' };
+  }
+
+  const force = options?.force === true;
+  const now = Date.now();
+
+  if (ensureRecommendBackgroundRefreshAlarmPromise) {
+    return ensureRecommendBackgroundRefreshAlarmPromise;
+  }
+
+  if (!force && (now - ensureRecommendBackgroundRefreshAlarmLastCheckAt) < RECOMMEND_BACKGROUND_REFRESH_ALARM_CHECK_MIN_GAP_MS) {
+    return { success: true, skipped: 'throttled' };
+  }
+
+  ensureRecommendBackgroundRefreshAlarmPromise = (async () => {
+    try {
+      const existingAlarm = await new Promise((resolve, reject) => {
+        try {
+          browserAPI.alarms.get(RECOMMEND_BACKGROUND_REFRESH_ALARM, (alarm) => {
+            const err = browserAPI?.runtime?.lastError;
+            if (err) {
+              reject(new Error(err.message || 'alarms_get_failed'));
+              return;
+            }
+            resolve(alarm || null);
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      if (existingAlarm) {
+        return { success: true, created: false };
+      }
+
+      browserAPI.alarms.create(RECOMMEND_BACKGROUND_REFRESH_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: RECOMMEND_BACKGROUND_REFRESH_CHECK_PERIOD_MINUTES
+      });
+      return { success: true, created: true };
+    } catch (error) {
+      console.warn('[S-score] ensure background refresh alarm failed:', error);
+      return { success: false, error: error?.message || String(error) };
+    } finally {
+      ensureRecommendBackgroundRefreshAlarmLastCheckAt = Date.now();
+      ensureRecommendBackgroundRefreshAlarmPromise = null;
+    }
+  })();
+
+  return ensureRecommendBackgroundRefreshAlarmPromise;
+}
+
 async function appendRecommendFlippedBookmarkState(bookmarkId) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
@@ -1499,11 +2849,13 @@ async function markHistoryCurrentCardFlippedState(bookmarkId) {
       flippedIds.push(id);
     }
 
+    const now = Date.now();
     const next = {
       ...current,
       cardIds,
       flippedIds,
-      timestamp: Date.now()
+      timestamp: now,
+      lastUpdated: now
     };
     await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: next });
 
@@ -1942,12 +3294,14 @@ async function runRemovedRecommendStatePrune() {
         || nextFlippedIds.length !== flippedIds.length
         || (Array.isArray(cardData) && cardData.length !== (Array.isArray(historyCurrentCards.cardData) ? historyCurrentCards.cardData.length : 0))
       ) {
+        const now = Date.now();
         updates[HISTORY_CURRENT_CARDS_STORAGE_KEY] = {
           ...historyCurrentCards,
           cardIds: nextCardIds,
           flippedIds: nextFlippedIds,
           ...(Array.isArray(cardData) ? { cardData } : {}),
-          timestamp: Date.now()
+          timestamp: now,
+          lastUpdated: now
         };
       }
     }
@@ -2147,7 +3501,17 @@ async function enterBookmarkBulkChangeMode(reason = '') {
   isBookmarkBulkChanging = true;
   lastBulkReason = reason || 'unknown';
   bookmarkBulkHasRemoval = reason === 'removed';
-  try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: true }); } catch (_) { }
+  clearQueuedBookmarkMutations();
+  try {
+    await browserAPI.storage.local.set({
+      [BOOKMARK_BULK_CHANGE_FLAG_KEY]: true,
+      [BOOKMARK_BULK_CHANGE_META_KEY]: {
+        active: true,
+        reason: lastBulkReason,
+        updatedAt: Date.now()
+      }
+    });
+  } catch (_) { }
   await invalidateRecommendCaches(`bulk:${reason || 'unknown'}`);
   clearBookmarkUrlIndex();
   scheduleBookmarkBulkExit();
@@ -2159,7 +3523,16 @@ async function exitBookmarkBulkChangeMode() {
   isBookmarkBulkChanging = false;
   bookmarkBulkWindowStart = 0;
   bookmarkBulkEventCount = 0;
-  try { await browserAPI.storage.local.set({ bookmarkBulkChangeFlag: false }); } catch (_) { }
+  try {
+    await browserAPI.storage.local.set({
+      [BOOKMARK_BULK_CHANGE_FLAG_KEY]: false,
+      [BOOKMARK_BULK_CHANGE_META_KEY]: {
+        active: false,
+        reason: lastBulkReason || 'unknown',
+        updatedAt: Date.now()
+      }
+    });
+  } catch (_) { }
 
   // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
   const reason = String(lastBulkReason || '');
@@ -2239,7 +3612,8 @@ async function getFormulaConfig() {
       await browserAPI.storage.local.set({ recommendFormulaConfig: config });
     } catch (_) { }
     // 之前可能已经按旧默认值计算过缓存：确保公式默认值与 UI 一致后，清空旧缓存避免“显示公式”和“实际分数”不一致。
-    await invalidateRecommendCaches('init-default-formula');
+    // 这里不清空当前轮次卡片，避免 UI 首屏出现“先显示一批，再被自动换批”。
+    await invalidateRecommendCaches('init-default-formula', { keepCurrentCards: true });
   }
 
   config.trackingEnabled = result.trackingEnabled !== false;
@@ -2923,7 +4297,11 @@ async function computeAllBookmarkScores(options = {}) {
 
       for (const bookmark of bootstrapBookmarks) {
         const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
-        newCache[bookmark.id] = nextMode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+        newCache[String(bookmark.id)] = buildScoreCacheEntry({
+          mode: nextMode,
+          scores,
+          bookmark
+        });
         computedCount += 1;
         if (computedCount % 50 === 0) {
           await new Promise(resolve => setTimeout(resolve, 0));
@@ -2967,7 +4345,11 @@ async function computeAllBookmarkScores(options = {}) {
 
       for (const bookmark of batchBookmarks) {
         const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
-        newCache[bookmark.id] = nextMode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+        newCache[String(bookmark.id)] = buildScoreCacheEntry({
+          mode: nextMode,
+          scores,
+          bookmark
+        });
         computedCount += 1;
         // 大量书签时让出事件循环，避免 service worker 长时间无响应
         if (computedCount % 50 === 0) {
@@ -2990,14 +4372,97 @@ async function computeAllBookmarkScores(options = {}) {
   }
 }
 
+async function getBookmarkNodeByIdForScore(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id || !browserAPI?.bookmarks?.get) return null;
+
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.bookmarks.get([id], (items) => {
+        if (browserAPI.runtime?.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(Array.isArray(items) && items[0] ? items[0] : null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function getAncestorFolderIdsByParentIdForScore(parentId) {
+  const ancestors = [];
+  let cursor = String(parentId || '').trim();
+  if (!cursor) return ancestors;
+
+  const visited = new Set();
+  let depth = 0;
+
+  while (cursor && !visited.has(cursor) && depth < 64) {
+    visited.add(cursor);
+    ancestors.unshift(cursor);
+    const parentNode = await getBookmarkNodeByIdForScore(cursor);
+    cursor = String(parentNode?.parentId || '').trim();
+    depth += 1;
+  }
+
+  return ancestors;
+}
+
+async function getBookmarkAncestorMapForIds(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  const idSet = new Set(unique);
+  const result = new Map();
+
+  if (idSet.size === 0 || !browserAPI?.bookmarks?.getTree) {
+    return result;
+  }
+
+  try {
+    const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+    const traverse = (nodes, ancestors = []) => {
+      if (!Array.isArray(nodes) || idSet.size === 0) return;
+      for (const node of nodes) {
+        if (!node) continue;
+        const nodeId = String(node.id || '').trim();
+        if (node.url && nodeId && idSet.has(nodeId)) {
+          result.set(nodeId, normalizeScoreCacheAncestorFolderIds(ancestors));
+          idSet.delete(nodeId);
+          if (idSet.size === 0) return;
+        }
+        if (Array.isArray(node.children) && node.children.length > 0) {
+          const nextAncestors = node.url
+            ? ancestors
+            : normalizeScoreCacheAncestorFolderIds([...ancestors, nodeId]);
+          traverse(node.children, nextAncestors);
+          if (idSet.size === 0) return;
+        }
+      }
+    };
+
+    traverse(tree, []);
+  } catch (_) {}
+
+  return result;
+}
+
 async function updateSingleBookmarkScore(bookmarkId) {
   try {
     if (isBookmarkImporting || isBookmarkBulkChanging) return;
-    const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get([bookmarkId], resolve));
+    const id = String(bookmarkId || '').trim();
+    if (!id) return;
+
+    const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get([id], resolve));
     if (!bookmarks || bookmarks.length === 0) return;
 
     const bookmark = bookmarks[0];
     if (!bookmark || !bookmark.url) return;
+    const ancestorFolderIds = await getAncestorFolderIdsByParentIdForScore(bookmark.parentId);
+    const bookmarkForScore = {
+      ...bookmark,
+      ancestorFolderIds
+    };
 
     const historyStats = new Map();
     if (browserAPI.history && bookmark.url) {
@@ -3050,10 +4515,15 @@ async function updateSingleBookmarkScore(bookmarkId) {
       getReviewDataForScore()
     ]);
 
-    const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
+    const scores = calculateBookmarkScore(bookmarkForScore, historyStats, trackingData, config, postponedList, reviewData);
     const mode = await getScoreCacheMode();
     const cache = await getScoresCache();
-    cache[bookmarkId] = mode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+    cache[id] = buildScoreCacheEntry({
+      mode,
+      scores,
+      existing: cache[id],
+      bookmark: bookmarkForScore
+    });
     await saveScoresCache(cache);
   } catch (e) {
     console.warn('[S-score] incremental update failed:', e);
@@ -3073,13 +4543,19 @@ function collectBookmarkIdsUnderFolders(nodes, folderIdSet, inTarget, output) {
   }
 }
 
-async function getBookmarkIdsByFolderIds(folderIds) {
+function getBookmarkIdsByFolderIdsFromTree(folderIds, bookmarkTree) {
   const ids = [];
   const folderIdSet = new Set((folderIds || []).map(id => String(id)).filter(Boolean));
-  if (folderIdSet.size === 0 || !browserAPI?.bookmarks?.getTree) return ids;
-  const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
-  collectBookmarkIdsUnderFolders(tree, folderIdSet, false, ids);
+  if (folderIdSet.size === 0) return ids;
+  collectBookmarkIdsUnderFolders(Array.isArray(bookmarkTree) ? bookmarkTree : [], folderIdSet, false, ids);
   return [...new Set(ids)];
+}
+
+async function getBookmarkIdsByFolderIds(folderIds) {
+  const folderIdSet = new Set((folderIds || []).map(id => String(id)).filter(Boolean));
+  if (folderIdSet.size === 0 || !browserAPI?.bookmarks?.getTree) return [];
+  const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+  return getBookmarkIdsByFolderIdsFromTree(Array.from(folderIdSet), tree);
 }
 
 function collectBookmarkIdsByDomains(nodes, domainSet, output) {
@@ -3173,6 +4649,21 @@ async function recomputeScoresForBookmarkIds(ids, options = {}) {
     getScoreCacheMode(),
     getScoresCache()
   ]);
+  const ancestorLookupIds = [];
+  for (const bookmark of bookmarks) {
+    const bookmarkId = String(bookmark?.id || '').trim();
+    if (!bookmarkId) continue;
+    const existing = cache[bookmarkId];
+    const existingParentId = String(existing?.parentId || '').trim();
+    const bookmarkParentId = String(bookmark?.parentId || '').trim();
+    const hasAncestors = normalizeScoreCacheAncestorFolderIds(existing?.ancestorFolderIds).length > 0;
+    if (!existingParentId || existingParentId !== bookmarkParentId || !hasAncestors) {
+      ancestorLookupIds.push(bookmarkId);
+    }
+  }
+  const ancestorMap = ancestorLookupIds.length > 0
+    ? await getBookmarkAncestorMapForIds(ancestorLookupIds)
+    : new Map();
 
   const batchSize = Math.max(40, Number(options.batchSize) || SCORE_INCREMENTAL_BATCH_SIZE);
   const flushByBatch = options.flushByBatch === true;
@@ -3183,8 +4674,25 @@ async function recomputeScoresForBookmarkIds(ids, options = {}) {
   for (let i = 0; i < bookmarks.length; i += batchSize) {
     const batch = bookmarks.slice(i, i + batchSize);
     for (const bookmark of batch) {
-      const scores = calculateBookmarkScore(bookmark, historyStats, trackingData, config, postponedList, reviewData);
-      cache[String(bookmark.id)] = mode === SCORE_CACHE_MODE_FULL ? scores : { S: scores.S };
+      const bookmarkId = String(bookmark?.id || '').trim();
+      if (!bookmarkId) continue;
+      const existing = cache[bookmarkId];
+      const existingParentId = String(existing?.parentId || '').trim();
+      const bookmarkParentId = String(bookmark?.parentId || '').trim();
+      const fallbackAncestors = existingParentId && existingParentId === bookmarkParentId
+        ? normalizeScoreCacheAncestorFolderIds(existing?.ancestorFolderIds)
+        : [];
+      const bookmarkForScore = {
+        ...bookmark,
+        ancestorFolderIds: ancestorMap.get(bookmarkId) || fallbackAncestors
+      };
+      const scores = calculateBookmarkScore(bookmarkForScore, historyStats, trackingData, config, postponedList, reviewData);
+      cache[bookmarkId] = buildScoreCacheEntry({
+        mode,
+        scores,
+        existing,
+        bookmark: bookmarkForScore
+      });
       updated += 1;
     }
 
@@ -3210,34 +4718,94 @@ async function applyTemplateScoresByIds(ids) {
   const unique = normalizeBookmarkIdList(ids);
   if (unique.length === 0) return 0;
 
-  const [mode, cache] = await Promise.all([
+  const [mode, cache, bookmarks] = await Promise.all([
     getScoreCacheMode(),
-    getScoresCache()
+    getScoresCache(),
+    getBookmarksByIdsForScore(unique)
   ]);
+  const bookmarkMap = new Map();
+  for (const bookmark of bookmarks) {
+    const id = String(bookmark?.id || '').trim();
+    if (id) {
+      bookmarkMap.set(id, bookmark);
+    }
+  }
+  const ancestorMap = await getBookmarkAncestorMapForIds(unique);
 
   let updated = 0;
   for (const id of unique) {
     const existing = cache[id];
-    const fallbackS = Number.isFinite(existing?.S) ? existing.S : SCORE_TEMPLATE_DEFAULT_S;
+    const bookmark = bookmarkMap.get(id);
+    const fallbackAncestors = normalizeScoreCacheAncestorFolderIds(existing?.ancestorFolderIds);
+    const bookmarkForCache = bookmark
+      ? {
+        ...bookmark,
+        ancestorFolderIds: ancestorMap.get(id) || fallbackAncestors
+      }
+      : existing;
 
-    if (mode === SCORE_CACHE_MODE_FULL) {
-      cache[id] = {
-        S: fallbackS,
-        F: Number.isFinite(existing?.F) ? existing.F : SCORE_TEMPLATE_DEFAULT_S,
-        C: Number.isFinite(existing?.C) ? existing.C : SCORE_TEMPLATE_DEFAULT_S,
-        T: Number.isFinite(existing?.T) ? existing.T : SCORE_TEMPLATE_DEFAULT_S,
-        D: Number.isFinite(existing?.D) ? existing.D : SCORE_TEMPLATE_DEFAULT_S,
-        L: Number.isFinite(existing?.L) ? existing.L : 0,
-        R: Number.isFinite(existing?.R) ? existing.R : 1,
-        _template: true
-      };
-    } else {
-      cache[id] = { S: fallbackS, _template: true };
-    }
+    cache[id] = buildScoreCacheEntry({
+      mode,
+      scores: existing,
+      existing,
+      bookmark: bookmarkForCache,
+      template: true
+    });
     updated += 1;
   }
 
   await saveScoresCache(cache);
+  return updated;
+}
+
+async function refreshScoreCacheMetadataForBookmarkIds(ids) {
+  const unique = normalizeBookmarkIdList(ids);
+  if (unique.length === 0) return 0;
+
+  const [mode, cache, bookmarks] = await Promise.all([
+    getScoreCacheMode(),
+    getScoresCache(),
+    getBookmarksByIdsForScore(unique)
+  ]);
+
+  if (bookmarks.length === 0) return 0;
+
+  const bookmarkMap = new Map();
+  for (const bookmark of bookmarks) {
+    const id = String(bookmark?.id || '').trim();
+    if (id) {
+      bookmarkMap.set(id, bookmark);
+    }
+  }
+
+  const ancestorMap = await getBookmarkAncestorMapForIds(unique);
+  let updated = 0;
+
+  for (const id of unique) {
+    const existing = cache[id];
+    if (!existing || typeof existing !== 'object') continue;
+    const bookmark = bookmarkMap.get(id);
+    if (!bookmark || !bookmark.url) continue;
+
+    const bookmarkForCache = {
+      ...bookmark,
+      ancestorFolderIds: ancestorMap.get(id) || normalizeScoreCacheAncestorFolderIds(existing?.ancestorFolderIds)
+    };
+
+    cache[id] = buildScoreCacheEntry({
+      mode,
+      scores: existing,
+      existing,
+      bookmark: bookmarkForCache,
+      template: existing?._template === true
+    });
+    updated += 1;
+  }
+
+  if (updated > 0) {
+    await saveScoresCache(cache);
+  }
+
   return updated;
 }
 
@@ -3377,6 +4945,443 @@ async function scheduleScoreUpdateByUrl(url) {
   }, 1000);
 }
 
+async function resolveMovedBookmarkIdsForMetadataRefresh(movedIds) {
+  const unique = normalizeBookmarkIdList(movedIds);
+  if (unique.length === 0) return [];
+
+  const directBookmarks = await getBookmarksByIdsForScore(unique);
+  const bookmarkIdSet = new Set(
+    directBookmarks
+      .map(item => String(item?.id || '').trim())
+      .filter(Boolean)
+  );
+
+  const folderIds = unique.filter(id => !bookmarkIdSet.has(id));
+  if (folderIds.length > 0 && browserAPI?.bookmarks?.getTree) {
+    try {
+      const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
+      const descendants = getBookmarkIdsByFolderIdsFromTree(folderIds, tree);
+      for (const descendantId of descendants) {
+        const normalized = String(descendantId || '').trim();
+        if (normalized) bookmarkIdSet.add(normalized);
+      }
+    } catch (_) { }
+  }
+
+  return normalizeBookmarkIdList(Array.from(bookmarkIdSet));
+}
+
+async function runMovedScoreMetadataRefresh(movedIds) {
+  const targetIds = await resolveMovedBookmarkIdsForMetadataRefresh(movedIds);
+  if (targetIds.length === 0) return 0;
+  return refreshScoreCacheMetadataForBookmarkIds(targetIds);
+}
+
+function clearQueuedBookmarkMutations() {
+  pendingCreatedScoreBookmarkIds.clear();
+  pendingChangedScoreBookmarkIds.clear();
+  pendingMovedBookmarkIds.clear();
+  pendingChangedBookmarkUrls.clear();
+  bookmarkMutationInFlightState = null;
+  bookmarkMutationFlushInProgress = false;
+  if (bookmarkMutationFlushTimer) {
+    clearTimeout(bookmarkMutationFlushTimer);
+    bookmarkMutationFlushTimer = null;
+  }
+  if (bookmarkMutationQueuePersistTimer) {
+    clearTimeout(bookmarkMutationQueuePersistTimer);
+    bookmarkMutationQueuePersistTimer = null;
+  }
+  bookmarkMutationFlushQueuedAt = 0;
+  persistPendingBookmarkMutationQueueNow('clear').catch(() => { });
+}
+
+function getPendingBookmarkMutationCount() {
+  const inFlight = normalizeBookmarkMutationQueuePayload(bookmarkMutationInFlightState);
+  const inFlightCount = inFlight.createdIds.length
+    + inFlight.changedIds.length
+    + inFlight.movedIds.length
+    + inFlight.changedUrls.length;
+
+  return pendingCreatedScoreBookmarkIds.size
+    + pendingChangedScoreBookmarkIds.size
+    + pendingMovedBookmarkIds.size
+    + pendingChangedBookmarkUrls.size
+    + inFlightCount;
+}
+
+function normalizeBookmarkMutationQueueUrlList(urls = []) {
+  return Array.from(new Set(
+    (Array.isArray(urls) ? urls : [])
+      .map((url) => String(url || '').trim())
+      .filter(Boolean)
+  )).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS);
+}
+
+function normalizeBookmarkMutationQueuePayload(payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  return {
+    createdIds: normalizeBookmarkIdList(source.createdIds || []).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    changedIds: normalizeBookmarkIdList(source.changedIds || []).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    movedIds: normalizeBookmarkIdList(source.movedIds || []).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    changedUrls: normalizeBookmarkMutationQueueUrlList(source.changedUrls || []),
+    queuedAt: Number.isFinite(Number(source.queuedAt)) && Number(source.queuedAt) > 0
+      ? Number(source.queuedAt)
+      : 0,
+    updatedAt: Number.isFinite(Number(source.updatedAt)) && Number(source.updatedAt) > 0
+      ? Number(source.updatedAt)
+      : 0
+  };
+}
+
+function hasBookmarkMutationQueuePayload(payload) {
+  return payload.createdIds.length > 0
+    || payload.changedIds.length > 0
+    || payload.movedIds.length > 0
+    || payload.changedUrls.length > 0;
+}
+
+function mergeBookmarkMutationQueuePayloadIntoPending(payload) {
+  const normalized = normalizeBookmarkMutationQueuePayload(payload);
+  normalized.createdIds.forEach((id) => pendingCreatedScoreBookmarkIds.add(id));
+  normalized.changedIds.forEach((id) => pendingChangedScoreBookmarkIds.add(id));
+  normalized.movedIds.forEach((id) => pendingMovedBookmarkIds.add(id));
+  normalized.changedUrls.forEach((url) => pendingChangedBookmarkUrls.add(url));
+
+  if (normalized.queuedAt > 0) {
+    if (!bookmarkMutationFlushQueuedAt) {
+      bookmarkMutationFlushQueuedAt = normalized.queuedAt;
+    } else {
+      bookmarkMutationFlushQueuedAt = Math.min(bookmarkMutationFlushQueuedAt, normalized.queuedAt);
+    }
+  }
+}
+
+function buildBookmarkMutationQueueSnapshot() {
+  const createdSet = new Set(pendingCreatedScoreBookmarkIds);
+  const changedSet = new Set(pendingChangedScoreBookmarkIds);
+  const movedSet = new Set(pendingMovedBookmarkIds);
+  const changedUrlSet = new Set(pendingChangedBookmarkUrls);
+
+  const inFlight = normalizeBookmarkMutationQueuePayload(bookmarkMutationInFlightState);
+  inFlight.createdIds.forEach((id) => createdSet.add(id));
+  inFlight.changedIds.forEach((id) => changedSet.add(id));
+  inFlight.movedIds.forEach((id) => movedSet.add(id));
+  inFlight.changedUrls.forEach((url) => changedUrlSet.add(url));
+
+  const snapshot = {
+    version: 1,
+    createdIds: normalizeBookmarkIdList(Array.from(createdSet)).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    changedIds: normalizeBookmarkIdList(Array.from(changedSet)).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    movedIds: normalizeBookmarkIdList(Array.from(movedSet)).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS),
+    changedUrls: normalizeBookmarkMutationQueueUrlList(Array.from(changedUrlSet)),
+    queuedAt: bookmarkMutationFlushQueuedAt > 0 ? bookmarkMutationFlushQueuedAt : Date.now(),
+    updatedAt: Date.now(),
+    inFlight: bookmarkMutationFlushInProgress === true
+  };
+
+  return normalizeBookmarkMutationQueuePayload(snapshot);
+}
+
+async function persistPendingBookmarkMutationQueueNow(reason = '') {
+  try {
+    const snapshot = buildBookmarkMutationQueueSnapshot();
+    if (!hasBookmarkMutationQueuePayload(snapshot)) {
+      await browserAPI.storage.local.remove([BOOKMARK_MUTATION_QUEUE_STORAGE_KEY]);
+      return { success: true, removed: true, reason };
+    }
+    await browserAPI.storage.local.set({
+      [BOOKMARK_MUTATION_QUEUE_STORAGE_KEY]: {
+        ...snapshot,
+        reason: String(reason || '')
+      }
+    });
+    return {
+      success: true,
+      removed: false,
+      reason,
+      count: snapshot.createdIds.length + snapshot.changedIds.length + snapshot.movedIds.length + snapshot.changedUrls.length
+    };
+  } catch (error) {
+    console.warn('[S-score] persist bookmark mutation queue failed:', error);
+    return { success: false, reason, error: error?.message || String(error) };
+  }
+}
+
+function schedulePersistPendingBookmarkMutationQueue(reason = '') {
+  if (bookmarkMutationQueuePersistTimer) {
+    clearTimeout(bookmarkMutationQueuePersistTimer);
+  }
+  bookmarkMutationQueuePersistTimer = setTimeout(() => {
+    bookmarkMutationQueuePersistTimer = null;
+    persistPendingBookmarkMutationQueueNow(reason).catch(() => { });
+  }, BOOKMARK_MUTATION_QUEUE_SAVE_DEBOUNCE_MS);
+}
+
+function restoreBookmarkMutationQueueState(reason = 'startup') {
+  if (restoreBookmarkMutationQueuePromise) {
+    return restoreBookmarkMutationQueuePromise;
+  }
+
+  restoreBookmarkMutationQueuePromise = (async () => {
+    try {
+      const result = await browserAPI.storage.local.get([BOOKMARK_MUTATION_QUEUE_STORAGE_KEY]);
+      const payload = normalizeBookmarkMutationQueuePayload(result?.[BOOKMARK_MUTATION_QUEUE_STORAGE_KEY]);
+      if (!hasBookmarkMutationQueuePayload(payload)) {
+        await browserAPI.storage.local.remove([BOOKMARK_MUTATION_QUEUE_STORAGE_KEY]);
+        return { success: true, restoredCount: 0, reason };
+      }
+
+      mergeBookmarkMutationQueuePayloadIntoPending(payload);
+      bookmarkMutationInFlightState = null;
+      schedulePersistPendingBookmarkMutationQueue('restore-normalize');
+      queueBookmarkMutationFlush();
+
+      const restoredCount = payload.createdIds.length + payload.changedIds.length + payload.movedIds.length + payload.changedUrls.length;
+      console.warn(`[S-score] restored mutation queue (${restoredCount}) from ${reason}`);
+      return { success: true, restoredCount, reason };
+    } catch (error) {
+      console.warn('[S-score] restore bookmark mutation queue failed:', error);
+      return { success: false, restoredCount: 0, reason, error: error?.message || String(error) };
+    } finally {
+      restoreBookmarkMutationQueuePromise = null;
+    }
+  })();
+
+  return restoreBookmarkMutationQueuePromise;
+}
+
+async function queryIdleStateForBookmarkMutationFlush() {
+  if (!browserAPI?.idle?.queryState) return 'unknown';
+  return await new Promise((resolve) => {
+    try {
+      browserAPI.idle.queryState(60, (state) => {
+        if (browserAPI.runtime?.lastError) {
+          resolve('unknown');
+          return;
+        }
+        resolve(String(state || 'unknown'));
+      });
+    } catch (_) {
+      resolve('unknown');
+    }
+  });
+}
+
+function queueBookmarkMutationFlush() {
+  if (!bookmarkMutationFlushQueuedAt) {
+    bookmarkMutationFlushQueuedAt = Date.now();
+  }
+  schedulePersistPendingBookmarkMutationQueue('queue');
+
+  if (bookmarkMutationFlushTimer) {
+    clearTimeout(bookmarkMutationFlushTimer);
+  }
+
+  bookmarkMutationFlushTimer = setTimeout(() => {
+    bookmarkMutationFlushTimer = null;
+    flushQueuedBookmarkMutations().catch((e) => {
+      console.warn('[S-score] bookmark mutation flush failed:', e);
+      if (getPendingBookmarkMutationCount() > 0) {
+        queueBookmarkMutationFlush();
+      }
+    });
+  }, BOOKMARK_MUTATION_FLUSH_DEBOUNCE_MS);
+}
+
+function queueBookmarkScoreMutation(bookmarkId, type = 'changed') {
+  const normalized = String(bookmarkId || '').trim();
+  if (!normalized) return;
+
+  if (type === 'created') {
+    pendingCreatedScoreBookmarkIds.add(normalized);
+  } else {
+    pendingChangedScoreBookmarkIds.add(normalized);
+  }
+
+  queueBookmarkMutationFlush();
+}
+
+function queueBookmarkChangedUrlForFavicon(url) {
+  const normalized = String(url || '').trim();
+  if (!normalized) return;
+  pendingChangedBookmarkUrls.add(normalized);
+  queueBookmarkMutationFlush();
+}
+
+function queueMovedScoreMetadataRefresh(id, moveInfo = null) {
+  const normalized = String(id || '').trim();
+  if (!normalized) return;
+
+  const oldParentId = String(moveInfo?.oldParentId || '').trim();
+  const newParentId = String(moveInfo?.parentId || '').trim();
+  if (oldParentId && newParentId && oldParentId === newParentId) {
+    return;
+  }
+
+  pendingMovedBookmarkIds.add(normalized);
+  queueBookmarkMutationFlush();
+}
+
+async function flushQueuedBookmarkMutations() {
+  if (bookmarkMutationFlushInProgress) {
+    queueBookmarkMutationFlush();
+    return;
+  }
+
+  if (bookmarkMutationInFlightState) {
+    mergeBookmarkMutationQueuePayloadIntoPending(bookmarkMutationInFlightState);
+    bookmarkMutationInFlightState = null;
+  }
+
+  const pendingCount = getPendingBookmarkMutationCount();
+  if (pendingCount === 0) {
+    bookmarkMutationFlushQueuedAt = 0;
+    await persistPendingBookmarkMutationQueueNow('flush-empty');
+    return;
+  }
+
+  if (isBookmarkImporting || isBookmarkBulkChanging || isComputingScores || templateRefineRunning) {
+    queueBookmarkMutationFlush();
+    return;
+  }
+
+  const queuedForMs = bookmarkMutationFlushQueuedAt > 0 ? (Date.now() - bookmarkMutationFlushQueuedAt) : 0;
+  if (pendingCount >= BOOKMARK_BULK_THRESHOLD && queuedForMs < BOOKMARK_MUTATION_FLUSH_MAX_WAIT_MS) {
+    const idleState = await queryIdleStateForBookmarkMutationFlush();
+    if (idleState === 'active') {
+      queueBookmarkMutationFlush();
+      return;
+    }
+  }
+
+  const createdIds = normalizeBookmarkIdList(Array.from(pendingCreatedScoreBookmarkIds));
+  const changedIds = normalizeBookmarkIdList(Array.from(pendingChangedScoreBookmarkIds));
+  const movedIds = normalizeBookmarkIdList(Array.from(pendingMovedBookmarkIds));
+  const changedUrls = Array.from(pendingChangedBookmarkUrls)
+    .map(url => String(url || '').trim())
+    .filter(Boolean);
+
+  bookmarkMutationInFlightState = {
+    createdIds,
+    changedIds,
+    movedIds,
+    changedUrls,
+    queuedAt: bookmarkMutationFlushQueuedAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  bookmarkMutationFlushInProgress = true;
+  await persistPendingBookmarkMutationQueueNow('flush-inflight');
+
+  pendingCreatedScoreBookmarkIds.clear();
+  pendingChangedScoreBookmarkIds.clear();
+  pendingMovedBookmarkIds.clear();
+  pendingChangedBookmarkUrls.clear();
+
+  try {
+    const scoreIds = normalizeBookmarkIdList([...createdIds, ...changedIds]);
+    for (let i = 0; i < scoreIds.length; i += BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE) {
+      const chunk = scoreIds.slice(i, i + BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE);
+      if (chunk.length === 0) continue;
+      await updateBookmarkScoresByIds(chunk);
+      if (i + BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE < scoreIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+
+    if (movedIds.length > 0) {
+      await runMovedScoreMetadataRefresh(movedIds);
+    }
+
+    if (changedUrls.length > 0) {
+      for (const url of changedUrls) {
+        try {
+          browserAPI.runtime.sendMessage({
+            action: 'clearFaviconCache',
+            url
+          }).catch(() => { });
+        } catch (_) { }
+      }
+    }
+
+    bookmarkMutationInFlightState = null;
+    bookmarkMutationFlushInProgress = false;
+
+    if (getPendingBookmarkMutationCount() > 0) {
+      queueBookmarkMutationFlush();
+      await persistPendingBookmarkMutationQueueNow('flush-requeue');
+      return;
+    }
+
+    bookmarkMutationFlushQueuedAt = 0;
+    await persistPendingBookmarkMutationQueueNow('flush-commit');
+  } catch (error) {
+    bookmarkMutationFlushInProgress = false;
+    throw error;
+  }
+}
+
+async function healStaleBookmarkBulkChangeState(reason = 'startup') {
+  try {
+    const result = await browserAPI.storage.local.get([BOOKMARK_BULK_CHANGE_FLAG_KEY, BOOKMARK_BULK_CHANGE_META_KEY]);
+    const activeFlag = result?.[BOOKMARK_BULK_CHANGE_FLAG_KEY] === true;
+    if (!activeFlag) {
+      return { success: true, healed: false, reason };
+    }
+
+    const meta = result?.[BOOKMARK_BULK_CHANGE_META_KEY];
+    const updatedAt = Number(meta?.updatedAt || 0);
+    const ageMs = updatedAt > 0 ? (Date.now() - updatedAt) : Number.POSITIVE_INFINITY;
+    if (ageMs <= BOOKMARK_BULK_CHANGE_STALE_MAX_MS) {
+      return { success: true, healed: false, reason, ageMs };
+    }
+
+    await browserAPI.storage.local.set({
+      [BOOKMARK_BULK_CHANGE_FLAG_KEY]: false,
+      [BOOKMARK_BULK_CHANGE_META_KEY]: {
+        active: false,
+        reason: `${reason}:stale-heal`,
+        updatedAt: Date.now()
+      }
+    });
+    console.warn('[S-score] healed stale bookmarkBulkChangeFlag on startup');
+    return { success: true, healed: true, reason, ageMs };
+  } catch (error) {
+    console.warn('[S-score] heal stale bulk flag failed:', error);
+    return { success: false, healed: false, reason, error: error?.message || String(error) };
+  }
+}
+
+function scheduleRecommendStartupSelfHeal(reason = 'startup') {
+  if (startupRecommendSelfHealPromise) {
+    return startupRecommendSelfHealPromise;
+  }
+
+  startupRecommendSelfHealPromise = (async () => {
+    try {
+      await ensureRecommendBackgroundRefreshAlarm({ force: true });
+      const [restoreResult, healResult] = await Promise.all([
+        restoreBookmarkMutationQueueState(reason),
+        healStaleBookmarkBulkChangeState(reason)
+      ]);
+
+      return {
+        success: true,
+        reason,
+        restoredCount: Number(restoreResult?.restoredCount || 0),
+        healedBulkFlag: healResult?.healed === true
+      };
+    } catch (error) {
+      console.warn('[S-score] startup self-heal failed:', error);
+      return { success: false, reason, error: error?.message || String(error) };
+    } finally {
+      startupRecommendSelfHealPromise = null;
+    }
+  })();
+
+  return startupRecommendSelfHealPromise;
+}
+
   if (browserAPI.history && browserAPI.history.onVisited) {
     browserAPI.history.onVisited.addListener((result) => {
       if (result && result.url) {
@@ -3393,7 +5398,7 @@ browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
   }
   if (bookmark.url) {
     addBookmarkToUrlIndex(bookmark);
-    setTimeout(() => updateSingleBookmarkScore(id), 500);
+    queueBookmarkScoreMutation(id, 'created');
   }
 });
 
@@ -3427,7 +5432,7 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   }
 });
 
-browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+browserAPI.bookmarks.onChanged.addListener((id, changeInfo) => {
   noteBookmarkEventForBulkGuard('changed');
   if (isBookmarkImporting || isBookmarkBulkChanging) {
     return;
@@ -3435,23 +5440,18 @@ browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
   if (changeInfo.url || changeInfo.title) {
     if (changeInfo.url) {
       updateBookmarkUrlIndex(id, changeInfo.url);
+      queueBookmarkChangedUrlForFavicon(changeInfo.url);
     }
-    await updateSingleBookmarkScore(id);
-    if (changeInfo.url) {
-      try {
-        browserAPI.runtime.sendMessage({
-          action: 'clearFaviconCache',
-          url: changeInfo.url
-        }).catch(() => {});
-      } catch (_) {}
-    }
+    queueBookmarkScoreMutation(id, 'changed');
   }
 });
 
 // 移动/重排不直接影响 S 值公式，但在大批量移动时会触发事件风暴：用 bulk guard 兜底降噪
 if (browserAPI.bookmarks.onMoved) {
-  browserAPI.bookmarks.onMoved.addListener(() => {
+  browserAPI.bookmarks.onMoved.addListener((id, moveInfo) => {
     noteBookmarkEventForBulkGuard('moved');
+    if (isBookmarkImporting || isBookmarkBulkChanging) return;
+    queueMovedScoreMetadataRefresh(id, moveInfo || null);
   });
 }
 
@@ -3475,6 +5475,197 @@ try {
 // Runtime message handler
 // =================================================================================
 
+const processedFaviconUpdates = new Map();
+const FAVICON_UPDATE_COOLDOWN_MS = 5000;
+
+async function blobToDataUrlBackground(blob) {
+  if (!blob) return null;
+  return await new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function readBlobDimensionsBackground(blob) {
+  if (!blob) return null;
+  try {
+    if (typeof createImageBitmap !== 'function') {
+      return null;
+    }
+    const bitmap = await createImageBitmap(blob);
+    const width = Number(bitmap && bitmap.width) || 0;
+    const height = Number(bitmap && bitmap.height) || 0;
+    try {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    } catch (_) { }
+    if (width > 0 && height > 0) {
+      return { width, height };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchImageAsDataUrlBackground(url, options = {}) {
+  if (!url || typeof url !== 'string') {
+    return options.includeMeta === true
+      ? { dataUrl: '', meta: { attempted: false, hardFailure: false, errorCode: 'invalid_url' } }
+      : null;
+  }
+
+  const timeoutMs = Math.max(500, Number(options.timeoutMs) || 4000);
+  const maxBytes = Math.max(1024, Number(options.maxBytes) || (512 * 1024));
+  const minDimensionPx = Math.max(1, Number(options.minDimensionPx) || 1);
+  const includeMeta = options.includeMeta === true;
+  const wrap = (dataUrl, meta) => includeMeta ? { dataUrl, meta } : dataUrl;
+  const isHardFailureStatus = (statusCode) => {
+    const code = Number(statusCode);
+    if (!Number.isFinite(code)) return false;
+    if (code === 0 || code === 408) return true;
+    return code >= 500 && code <= 599;
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    try { controller.abort(); } catch (_) { }
+  }, timeoutMs);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      const statusCode = Number(res.status) || 0;
+      return wrap('', {
+        attempted: true,
+        statusCode,
+        hardFailure: isHardFailureStatus(statusCode),
+        errorCode: `http_${statusCode || 0}`
+      });
+    }
+
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (contentType && !contentType.startsWith('image/')) {
+      return wrap('', {
+        attempted: true,
+        statusCode: Number(res.status) || 200,
+        hardFailure: false,
+        errorCode: 'non_image_content'
+      });
+    }
+
+    const declaredLength = Number(res.headers.get('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      return wrap('', {
+        attempted: true,
+        statusCode: Number(res.status) || 200,
+        hardFailure: false,
+        errorCode: 'payload_too_large'
+      });
+    }
+
+    const blob = await res.blob();
+    if (!blob || blob.size <= 0 || blob.size > maxBytes) {
+      return wrap('', {
+        attempted: true,
+        statusCode: Number(res.status) || 200,
+        hardFailure: false,
+        errorCode: 'invalid_blob'
+      });
+    }
+
+    const dimensions = await readBlobDimensionsBackground(blob);
+    if (!dimensions || dimensions.width < minDimensionPx || dimensions.height < minDimensionPx) {
+      return wrap('', {
+        attempted: true,
+        statusCode: Number(res.status) || 200,
+        hardFailure: false,
+        errorCode: 'dimension_too_small'
+      });
+    }
+
+    const dataUrl = await blobToDataUrlBackground(blob);
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      return wrap('', {
+        attempted: true,
+        statusCode: Number(res.status) || 200,
+        hardFailure: false,
+        errorCode: 'invalid_data_url'
+      });
+    }
+    return wrap(dataUrl, {
+      attempted: true,
+      statusCode: Number(res.status) || 200,
+      hardFailure: false,
+      errorCode: ''
+    });
+  } catch (error) {
+    const errorCode = error && error.name === 'AbortError' ? 'timeout' : 'fetch_failed';
+    return wrap('', {
+      attempted: true,
+      hardFailure: true,
+      errorCode
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
+  browserAPI.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    (async () => {
+      try {
+        const pageUrl = String(tab?.url || '');
+        if (!pageUrl || (!pageUrl.startsWith('http://') && !pageUrl.startsWith('https://'))) {
+          return;
+        }
+
+        const sourceIconUrl = String(changeInfo?.favIconUrl || tab?.favIconUrl || '');
+        if (!sourceIconUrl) {
+          return;
+        }
+
+        const now = Date.now();
+        const processKey = `${pageUrl}|${sourceIconUrl}`;
+        const lastProcessed = Number(processedFaviconUpdates.get(processKey) || 0);
+        if (lastProcessed > 0 && (now - lastProcessed) < FAVICON_UPDATE_COOLDOWN_MS) {
+          return;
+        }
+        processedFaviconUpdates.set(processKey, now);
+
+        if (processedFaviconUpdates.size > 400) {
+          for (const [key, ts] of processedFaviconUpdates.entries()) {
+            if ((now - Number(ts || 0)) > (FAVICON_UPDATE_COOLDOWN_MS * 3)) {
+              processedFaviconUpdates.delete(key);
+            }
+          }
+        }
+
+        const dataUrl = await fetchImageAsDataUrlBackground(sourceIconUrl, {
+          minDimensionPx: 16,
+          maxBytes: 512 * 1024,
+          timeoutMs: 4000
+        });
+
+        if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+          try {
+            browserAPI.runtime.sendMessage({
+              action: 'updateFaviconFromTab',
+              url: pageUrl,
+              favIconUrl: dataUrl
+            }).catch(() => { });
+          } catch (_) { }
+        }
+      } catch (_) { }
+    })();
+  });
+}
+
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object' || !message.action) {
     sendResponse({ success: false, error: 'Invalid message' });
@@ -3482,6 +5673,32 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   const action = message.action;
+
+  if (action === 'canvasFetchFaviconDataUrl') {
+    (async () => {
+      try {
+        const url = typeof message.url === 'string' ? message.url : '';
+        const includeMeta = message.includeMeta === true;
+        const dataResult = await fetchImageAsDataUrlBackground(url, {
+          minDimensionPx: Number(message.minDimensionPx) || 1,
+          maxBytes: Number(message.maxBytes) || (512 * 1024),
+          timeoutMs: Number(message.timeoutMs) || 4000,
+          includeMeta
+        });
+        const dataUrl = includeMeta
+          ? (dataResult && typeof dataResult.dataUrl === 'string' ? dataResult.dataUrl : '')
+          : (typeof dataResult === 'string' ? dataResult : '');
+        sendResponse({
+          success: true,
+          dataUrl,
+          meta: includeMeta && dataResult && typeof dataResult.meta === 'object' ? dataResult.meta : null
+        });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
 
   if (action === 'extensionBookmarkOpen') {
     (async () => {
@@ -3508,6 +5725,71 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'quickReviewNext') {
+    (async () => {
+      try {
+        triggerRecommendBackgroundRefresh('quick-review-message', { requireIdle: true });
+        const result = await runQuickReviewNextState(message.source || 'ui');
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, handled: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'selectRecommendCardsRound') {
+    (async () => {
+      try {
+        const result = await selectQuickReviewCardsRoundState({
+          force: message.force === true
+        });
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'peekRecommendPreloadUrls') {
+    (async () => {
+      try {
+        const result = await peekQuickReviewPreloadUrlsState({
+          limit: Number(message.limit) || 12
+        });
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, urls: [], error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'setQuickReviewOpenMode') {
+    (async () => {
+      try {
+        const mode = await setQuickReviewOpenModeState(message.mode);
+        sendResponse({ success: true, mode });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'getQuickReviewOpenMode') {
+    (async () => {
+      try {
+        const mode = await getQuickReviewOpenModeState();
+        sendResponse({ success: true, mode });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -3640,6 +5922,26 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (action === 'getTrackingRankingStatsByRange') {
+    (async () => {
+      try {
+        const range = message.range || 'all';
+        const startTime = Number(message.startTime || 0);
+        const endTime = Number(message.endTime || Date.now());
+        const result = await getTrackingRankingStatsByRange(range, startTime, endTime);
+        sendResponse({
+          success: true,
+          stats: result?.stats || {},
+          startedAt: Number(result?.startedAt || 0),
+          source: result?.source || 'total'
+        });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (action === 'clearTrackingDisplayData') {
     (async () => {
       try {
@@ -3729,30 +6031,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const result = await markHistoryCurrentCardFlippedState(message.bookmarkId);
-        sendResponse({ success: true, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'consumeRecommendPoolCursor') {
-    (async () => {
-      try {
-        const result = await consumeRecommendPoolCursorState(message.poolLength, message.consumeCount);
-        sendResponse({ success: true, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'setRecommendPoolCursor') {
-    (async () => {
-      try {
-        const result = await setRecommendPoolCursorState(message.poolLength, message.cursor);
         sendResponse({ success: true, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
@@ -3952,7 +6230,13 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           getTrackingDataForScore(),
           getPostponedBookmarksForScore(),
           getReviewDataForScore(),
-          browserAPI.storage.local.get(['recommendScoresStaleMeta', 'bookmarkBulkChangeFlag', 'recommend_scores_time', SCORE_ALGO_VERSION_KEY])
+          browserAPI.storage.local.get([
+            'recommendScoresStaleMeta',
+            BOOKMARK_BULK_CHANGE_FLAG_KEY,
+            BOOKMARK_BULK_CHANGE_META_KEY,
+            'recommend_scores_time',
+            SCORE_ALGO_VERSION_KEY
+          ])
         ]);
 
         const cachedEntry = cache[bookmarkId] || null;
@@ -3968,7 +6252,11 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const trackingType = debug?.matches?.tracking?.type || 'none';
         if (isBookmarkImporting) notes.push('importing: score recompute paused');
         if (isBookmarkBulkChanging) notes.push('bulk-changing: score recompute paused');
-        if (meta?.bookmarkBulkChangeFlag) notes.push('bookmarkBulkChangeFlag=true');
+        if (meta?.[BOOKMARK_BULK_CHANGE_FLAG_KEY]) notes.push('bookmarkBulkChangeFlag=true');
+        const bulkMetaUpdatedAt = Number(meta?.[BOOKMARK_BULK_CHANGE_META_KEY]?.updatedAt || 0);
+        if (bulkMetaUpdatedAt > 0 && (Date.now() - bulkMetaUpdatedAt) > BOOKMARK_BULK_CHANGE_STALE_MAX_MS) {
+          notes.push('bookmarkBulkChangeFlag may be stale (startup self-heal pending)');
+        }
         if (!trackingWarm) notes.push('tracking cold-start: w3 disabled');
         if (trackingType === 'none') notes.push('tracking miss: T neutral=0.5');
         if (cachedEntry && cachedS != null && computedS != null && Math.abs(cachedS - computedS) > 0.02) {
@@ -3983,7 +6271,16 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (computedS != null && canUpdateCache) {
           const shouldUpdate = !cachedEntry || cachedS == null || Math.abs(cachedS - computedS) > 1e-6;
           if (shouldUpdate) {
-            cache[bookmarkId] = mode === SCORE_CACHE_MODE_FULL ? debug.factors : { S: computedS };
+            const bookmarkForCache = {
+              ...bookmark,
+              ancestorFolderIds: normalizeScoreCacheAncestorFolderIds(cachedEntry?.ancestorFolderIds)
+            };
+            cache[bookmarkId] = buildScoreCacheEntry({
+              mode,
+              scores: debug.factors,
+              existing: cachedEntry,
+              bookmark: bookmarkForCache
+            });
             await saveScoresCache(cache);
             cacheUpdated = true;
           }

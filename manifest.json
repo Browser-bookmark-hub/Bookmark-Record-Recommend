@@ -45,14 +45,25 @@
         "linux": "Alt+4"
       },
       "description": "Open 'Bookmark Recommend' view"
+    },
+    "quick_review_next": {
+      "suggested_key": {
+        "default": "Ctrl+Down",
+        "mac": "Alt+Down",
+        "windows": "Ctrl+Down",
+        "linux": "Ctrl+Down"
+      },
+      "description": "Quick review: start or open next card"
     }
   },
   "permissions": [
     "unlimitedStorage",
+    "favicon",
     "sidePanel",
     "bookmarks",
     "history",
     "storage",
+    "alarms",
     "idle",
     "downloads",
     "tabs",

@@ -77,7 +77,8 @@ function getCalendarLayoutTokens() {
             monthTopGap: '10px',
             splitGap: '10px',
             splitMinHeight: '320px',
-            sidebarWidth: '92px',
+            // 侧边栏模式：宽度以 20% 为主，保留最小/最大值避免过窄或过宽
+            sidebarWidth: 'clamp(92px, 20%, 220px)',
             sidebarPaddingRight: '6px'
         };
     }
@@ -88,7 +89,8 @@ function getCalendarLayoutTokens() {
         monthTopGap: '20px',
         splitGap: '20px',
         splitMinHeight: '400px',
-        sidebarWidth: '128px',
+        // 标签页模式：目录栏按约 20% 展示，并限制上下界
+        sidebarWidth: 'clamp(180px, 20%, 320px)',
         sidebarPaddingRight: '10px'
     };
 }
@@ -3303,16 +3305,20 @@ class BookmarkCalendar {
             const bookmarks = this.bookmarksByDate.get(dateKey) || [];
             const isTodayCard = this.isToday(date);
             const dayOfWeek = date.getDay(); // 0-6 (周日到周六)
+            const hasBookmarks = bookmarks.length > 0;
 
-            if (bookmarks.length <= 0) {
-                continue;
+            if (hasBookmarks) {
+                allBookmarks.push({ date, bookmarks });
             }
-            allBookmarks.push({ date, bookmarks });
 
             const dayCard = document.createElement('div');
             dayCard.className = 'week-day-card';
             dayCard.style.position = 'relative';
-            dayCard.dataset.dateKey = dateKey;
+            if (hasBookmarks) {
+                dayCard.dataset.dateKey = dateKey;
+            } else {
+                dayCard.classList.add('week-day-card-empty');
+            }
 
             // 如果是今天，添加蓝色边框
             if (isTodayCard) {
@@ -3320,25 +3326,29 @@ class BookmarkCalendar {
             }
 
             // 勾选模式下的样式
-            if (this.selectedDates.has(dateKey)) {
+            if (hasBookmarks && this.selectedDates.has(dateKey)) {
                 dayCard.classList.add('selected');
             }
 
             const countColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
+            const countText = hasBookmarks
+                ? t('calendarBookmarkCount', bookmarks.length)
+                : '&nbsp;';
+            const countClass = hasBookmarks ? 'week-day-count' : 'week-day-count week-day-count-empty';
 
             dayCard.innerHTML = `
                 <div class="week-day-header">
                     <div class="week-day-name">${tw(dayOfWeek)}</div>
                     <div class="week-day-date">${date.getDate()}</div>
                 </div>
-                <div class="week-day-count" style="color: ${countColor};">${t('calendarBookmarkCount', bookmarks.length)}</div>
+                <div class="${countClass}" style="color: ${countColor};">${countText}</div>
                 ${isTodayCard ? `<div style="position: absolute; bottom: 4px; right: 4px; font-size: 11px; color: #2196F3; font-weight: 600;">${currentLang === 'en' ? 'Today' : '今天'}</div>` : ''}
             `;
 
             // 勾选模式下的事件处理
             if (this.selectMode) {
                 // 只有有书签数据的格子才能被勾选
-                if (bookmarks.length > 0) {
+                if (hasBookmarks) {
                     // 鼠标进入：拖拽中时勾选（防抖render）
                     dayCard.addEventListener('mouseenter', () => {
                         if (this.isDragging && this.dragStartPos) {
@@ -3377,14 +3387,11 @@ class BookmarkCalendar {
                             }
                         }
                     });
-                } else {
-                    // 空白格子：显示为不可用状态
-                    dayCard.style.opacity = '0.5';
                 }
             } else {
                 // 普通模式：点击进入日视图
                 dayCard.addEventListener('click', () => {
-                    if (bookmarks.length > 0) {
+                    if (hasBookmarks) {
                         this.currentDay = date;
                         // currentWeekStart已经设置正确，无需更新
                         this.viewLevel = 'day';
@@ -5499,11 +5506,4 @@ window.updateBookmarkCalendarLanguage = function () {
     }
 };
 
-// 自动初始化
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(() => window.initBookmarkCalendar(), 500);
-    });
-} else {
-    setTimeout(() => window.initBookmarkCalendar(), 500);
-}
+// 仅按需初始化（由 history.js 在进入对应子视图时触发）
