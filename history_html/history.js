@@ -591,8 +591,7 @@ async function ensureAdditionsCacheLoaded(skipRender) {
                     renderAdditionsView();
                 }
             }
-        } catch (error) {
-            console.warn('[AdditionsCache] 恢复失败:', error);
+        } catch {
         }
     })();
 
@@ -4723,8 +4722,7 @@ function openBrowserShortcutsSettingsPage() {
         if (browserAPI?.tabs?.create) {
             browserAPI.tabs.create({ url });
         }
-    } catch (e) {
-        console.warn('[Shortcuts] 打开浏览器快捷键设置页面失败:', e);
+    } catch {
     }
 }
 
@@ -7147,8 +7145,7 @@ function renderCurrentView() {
                 } else if (typeof initBookmarkCalendar === 'function') {
                     initBookmarkCalendar();
                 }
-            } catch (error) {
-                console.warn('[renderCurrentView] 初始化 additions 日历失败:', error);
+            } catch {
             }
             break;
         case 'recommend':
@@ -7452,9 +7449,7 @@ function flushWidgetsPendingRefresh() {
             if (isWidgetsInteractionActive({ includeCooldown: false })) return;
             applyWidgetsSmartSort();
         })
-        .catch((error) => {
-            console.warn('[Widgets] 交互后补刷失败:', error);
-        });
+        .catch(() => { });
 }
 
 function touchWidgetsInteraction() {
@@ -9135,8 +9130,7 @@ function runWidgetsRankingHydration(reason = 'widgets-fast-path') {
             if (currentView === 'widgets') {
                 markWidgetsDirty('ranking', { delayMs: 120 });
             }
-        } catch (error) {
-            console.warn('[Widgets] 点击排行后台补算失败:', reason, error);
+        } catch {
         } finally {
             widgetsRankingHydrationPromise = null;
         }
@@ -11900,9 +11894,7 @@ async function updateWidgetsAdditionsWeekWidget() {
 
         const hasCalendarSnapshot = Boolean(window.bookmarkCalendarInstance?.bookmarksByDate);
         if (!hasInMemoryAdditions && !hasCalendarSnapshot) {
-            ensureAdditionsCacheLoaded(true).catch((error) => {
-                console.warn('[Widgets] 书签添加数据异步加载失败:', error);
-            });
+            ensureAdditionsCacheLoaded(true).catch(() => { });
         }
 
         const additionsSourceLoading = isWidgetsAdditionsSourceStillLoading();
@@ -12460,7 +12452,6 @@ async function updateWidgetsViewData(options = {}) {
                 return;
             }
             widgetsDirtyFlags[result.target] = true;
-            console.warn(`[Widgets] 刷新${result.target}失败:`, result.error);
         });
 
         if (hasVisualUpdate || force) {
@@ -12574,8 +12565,7 @@ function runWidgetsSourcePrime(reason = 'widgets-idle-prime') {
 
             // 首屏优先用缓存秒开，增量同步放后台慢慢跑。
             refreshBrowsingHistoryData({ forceFull: false, silent: true }).catch(() => { });
-        } catch (error) {
-            console.warn('[Widgets] 首次数据源预热失败:', reason, error);
+        } catch {
         } finally {
             widgetsSourcePrimePromise = null;
         }
@@ -12657,8 +12647,7 @@ function startWidgetsViewRefresh() {
         updateWidgetsViewData({
             targets: initialTargets,
             recommendAllowBootstrap: false
-        }).catch((error) => {
-            console.warn('[Widgets] 初次刷新失败:', error);
+        }).catch(() => {
             setWidgetsOpenStabilizing(false, { releaseDelayMs: 0 });
         });
     });
@@ -12675,9 +12664,7 @@ function startWidgetsViewRefresh() {
             updateWidgetsViewData({
                 targets: ['recommend'],
                 recommendAllowBootstrap: true
-            }).catch((error) => {
-                console.warn('[Widgets] 推荐预热补刷失败:', error);
-            });
+            }).catch(() => { });
         }, 120);
     }
 
@@ -12691,9 +12678,7 @@ function startWidgetsViewRefresh() {
             widgetsInitialHydrationRetryTimer = null;
             if (currentView !== 'widgets') return;
             markWidgetsDirty(WIDGETS_REFRESH_TARGETS, { schedule: false });
-            updateWidgetsViewData().catch((error) => {
-                console.warn('[Widgets] 首次补刷失败:', error);
-            });
+            updateWidgetsViewData().catch(() => { });
         }, WIDGETS_INITIAL_HYDRATION_RETRY_MS);
     }
 
@@ -12709,9 +12694,7 @@ function startWidgetsViewRefresh() {
 
             // 周期任务收窄：常驻只刷追踪状态，其他统计走点到即算/后台补算。
             markWidgetsDirty('tracking', { schedule: false });
-            updateWidgetsViewData().catch((error) => {
-                console.warn('[Widgets] 周期刷新失败:', error);
-            });
+            updateWidgetsViewData().catch(() => { });
         }, WIDGETS_VIEW_REFRESH_INTERVAL_MS);
     }, WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS + 240);
 
@@ -12782,9 +12765,7 @@ function cycleWidgetsAdditionsRange() {
     writeWidgetsAdditionsRange(nextRange);
     updateWidgetsAdditionsToggleLabel();
     markWidgetsDirty('additionsWeek', { schedule: false });
-    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
-        console.warn('[Widgets] 切换书签添加记录范围失败:', error);
-    });
+    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch(() => { });
 }
 
 function cycleWidgetsAdditionsViewMode() {
@@ -12794,9 +12775,7 @@ function cycleWidgetsAdditionsViewMode() {
     writeWidgetsAdditionsViewMode(nextMode);
     updateWidgetsAdditionsToggleLabel();
     markWidgetsDirty('additionsWeek', { schedule: false });
-    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
-        console.warn('[Widgets] 切换书签添加记录视图失败:', error);
-    });
+    updateWidgetsViewData({ targets: ['additionsWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch(() => { });
 }
 
 function cycleWidgetsHistoryRange() {
@@ -12805,9 +12784,7 @@ function cycleWidgetsHistoryRange() {
     writeWidgetsHistoryRange(nextRange);
     updateWidgetsHistoryToggleLabel();
     markWidgetsDirty('historyWeek', { schedule: false });
-    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
-        console.warn('[Widgets] 切换点击记录范围失败:', error);
-    });
+    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch(() => { });
 }
 
 function cycleWidgetsHistoryViewMode() {
@@ -12817,9 +12794,7 @@ function cycleWidgetsHistoryViewMode() {
     writeWidgetsHistoryViewMode(nextMode);
     updateWidgetsHistoryToggleLabel();
     markWidgetsDirty('historyWeek', { schedule: false });
-    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
-        console.warn('[Widgets] 切换点击记录视图失败:', error);
-    });
+    updateWidgetsViewData({ targets: ['historyWeek'], bypassVisualGate: true, allowDuringInteraction: true }).catch(() => { });
 }
 
 function cycleWidgetsRankingVisualMode() {
@@ -12828,9 +12803,7 @@ function cycleWidgetsRankingVisualMode() {
     writeWidgetsRankingVisualMode(nextMode);
     updateWidgetsRankingVisualToggleLabel(nextMode);
     markWidgetsDirty('ranking', { schedule: false });
-    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
-        console.warn('[Widgets] 切换点击排行图表失败:', error);
-    });
+    updateWidgetsViewData({ targets: ['ranking'], bypassVisualGate: true, allowDuringInteraction: true }).catch(() => { });
 }
 
 function cycleWidgetsRankingViewMode() {
@@ -20741,7 +20714,6 @@ async function refreshRecommendCards(force = false) {
             return;
         }
 
-        console.warn('[书签推荐] 后台选卡不可用，本次保持当前展示');
         if (force) {
             try {
                 showToast(currentLang === 'en'
@@ -23388,8 +23360,7 @@ async function waitForBrowsingHistoryCalendar(options = {}) {
         if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
             initBrowsingHistoryCalendar();
         }
-    } catch (e) {
-        console.warn('[BrowsingHistoryCalendar] 初始化失败:', e);
+    } catch {
     }
 
     const start = Date.now();

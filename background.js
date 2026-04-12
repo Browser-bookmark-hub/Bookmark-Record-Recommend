@@ -2731,7 +2731,6 @@ async function maybeRunRecommendBackgroundRefresh(options = {}) {
 
     return { success: true, refreshed: true, reason };
   } catch (error) {
-    console.warn('[S-score] background refresh failed:', error);
     return { success: false, refreshed: false, skipped: 'error', reason, error: error?.message || String(error) };
   } finally {
     recommendBackgroundRefreshInProgress = false;
@@ -2787,7 +2786,6 @@ async function ensureRecommendBackgroundRefreshAlarm(options = {}) {
       });
       return { success: true, created: true };
     } catch (error) {
-      console.warn('[S-score] ensure background refresh alarm failed:', error);
       return { success: false, error: error?.message || String(error) };
     } finally {
       ensureRecommendBackgroundRefreshAlarmLastCheckAt = Date.now();
@@ -4940,7 +4938,6 @@ async function scheduleScoreUpdateByUrl(url) {
         await updateSingleBookmarkScore(bookmark.id);
       }
     } catch (e) {
-      console.warn('[S-score] URL update failed:', e);
     }
   }, 1000);
 }
@@ -5103,7 +5100,6 @@ async function persistPendingBookmarkMutationQueueNow(reason = '') {
       count: snapshot.createdIds.length + snapshot.changedIds.length + snapshot.movedIds.length + snapshot.changedUrls.length
     };
   } catch (error) {
-    console.warn('[S-score] persist bookmark mutation queue failed:', error);
     return { success: false, reason, error: error?.message || String(error) };
   }
 }
@@ -5138,10 +5134,8 @@ function restoreBookmarkMutationQueueState(reason = 'startup') {
       queueBookmarkMutationFlush();
 
       const restoredCount = payload.createdIds.length + payload.changedIds.length + payload.movedIds.length + payload.changedUrls.length;
-      console.warn(`[S-score] restored mutation queue (${restoredCount}) from ${reason}`);
       return { success: true, restoredCount, reason };
     } catch (error) {
-      console.warn('[S-score] restore bookmark mutation queue failed:', error);
       return { success: false, restoredCount: 0, reason, error: error?.message || String(error) };
     } finally {
       restoreBookmarkMutationQueuePromise = null;
@@ -5181,7 +5175,6 @@ function queueBookmarkMutationFlush() {
   bookmarkMutationFlushTimer = setTimeout(() => {
     bookmarkMutationFlushTimer = null;
     flushQueuedBookmarkMutations().catch((e) => {
-      console.warn('[S-score] bookmark mutation flush failed:', e);
       if (getPendingBookmarkMutationCount() > 0) {
         queueBookmarkMutationFlush();
       }
@@ -5344,10 +5337,8 @@ async function healStaleBookmarkBulkChangeState(reason = 'startup') {
         updatedAt: Date.now()
       }
     });
-    console.warn('[S-score] healed stale bookmarkBulkChangeFlag on startup');
     return { success: true, healed: true, reason, ageMs };
   } catch (error) {
-    console.warn('[S-score] heal stale bulk flag failed:', error);
     return { success: false, healed: false, reason, error: error?.message || String(error) };
   }
 }
@@ -5372,7 +5363,6 @@ function scheduleRecommendStartupSelfHeal(reason = 'startup') {
         healedBulkFlag: healResult?.healed === true
       };
     } catch (error) {
-      console.warn('[S-score] startup self-heal failed:', error);
       return { success: false, reason, error: error?.message || String(error) };
     } finally {
       startupRecommendSelfHealPromise = null;

@@ -893,8 +893,7 @@ async function getTrackingDailyStatsByRange(startTime, endTime) {
         }
 
         return { stats: aggregated, startedAt };
-    } catch (error) {
-        console.warn('[ActiveTimeTracker] 获取区间统计失败:', error);
+    } catch {
         return { stats: {}, startedAt: 0 };
     }
 }

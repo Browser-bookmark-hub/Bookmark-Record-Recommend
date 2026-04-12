@@ -73,8 +73,7 @@ function updateShortcutsDisplay() {
                         ? 'edge://extensions/shortcuts'
                         : 'chrome://extensions/shortcuts';
                     browserAPI.tabs.create({ url });
-                } catch (e) {
-                    console.warn('[Shortcuts] 打开浏览器快捷键设置页面失败:', e);
+                } catch {
                 }
             });
         }
