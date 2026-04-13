@@ -4103,7 +4103,15 @@ function applyLanguage() {
     if (widgetsCardRefreshText) widgetsCardRefreshText.textContent = i18n.widgetsCardRefreshText[currentLang];
     const widgetsCardRefreshBtn = document.getElementById('widgetsCardRefreshBtn');
     if (widgetsCardRefreshBtn) {
-        widgetsCardRefreshBtn.title = i18n.widgetsCardRefreshText[currentLang];
+        const refreshTooltipText = i18n.widgetsCardRefreshText[currentLang];
+        const isSidePanelMode = document.documentElement.classList.contains('side-panel-mode');
+        if (isSidePanelMode) {
+            widgetsCardRefreshBtn.dataset.instantTooltip = refreshTooltipText;
+            widgetsCardRefreshBtn.removeAttribute('title');
+        } else {
+            widgetsCardRefreshBtn.setAttribute('title', refreshTooltipText);
+            widgetsCardRefreshBtn.removeAttribute('data-instant-tooltip');
+        }
         widgetsCardRefreshBtn.setAttribute('aria-label', i18n.widgetsCardRefreshText[currentLang]);
     }
     const widgetsQuickReviewBtn = document.getElementById('widgetsQuickReviewBtn');
