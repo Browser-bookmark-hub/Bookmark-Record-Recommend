@@ -172,7 +172,6 @@ window.SearchContextManager = {
 
         this.currentContext = next;
         this._lastContextKey = key;
-        console.log('[SearchContext] Context Updated:', this.currentContext);
 
         // [Search Isolation] Different pages share the same top search input but have different behaviors.
         // When context changes, clear the input + results so queries won't leak across views/tabs.
@@ -273,7 +272,6 @@ function syncSearchContextFromCurrentUI(reason = 'sync') {
                 setSearchMode(view, { switchView: false });
             }
         } catch (_) { }
-        console.log('[SearchContext] Synced from UI:', { reason, view, tab, subTab });
     } catch (_) { }
 }
 

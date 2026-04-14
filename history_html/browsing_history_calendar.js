@@ -517,7 +517,6 @@ class BrowsingHistoryCalendar {
             const { startKey, endKey } = this.getRangeKeys(range);
             const loaded = await this.loadViewRangeFromCache(startKey, endKey);
             if (loaded) {
-                console.log('[BrowsingHistoryCalendar] 已从缓存恢复', this.bookmarksByDate.size, '天数据');
             }
             return loaded;
         } catch (error) {
@@ -942,24 +941,20 @@ class BrowsingHistoryCalendar {
     }
 
     async init() {
-        console.log('[BrowsingHistoryCalendar] 初始化...');
 
         // ✨ 尝试使用新的数据库架构
         if (typeof DatabaseManager !== 'undefined') {
-            console.log('[BrowsingHistoryCalendar] 使用新的三库架构');
             this.useNewArchitecture = true;
             this.dbManager = new DatabaseManager();
 
             try {
                 const result = await this.dbManager.initialize({ forceRefresh: false });
-                console.log('[BrowsingHistoryCalendar] DatabaseManager初始化:', result);
 
                 // 从DatabaseManager同步数据到bookmarksByDate（用于渲染）
                 this.syncFromDatabaseManager();
 
                 // 监听数据更新事件
                 document.addEventListener('browsingDataUpdated', (event) => {
-                    console.log('[BrowsingHistoryCalendar] 收到数据更新事件:', event.detail);
                     this.syncFromDatabaseManager();
                     this.render();
                     // ✨ 派发旧的更新事件，以便其他组件（如点击排行）也能收到通知
@@ -976,7 +971,6 @@ class BrowsingHistoryCalendar {
         if (typeof FaviconCache !== 'undefined' && FaviconCache.init) {
             try {
                 await FaviconCache.init();
-                console.log('[BrowsingHistoryCalendar] FaviconCache初始化完成');
             } catch (error) {
                 console.warn('[BrowsingHistoryCalendar] FaviconCache初始化失败:', error);
             }
@@ -1033,7 +1027,6 @@ class BrowsingHistoryCalendar {
         if (this.isVisible()) {
             this.render();
         } else {
-            console.log('[BrowsingHistoryCalendar] View is hidden, deferring render...');
             this.setupVisibilityObserver();
         }
 
@@ -1067,7 +1060,6 @@ class BrowsingHistoryCalendar {
 
         const observer = new MutationObserver((mutations) => {
             if (this.isVisible()) {
-                console.log('[BrowsingHistoryCalendar] View became visible, rendering...');
                 this.render();
             }
         });
@@ -1118,7 +1110,6 @@ class BrowsingHistoryCalendar {
     syncFromDatabaseManager() {
         if (!this.dbManager) return;
 
-        console.log('[BrowsingHistoryCalendar] 同步DatabaseManager数据...');
 
         // 清空现有数据
         this.bookmarksByDate.clear();
@@ -1153,7 +1144,6 @@ class BrowsingHistoryCalendar {
         }
 
         const stats = bookmarkHistoryDB.getStats();
-        console.log('[BrowsingHistoryCalendar] 同步完成:', stats);
     }
 
     // 从localStorage恢复勾选模式和视图状态
@@ -1186,7 +1176,6 @@ class BrowsingHistoryCalendar {
             try {
                 const dates = JSON.parse(savedSelectedDates);
                 this.selectedDates = new Set(dates);
-                console.log('[BrowsingHistoryCalendar] 恢复选中日期:', this.selectedDates.size);
             } catch (error) {
                 console.warn('[BrowsingHistoryCalendar] 恢复选中日期失败:', error);
                 this.selectedDates = new Set();
@@ -1211,11 +1200,6 @@ class BrowsingHistoryCalendar {
                     this.currentDay = new Date(viewState.currentDay);
                 }
 
-                console.log('[BrowsingHistoryCalendar] 恢复视图状态:', {
-                    viewLevel: this.viewLevel,
-                    year: this.currentYear,
-                    month: this.currentMonth
-                });
             } catch (error) {
                 console.warn('[BrowsingHistoryCalendar] 恢复视图状态失败:', error);
             }
@@ -1489,12 +1473,6 @@ class BrowsingHistoryCalendar {
                 return false;
             });
             if (historyItems.length) {
-                console.log('[BrowsingHistoryCalendar] 历史匹配结果:', {
-                    total: historyItems.length,
-                    urlMatch: urlMatchCount,
-                    titleMatch: titleMatchCount,
-                    relevant: relevantHistoryItems.length
-                });
             }
             if (!relevantHistoryItems.length) {
                 this.historyCacheMeta.lastSyncTime = now;
@@ -1710,7 +1688,6 @@ class BrowsingHistoryCalendar {
         this.currentWeekStart = new Date(today);
         this.currentWeekStart.setDate(today.getDate() - todayDay + 1);
 
-        console.log('[BrowsingHistoryCalendar] 默认显示当月当天:', this.currentYear, '年', this.currentMonth + 1, '月');
     }
 
     // ========== 面包屑导航 ==========
@@ -6736,7 +6713,6 @@ class BrowsingHistoryCalendar {
         const exitBtn = document.getElementById('exitLocateModeBtn');
         if (exitBtn) exitBtn.remove();
 
-        console.log('[BrowsingHistoryCalendar] Exited locate mode');
     }
 
     renderExitButton() {

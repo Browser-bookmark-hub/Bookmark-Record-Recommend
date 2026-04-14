@@ -161,13 +161,11 @@ class BookmarkCalendar {
     }
 
     async init() {
-        console.log('[BookmarkCalendar] 初始化...');
 
         // 初始化FaviconCache（如果可用）
         if (typeof FaviconCache !== 'undefined' && FaviconCache.init) {
             try {
                 await FaviconCache.init();
-                console.log('[BookmarkCalendar] FaviconCache初始化完成');
             } catch (error) {
                 console.warn('[BookmarkCalendar] FaviconCache初始化失败:', error);
             }
@@ -207,7 +205,6 @@ class BookmarkCalendar {
         if (this.isVisible()) {
             this.render();
         } else {
-            console.log('[BookmarkCalendar] View is hidden, deferring render...');
             this.setupVisibilityObserver();
         }
 
@@ -228,7 +225,6 @@ class BookmarkCalendar {
         // Watch for class changes (active class toggling) or style changes
         const observer = new MutationObserver((mutations) => {
             if (this.isVisible()) {
-                console.log('[BookmarkCalendar] View became visible, rendering...');
                 this.render();
                 // Once rendered, we might keep observing if we want to support dynamic updates, 
                 // but for "Defer Initial Render", we can strictly safeguard render() too.
@@ -269,7 +265,6 @@ class BookmarkCalendar {
             try {
                 const dates = JSON.parse(savedSelectedDates);
                 this.selectedDates = new Set(dates);
-                console.log('[BookmarkCalendar] 恢复选中日期:', this.selectedDates.size);
             } catch (error) {
                 console.warn('[BookmarkCalendar] 恢复选中日期失败:', error);
                 this.selectedDates = new Set();
@@ -294,11 +289,6 @@ class BookmarkCalendar {
                     this.currentDay = new Date(viewState.currentDay);
                 }
 
-                console.log('[BookmarkCalendar] 恢复视图状态:', {
-                    viewLevel: this.viewLevel,
-                    year: this.currentYear,
-                    month: this.currentMonth // Fixed: was missing from replacement causing error?
-                });
             } catch (error) {
                 console.warn('[BookmarkCalendar] 恢复视图状态失败:', error);
             }
@@ -477,7 +467,6 @@ class BookmarkCalendar {
         try {
             const bookmarks = await chrome.bookmarks.getTree();
             this.parseBookmarks(bookmarks[0]);
-            console.log('[BookmarkCalendar] 加载完成，共', this.bookmarksByDate.size, '个日期');
         } catch (error) {
             console.error('[BookmarkCalendar] 加载失败:', error);
         }
@@ -555,7 +544,6 @@ class BookmarkCalendar {
         this.currentWeekStart = new Date(today);
         this.currentWeekStart.setDate(today.getDate() - todayDay + 1);
 
-        console.log('[BookmarkCalendar] 默认显示当月当天:', this.currentYear, '年', this.currentMonth + 1, '月');
     }
 
     // ========== 面包屑导航 ==========
@@ -5469,7 +5457,6 @@ class BookmarkCalendar {
         const exitBtn = document.getElementById('exitLocateModeBtn');
         if (exitBtn) exitBtn.remove();
 
-        console.log('[BookmarkCalendar] Exited locate mode');
     }
 
     renderExitButton() {

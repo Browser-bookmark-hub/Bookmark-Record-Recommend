@@ -301,7 +301,6 @@ function applyTrackingBlockedToActiveSessions() {
         if (isTrackingBlockedByCache({ url: session.url, bookmarkId: session.bookmarkId })) {
             session.end();
             activeSessions.delete(tabId);
-            console.log('[ActiveTimeTracker] 已停止屏蔽会话:', session.title || session.url);
         }
     }
 }
@@ -333,7 +332,6 @@ async function openDatabase() {
 
         request.onsuccess = () => {
             db = request.result;
-            console.log('[ActiveTimeTracker] 数据库打开成功');
             resolve(db);
         };
 
@@ -351,7 +349,6 @@ async function openDatabase() {
                 store.createIndex('startTime', 'startTime', { unique: false });
                 store.createIndex('endTime', 'endTime', { unique: false });
 
-                console.log('[ActiveTimeTracker] 创建 active_sessions 表');
             }
         };
     });
@@ -360,7 +357,6 @@ async function openDatabase() {
 async function saveSession(session) {
     try {
         if (isTrackingBlockedByCache({ url: session.url, bookmarkId: session.bookmarkId })) {
-            console.log('[ActiveTimeTracker] 会话被屏蔽，跳过保存:', session.title || session.url);
             return false;
         }
         const database = await openDatabase();
@@ -402,8 +398,6 @@ async function saveSession(session) {
             const request = store.add(record);
 
             request.onsuccess = async () => {
-                console.log('[ActiveTimeTracker] 会话已保存:', record.url,
-                    `综合时间: ${Math.round(record.compositeMs / 1000)}秒`);
 
                 // 同时更新永久存储中的累积统计
                 await updateTrackingStats(record);
@@ -525,7 +519,6 @@ async function updateTrackingStats(record) {
         }
 
         await browserAPI.storage.local.set(updates);
-        console.log('[ActiveTimeTracker] 累积统计已更新:', key);
     } catch (error) {
         console.warn('[ActiveTimeTracker] 更新累积统计失败:', error);
     }
@@ -620,7 +613,6 @@ async function clearAllSessions() {
             const request = store.clear();
 
             request.onsuccess = () => {
-                console.log('[ActiveTimeTracker] IndexedDB 会话记录已清除');
                 resolve(true);
             };
 
@@ -643,7 +635,6 @@ async function clearCurrentTrackingSessions() {
             'activeTrackingSessionsUpdatedAt'
         ]);
         activeSessions.clear();
-        console.log('[ActiveTimeTracker] 正在追踪的会话已清除');
         return true;
     } catch (error) {
         console.error('[ActiveTimeTracker] clearCurrentTrackingSessions 错误:', error);
@@ -671,7 +662,6 @@ async function clearTrackingStatsByRange(range) {
             ]);
             // 同时清除 IndexedDB
             await clearAllSessions();
-            console.log('[ActiveTimeTracker] 已清除全部综合排行数据');
             return { cleared: Object.keys(stats).length, remaining: 0 };
         }
 
@@ -714,7 +704,6 @@ async function clearTrackingStatsByRange(range) {
         // 同时清除 IndexedDB 中对应时间范围的数据
         await clearSessionsByTimeRange(0, cutoffTime);
 
-        console.log('[ActiveTimeTracker] 已清除', clearedCount, '条综合排行数据（', range, '以前）');
         return { cleared: clearedCount, remaining: Object.keys(newStats).length };
     } catch (error) {
         console.error('[ActiveTimeTracker] clearTrackingStatsByRange 错误:', error);
@@ -742,7 +731,6 @@ async function clearSessionsByTimeRange(startTime, endTime) {
                     }
                     cursor.continue();
                 } else {
-                    console.log('[ActiveTimeTracker] 已清除', deletedCount, '条IndexedDB记录');
                     resolve(deletedCount);
                 }
             };
@@ -757,7 +745,6 @@ async function clearSessionsByTimeRange(startTime, endTime) {
 // 数据一致性检查：同步 trackingStats 和 IndexedDB
 async function syncTrackingData() {
     try {
-        console.log('[ActiveTimeTracker] 开始数据一致性检查...');
 
         // 从 IndexedDB 重新计算统计
         const sessions = await getSessionsByTimeRange(0, Date.now());
@@ -805,15 +792,12 @@ async function syncTrackingData() {
         };
 
         if (diff.added.length > 0 || diff.removed.length > 0 || diff.updated.length > 0) {
-            console.log('[ActiveTimeTracker] 发现数据不一致:', diff);
             pruneTrackingStats(recalculatedStats, Date.now());
             const prunedKeys = Object.keys(recalculatedStats);
             await browserAPI.storage.local.set({ trackingStats: recalculatedStats });
-            console.log('[ActiveTimeTracker] 已同步 trackingStats，共', prunedKeys.length, '条记录');
             return { synced: true, diff, totalRecords: prunedKeys.length };
         }
 
-        console.log('[ActiveTimeTracker] 数据一致，无需同步');
         return { synced: false, totalRecords: currentKeys.length };
     } catch (error) {
         console.error('[ActiveTimeTracker] syncTrackingData 错误:', error);
@@ -1003,7 +987,6 @@ async function persistActiveSessionsToStorage() {
         });
 
         if (sessionsData.length > 0) {
-            console.log('[ActiveTimeTracker] 已持久化', sessionsData.length, '个活跃会话到永久存储');
         }
     } catch (error) {
         console.error('[ActiveTimeTracker] 持久化会话状态失败:', error);
@@ -1018,7 +1001,6 @@ async function restoreActiveSessionsFromStorage() {
         const updatedAt = result.activeTrackingSessionsUpdatedAt || 0;
 
         if (sessionsData.length === 0) {
-            console.log('[ActiveTimeTracker] 无需恢复，永久存储中没有活跃会话');
             return 0;
         }
 
@@ -1027,7 +1009,6 @@ async function restoreActiveSessionsFromStorage() {
 
         // 如果距离上次更新超过5分钟，可能会话已经过期，不恢复
         if (timeSinceUpdate > 5 * 60 * 1000) {
-            console.log('[ActiveTimeTracker] 持久化数据过期（', Math.round(timeSinceUpdate / 1000), '秒前），不恢复');
             await browserAPI.storage.local.remove(['activeTrackingSessions', 'activeTrackingSessionsUpdatedAt']);
             return 0;
         }
@@ -1051,7 +1032,6 @@ async function restoreActiveSessionsFromStorage() {
                 }
 
                 if (isTrackingBlockedByCache({ url: currentTabUrl, bookmarkId: data.bookmarkId })) {
-                    console.log('[ActiveTimeTracker] 恢复跳过屏蔽会话:', data.title || data.url);
                     continue;
                 }
 
@@ -1127,8 +1107,6 @@ async function restoreActiveSessionsFromStorage() {
                 activeSessions.set(data.tabId, session);
                 restoredCount++;
 
-                console.log('[ActiveTimeTracker] 恢复会话:', data.title || data.url,
-                    '累积时间:', Math.round(activeMetric.total / 1000), '秒');
             } catch (e) {
                 // 标签页不存在，跳过
             }
@@ -1137,7 +1115,6 @@ async function restoreActiveSessionsFromStorage() {
         // 清除已恢复的持久化数据
         await browserAPI.storage.local.remove(['activeTrackingSessions', 'activeTrackingSessionsUpdatedAt']);
 
-        console.log('[ActiveTimeTracker] 从永久存储恢复了', restoredCount, '个会话');
         return restoredCount;
     } catch (error) {
         console.error('[ActiveTimeTracker] 恢复会话状态失败:', error);
@@ -1169,7 +1146,6 @@ async function saveAllActiveSessions() {
     }
 
     activeSessions.clear();
-    console.log('[ActiveTimeTracker] 浏览器关闭/暂停，已保存', savedCount, '个活跃会话');
     return savedCount;
 }
 
@@ -1194,7 +1170,6 @@ async function deleteSessionsByUrl(url) {
                     deletedCount++;
                     cursor.continue();
                 } else {
-                    console.log('[ActiveTimeTracker] 已删除', deletedCount, '条记录:', normalizedUrl);
                     resolve(deletedCount);
                 }
             };
@@ -1230,7 +1205,6 @@ async function deleteSessionsByTitle(title) {
                     }
                     cursor.continue();
                 } else {
-                    console.log('[ActiveTimeTracker] 按标题删除了', deletedCount, '条记录:', normalizedTitle);
                     resolve(deletedCount);
                 }
             };
@@ -1404,8 +1378,6 @@ async function rebuildBookmarkCache() {
         };
 
         traverse(tree, []);
-        console.log('[ActiveTimeTracker] 书签缓存已重建:',
-            bookmarkUrlSet.size, 'URLs,', bookmarkTitleSet.size, 'Titles');
     } catch (error) {
         console.error('[ActiveTimeTracker] 重建书签缓存失败:', error);
     }
@@ -1582,7 +1554,6 @@ class SessionData {
         // 通过「书签打开」归因：即使 URL/标题 已变化，也继续追踪到该书签
         if (this.forceBookmarkTracking && this.trackedUrl) {
             if (!normalizeUrl(this.trackedUrl)) {
-                console.log('[ActiveTimeTracker] 归因URL不可追踪，跳过:', this.trackedUrl);
                 return false;
             }
 
@@ -1598,7 +1569,6 @@ class SessionData {
             }
 
             if (isTrackingBlockedByCache({ url: this.url, bookmarkId: this.bookmarkId })) {
-                console.log('[ActiveTimeTracker] 命中时间追踪屏蔽，跳过追踪:', this.title || this.trackedUrl);
                 return false;
             }
 
@@ -1609,15 +1579,12 @@ class SessionData {
             this.activeStartTime = Date.now();
             this.isBackground = false;
 
-            console.log('[ActiveTimeTracker] 会话开始:', this.title || this.trackedUrl,
-                '匹配类型:', this.matchType);
             return true;
         }
 
         const match = isBookmarkUrl(this.url, this.title);
         if (!match.isBookmark) {
             rememberNonBookmarkPage(this.tabId, this.url, this.title);
-            console.log('[ActiveTimeTracker] 非书签页面，不追踪:', this.url);
             return false;
         }
 
@@ -1626,17 +1593,14 @@ class SessionData {
 
         // 优先使用书签的原始标题
         if (match.bookmarkTitle) {
-            console.log('[ActiveTimeTracker] 使用书签标题:', match.bookmarkTitle, '(原始标题:', this.title, ')');
             this.title = match.bookmarkTitle;
             if (match.matchType === 'url') {
                 this.trackedUrl = this.url;
             }
         } else {
-            console.log('[ActiveTimeTracker] 书签无标题，使用页面标题:', this.title);
         }
 
         if (isTrackingBlockedByCache({ url: this.url, bookmarkId: this.bookmarkId })) {
-            console.log('[ActiveTimeTracker] 命中时间追踪屏蔽，跳过追踪:', this.title || this.url);
             return false;
         }
 
@@ -1646,8 +1610,6 @@ class SessionData {
         this.activeStartTime = Date.now();
         this.isBackground = false;
 
-        console.log('[ActiveTimeTracker] 会话开始:', this.title || this.url,
-            '匹配类型:', this.matchType);
         return true;
     }
 
@@ -1662,7 +1624,6 @@ class SessionData {
         this.isBackground = false;
         this.state = SessionState.PAUSED;
 
-        console.log('[ActiveTimeTracker] 用户空闲暂停:', this.title || this.url);
     }
 
     // 窗口失去焦点但仍是当前标签（可见参考，×0.5倍率）
@@ -1678,7 +1639,6 @@ class SessionData {
         this.isSleeping = false;
         this.state = SessionState.PAUSED;
 
-        console.log('[ActiveTimeTracker] 进入可见参考:', this.title || this.url);
     }
 
     // 切换标签（进入后台，×0.1倍率）
@@ -1694,7 +1654,6 @@ class SessionData {
         this.isSleeping = false;
         this.state = SessionState.PAUSED;
 
-        console.log('[ActiveTimeTracker] 进入后台:', this.title || this.url);
     }
 
     // 用户睡眠时，后台会话也停止计时
@@ -1708,7 +1667,6 @@ class SessionData {
         }
         this.isSleeping = true;
 
-        console.log('[ActiveTimeTracker] 后台进入睡眠:', this.title || this.url);
     }
 
     // 用户恢复活跃，后台会话重新开始计时
@@ -1718,14 +1676,12 @@ class SessionData {
         this.lastPauseTime = Date.now();
         this.isSleeping = false;
 
-        console.log('[ActiveTimeTracker] 后台恢复计时:', this.title || this.url);
     }
 
     resume() {
         if (this.state !== SessionState.PAUSED) return;
 
         if (isTrackingBlockedByCache({ url: this.url, bookmarkId: this.bookmarkId })) {
-            console.log('[ActiveTimeTracker] 会话被屏蔽，停止追踪:', this.title || this.url);
             return false;
         }
 
@@ -1750,7 +1706,6 @@ class SessionData {
         this.wakeCount++;  // 唤醒次数 +1
         this.state = SessionState.ACTIVE;
 
-        console.log('[ActiveTimeTracker] 会话恢复（唤醒）:', this.title || this.url);
         return true;
     }
 
@@ -1778,9 +1733,6 @@ class SessionData {
         this.state = SessionState.ENDED;
         this.endTime = now;
 
-        console.log('[ActiveTimeTracker] 会话结束:', this.title || this.url,
-            `活跃时间: ${Math.round(this.accumulatedActiveMs / 1000)}秒`,
-            `静止时间: ${Math.round(this.pauseTotalMs / 1000)}秒`);
 
         return this;
     }
@@ -1970,7 +1922,6 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
         // 如果是通过 URL 匹配的书签，已经有书签标题了，不覆盖
         if (session.matchType === 'url' || session.matchType === 'both' || session.matchType === 'auto_bookmark') {
             // URL 匹配的会话，保持书签标题不变
-            console.log('[ActiveTimeTracker] 保持书签标题:', session.title);
         } else if (session.matchType === 'title') {
             // 标题匹配的会话，可能需要更新（但要检查新标题是否还匹配书签）
             const match = isBookmarkUrl(session.url, changeInfo.title);
@@ -2029,7 +1980,6 @@ async function handleTabUrlChange(tabId, newUrl, tab) {
     // 防抖：检查是否是相同 URL 的刷新
     if (session && session.url === newUrl) {
         // URL 没变化，是页面刷新，继续使用现有会话
-        console.log('[ActiveTimeTracker] 页面刷新（URL 不变），继续追踪:', newUrl);
         return;
     }
 
@@ -2093,7 +2043,6 @@ async function handleTabUrlChange(tabId, newUrl, tab) {
         // 同域名 + 2秒内 = 可能是刷新或页面内导航，继续追踪
         const timeSinceStart = Date.now() - session.startTime;
         if (!isForwardBack && isSameOrigin && timeSinceStart < 2000) {
-            console.log('[ActiveTimeTracker] 快速刷新防抖（同域名，2秒内），更新 URL:', newUrl);
             session.url = newUrl;  // 更新 URL 但不重新创建会话
             return;
         }
@@ -2197,12 +2146,6 @@ function handleWindowFocusChanged(windowId) {
     currentWindowFocused = windowId !== browserAPI.windows.WINDOW_ID_NONE;
     currentFocusedWindowId = currentWindowFocused ? windowId : null;
 
-    console.log('[ActiveTimeTracker] 窗口焦点变化:', {
-        previousWindowId,
-        newWindowId: windowId,
-        wasFocused,
-        nowFocused: currentWindowFocused
-    });
 
     if (!currentWindowFocused) {
         // 焦点完全离开浏览器，当前标签进入可见参考（×0.5）
@@ -2354,7 +2297,6 @@ async function setTrackingEnabled(enabled) {
 
     // 保存状态
     await browserAPI.storage.local.set({ trackingEnabled: enabled });
-    console.log('[ActiveTimeTracker] 追踪状态:', enabled ? '开启' : '关闭');
 }
 
 async function isTrackingEnabled() {
@@ -2387,7 +2329,6 @@ async function getCurrentActiveSessions() {
 
             // 只有在数据较新时（15分钟内）才使用
             if (sessionsData.length > 0 && (now - updatedAt) < 15 * 60 * 1000) {
-                console.log('[ActiveTimeTracker] 从永久存储读取活跃会话:', sessionsData.length, '个');
 
                 for (const data of sessionsData) {
                     let tabUrlForThis = null;
@@ -2628,7 +2569,6 @@ async function getCurrentActiveSessions() {
 // =============================================================================
 
 async function initialize() {
-    console.log('[ActiveTimeTracker] 初始化...');
 
     try {
         // 打开数据库
@@ -2656,7 +2596,6 @@ async function initialize() {
                 if (focusedWindow && focusedWindow.focused) {
                     currentFocusedWindowId = focusedWindow.id;
                     currentWindowFocused = true;
-                    console.log('[ActiveTimeTracker] 当前焦点窗口:', currentFocusedWindowId);
 
                     // 如果没有从存储恢复会话，则创建新会话
                     if (restoredCount === 0) {
@@ -2686,7 +2625,6 @@ async function initialize() {
         // 启动休眠检测（防止唤醒后计时不准）
         startSleepDetection();
 
-        console.log('[ActiveTimeTracker] 初始化完成, 追踪状态:', trackingEnabled);
     } catch (error) {
         console.error('[ActiveTimeTracker] 初始化失败:', error);
     }
@@ -2712,7 +2650,6 @@ function startPeriodicSave() {
                     await saveSession(snapshot);
                     // 重置会话累积时间（避免重复计算）
                     session.resetAccumulated();
-                    console.log('[ActiveTimeTracker] 定期保存会话:', session.url);
                 }
             }
         }
@@ -2721,14 +2658,12 @@ function startPeriodicSave() {
         await persistActiveSessionsToStorage();
     }, CONFIG.PERIODIC_SAVE_INTERVAL);
 
-    console.log('[ActiveTimeTracker] 定期保存已启动，间隔:', CONFIG.PERIODIC_SAVE_INTERVAL / 1000, '秒');
 }
 
 function stopPeriodicSave() {
     if (periodicSaveTimer) {
         clearInterval(periodicSaveTimer);
         periodicSaveTimer = null;
-        console.log('[ActiveTimeTracker] 定期保存已停止');
     }
 }
 
@@ -2748,21 +2683,18 @@ function startSleepDetection() {
         const elapsed = now - lastHeartbeat;
 
         if (elapsed > CONFIG.SLEEP_THRESHOLD_MS) {
-            console.log('[ActiveTimeTracker] 检测到休眠/唤醒，时间跳跃:', Math.round(elapsed / 1000), '秒');
             handleWakeFromSleep(elapsed);
         }
 
         lastHeartbeat = now;
     }, CONFIG.SLEEP_DETECTION_INTERVAL);
 
-    console.log('[ActiveTimeTracker] 休眠检测已启动');
 }
 
 function stopSleepDetection() {
     if (sleepDetectionTimer) {
         clearInterval(sleepDetectionTimer);
         sleepDetectionTimer = null;
-        console.log('[ActiveTimeTracker] 休眠检测已停止');
     }
 }
 
@@ -2778,8 +2710,6 @@ function handleWakeFromSleep(sleepDuration) {
             session.accumulatedActiveMs += activeBeforeSleep;
             // 重置起点为唤醒时间
             session.activeStartTime = now;
-            console.log('[ActiveTimeTracker] 重置会话计时起点:', session.title || session.url,
-                '累积活跃时间:', Math.round(session.accumulatedActiveMs / 1000), '秒');
         }
 
         if (session.state === SessionState.PAUSED && session.lastPauseTime) {
@@ -2807,7 +2737,6 @@ function setupEventListeners() {
 
     // 防止重复注册监听器
     if (eventListenersSetup) {
-        console.log('[ActiveTimeTracker] 事件监听器已设置，跳过重复注册');
         return;
     }
     eventListenersSetup = true;
@@ -2892,7 +2821,6 @@ function setupEventListeners() {
                             activeSessions.delete(tabId);
                         }
                     }
-                    console.log('[ActiveTimeTracker] 书签已删除，清理对应记录:', node.title || node.url);
                 }
                 rebuildCache();
             });
@@ -2930,7 +2858,6 @@ function setupEventListeners() {
     // Service Worker 暂停时保存所有活跃会话
     if (browserAPI.runtime && browserAPI.runtime.onSuspend) {
         browserAPI.runtime.onSuspend.addListener(async () => {
-            console.log('[ActiveTimeTracker] Service Worker 即将暂停，保存活跃会话...');
             // 先持久化到永久存储（快速，确保不丢失）
             await persistActiveSessionsToStorage();
             // 再保存到数据库
@@ -2938,7 +2865,6 @@ function setupEventListeners() {
         });
     }
 
-    console.log('[ActiveTimeTracker] 事件监听器已设置');
 }
 
 // 由 background 侧驱动：把“书签打开(浏览器/扩展UI)”归因信息绑定到 tabId 上（不立刻强制追踪，按需兜底）
