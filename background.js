@@ -5506,7 +5506,7 @@ async function readBlobDimensionsBackground(blob) {
 async function fetchImageAsDataUrlBackground(url, options = {}) {
   if (!url || typeof url !== 'string') {
     return options.includeMeta === true
-      ? { dataUrl: '', meta: { attempted: false, hardFailure: false, errorCode: 'invalid_url' } }
+      ? { dataUrl: '', meta: { attempted: false, hardFailure: false, errorCode: 'invalid_url', resultClass: 'invalid_content' } }
       : null;
   }
 
@@ -5521,6 +5521,28 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
     if (code === 0 || code === 408) return true;
     return code >= 500 && code <= 599;
   };
+  const classifyFetchException = (error) => {
+    const errorName = String(error?.name || '').toLowerCase();
+    const errorMessage = String(error?.message || '').toLowerCase();
+    if (errorName === 'aborterror') {
+      return { errorCode: 'timeout', hardFailure: true, resultClass: 'hard_failure' };
+    }
+    const looksNonFetchable =
+      errorName === 'typeerror' && (
+        errorMessage.includes('unsupported') ||
+        errorMessage.includes('not supported') ||
+        errorMessage.includes('scheme') ||
+        errorMessage.includes('protocol') ||
+        errorMessage.includes('invalid url') ||
+        errorMessage.includes('url is invalid') ||
+        errorMessage.includes('not allowed') ||
+        errorMessage.includes('only http')
+      );
+    if (looksNonFetchable) {
+      return { errorCode: 'non_fetchable', hardFailure: false, resultClass: 'non_fetchable' };
+    }
+    return { errorCode: 'fetch_failed', hardFailure: true, resultClass: 'hard_failure' };
+  };
 
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -5531,11 +5553,13 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
       const statusCode = Number(res.status) || 0;
+      const hardFailure = isHardFailureStatus(statusCode);
       return wrap('', {
         attempted: true,
         statusCode,
-        hardFailure: isHardFailureStatus(statusCode),
-        errorCode: `http_${statusCode || 0}`
+        hardFailure,
+        errorCode: `http_${statusCode || 0}`,
+        resultClass: hardFailure ? 'hard_failure' : 'invalid_content'
       });
     }
 
@@ -5545,7 +5569,8 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
         attempted: true,
         statusCode: Number(res.status) || 200,
         hardFailure: false,
-        errorCode: 'non_image_content'
+        errorCode: 'non_image_content',
+        resultClass: 'invalid_content'
       });
     }
 
@@ -5555,7 +5580,8 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
         attempted: true,
         statusCode: Number(res.status) || 200,
         hardFailure: false,
-        errorCode: 'payload_too_large'
+        errorCode: 'payload_too_large',
+        resultClass: 'invalid_content'
       });
     }
 
@@ -5565,7 +5591,8 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
         attempted: true,
         statusCode: Number(res.status) || 200,
         hardFailure: false,
-        errorCode: 'invalid_blob'
+        errorCode: 'invalid_blob',
+        resultClass: 'invalid_content'
       });
     }
 
@@ -5575,7 +5602,8 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
         attempted: true,
         statusCode: Number(res.status) || 200,
         hardFailure: false,
-        errorCode: 'dimension_too_small'
+        errorCode: 'dimension_too_small',
+        resultClass: 'invalid_content'
       });
     }
 
@@ -5585,21 +5613,24 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
         attempted: true,
         statusCode: Number(res.status) || 200,
         hardFailure: false,
-        errorCode: 'invalid_data_url'
+        errorCode: 'invalid_data_url',
+        resultClass: 'invalid_content'
       });
     }
     return wrap(dataUrl, {
       attempted: true,
       statusCode: Number(res.status) || 200,
       hardFailure: false,
-      errorCode: ''
+      errorCode: '',
+      resultClass: 'success'
     });
   } catch (error) {
-    const errorCode = error && error.name === 'AbortError' ? 'timeout' : 'fetch_failed';
+    const classifiedError = classifyFetchException(error);
     return wrap('', {
       attempted: true,
-      hardFailure: true,
-      errorCode
+      hardFailure: classifiedError.hardFailure,
+      errorCode: classifiedError.errorCode,
+      resultClass: classifiedError.resultClass
     });
   } finally {
     clearTimeout(timeout);
@@ -5615,13 +5646,10 @@ if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
           return;
         }
 
-        const sourceIconUrl = String(changeInfo?.favIconUrl || tab?.favIconUrl || '');
-        if (!sourceIconUrl) {
-          return;
-        }
+        const sourceIconUrl = String(tab?.favIconUrl || '');
 
         const now = Date.now();
-        const processKey = `${pageUrl}|${sourceIconUrl}`;
+        const processKey = `${pageUrl}|${sourceIconUrl || '_favicon_fallback'}`;
         const lastProcessed = Number(processedFaviconUpdates.get(processKey) || 0);
         if (lastProcessed > 0 && (now - lastProcessed) < FAVICON_UPDATE_COOLDOWN_MS) {
           return;
@@ -5636,13 +5664,40 @@ if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
           }
         }
 
-        const dataUrl = await fetchImageAsDataUrlBackground(sourceIconUrl, {
-          minDimensionPx: 16,
-          maxBytes: 512 * 1024,
-          timeoutMs: 4000
-        });
+        let dataUrl = '';
+        let fetchMeta = null;
 
-        if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+        if (sourceIconUrl) {
+          const primaryResult = await fetchImageAsDataUrlBackground(sourceIconUrl, {
+            minDimensionPx: 16,
+            maxBytes: 512 * 1024,
+            timeoutMs: 4000,
+            includeMeta: true
+          });
+          dataUrl = typeof primaryResult?.dataUrl === 'string' ? primaryResult.dataUrl : '';
+          fetchMeta = primaryResult && typeof primaryResult.meta === 'object' ? primaryResult.meta : null;
+        }
+
+        if (!dataUrl || fetchMeta?.resultClass !== 'success') {
+          let fallbackUrl = '';
+          try {
+            fallbackUrl = `${new URL('/_favicon', pageUrl).toString()}?pageUrl=${encodeURIComponent(pageUrl)}&size=32`;
+          } catch (_) {
+            fallbackUrl = '';
+          }
+          if (fallbackUrl) {
+            const fallbackResult = await fetchImageAsDataUrlBackground(fallbackUrl, {
+              minDimensionPx: 16,
+              maxBytes: 512 * 1024,
+              timeoutMs: 4000,
+              includeMeta: true
+            });
+            dataUrl = typeof fallbackResult?.dataUrl === 'string' ? fallbackResult.dataUrl : '';
+            fetchMeta = fallbackResult && typeof fallbackResult.meta === 'object' ? fallbackResult.meta : null;
+          }
+        }
+
+        if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') && fetchMeta?.resultClass === 'success') {
           try {
             browserAPI.runtime.sendMessage({
               action: 'updateFaviconFromTab',
