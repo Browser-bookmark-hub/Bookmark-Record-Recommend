@@ -10692,10 +10692,24 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, wid
     daysRow.className = 'widgets-week-days-row';
 
     const safeWidgetType = widgetType === 'history' ? 'history' : 'additions';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayTime = today.getTime();
 
     dailyCounts.forEach((item) => {
         const cell = document.createElement('div');
         cell.className = 'widgets-week-day-cell';
+
+        const itemDate = item?.date instanceof Date ? new Date(item.date) : new Date(item?.date || 0);
+        if (!Number.isNaN(itemDate.getTime())) {
+            itemDate.setHours(0, 0, 0, 0);
+            const itemTime = itemDate.getTime();
+            if (itemTime === todayTime) {
+                cell.classList.add('is-today');
+            } else if (itemTime > todayTime) {
+                cell.classList.add('is-future');
+            }
+        }
 
         const label = document.createElement('span');
         label.className = 'widgets-week-day-label';
@@ -10703,9 +10717,16 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, wid
 
         const count = document.createElement('span');
         count.className = 'widgets-week-day-number';
-        count.textContent = `${item.count}`;
+        const dayCount = Number(item?.count || 0);
+        if (dayCount > 0) {
+            count.textContent = String(dayCount);
+        } else {
+            count.textContent = '';
+            cell.classList.add('is-zero');
+            count.classList.add('is-zero');
+        }
 
-        if (Number(item.count) > 0) {
+        if (dayCount > 0) {
             const targetDateKey = normalizeWidgetsDateKey(item.date);
             const handleJump = () => {
                 if (!targetDateKey) return;
