@@ -5515,6 +5515,37 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
   const minDimensionPx = Math.max(1, Number(options.minDimensionPx) || 1);
   const includeMeta = options.includeMeta === true;
   const wrap = (dataUrl, meta) => includeMeta ? { dataUrl, meta } : dataUrl;
+  const normalizedUrl = String(url).trim();
+  const extensionProtocol = (() => {
+    try {
+      return String(new URL(browserAPI.runtime.getURL('/')).protocol || '').toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  })();
+  const isFetchableFaviconUrl = (candidateUrl) => {
+    const text = String(candidateUrl || '').trim();
+    if (!text) return false;
+    if (text.startsWith('/')) return true;
+    try {
+      const protocol = String(new URL(text).protocol || '').toLowerCase();
+      if (!protocol) return false;
+      if (protocol === 'http:' || protocol === 'https:' || protocol === 'data:' || protocol === 'blob:') {
+        return true;
+      }
+      return Boolean(extensionProtocol && protocol === extensionProtocol);
+    } catch (_) {
+      return false;
+    }
+  };
+  if (!isFetchableFaviconUrl(normalizedUrl)) {
+    return wrap('', {
+      attempted: false,
+      hardFailure: false,
+      errorCode: 'non_fetchable',
+      resultClass: 'non_fetchable'
+    });
+  }
   const isHardFailureStatus = (statusCode) => {
     const code = Number(statusCode);
     if (!Number.isFinite(code)) return false;
@@ -5550,7 +5581,7 @@ async function fetchImageAsDataUrlBackground(url, options = {}) {
   }, timeoutMs);
 
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(normalizedUrl, { signal: controller.signal });
     if (!res.ok) {
       const statusCode = Number(res.status) || 0;
       const hardFailure = isHardFailureStatus(statusCode);
@@ -5681,7 +5712,10 @@ if (browserAPI.tabs && browserAPI.tabs.onUpdated) {
         if (!dataUrl || fetchMeta?.resultClass !== 'success') {
           let fallbackUrl = '';
           try {
-            fallbackUrl = `${new URL('/_favicon', pageUrl).toString()}?pageUrl=${encodeURIComponent(pageUrl)}&size=32`;
+            const fallbackPath = `/_favicon?pageUrl=${encodeURIComponent(pageUrl)}&size=32`;
+            fallbackUrl = browserAPI?.runtime?.getURL
+              ? browserAPI.runtime.getURL(fallbackPath)
+              : fallbackPath;
           } catch (_) {
             fallbackUrl = '';
           }
