@@ -1397,6 +1397,7 @@ const FaviconCache = {
     },
 
     async getByHostnames(hostnames = [], options = {}) {
+        const ignoreFailureCache = options && options.ignoreFailureCache === true;
         const normalizedHostnames = Array.from(new Set(
             (Array.isArray(hostnames) ? hostnames : [])
                 .map((item) => this._normalizeHostname(item))
@@ -1410,7 +1411,7 @@ const FaviconCache = {
 
         const pendingDbHostnames = [];
         normalizedHostnames.forEach((hostname) => {
-            if (this._isFailureDomainActive(hostname)) {
+            if (!ignoreFailureCache && this._isFailureDomainActive(hostname)) {
                 result.set(hostname, 'failed');
                 return;
             }
@@ -1454,7 +1455,7 @@ const FaviconCache = {
                         settledCount += 1;
                         if (settledCount < 2) return;
 
-                        if (failureRecord) {
+                        if (!ignoreFailureCache && failureRecord) {
                             const ts = Number(failureRecord.timestamp) || 0;
                             if (ts > 0 && (Date.now() - ts) < this.failureTtlMs) {
                                 this._markFailureDomain(hostname, ts);
@@ -2700,6 +2701,14 @@ function getFaviconUrl(url) {
 
         // 检查失败缓存
         if (FaviconCache._isFailureDomainActive(hostname)) {
+            FaviconCache.fetch(url, {
+                ignoreFailureCache: true,
+                skipDbRead: true
+            }).then(dataUrl => {
+                if (dataUrl && dataUrl !== fallbackIcon) {
+                    updateFaviconImages(url, dataUrl);
+                }
+            }).catch(() => { });
             return fallbackIcon;
         }
 
@@ -2729,11 +2738,13 @@ function resolveFaviconBindingUrlFromElement(element) {
             if (node.dataset.bookmarkUrl) return node.dataset.bookmarkUrl;
             if (node.dataset.nodeUrl) return node.dataset.nodeUrl;
             if (node.dataset.url) return node.dataset.url;
+            if (node.dataset.faviconUrl) return node.dataset.faviconUrl;
         }
         if (typeof node.getAttribute === 'function') {
             return node.getAttribute('data-bookmark-url')
                 || node.getAttribute('data-node-url')
                 || node.getAttribute('data-url')
+                || node.getAttribute('data-favicon-url')
                 || '';
         }
         return '';
@@ -2755,7 +2766,7 @@ function updateFaviconImages(url, dataUrl) {
         if (!domain) return 0;
 
         const allImages = document.querySelectorAll(
-            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img[data-bookmark-url], img[data-node-url], img[data-url], image.widgets-pie-slice-icon[data-bookmark-url]'
+            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img.bookmark-favicon, img.card-favicon, img.recommend-search-favicon, img[data-bookmark-url], img[data-node-url], img[data-url], img[data-favicon-url], image.widgets-pie-slice-icon[data-bookmark-url]'
         );
 
         allImages.forEach(img => {
@@ -2818,6 +2829,8 @@ function setupGlobalImageErrorHandler() {
                 e.target.classList.contains('postponed-item-icon') ||
                 e.target.classList.contains('heatmap-detail-favicon') ||
                 e.target.classList.contains('search-result-favicon') ||
+                e.target.classList.contains('recommend-search-favicon') ||
+                e.target.classList.contains('bookmark-favicon') ||
                 e.target.classList.contains('related-history-favicon') ||
                 e.target.classList.contains('widgets-pie-tooltip-icon'))) {
             // 只在src不是fallbackIcon时才替换，避免无限循环
@@ -23343,10 +23356,12 @@ function renderBookmarkClickRankingList(container, items) {
     items.forEach(entry => {
         const row = document.createElement('div');
         row.className = 'addition-item ranking-item';
-        row.dataset.url = entry.url;
+        row.dataset.url = entry.url || '';
+        row.dataset.bookmarkUrl = entry.url || '';
 
         const icon = document.createElement('img');
         icon.className = 'addition-icon';
+        icon.dataset.bookmarkUrl = entry.url || '';
         icon.src = getFaviconUrl(entry.url);
         icon.alt = '';
 
@@ -24003,9 +24018,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
             bookmarkItem.style.transition = 'background 0.2s';
 
             const itemTitle = item.title || item.url || '';
-            const faviconSrc = typeof getFaviconUrl === 'function'
-                ? getFaviconUrl(item.url)
-                : `${(navigator.userAgent || '').includes('Edg/') ? 'edge' : 'chrome'}://favicon/${item.url || ''}`;
+            const faviconSrc = getFaviconUrl(item.url);
 
             bookmarkItem.innerHTML = `
                 <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
@@ -24203,9 +24216,7 @@ function renderBrowsingDomainRankingList(container, items, range, options = {}) 
             bookmarkItem.style.transition = 'background 0.2s';
 
             const itemTitle = item.title || item.url || '';
-            const faviconSrc = typeof getFaviconUrl === 'function'
-                ? getFaviconUrl(item.url)
-                : `${(navigator.userAgent || '').includes('Edg/') ? 'edge' : 'chrome'}://favicon/${item.url || ''}`;
+            const faviconSrc = getFaviconUrl(item.url);
 
             bookmarkItem.innerHTML = `
                 <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
@@ -24295,6 +24306,8 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
 
             const row = document.createElement('div');
             row.className = 'addition-item ranking-item';
+            row.dataset.url = entry.url || '';
+            row.dataset.bookmarkUrl = entry.url || '';
 
             const header = document.createElement('div');
             header.className = 'ranking-item-header';
@@ -24319,6 +24332,7 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
 
             const icon = document.createElement('img');
             icon.className = 'addition-icon';
+            icon.dataset.bookmarkUrl = entry.url || '';
             icon.src = getFaviconUrl(entry.url);
             icon.alt = '';
 

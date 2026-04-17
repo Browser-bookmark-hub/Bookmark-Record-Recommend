@@ -3670,20 +3670,22 @@ class BrowsingHistoryCalendar {
         // 创建favicon图标
         const faviconImg = document.createElement('img');
         faviconImg.className = 'bookmark-favicon';
+        faviconImg.dataset.bookmarkUrl = bookmark.url || '';
         faviconImg.style.width = '16px';
         faviconImg.style.height = '16px';
         faviconImg.style.flexShrink = '0';
         faviconImg.style.marginTop = '2px'; // 微调对齐
         faviconImg.alt = '';
 
-        // 使用全局的 getFaviconUrl 函数（如果存在）
+        // 优先使用统一图标系统；若全局函数暂不可用，则退回扩展内置 _favicon 端点
         if (typeof getFaviconUrl === 'function') {
             faviconImg.src = getFaviconUrl(bookmark.url);
         } else {
-            // 降级方案（Edge/Chrome 内置 favicon 端点不同）
-            const ua = navigator.userAgent || '';
-            const isEdge = ua.includes('Edg/');
-            faviconImg.src = `${isEdge ? 'edge' : 'chrome'}://favicon/${bookmark.url}`;
+            const fallbackPath = `/_favicon?pageUrl=${encodeURIComponent(bookmark.url || '')}&size=32`;
+            const browserRuntimeApi = (typeof chrome !== 'undefined') ? chrome : ((typeof browser !== 'undefined') ? browser : null);
+            faviconImg.src = browserRuntimeApi?.runtime?.getURL
+                ? browserRuntimeApi.runtime.getURL(fallbackPath)
+                : fallbackPath;
         }
 
         item.appendChild(faviconImg);
@@ -4506,6 +4508,7 @@ class BrowsingHistoryCalendar {
 
         const faviconImg = document.createElement('img');
         faviconImg.className = 'bookmark-favicon';
+        faviconImg.dataset.bookmarkUrl = bookmark.url || '';
         faviconImg.style.width = '16px';
         faviconImg.style.height = '16px';
         faviconImg.style.flexShrink = '0';
@@ -4515,9 +4518,11 @@ class BrowsingHistoryCalendar {
         if (typeof getFaviconUrl === 'function') {
             faviconImg.src = getFaviconUrl(bookmark.url);
         } else {
-            const ua = navigator.userAgent || '';
-            const isEdge = ua.includes('Edg/');
-            faviconImg.src = `${isEdge ? 'edge' : 'chrome'}://favicon/${bookmark.url}`;
+            const fallbackPath = `/_favicon?pageUrl=${encodeURIComponent(bookmark.url || '')}&size=32`;
+            const browserRuntimeApi = (typeof chrome !== 'undefined') ? chrome : ((typeof browser !== 'undefined') ? browser : null);
+            faviconImg.src = browserRuntimeApi?.runtime?.getURL
+                ? browserRuntimeApi.runtime.getURL(fallbackPath)
+                : fallbackPath;
         }
 
         item.appendChild(faviconImg);
