@@ -1171,7 +1171,7 @@ const FaviconCache = {
     networkBranchReevaluationCooldownMs: 3000,
     networkBranchSwitchReason: '',
     networkBranchLastReevaluationReason: '',
-    cacheQualityVersion: 6,
+    cacheQualityVersion: 7,
     cacheQualityVersionKey: 'bb_favicon_quality_version',
     firstInstallFastPathKey: 'bb_favicon_first_install_fast_path_done',
     firstInstallSkipDbReadsRemaining: 0,
@@ -2310,10 +2310,7 @@ const FaviconCache = {
                 });
 
                 activeBranchMode = this._normalizeNetworkBranchMode(this.networkBranchMode || activeBranchMode);
-                const useFastFirstCandidate = strictMinDimension <= Math.max(16, Number(this.minFaviconDimensionPx) || 16);
-                let chosenCandidate = useFastFirstCandidate
-                    ? (strictCandidates[0] || null)
-                    : await this._selectBestCandidateWithConflictRule(strictCandidates);
+                let chosenCandidate = await this._selectBestCandidateWithConflictRule(strictCandidates);
 
                 // 第二轮：放宽到兜底阈值（默认 >= 32，拒绝 16x16）
                 if (!chosenCandidate && fallbackMinDimension < strictMinDimension) {
@@ -2766,7 +2763,7 @@ function updateFaviconImages(url, dataUrl) {
         if (!domain) return 0;
 
         const allImages = document.querySelectorAll(
-            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img.bookmark-favicon, img.card-favicon, img.recommend-search-favicon, img[data-bookmark-url], img[data-node-url], img[data-url], img[data-favicon-url], image.widgets-pie-slice-icon[data-bookmark-url]'
+            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img.bookmark-favicon, img.card-favicon, img.recommend-search-favicon, img[class*="favicon"], img[data-bookmark-url], img[data-node-url], img[data-url], img[data-favicon-url], image.widgets-pie-slice-icon[data-bookmark-url]'
         );
 
         allImages.forEach(img => {
@@ -2818,26 +2815,32 @@ function updateFaviconImages(url, dataUrl) {
 // 全局图片错误处理（使用事件委托，避免CSP内联事件处理器）
 function setupGlobalImageErrorHandler() {
     document.addEventListener('error', (e) => {
-        if (e.target.tagName === 'IMG' &&
-            (e.target.classList.contains('addition-icon') ||
-                e.target.classList.contains('tracking-favicon') ||
-                e.target.classList.contains('card-favicon') ||
-                e.target.classList.contains('ranking-favicon') ||
-                e.target.classList.contains('add-result-favicon') ||
-                e.target.classList.contains('add-bookmark-favicon') ||
-                e.target.classList.contains('block-item-icon') ||
-                e.target.classList.contains('postponed-item-icon') ||
-                e.target.classList.contains('heatmap-detail-favicon') ||
-                e.target.classList.contains('search-result-favicon') ||
-                e.target.classList.contains('recommend-search-favicon') ||
-                e.target.classList.contains('bookmark-favicon') ||
-                e.target.classList.contains('related-history-favicon') ||
-                e.target.classList.contains('widgets-pie-tooltip-icon'))) {
-            // 只在src不是fallbackIcon时才替换，避免无限循环
-            // fallbackIcon 是 data URL，不会加载失败
-            if (e.target.src !== fallbackIcon && !e.target.src.startsWith('data:image/svg+xml')) {
-                e.target.src = fallbackIcon;
-            }
+        if (e.target.tagName !== 'IMG') return;
+
+        const classNames = e.target.classList ? Array.from(e.target.classList) : [];
+        const hasKnownIconClass = (
+            e.target.classList.contains('addition-icon') ||
+            e.target.classList.contains('tracking-favicon') ||
+            e.target.classList.contains('card-favicon') ||
+            e.target.classList.contains('ranking-favicon') ||
+            e.target.classList.contains('add-result-favicon') ||
+            e.target.classList.contains('add-bookmark-favicon') ||
+            e.target.classList.contains('block-item-icon') ||
+            e.target.classList.contains('postponed-item-icon') ||
+            e.target.classList.contains('heatmap-detail-favicon') ||
+            e.target.classList.contains('search-result-favicon') ||
+            e.target.classList.contains('recommend-search-favicon') ||
+            e.target.classList.contains('bookmark-favicon') ||
+            e.target.classList.contains('related-history-favicon') ||
+            e.target.classList.contains('widgets-pie-tooltip-icon')
+        );
+        const hasGenericFaviconClass = classNames.some((className) => String(className || '').includes('favicon'));
+        if (!hasKnownIconClass && !hasGenericFaviconClass) return;
+
+        // 只在src不是fallbackIcon时才替换，避免无限循环
+        // fallbackIcon 是 data URL，不会加载失败
+        if (e.target.src !== fallbackIcon && !e.target.src.startsWith('data:image/svg+xml')) {
+            e.target.src = fallbackIcon;
         }
     }, true); // 使用捕获阶段
 }
@@ -21124,7 +21127,7 @@ async function loadCurrentTrackingSessions() {
                             <td>
                                 <div class="tracking-title-cell">
                                     ${expandIcon}
-                                    <img class="tracking-favicon" src="${faviconUrl}" alt="">
+                                    <img class="tracking-favicon" data-bookmark-url="${escapeHtml(primarySession.url || '')}" src="${faviconUrl}" alt="">
                                     <span class="tracking-title" title="${escapeHtml(primarySession.title || primarySession.url)}">${escapeHtml(displayTitle)}</span>
                                     ${groupBadge}
                                 </div>
@@ -22099,7 +22102,7 @@ async function showHeatmapDateDetail(dateStr) {
             if (bookmark) {
                 html += `
                     <div class="heatmap-detail-item" data-url="${escapeHtml(bookmark.url)}">
-                        <img class="heatmap-detail-favicon" src="${getFaviconUrl(bookmark.url)}">
+                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
                         <div class="heatmap-detail-info">
                             <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
                             <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
@@ -22192,7 +22195,7 @@ async function showHeatmapMonthDetail(year, month) {
                 html += `
                     <div class="heatmap-detail-item heatmap-ranking-item" data-url="${escapeHtml(bookmark.url)}">
                         <span class="heatmap-rank ${rank <= 3 ? 'top-' + rank : ''}">${rank}</span>
-                        <img class="heatmap-detail-favicon" src="${getFaviconUrl(bookmark.url)}">
+                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
                         <div class="heatmap-detail-info">
                             <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
                             <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
@@ -22748,7 +22751,7 @@ async function loadActiveTimeRanking() {
             return `
                 <div class="tracking-ranking-item" data-url="${escapeHtml(item.url)}" data-bookmark-url="${escapeHtml(item.url)}">
                     <span class="ranking-number">${index + 1}</span>
-                    <img class="ranking-favicon" src="${faviconUrl}" alt="">
+                    <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${faviconUrl}" alt="">
                     <div class="ranking-info">
                         <div class="ranking-title" title="${escapeHtml(item.title || item.url)}">${escapeHtml(displayTitle)}</div>
                         <div class="ranking-bar">
@@ -24301,7 +24304,7 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
         return isZh ? '本月' : 'This month';
     })();
 
-    const PAGE_SIZE = 200; // 每次加载200条
+    const PAGE_SIZE = 100; // 每次加载100条
     let offset = 0;
 
     const appendNextPage = () => {
@@ -25307,7 +25310,7 @@ function renderBookmarkItem(bookmark) {
 
     return `
         <div class="addition-item" data-bookmark-url="${escapeHtml(bookmark.url)}">
-            <img class="addition-icon" src="${favicon}" alt="">
+            <img class="addition-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${favicon}" alt="">
             <div class="addition-info">
                 <a href="${escapeHtml(bookmark.url)}" target="_blank" class="addition-title" rel="noopener noreferrer">${escapeHtml(bookmark.title)}</a>
                 <div class="addition-url">${escapeHtml(bookmark.url)}</div>
@@ -26681,9 +26684,9 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
     } catch (_) { }
 
     // 懒加载规则：
-    // - 当分组数 > 500 时启用懒加载（所有范围都适用）
+    // - 当分组数 > 100 时启用懒加载（所有范围都适用）
     // - 其他情况一次性渲染全部
-    const enableLazy = mergedGroups.length > 500;
+    const enableLazy = mergedGroups.length > 100;
 
     // 渲染单个分组的函数
     const renderGroup = (group) => {
@@ -26780,8 +26783,8 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
         return;
     }
 
-    // 启用懒加载：每次追加 1000 个分组
-    const PAGE_SIZE = 1000;
+    // 启用懒加载：每次追加 100 个分组
+    const PAGE_SIZE = 100;
     let offset = 0;
 
     const appendNextPage = () => {
@@ -26817,7 +26820,7 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
 
     // 暴露懒加载状态和函数，供跳转功能使用
     container.__lazyLoadState = {
-        totalItems: filteredItems.length,
+        totalItems: mergedGroups.length,
         getLoadedCount: () => offset,
         loadMore: appendNextPage,
         loadAll: () => {

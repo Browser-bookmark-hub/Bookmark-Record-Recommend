@@ -3014,94 +3014,81 @@ class BookmarkCalendar {
         const container = document.createElement('div');
         container.style.marginBottom = '8px';
 
-        const BOOKMARK_COLLAPSE_THRESHOLD = 10;
-        const shouldCollapseBookmarks = bookmarks.length > BOOKMARK_COLLAPSE_THRESHOLD;
+        const listHost = document.createElement('div');
+        container.appendChild(listHost);
 
-        const visibleCount = shouldCollapseBookmarks ? BOOKMARK_COLLAPSE_THRESHOLD : bookmarks.length;
-        for (let i = 0; i < visibleCount; i++) {
-            const isLastVisible = !shouldCollapseBookmarks && i === bookmarks.length - 1;
-            container.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLastVisible));
-        }
+        const BOOKMARK_LOAD_BATCH_SIZE = 100;
+        let renderedCount = 0;
 
-        if (shouldCollapseBookmarks) {
-            const hiddenBookmarksContainer = document.createElement('div');
-            hiddenBookmarksContainer.style.display = 'none';
-            hiddenBookmarksContainer.dataset.collapsed = 'true';
-            hiddenBookmarksContainer.dataset.lazyLoaded = '0';
+        const renderNextBatch = () => {
+            const end = Math.min(renderedCount + BOOKMARK_LOAD_BATCH_SIZE, bookmarks.length);
+            for (let i = renderedCount; i < end; i++) {
+                const isLast = i === bookmarks.length - 1;
+                listHost.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLast));
+            }
+            renderedCount = end;
+        };
 
-            const loadHiddenBookmarks = () => {
-                if (hiddenBookmarksContainer.dataset.lazyLoaded === '1') return;
-                for (let i = BOOKMARK_COLLAPSE_THRESHOLD; i < bookmarks.length; i++) {
-                    const isLast = i === bookmarks.length - 1;
-                    hiddenBookmarksContainer.appendChild(this.createBookmarkItem(bookmarks[i], showTreeLines, isLast));
-                }
-                hiddenBookmarksContainer.dataset.lazyLoaded = '1';
+        renderNextBatch();
+
+        if (bookmarks.length > renderedCount) {
+            const loadMoreBtn = document.createElement('button');
+            loadMoreBtn.style.width = '100%';
+            loadMoreBtn.style.padding = '8px 12px';
+            loadMoreBtn.style.marginTop = '8px';
+            loadMoreBtn.style.border = '1px solid var(--border-color)';
+            const btnColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
+            loadMoreBtn.style.borderRadius = '6px';
+            loadMoreBtn.style.background = 'var(--bg-secondary)';
+            loadMoreBtn.style.color = 'var(--text-primary)';
+            loadMoreBtn.style.cursor = 'pointer';
+            loadMoreBtn.style.fontSize = '12px';
+            loadMoreBtn.style.fontWeight = '500';
+            loadMoreBtn.style.transition = 'all 0.2s';
+            loadMoreBtn.style.display = 'flex';
+            loadMoreBtn.style.alignItems = 'center';
+            loadMoreBtn.style.justifyContent = 'center';
+            loadMoreBtn.style.gap = '6px';
+
+            const updateLoadMoreLabel = () => {
+                const remaining = Math.max(0, bookmarks.length - renderedCount);
+                const nextCount = Math.min(BOOKMARK_LOAD_BATCH_SIZE, remaining);
+                const label = currentLang === 'en'
+                    ? `Load ${nextCount} more (${remaining} remaining)`
+                    : `继续加载 ${nextCount} 个（剩余 ${remaining} 个）`;
+                loadMoreBtn.innerHTML = `
+                    <i class="fas fa-chevron-down" style="color:${btnColor};"></i>
+                    <span>${label}</span>
+                `;
             };
 
-            container.appendChild(hiddenBookmarksContainer);
+            updateLoadMoreLabel();
 
-            const toggleBtn = document.createElement('button');
-            toggleBtn.style.width = '100%';
-            toggleBtn.style.padding = '8px 12px';
-            toggleBtn.style.marginTop = '8px';
-            toggleBtn.style.border = '1px solid var(--border-color)';
-            const btnColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
-            toggleBtn.style.borderRadius = '6px';
-            toggleBtn.style.background = 'var(--bg-secondary)';
-            toggleBtn.style.color = 'var(--text-primary)';
-            toggleBtn.style.cursor = 'pointer';
-            toggleBtn.style.fontSize = '12px';
-            toggleBtn.style.fontWeight = '500';
-            toggleBtn.style.transition = 'all 0.2s';
-            toggleBtn.style.display = 'flex';
-            toggleBtn.style.alignItems = 'center';
-            toggleBtn.style.justifyContent = 'center';
-            toggleBtn.style.gap = '6px';
-
-            const hiddenCount = bookmarks.length - BOOKMARK_COLLAPSE_THRESHOLD;
-            const expandText = currentLang === 'en' ? `Show ${hiddenCount} more` : `展开更多 ${hiddenCount} 个`;
-            const collapseText = currentLang === 'en' ? 'Show less' : '收起';
-
-            toggleBtn.innerHTML = `
-                <i class="fas fa-chevron-down" style="color:${btnColor};"></i>
-                <span>${expandText}</span>
-            `;
-
-            toggleBtn.addEventListener('click', (e) => {
+            loadMoreBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const isCollapsed = hiddenBookmarksContainer.dataset.collapsed === 'true';
-                if (isCollapsed) {
-                    loadHiddenBookmarks();
-                    hiddenBookmarksContainer.style.display = 'block';
-                    hiddenBookmarksContainer.dataset.collapsed = 'false';
-                    toggleBtn.innerHTML = `
-                        <i class="fas fa-chevron-up" style="color:${btnColor};"></i>
-                        <span>${collapseText}</span>
-                    `;
+                const shouldKeepButton = bookmarks.length > renderedCount + BOOKMARK_LOAD_BATCH_SIZE;
+                renderNextBatch();
+                if (shouldKeepButton) {
+                    updateLoadMoreLabel();
                 } else {
-                    hiddenBookmarksContainer.style.display = 'none';
-                    hiddenBookmarksContainer.dataset.collapsed = 'true';
-                    toggleBtn.innerHTML = `
-                        <i class="fas fa-chevron-down" style="color:${btnColor};"></i>
-                        <span>${expandText}</span>
-                    `;
+                    loadMoreBtn.remove();
                 }
             });
 
-            toggleBtn.addEventListener('mouseenter', () => {
+            loadMoreBtn.addEventListener('mouseenter', () => {
                 const hoverColor = this.selectMode ? '#4CAF50' : 'var(--accent-primary)';
-                toggleBtn.style.background = 'var(--bg-tertiary)';
-                toggleBtn.style.borderColor = hoverColor;
-                toggleBtn.style.color = hoverColor;
+                loadMoreBtn.style.background = 'var(--bg-tertiary)';
+                loadMoreBtn.style.borderColor = hoverColor;
+                loadMoreBtn.style.color = hoverColor;
             });
 
-            toggleBtn.addEventListener('mouseleave', () => {
-                toggleBtn.style.background = 'var(--bg-secondary)';
-                toggleBtn.style.borderColor = 'var(--border-color)';
-                toggleBtn.style.color = 'var(--text-primary)';
+            loadMoreBtn.addEventListener('mouseleave', () => {
+                loadMoreBtn.style.background = 'var(--bg-secondary)';
+                loadMoreBtn.style.borderColor = 'var(--border-color)';
+                loadMoreBtn.style.color = 'var(--text-primary)';
             });
 
-            container.appendChild(toggleBtn);
+            container.appendChild(loadMoreBtn);
         }
 
         return container;
