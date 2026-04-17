@@ -881,6 +881,7 @@ async function refreshBrowsingHistoryData(options = {}) {
             }
 
             resetBrowsingRankingDerivedCache();
+            markBrowsingRelatedSnapshotStale('history-refresh');
             clearWidgetsTrendDataCaches({ historyOnly: true });
             markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
         } catch (error) {
@@ -925,6 +926,7 @@ async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
         }
 
         resetBrowsingRankingDerivedCache();
+        markBrowsingRelatedSnapshotStale('history-refresh-from-cache');
         clearWidgetsTrendDataCaches({ historyOnly: true });
         markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
         document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
@@ -3034,6 +3036,9 @@ const i18n = {pageTitle: {
     },widgetsRelatedEmpty: {
         'zh_CN': '暂无目录记录',
         'en': 'No folder records'
+    },widgetsRelatedComputing: {
+        'zh_CN': '正在计算…',
+        'en': 'Calculating...'
     },widgetsCardRefreshText: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh Cards'
@@ -3154,6 +3159,18 @@ const i18n = {pageTitle: {
     },browsingRelatedLoadingText: {
         'zh_CN': '正在读取历史记录...',
         'en': 'Loading history...'
+    },browsingRelatedComputingOpen: {
+        'zh_CN': '正在打开关联记录…',
+        'en': 'Opening related history...'
+    },browsingRelatedComputingCalc: {
+        'zh_CN': '正在计算关联记录…',
+        'en': 'Calculating related history...'
+    },browsingRelatedComputingApply: {
+        'zh_CN': '正在应用筛选…',
+        'en': 'Applying filters...'
+    },browsingRelatedComputingReuse: {
+        'zh_CN': '正在复用上次结果…',
+        'en': 'Reusing last snapshot...'
     },browsingRelatedFilterDay: {
         'zh_CN': '当天',
         'en': 'Today'
@@ -4553,6 +4570,8 @@ function applyLanguage() {
     if (browsingRelatedDescription) browsingRelatedDescription.textContent = i18n.browsingRelatedDescription[currentLang];
     const browsingRelatedLoadingText = document.getElementById('browsingRelatedLoadingText');
     if (browsingRelatedLoadingText) browsingRelatedLoadingText.textContent = i18n.browsingRelatedLoadingText[currentLang];
+    const browsingRelatedComputeStatusText = document.getElementById('browsingRelatedComputeStatusText');
+    if (browsingRelatedComputeStatusText) browsingRelatedComputeStatusText.textContent = i18n.browsingRelatedComputingCalc[currentLang];
     const browsingRelatedFilterDay = document.getElementById('browsingRelatedFilterDay');
     if (browsingRelatedFilterDay) browsingRelatedFilterDay.textContent = i18n.browsingRelatedFilterDay[currentLang];
     const browsingRelatedFilterWeek = document.getElementById('browsingRelatedFilterWeek');
@@ -7438,6 +7457,8 @@ let widgetsRelatedFolderDepth = 'level1';
 let widgetsRelatedPrimaryRange = 'day';
 let widgetsRelatedSecondaryAvailable = true;
 let widgetsRelatedActiveSecondaryKey = '';
+let widgetsRelatedTimeBucketIndexCache = null;
+let widgetsRelatedTimeBucketIndexPromise = null;
 const WIDGETS_PIE_COLORS = ['#1f77ff', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6'];
 const WIDGETS_VIEW_REFRESH_INTERVAL_MS = 1500;
 const WIDGETS_INITIAL_HYDRATION_RETRY_MS = 1800;
@@ -10917,11 +10938,23 @@ function setWidgetsWeekWidgetHeaderCount(widgetType, total, range = 'week') {
     const base = currentLang === 'zh_CN'
         ? (safeType === 'history' ? '点击记录' : '添加记录')
         : (safeType === 'history' ? 'Click History' : 'Additions');
-    const openBracket = currentLang === 'zh_CN' ? '（' : ' (';
+    const isZh = currentLang === 'zh_CN';
+    const openBracket = isZh ? '（' : '(';
     const closeBracket = currentLang === 'zh_CN' ? '）' : ')';
 
     titleEl.textContent = '';
-    titleEl.appendChild(document.createTextNode(base + openBracket));
+    const baseSpan = document.createElement('span');
+    baseSpan.className = 'widgets-week-title-base';
+    baseSpan.textContent = base;
+    titleEl.appendChild(baseSpan);
+
+    if (!isZh) {
+        titleEl.appendChild(document.createTextNode(' '));
+    }
+
+    const bracketSpan = document.createElement('span');
+    bracketSpan.className = 'widgets-week-title-bracket';
+    bracketSpan.appendChild(document.createTextNode(openBracket));
 
     const matchedNumber = String(totalText).match(/^(.*?)(\d[\d,]*)(.*)$/);
     if (matchedNumber) {
@@ -10930,25 +10963,26 @@ function setWidgetsWeekWidgetHeaderCount(widgetType, total, range = 'week') {
         const suffixText = matchedNumber[3] || '';
 
         if (prefixText) {
-            titleEl.appendChild(document.createTextNode(prefixText));
+            bracketSpan.appendChild(document.createTextNode(prefixText));
         }
 
         const numberSpan = document.createElement('span');
         numberSpan.className = 'widgets-week-title-count';
         numberSpan.textContent = numberText;
-        titleEl.appendChild(numberSpan);
+        bracketSpan.appendChild(numberSpan);
 
         if (suffixText) {
-            titleEl.appendChild(document.createTextNode(suffixText));
+            bracketSpan.appendChild(document.createTextNode(suffixText));
         }
     } else {
         const fallbackSpan = document.createElement('span');
         fallbackSpan.className = 'widgets-week-title-count';
         fallbackSpan.textContent = totalText;
-        titleEl.appendChild(fallbackSpan);
+        bracketSpan.appendChild(fallbackSpan);
     }
 
-    titleEl.appendChild(document.createTextNode(closeBracket));
+    bracketSpan.appendChild(document.createTextNode(closeBracket));
+    titleEl.appendChild(bracketSpan);
 }
 
 async function waitForBookmarkCalendarForWidgets(timeoutMs = 3000) {
@@ -10977,13 +11011,19 @@ async function waitForBrowsingCalendarForWidgets(timeoutMs = 3600) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
         const inst = window.browsingHistoryCalendarInstance;
-        if (inst && inst.bookmarksByDate && inst.bookmarksByDate.size >= 0) {
-            return inst;
+        if (inst && inst.bookmarksByDate) {
+            // 这里需要等到“真正可用”再返回，否则会把尚未装载完的数据误判为空。
+            const hasAnyRecords = inst.bookmarksByDate.size > 0;
+            const sourceReady = isBrowsingHistoryCalendarReady(inst);
+            if (hasAnyRecords || sourceReady) {
+                return inst;
+            }
         }
         await new Promise(resolve => setTimeout(resolve, 120));
     }
     return window.browsingHistoryCalendarInstance || null;
 }
+
 
 function focusBookmarkCalendarCurrentWeek() {
     const calendar = window.bookmarkCalendarInstance;
@@ -11421,49 +11461,364 @@ function getWidgetsRelatedRangeLabel(range) {
     return labels[safeRange] || labels.day;
 }
 
-function getWidgetsRelatedPrimaryRangeItems() {
-    const rangeConfig = [
-        { range: 'day', countKey: 'dayCount' },
-        { range: 'week', countKey: 'weekCount' },
-        { range: 'month', countKey: 'monthCount' },
-        { range: 'year', countKey: 'yearCount' },
-        { range: 'all', countKey: 'allCount' }
-    ];
+function createWidgetsRelatedTimeBucketIndex() {
+    return {
+        total: 0,
+        recordCount: 0,
+        latestVisitTime: 0,
+        byDate: new Map(),
+        byDateHour: new Map(),
+        byMonth: new Map(),
+        byMonthWeek: new Map(),
+        byYear: new Map(),
+        byYearMonth: new Map()
+    };
+}
 
-    return rangeConfig.map(({ range, countKey }) => {
-        const sourceItems = getBrowsingRankingItemsForRange(range) || [];
-        const count = sourceItems.reduce((sum, item) => {
-            const value = Number(item && item[countKey] ? item[countKey] : 0);
-            return sum + (Number.isFinite(value) ? value : 0);
-        }, 0);
+function clearWidgetsRelatedTimeBucketIndexCache() {
+    widgetsRelatedTimeBucketIndexCache = null;
+    widgetsRelatedTimeBucketIndexPromise = null;
+}
 
-        return {
-            id: `range:${range}`,
-            range,
-            label: getWidgetsRelatedRangeLabel(range),
-            count
-        };
+function getCachedWidgetsRelatedTimeBucketIndex() {
+    return widgetsRelatedTimeBucketIndexCache?.index || null;
+}
+
+function getWidgetsRelatedMonthKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getWidgetsRelatedBucketMap(parentMap, key) {
+    if (!parentMap.has(key)) {
+        parentMap.set(key, new Map());
+    }
+    return parentMap.get(key);
+}
+
+function incrementWidgetsRelatedCountMap(map, key, amount = 1) {
+    const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+    if (!key || safeAmount <= 0) return;
+    map.set(key, (Number(map.get(key)) || 0) + safeAmount);
+}
+
+function incrementWidgetsRelatedEntryMap(map, key, options = {}) {
+    if (!key) return;
+    const count = Number.isFinite(Number(options.count)) ? Math.max(0, Number(options.count)) : 1;
+    if (count <= 0) return;
+    const order = Number.isFinite(Number(options.order)) ? Number(options.order) : 0;
+
+    if (!map.has(key)) {
+        map.set(key, {
+            count: 0,
+            order,
+            value: options.value
+        });
+    }
+
+    const entry = map.get(key);
+    entry.count += count;
+    if (!Number.isFinite(Number(entry.order)) || (order && order < entry.order)) {
+        entry.order = order;
+    }
+    if (options.value !== undefined) {
+        entry.value = options.value;
+    }
+}
+
+function getWidgetsRelatedRecordVisitTime(record, fallbackDateKey = '') {
+    const rawVisitTime = Number(record?.visitTime || 0);
+    if (Number.isFinite(rawVisitTime) && rawVisitTime > 0) return rawVisitTime;
+
+    const rawLastVisitTime = Number(record?.lastVisitTime || 0);
+    if (Number.isFinite(rawLastVisitTime) && rawLastVisitTime > 0) return rawLastVisitTime;
+
+    return 0;
+}
+
+function addWidgetsRelatedRecordToTimeBucketIndex(index, record, fallbackDateKey = '', nowMs = Date.now()) {
+    const visitTime = getWidgetsRelatedRecordVisitTime(record, fallbackDateKey);
+    if (!Number.isFinite(visitTime) || visitTime <= 0 || visitTime > nowMs) return;
+
+    const visitDate = new Date(visitTime);
+    if (Number.isNaN(visitDate.getTime())) return;
+
+    const dateKey = getWidgetsDateKey(visitDate);
+    const monthKey = getWidgetsRelatedMonthKey(visitDate);
+    const yearKey = String(visitDate.getFullYear());
+    const hourKey = String(visitDate.getHours()).padStart(2, '0');
+    const monthIndex = visitDate.getMonth();
+    const weekNo = getWeekNumberForRelated(visitDate);
+    const dayStart = new Date(visitDate);
+    dayStart.setHours(0, 0, 0, 0);
+
+    index.total += 1;
+    index.recordCount += 1;
+    if (visitTime > index.latestVisitTime) {
+        index.latestVisitTime = visitTime;
+    }
+
+    incrementWidgetsRelatedCountMap(index.byDate, dateKey, 1);
+    incrementWidgetsRelatedCountMap(index.byMonth, monthKey, 1);
+    incrementWidgetsRelatedCountMap(index.byYear, yearKey, 1);
+
+    const hourMap = getWidgetsRelatedBucketMap(index.byDateHour, dateKey);
+    incrementWidgetsRelatedCountMap(hourMap, hourKey, 1);
+
+    const monthWeekMap = getWidgetsRelatedBucketMap(index.byMonthWeek, monthKey);
+    incrementWidgetsRelatedEntryMap(monthWeekMap, String(weekNo), {
+        count: 1,
+        order: dayStart.getTime(),
+        value: weekNo
+    });
+
+    const yearMonthMap = getWidgetsRelatedBucketMap(index.byYearMonth, yearKey);
+    incrementWidgetsRelatedEntryMap(yearMonthMap, String(monthIndex), {
+        count: 1,
+        order: monthIndex,
+        value: monthIndex
     });
 }
 
-async function getWidgetsRelatedSecondaryItems(range, stats) {
-    const safeRange = normalizeWidgetsRelatedRange(range);
-    const boundaries = stats && stats.boundaries ? stats.boundaries : null;
-    if (!boundaries) return [];
+function buildWidgetsRelatedTimeBucketIndexFromRows(rows = []) {
+    const index = createWidgetsRelatedTimeBucketIndex();
+    const nowMs = Date.now();
 
-    let calendar = window.browsingHistoryCalendarInstance;
-    const calendarReady = calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0;
-    if (!calendarReady) {
-        if (currentView === 'widgets' && isSidePanelMode) {
-            // 小组件场景优先走缓存，避免为二级分组强制拉起点击记录日历。
-            return [];
+    rows.forEach((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) return;
+        const dateKey = normalizeWidgetsDateKey(entry[0]);
+        const records = Array.isArray(entry[1]) ? entry[1] : [];
+        records.forEach((record) => {
+            addWidgetsRelatedRecordToTimeBucketIndex(index, record, dateKey, nowMs);
+        });
+    });
+
+    return index;
+}
+
+function buildWidgetsRelatedTimeBucketIndexFromMap(bookmarksByDate) {
+    if (!bookmarksByDate || typeof bookmarksByDate.entries !== 'function') {
+        return createWidgetsRelatedTimeBucketIndex();
+    }
+    return buildWidgetsRelatedTimeBucketIndexFromRows(Array.from(bookmarksByDate.entries()));
+}
+
+async function getWidgetsRelatedTimeBucketIndex() {
+    const cached = getCachedWidgetsRelatedTimeBucketIndex();
+    if (cached) return cached;
+    if (widgetsRelatedTimeBucketIndexPromise) return widgetsRelatedTimeBucketIndexPromise;
+
+    widgetsRelatedTimeBucketIndexPromise = (async () => {
+        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+            try {
+                initBrowsingHistoryCalendar();
+            } catch (_) { }
         }
-        calendar = await waitForBrowsingCalendarForWidgets(1200);
+
+        let calendar = window.browsingHistoryCalendarInstance;
+        if (calendar && calendar.initCompleted === false && typeof waitForBrowsingHistoryCalendar === 'function') {
+            calendar = await waitForBrowsingHistoryCalendar({
+                timeout: currentView === 'widgets' ? 900 : 2500,
+                pollMs: 80
+            });
+        }
+
+        if (calendar?.useNewArchitecture && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
+            const index = buildWidgetsRelatedTimeBucketIndexFromMap(calendar.bookmarksByDate);
+            widgetsRelatedTimeBucketIndexCache = {
+                index,
+                source: 'database-calendar',
+                builtAt: Date.now()
+            };
+            return index;
+        }
+
+        if (calendar?.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
+            const index = buildWidgetsRelatedTimeBucketIndexFromMap(calendar.bookmarksByDate);
+            widgetsRelatedTimeBucketIndexCache = {
+                index,
+                source: 'calendar',
+                builtAt: Date.now()
+            };
+            return index;
+        }
+
+        if (calendar?.bookmarksByDate && calendar.initCompleted !== false) {
+            const index = createWidgetsRelatedTimeBucketIndex();
+            widgetsRelatedTimeBucketIndexCache = {
+                index,
+                source: 'empty-calendar',
+                builtAt: Date.now()
+            };
+            return index;
+        }
+
+        return null;
+    })();
+
+    try {
+        return await widgetsRelatedTimeBucketIndexPromise;
+    } finally {
+        widgetsRelatedTimeBucketIndexPromise = null;
     }
-    if (!calendar || !calendar.bookmarksByDate || calendar.bookmarksByDate.size === 0) {
-        return [];
+}
+
+function getWidgetsRelatedWeekTotal(index, boundaries) {
+    if (!index || !boundaries) return 0;
+    const startDate = new Date(boundaries.weekStart);
+    startDate.setHours(0, 0, 0, 0);
+    const nowDate = new Date(boundaries.now);
+    nowDate.setHours(0, 0, 0, 0);
+
+    let total = 0;
+    for (let i = 0; i < 7; i += 1) {
+        const date = new Date(startDate);
+        date.setDate(startDate.getDate() + i);
+        if (date.getTime() > nowDate.getTime()) break;
+        total += Number(index.byDate.get(getWidgetsDateKey(date)) || 0);
+    }
+    return total;
+}
+
+function getWidgetsRelatedPrimaryRangeItems(index) {
+    const boundaries = getBrowsingClickRankingBoundaries();
+    const now = new Date(boundaries.now);
+    const todayKey = getWidgetsDateKey(now);
+    const monthKey = getWidgetsRelatedMonthKey(now);
+    const yearKey = String(now.getFullYear());
+    const rangeConfig = [
+        { range: 'day', count: Number(index?.byDate?.get(todayKey) || 0) },
+        { range: 'week', count: getWidgetsRelatedWeekTotal(index, boundaries) },
+        { range: 'month', count: Number(index?.byMonth?.get(monthKey) || 0) },
+        { range: 'year', count: Number(index?.byYear?.get(yearKey) || 0) },
+        { range: 'all', count: Number(index?.total || 0) }
+    ];
+
+    return rangeConfig
+        .map(({ range, count }) => {
+            return {
+                id: `range:${range}`,
+                range,
+                label: getWidgetsRelatedRangeLabel(range),
+                count: Number.isFinite(Number(count)) ? Number(count) : 0
+            };
+        })
+        .filter((item) => item.count > 0);
+}
+
+function syncWidgetsRelatedPrimaryRangeToAvailableItems(primaryItems = []) {
+    if (!Array.isArray(primaryItems) || primaryItems.length === 0) {
+        return normalizeWidgetsRelatedRange(widgetsRelatedPrimaryRange);
     }
 
+    const currentRange = normalizeWidgetsRelatedRange(widgetsRelatedPrimaryRange);
+    if (primaryItems.some((item) => normalizeWidgetsRelatedRange(item?.range) === currentRange)) {
+        return currentRange;
+    }
+
+    const nextRange = normalizeWidgetsRelatedRange(primaryItems[0]?.range || currentRange);
+    if (nextRange !== currentRange) {
+        setWidgetsRelatedPrimaryRange(nextRange, false, false);
+        widgetsRelatedActiveSecondaryKey = '';
+    }
+    return nextRange;
+}
+
+function renderWidgetsRelatedSecondaryRow(listEl, secondaryItems = [], options = {}) {
+    if (!listEl) return;
+
+    const existingStatusRow = listEl.querySelector('.widgets-related-level2-status-row');
+    const existingSecondaryRow = listEl.querySelector('.widgets-related-level2-row');
+
+    if (!Array.isArray(secondaryItems) || secondaryItems.length === 0) {
+        if (existingSecondaryRow) existingSecondaryRow.remove();
+        if (existingStatusRow) existingStatusRow.remove();
+        return;
+    }
+
+    if (existingStatusRow) existingStatusRow.remove();
+    if (existingSecondaryRow) existingSecondaryRow.remove();
+
+    const secondaryRow = document.createElement('div');
+    secondaryRow.className = 'widgets-related-level-row widgets-related-level2-row';
+
+    secondaryItems.slice(0, 8).forEach((folder) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'time-menu-btn widgets-related-folder-item widgets-related-secondary-item';
+
+        const rowKey = getWidgetsRelatedFilterKey(folder.filter);
+        if (widgetsRelatedActiveSecondaryKey && rowKey && widgetsRelatedActiveSecondaryKey === rowKey) {
+            row.classList.add('is-selected');
+            row.classList.add('active');
+        }
+
+        const name = document.createElement('span');
+        name.className = 'widgets-related-folder-name';
+        name.textContent = folder.label || '--';
+        name.title = folder.label || '--';
+
+        const count = document.createElement('span');
+        count.className = 'widgets-related-folder-count';
+        count.textContent = currentLang === 'zh_CN' ? `${folder.count}次` : `${folder.count}x`;
+
+        row.appendChild(name);
+        row.appendChild(count);
+
+        row.addEventListener('click', (event) => {
+            event.stopPropagation();
+
+            const filter = cloneWidgetsRelatedFilter(folder.filter);
+            const filterKey = getWidgetsRelatedFilterKey(filter);
+            if (!filterKey) return;
+
+            widgetsRelatedActiveSecondaryKey = filterKey;
+            navigateToAdditionsRelatedLevelFromWidgets('level2', widgetsRelatedPrimaryRange, filter);
+        });
+
+        secondaryRow.appendChild(row);
+    });
+
+    listEl.appendChild(secondaryRow);
+}
+
+function handleWidgetsRelatedPrimaryRangeClick(targetRange) {
+    const safeRange = normalizeWidgetsRelatedRange(targetRange);
+    setWidgetsRelatedPrimaryRange(safeRange, true, false);
+    widgetsRelatedActiveSecondaryKey = '';
+    setWidgetsRelatedFolderDepth('level1', true, false);
+
+    const listEl = document.getElementById('widgetsRelatedList');
+    if (listEl) {
+        listEl.querySelectorAll('.widgets-related-primary-item').forEach((btn) => {
+            const btnRange = normalizeWidgetsRelatedRange(btn.dataset.range || 'day');
+            const selected = btnRange === safeRange;
+            btn.classList.toggle('is-selected', selected);
+            btn.classList.toggle('active', selected);
+        });
+
+        const cachedIndex = getCachedWidgetsRelatedTimeBucketIndex();
+        if (cachedIndex) {
+            const secondaryItems = buildWidgetsRelatedSecondaryItemsFromTimeBucketIndex(safeRange, cachedIndex);
+            widgetsRelatedSecondaryAvailable = secondaryItems.length > 0;
+            updateWidgetsRelatedDepthButtonsState();
+            renderWidgetsRelatedSecondaryRow(listEl, secondaryItems, { range: safeRange });
+        } else {
+            renderWidgetsRelatedSecondaryRow(listEl, [], { range: safeRange });
+        }
+    }
+
+    markWidgetsDirty('related', { schedule: false });
+    updateWidgetsViewData({
+        targets: ['related'],
+        bypassVisualGate: true,
+        allowDuringInteraction: true
+    }).catch(() => { });
+}
+
+function buildWidgetsRelatedSecondaryItemsFromTimeBucketIndex(range, index) {
+    const safeRange = normalizeWidgetsRelatedRange(range);
+    if (!index || Number(index.total || 0) <= 0) return [];
+    const boundaries = getBrowsingClickRankingBoundaries();
     const isZh = currentLang === 'zh_CN';
     const weekdayNames = isZh
         ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -11472,80 +11827,155 @@ async function getWidgetsRelatedSecondaryItems(range, stats) {
         ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
         : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-    const bucketMap = new Map();
-    const addBucket = (filter, label, order) => {
-        const normalizedFilter = cloneWidgetsRelatedFilter(filter);
-        const key = getWidgetsRelatedFilterKey(normalizedFilter);
-        if (!key) return;
+    const toItem = ({ key, label, count, order, filter }) => ({
+        id: getWidgetsRelatedFilterKey(filter) || String(key || ''),
+        label,
+        count: Number(count || 0),
+        order: Number.isFinite(Number(order)) ? Number(order) : 0,
+        filter: cloneWidgetsRelatedFilter(filter)
+    });
 
-        if (!bucketMap.has(key)) {
-            bucketMap.set(key, {
-                id: key,
-                label,
-                count: 0,
-                order,
-                filter: normalizedFilter
-            });
-        }
-
-        const entry = bucketMap.get(key);
-        entry.count += 1;
-    };
-
-    for (const records of calendar.bookmarksByDate.values()) {
-        if (!Array.isArray(records)) continue;
-        records.forEach((record) => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (!t || !Number.isFinite(t)) return;
-
-            const visitDate = new Date(t);
-
-            if (safeRange === 'day') {
-                if (t < boundaries.dayStart || t > boundaries.now) return;
-                const hour = visitDate.getHours();
-                addBucket({ type: 'hour', value: hour }, `${String(hour).padStart(2, '0')}:00`, hour);
-                return;
-            }
-
-            if (safeRange === 'week') {
-                if (t < boundaries.weekStart || t > boundaries.now) return;
-                const dayDate = new Date(visitDate);
-                dayDate.setHours(0, 0, 0, 0);
-                addBucket({ type: 'day', value: dayDate }, weekdayNames[dayDate.getDay()], dayDate.getTime());
-                return;
-            }
-
-            if (safeRange === 'month') {
-                if (t < boundaries.monthStart || t > boundaries.now) return;
-                const weekNo = getWeekNumberForRelated(visitDate);
-                addBucket({ type: 'week', value: weekNo }, isZh ? `第${weekNo}周` : `W${weekNo}`, weekNo);
-                return;
-            }
-
-            if (safeRange === 'year') {
-                if (t < boundaries.yearStart || t > boundaries.now) return;
-                const month = visitDate.getMonth();
-                addBucket({ type: 'month', value: month }, monthNames[month], month);
-                return;
-            }
-
-            if (safeRange === 'all') {
-                if (t > boundaries.now) return;
-                const year = visitDate.getFullYear();
-                addBucket({ type: 'year', value: year }, isZh ? `${year}年` : `${year}`, -year);
-            }
-        });
+    if (safeRange === 'day') {
+        const todayKey = getWidgetsDateKey(boundaries.now);
+        const hourMap = index.byDateHour.get(todayKey);
+        if (!hourMap || hourMap.size === 0) return [];
+        return Array.from(hourMap.entries())
+            .map(([hourKey, count]) => {
+                const hour = Number(hourKey);
+                return toItem({
+                    key: hourKey,
+                    label: `${String(hour).padStart(2, '0')}:00`,
+                    count,
+                    order: hour,
+                    filter: { type: 'hour', value: hour }
+                });
+            })
+            .filter((item) => item.count > 0 && item.filter)
+            .sort((a, b) => a.order - b.order);
     }
 
-    return Array.from(bucketMap.values())
+    if (safeRange === 'week') {
+        const startDate = new Date(boundaries.weekStart);
+        startDate.setHours(0, 0, 0, 0);
+        const nowDate = new Date(boundaries.now);
+        nowDate.setHours(0, 0, 0, 0);
+        const items = [];
+
+        for (let i = 0; i < 7; i += 1) {
+            const dayDate = new Date(startDate);
+            dayDate.setDate(startDate.getDate() + i);
+            if (dayDate.getTime() > nowDate.getTime()) break;
+
+            const dateKey = getWidgetsDateKey(dayDate);
+            const count = Number(index.byDate.get(dateKey) || 0);
+            if (count <= 0) continue;
+
+            items.push(toItem({
+                key: dateKey,
+                label: weekdayNames[dayDate.getDay()],
+                count,
+                order: dayDate.getTime(),
+                filter: { type: 'day', value: dayDate }
+            }));
+        }
+        return items;
+    }
+
+    if (safeRange === 'month') {
+        const nowDate = new Date(boundaries.now);
+        const monthKey = getWidgetsRelatedMonthKey(nowDate);
+        const monthWeekMap = index.byMonthWeek.get(monthKey);
+        if (!monthWeekMap || monthWeekMap.size === 0) return [];
+        return Array.from(monthWeekMap.entries())
+            .map(([weekKey, entry]) => {
+                const weekNo = Number(entry?.value ?? weekKey);
+                return toItem({
+                    key: weekKey,
+                    label: isZh ? `第${weekNo}周` : `W${weekNo}`,
+                    count: Number(entry?.count || 0),
+                    order: Number(entry?.order || weekNo),
+                    filter: { type: 'week', value: weekNo }
+                });
+            })
+            .filter((item) => item.count > 0 && item.filter)
+            .sort((a, b) => {
+                if (a.order !== b.order) return a.order - b.order;
+                return String(a.label || '').localeCompare(String(b.label || ''));
+            });
+    }
+
+    if (safeRange === 'year') {
+        const yearKey = String(new Date(boundaries.now).getFullYear());
+        const yearMonthMap = index.byYearMonth.get(yearKey);
+        if (!yearMonthMap || yearMonthMap.size === 0) return [];
+        return Array.from(yearMonthMap.entries())
+            .map(([monthKey, entry]) => {
+                const month = Number(entry?.value ?? monthKey);
+                return toItem({
+                    key: monthKey,
+                    label: monthNames[month] || String(month + 1),
+                    count: Number(entry?.count || 0),
+                    order: month,
+                    filter: { type: 'month', value: month }
+                });
+            })
+            .filter((item) => item.count > 0 && item.filter)
+            .sort((a, b) => a.order - b.order);
+    }
+
+    return Array.from(index.byYear.entries())
+        .map(([yearKey, count]) => {
+            const year = Number(yearKey);
+            return toItem({
+                key: yearKey,
+                label: isZh ? `${year}年` : `${year}`,
+                count,
+                order: -year,
+                filter: { type: 'year', value: year }
+            });
+        })
+        .filter((item) => item.count > 0 && item.filter)
         .sort((a, b) => {
             if (a.order !== b.order) return a.order - b.order;
-
             return String(a.label || '').localeCompare(String(b.label || ''));
         });
 }
 
+async function getWidgetsRelatedSecondaryItems(range, index = null) {
+    const safeRange = normalizeWidgetsRelatedRange(range);
+    const sourceIndex = index || await getWidgetsRelatedTimeBucketIndex();
+    if (!sourceIndex) {
+        return [];
+    }
+
+    return buildWidgetsRelatedSecondaryItemsFromTimeBucketIndex(safeRange, sourceIndex);
+}
+
 function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelatedPrimaryRange, secondaryFilter = null) {
+    setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('open'));
+
+    const waitForDom = (resolver, timeoutMs = 700, pollMs = 20) => new Promise((resolve) => {
+        const start = Date.now();
+        const tick = () => {
+            let target = null;
+            try {
+                target = resolver();
+            } catch (_) {
+                target = null;
+            }
+            if (target) {
+                resolve(target);
+                return;
+            }
+            if ((Date.now() - start) >= timeoutMs) {
+                resolve(null);
+                return;
+            }
+            setTimeout(tick, pollMs);
+        };
+        tick();
+    });
+
     const safeDepth = setWidgetsRelatedFolderDepth(level, true, false);
     const targetRange = setWidgetsRelatedPrimaryRange(range, true, false);
     const normalizedFilter = safeDepth === 'level2' ? cloneWidgetsRelatedFilter(secondaryFilter) : null;
@@ -11564,6 +11994,7 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
     } catch (_) { }
 
     const applySecondary = () => {
+        setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('apply'));
         if (safeDepth === 'level2' && normalizedFilter) {
             scheduleApplyRelatedFilter(normalizedFilter);
         } else {
@@ -11573,40 +12004,52 @@ function navigateToAdditionsRelatedLevelFromWidgets(level, range = widgetsRelate
 
     navigateToAdditionsFromWidgetsWithJumpFallback(() => {
         switchView('additions');
-        setTimeout(() => {
-            const browsingTab = document.getElementById('additionsTabBrowsing');
+        (async () => {
+            const browsingTabTask = waitForDom(() => document.getElementById('additionsTabBrowsing'), 520, 18);
+            const relatedTabTask = waitForDom(() => document.getElementById('browsingTabRelated'), 720, 18);
+            const relatedPanelTask = waitForDom(() => (
+                document.getElementById('browsingRelatedPanel')
+                || document.getElementById('browsingRelatedTimeMenu')
+                || document.getElementById('browsingRelatedList')
+            ), 900, 24);
+
+            const browsingTab = await browsingTabTask;
             if (browsingTab && !browsingTab.classList.contains('active')) {
                 browsingTab.click();
             }
 
-            setTimeout(() => {
-                const relatedTab = document.getElementById('browsingTabRelated');
-                if (relatedTab && !relatedTab.classList.contains('active')) {
-                    relatedTab.click();
-                }
+            let relatedTab = await relatedTabTask;
+            if (!relatedTab) {
+                relatedTab = await waitForDom(() => document.getElementById('browsingTabRelated'), 280, 18);
+            }
+            if (relatedTab && !relatedTab.classList.contains('active')) {
+                relatedTab.click();
+            }
 
-                setTimeout(() => {
-                    try {
-                        if (typeof setBrowsingRelatedActiveRange === 'function') {
-                            setBrowsingRelatedActiveRange(targetRange, true);
-                        } else {
-                            browsingRelatedCurrentRange = targetRange;
-                            showBrowsingRelatedTimeMenu(targetRange);
-                            loadBrowsingRelatedHistory(targetRange);
-                        }
+            await relatedPanelTask;
 
-                        setTimeout(applySecondary, 260);
-                    } catch (_) { }
-                }, 150);
-            }, 70);
-        }, 100);
+            setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('calc'));
+            if (typeof setBrowsingRelatedActiveRange === 'function') {
+                setBrowsingRelatedActiveRange(targetRange, true, { userInitiated: true });
+            } else {
+                browsingRelatedCurrentRange = targetRange;
+                showBrowsingRelatedTimeMenu(targetRange);
+                loadBrowsingRelatedHistory(targetRange, { userInitiated: true });
+            }
+
+            applySecondary();
+        })()
+            .catch(() => {
+                setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('apply'));
+                applySecondary();
+            });
     }, jumpContext);
 }
 
 async function getWidgetsRelatedFolderItems(depth = 'level1') {
     const safeDepth = normalizeWidgetsRelatedDepth(depth);
-    const stats = await ensureBrowsingClickRankingStats();
-    if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
+    const index = await getWidgetsRelatedTimeBucketIndex();
+    if (!index || Number(index.total || 0) <= 0) {
         widgetsRelatedSecondaryAvailable = false;
         return {
             primaryItems: [],
@@ -11615,8 +12058,9 @@ async function getWidgetsRelatedFolderItems(depth = 'level1') {
         };
     }
 
-    const primaryItems = getWidgetsRelatedPrimaryRangeItems();
-    const secondaryItems = await getWidgetsRelatedSecondaryItems(widgetsRelatedPrimaryRange, stats);
+    const primaryItems = getWidgetsRelatedPrimaryRangeItems(index);
+    const activeRange = syncWidgetsRelatedPrimaryRangeToAvailableItems(primaryItems);
+    const secondaryItems = await getWidgetsRelatedSecondaryItems(activeRange, index);
 
     widgetsRelatedSecondaryAvailable = secondaryItems.length > 0;
     if (!widgetsRelatedSecondaryAvailable && safeDepth === 'level2') {
@@ -11649,21 +12093,9 @@ async function updateWidgetsRelatedWidget(options = {}) {
         widgetsRelatedRenderSignature = nextSignature;
     }
 
-    if (isWidgetsInFirstVisualOnlyWindow({ bypassVisualGate }) && !shouldReuseBrowsingRankingStatsCache()) {
-        const nextSignature = `loading::defer::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
-        widgetsRelatedSecondaryAvailable = false;
-        updateWidgetsRelatedDepthButtonsState();
-        if (widgetsRelatedRenderSignature === nextSignature) return false;
-        listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
-        widgetsRelatedRenderSignature = nextSignature;
-        markWidgetsDirty('related', { delayMs: WIDGETS_FIRST_VISUAL_ONLY_WINDOW_MS + 320 });
-        scheduleWidgetsRankingHydration('related-visual-gate');
-        return true;
-    }
-
     try {
-        const stats = await ensureBrowsingClickRankingStats();
-        if (isWidgetsInLoadingGuardWindow() && (!stats || stats.error === 'noBookmarks') && isWidgetsBrowsingSourceStillLoading()) {
+        const index = await getWidgetsRelatedTimeBucketIndex();
+        if (!index && isWidgetsBrowsingSourceStillLoading()) {
             const nextSignature = `loading::warmup::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
             widgetsRelatedSecondaryAvailable = false;
             updateWidgetsRelatedDepthButtonsState();
@@ -11675,19 +12107,7 @@ async function updateWidgetsRelatedWidget(options = {}) {
             return true;
         }
 
-        if (isWidgetsRankingStatsTransientLoading(stats)) {
-            const nextSignature = `loading::transient::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
-            widgetsRelatedSecondaryAvailable = false;
-            updateWidgetsRelatedDepthButtonsState();
-            if (widgetsRelatedRenderSignature !== nextSignature) {
-                listEl.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
-                widgetsRelatedRenderSignature = nextSignature;
-            }
-            markWidgetsDirty('related', { delayMs: 260 });
-            return true;
-        }
-
-        if (!stats || stats.error || !Array.isArray(stats.items) || stats.items.length === 0) {
+        if (!index || Number(index.total || 0) <= 0) {
             const nextSignature = `empty::${currentLang}::${widgetsRelatedPrimaryRange}::${widgetsRelatedFolderDepth}`;
             widgetsRelatedSecondaryAvailable = false;
             updateWidgetsRelatedDepthButtonsState();
@@ -11697,8 +12117,9 @@ async function updateWidgetsRelatedWidget(options = {}) {
             return true;
         }
 
-        const primaryItems = getWidgetsRelatedPrimaryRangeItems();
-        const secondaryItems = await getWidgetsRelatedSecondaryItems(widgetsRelatedPrimaryRange, stats);
+        const primaryItems = getWidgetsRelatedPrimaryRangeItems(index);
+        const activeRange = syncWidgetsRelatedPrimaryRangeToAvailableItems(primaryItems);
+        const secondaryItems = await getWidgetsRelatedSecondaryItems(activeRange, index);
         widgetsRelatedSecondaryAvailable = secondaryItems.length > 0;
         updateWidgetsRelatedDepthButtonsState();
 
@@ -11726,7 +12147,9 @@ async function updateWidgetsRelatedWidget(options = {}) {
             `l1:${primarySignature}`,
             `l2:${secondarySignature}`
         ].join('::');
-        if (widgetsRelatedRenderSignature === nextSignature) return false;
+        if (widgetsRelatedRenderSignature === nextSignature) {
+            return false;
+        }
 
         listEl.style.display = '';
         listEl.innerHTML = '';
@@ -11738,6 +12161,7 @@ async function updateWidgetsRelatedWidget(options = {}) {
             const row = document.createElement('button');
             row.type = 'button';
             row.className = 'time-menu-btn widgets-related-folder-item widgets-related-primary-item';
+            row.dataset.range = normalizeWidgetsRelatedRange(folder.range);
 
             const activeKey = `range:${normalizeWidgetsRelatedRange(widgetsRelatedPrimaryRange)}`;
             const rowKey = `range:${folder.range}`;
@@ -11760,67 +12184,16 @@ async function updateWidgetsRelatedWidget(options = {}) {
 
             row.addEventListener('click', (event) => {
                 event.stopPropagation();
-
-                const targetRange = normalizeWidgetsRelatedRange(folder.range);
-                setWidgetsRelatedPrimaryRange(targetRange, true, false);
-                widgetsRelatedActiveSecondaryKey = '';
-                setWidgetsRelatedFolderDepth('level1', true, false);
-
-                markWidgetsDirty('related', { schedule: false });
-                updateWidgetsViewData({ targets: ['related'], bypassVisualGate: true }).catch(() => { });
+                handleWidgetsRelatedPrimaryRangeClick(folder.range);
             });
 
             primaryRow.appendChild(row);
         });
 
         listEl.appendChild(primaryRow);
-
-        if (!secondaryItems.length) {
-            widgetsRelatedRenderSignature = nextSignature;
-            return true;
-        }
-
-        const secondaryRow = document.createElement('div');
-        secondaryRow.className = 'widgets-related-level-row widgets-related-level2-row';
-
-        secondaryItems.slice(0, 8).forEach((folder) => {
-            const row = document.createElement('button');
-            row.type = 'button';
-            row.className = 'time-menu-btn widgets-related-folder-item widgets-related-secondary-item';
-
-            const rowKey = getWidgetsRelatedFilterKey(folder.filter);
-            if (widgetsRelatedActiveSecondaryKey && rowKey && widgetsRelatedActiveSecondaryKey === rowKey) {
-                row.classList.add('is-selected');
-                row.classList.add('active');
-            }
-
-            const name = document.createElement('span');
-            name.className = 'widgets-related-folder-name';
-            name.textContent = folder.label || '--';
-            name.title = folder.label || '--';
-
-            const count = document.createElement('span');
-            count.className = 'widgets-related-folder-count';
-            count.textContent = currentLang === 'zh_CN' ? `${folder.count}次` : `${folder.count}x`;
-
-            row.appendChild(name);
-            row.appendChild(count);
-
-            row.addEventListener('click', (event) => {
-                event.stopPropagation();
-
-                const filter = cloneWidgetsRelatedFilter(folder.filter);
-                const filterKey = getWidgetsRelatedFilterKey(filter);
-                if (!filterKey) return;
-
-                widgetsRelatedActiveSecondaryKey = filterKey;
-                navigateToAdditionsRelatedLevelFromWidgets('level2', widgetsRelatedPrimaryRange, filter);
-            });
-
-            secondaryRow.appendChild(row);
+        renderWidgetsRelatedSecondaryRow(listEl, secondaryItems, {
+            range: widgetsRelatedPrimaryRange
         });
-
-        listEl.appendChild(secondaryRow);
         widgetsRelatedRenderSignature = nextSignature;
         return true;
     } catch (error) {
@@ -23182,7 +23555,7 @@ function initBrowsingSubTabs() {
                     console.error('[initBrowsingSubTabs] 初始化书签关联记录失败:', e);
                 }
             } else {
-                refreshBrowsingRelatedHistory();
+                refreshBrowsingRelatedHistory({ userInitiated: true });
             }
         }
 
@@ -23574,6 +23947,7 @@ function resetBrowsingRankingDerivedCache() {
     browsingClickRankingStats = null;
     clearBrowsingRankingTransientRetryTimer();
     clearWidgetsRankingFastItems();
+    clearWidgetsRelatedTimeBucketIndexCache();
 }
 
 function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSIENT_RETRY_MS) {
@@ -23590,7 +23964,7 @@ function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSI
         markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
         try {
             refreshActiveBrowsingRankingIfVisible();
-            refreshBrowsingRelatedHistory();
+            markBrowsingRelatedSnapshotStale('ranking-transient-retry');
         } catch (_) { }
     }, safeDelay);
 }
@@ -24908,7 +25282,7 @@ try {
     window.autoExitSearchFiltersOnContextChange = autoExitSearchFiltersOnContextChange;
 } catch (_) { }
 
-function setBrowsingRelatedActiveRange(range, shouldPersist = true) {
+function setBrowsingRelatedActiveRange(range, shouldPersist = true, options = {}) {
     const panel = document.getElementById('browsingRelatedPanel');
     if (!panel) return;
     const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
@@ -24924,8 +25298,9 @@ function setBrowsingRelatedActiveRange(range, shouldPersist = true) {
         else btn.classList.remove('active');
     });
 
+    const userInitiated = options && options.userInitiated === true;
     showBrowsingRelatedTimeMenu(range);
-    loadBrowsingRelatedHistory(range);
+    loadBrowsingRelatedHistory(range, { userInitiated });
 
     if (shouldPersist) {
         try {
@@ -25197,7 +25572,7 @@ document.addEventListener('browsingHistoryCacheUpdated', () => {
     resetBrowsingRankingDerivedCache();
     markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 80 });
     refreshActiveBrowsingRankingIfVisible();
-    refreshBrowsingRelatedHistory(); // 同时刷新书签关联页面
+    markBrowsingRelatedSnapshotStale('browsing-history-cache-updated');
 });
 
 function groupBookmarksByTime(bookmarks, timeFilter) {
@@ -26052,6 +26427,171 @@ let browsingRelatedCurrentRange = 'day'; // 当前选中的时间范围
 let browsingRelatedBookmarkUrls = null; // 缓存的书签URL集合（用于标识）
 let browsingRelatedBookmarkTitles = null; // 缓存的书签标题集合（用于标识）
 let browsingRelatedBookmarkInfo = null; // 缓存的书签URL->标题映射（用于统计与展示）
+let browsingRelatedRecomputePending = false; // 数据变更后，延迟到下次用户触发加载时再重算
+let browsingRelatedLoadSeq = 0;
+const BROWSING_RELATED_SNAPSHOT_CACHE_LIMIT = 6;
+const browsingRelatedSnapshotCache = new Map(); // key -> { historyItemsExpanded, bookmarkUrls, bookmarkTitles }
+
+function normalizeBrowsingRelatedRange(range) {
+    const allowed = ['day', 'week', 'month', 'year', 'all'];
+    return allowed.includes(range) ? range : 'day';
+}
+
+function getBrowsingRelatedComputeMessage(phase = 'calc') {
+    const key = phase === 'open'
+        ? 'browsingRelatedComputingOpen'
+        : phase === 'apply'
+            ? 'browsingRelatedComputingApply'
+            : phase === 'reuse'
+                ? 'browsingRelatedComputingReuse'
+                : 'browsingRelatedComputingCalc';
+    if (i18n[key] && i18n[key][currentLang]) return i18n[key][currentLang];
+    if (phase === 'open') return currentLang === 'zh_CN' ? '正在打开关联记录…' : 'Opening related history...';
+    if (phase === 'apply') return currentLang === 'zh_CN' ? '正在应用筛选…' : 'Applying filters...';
+    if (phase === 'reuse') return currentLang === 'zh_CN' ? '正在复用上次结果…' : 'Reusing last snapshot...';
+    return currentLang === 'zh_CN' ? '正在计算关联记录…' : 'Calculating related history...';
+}
+
+function setBrowsingRelatedComputeStatus(visible, message = '') {
+    const panel = document.getElementById('browsingRelatedPanel');
+    const status = document.getElementById('browsingRelatedComputeStatus');
+    const textEl = document.getElementById('browsingRelatedComputeStatusText');
+    if (!status) return;
+
+    if (!visible) {
+        status.hidden = true;
+        status.setAttribute('aria-hidden', 'true');
+        if (panel) panel.classList.remove('is-computing');
+        return;
+    }
+
+    if (textEl) {
+        textEl.textContent = message || getBrowsingRelatedComputeMessage('calc');
+    }
+    status.hidden = false;
+    status.setAttribute('aria-hidden', 'false');
+    if (panel) panel.classList.add('is-computing');
+}
+
+function markBrowsingRelatedSnapshotStale(reason = '') {
+    browsingRelatedRecomputePending = true;
+    if (reason) {
+        try {
+            console.debug('[BrowsingRelated] 标记待重算:', reason);
+        } catch (_) { }
+    }
+}
+
+function getBrowsingRelatedStatsVersion(stats) {
+    if (!stats) return 'none';
+    if (stats.error) return `error:${String(stats.error)}`;
+    if (!Array.isArray(stats.items)) return 'items:none';
+
+    let allCountSum = 0;
+    let latestVisit = 0;
+    for (const item of stats.items) {
+        const allCount = Number(item?.allCount || 0);
+        if (Number.isFinite(allCount)) allCountSum += allCount;
+        const lastVisit = Number(item?.lastVisitTime || 0);
+        if (Number.isFinite(lastVisit) && lastVisit > latestVisit) latestVisit = lastVisit;
+    }
+    return `${stats.items.length}:${allCountSum}:${latestVisit}`;
+}
+
+function getBrowsingRelatedScopeKey(range) {
+    const safeRange = normalizeBrowsingRelatedRange(range);
+    if (browsingRelatedCustomBounds && Number.isFinite(browsingRelatedCustomBounds.startTime) && Number.isFinite(browsingRelatedCustomBounds.endTime)) {
+        return `custom:${browsingRelatedCustomBounds.startTime}:${browsingRelatedCustomBounds.endTime}`;
+    }
+    return `preset:${safeRange}`;
+}
+
+function getBrowsingRelatedQueryBounds(range) {
+    const safeRange = normalizeBrowsingRelatedRange(range);
+    if (browsingRelatedCustomBounds && Number.isFinite(browsingRelatedCustomBounds.startTime) && Number.isFinite(browsingRelatedCustomBounds.endTime)) {
+        return {
+            startTime: browsingRelatedCustomBounds.startTime,
+            endTime: browsingRelatedCustomBounds.endTime
+        };
+    }
+    return {
+        startTime: getTimeRangeStart(safeRange),
+        endTime: Date.now()
+    };
+}
+
+function buildBrowsingRelatedSnapshotKey(range, statsVersion) {
+    return `${getBrowsingRelatedScopeKey(range)}|stats:${statsVersion}`;
+}
+
+function getBrowsingRelatedSnapshot(key) {
+    if (!key || !browsingRelatedSnapshotCache.has(key)) return null;
+    const snapshot = browsingRelatedSnapshotCache.get(key);
+    // LRU: recently used move to tail
+    browsingRelatedSnapshotCache.delete(key);
+    browsingRelatedSnapshotCache.set(key, snapshot);
+    return snapshot;
+}
+
+function setBrowsingRelatedSnapshot(key, snapshot) {
+    if (!key || !snapshot) return;
+    if (browsingRelatedSnapshotCache.has(key)) {
+        browsingRelatedSnapshotCache.delete(key);
+    }
+    browsingRelatedSnapshotCache.set(key, snapshot);
+    while (browsingRelatedSnapshotCache.size > BROWSING_RELATED_SNAPSHOT_CACHE_LIMIT) {
+        const oldestKey = browsingRelatedSnapshotCache.keys().next().value;
+        browsingRelatedSnapshotCache.delete(oldestKey);
+    }
+}
+
+function getLatestBrowsingRelatedSnapshotForScope(range) {
+    const scopePrefix = `${getBrowsingRelatedScopeKey(range)}|stats:`;
+    let latestSnapshot = null;
+    let latestSavedAt = -1;
+    for (const [key, snapshot] of browsingRelatedSnapshotCache.entries()) {
+        if (!String(key || '').startsWith(scopePrefix)) continue;
+        if (!snapshot || !Array.isArray(snapshot.historyItemsExpanded)) continue;
+        const savedAt = Number(snapshot.savedAt || 0);
+        if (savedAt >= latestSavedAt) {
+            latestSavedAt = savedAt;
+            latestSnapshot = snapshot;
+        }
+    }
+    return latestSnapshot;
+}
+
+function getBrowsingRelatedSnapshotPayload(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.historyItemsExpanded)) return null;
+    const historyItemsExpanded = snapshot.historyItemsExpanded.slice();
+    const bookmarkUrls = snapshot.bookmarkUrls instanceof Set ? snapshot.bookmarkUrls : new Set();
+    const bookmarkTitles = snapshot.bookmarkTitles instanceof Set ? snapshot.bookmarkTitles : new Set();
+
+    if (browsingRelatedSortAsc) {
+        historyItemsExpanded.sort((a, b) => (a.lastVisitTime || 0) - (b.lastVisitTime || 0));
+    } else {
+        historyItemsExpanded.sort((a, b) => (b.lastVisitTime || 0) - (a.lastVisitTime || 0));
+    }
+
+    return {
+        historyItemsExpanded,
+        bookmarkUrls,
+        bookmarkTitles
+    };
+}
+
+async function renderBrowsingRelatedSnapshot(listContainer, snapshot, range) {
+    const payload = getBrowsingRelatedSnapshotPayload(snapshot);
+    if (!payload) return false;
+    await renderBrowsingRelatedList(
+        listContainer,
+        payload.historyItemsExpanded,
+        payload.bookmarkUrls,
+        payload.bookmarkTitles,
+        range
+    );
+    return true;
+}
 
 // 初始化书签关联记录
 function initBrowsingRelatedHistory() {
@@ -26088,7 +26628,7 @@ function initBrowsingRelatedHistory() {
 
     const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
 
-    const setActiveRange = (range, shouldPersist = true) => {
+    const setActiveRange = (range, shouldPersist = true, userInitiated = false) => {
         if (!allowedRanges.includes(range)) {
             range = 'day';
         }
@@ -26106,7 +26646,7 @@ function initBrowsingRelatedHistory() {
         // 显示对应的时间段菜单
         showBrowsingRelatedTimeMenu(range);
 
-        loadBrowsingRelatedHistory(range);
+        loadBrowsingRelatedHistory(range, { userInitiated });
 
         if (shouldPersist) {
             try {
@@ -26120,7 +26660,7 @@ function initBrowsingRelatedHistory() {
     buttons.forEach(btn => {
         btn.addEventListener('click', () => {
             const range = btn.dataset.range || 'day';
-            setActiveRange(range);
+            setActiveRange(range, true, true);
         });
     });
 
@@ -26145,7 +26685,7 @@ function initBrowsingRelatedHistory() {
                 sortBtn.classList.remove('asc');
             }
             updateTooltip();
-            loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+            loadBrowsingRelatedHistory(browsingRelatedCurrentRange, { userInitiated: true });
         });
     }
 
@@ -26159,21 +26699,30 @@ function initBrowsingRelatedHistory() {
         console.warn('[BrowsingRelated] 无法读取筛选范围:', storageErr);
     }
 
-    setActiveRange(initialRange, false);
+    setActiveRange(initialRange, false, false);
 }
 
 // 刷新书签关联记录
-async function refreshBrowsingRelatedHistory() {
+async function refreshBrowsingRelatedHistory(options = {}) {
     const panel = document.getElementById('browsingRelatedPanel');
     if (!panel || !panel.classList.contains('active')) return;
 
     const activeBtn = panel.querySelector('.ranking-time-filter-btn.active');
     const range = activeBtn ? (activeBtn.dataset.range || 'day') : 'day';
+    const userInitiated = options && options.userInitiated === true;
+    const forceSourceRefresh = options && options.forceSourceRefresh === true;
 
-    // 清除书签URL/标题缓存（以便重新获取最新书签）
-    browsingRelatedBookmarkUrls = null;
-    browsingRelatedBookmarkTitles = null;
-    browsingRelatedBookmarkInfo = null;
+    // 用户要求：数据变化后不立刻重算，等下次用户触发再算。
+    if (browsingRelatedRecomputePending && !userInitiated && !forceSourceRefresh) {
+        return;
+    }
+
+    // 仅在明确要求时刷新来源缓存，避免每次进入都触发全量重算。
+    if (forceSourceRefresh) {
+        browsingRelatedBookmarkUrls = null;
+        browsingRelatedBookmarkTitles = null;
+        browsingRelatedBookmarkInfo = null;
+    }
 
     const calendar = await waitForBrowsingHistoryCalendar({
         timeout: 2000,
@@ -26184,7 +26733,7 @@ async function refreshBrowsingRelatedHistory() {
     }
 
     // 直接重新加载（数据来自 browsingHistoryCalendarInstance）
-    loadBrowsingRelatedHistory(range);
+    loadBrowsingRelatedHistory(range, { userInitiated });
 }
 
 // 获取书签URL和标题集合（使用URL或标题匹配）
@@ -26364,21 +26913,52 @@ async function getBrowsingRelatedHistoryData(range = 'day') {
 
 // 加载书签关联记录（显示所有浏览记录，标识出书签）
 // 复用「点击记录」的书签集合进行标识，实现数据一致性
-async function loadBrowsingRelatedHistory(range = 'day') {
+async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
     const listContainer = document.getElementById('browsingRelatedList');
     if (!listContainer) return;
+    const safeRange = normalizeBrowsingRelatedRange(range);
+    const loadSeq = ++browsingRelatedLoadSeq;
+    const userInitiated = options && options.userInitiated === true;
+    const forceRecompute = options && options.forceRecompute === true;
 
     const isZh = currentLang === 'zh_CN';
     const loadingTitle = isZh ? '正在读取历史记录...' : 'Loading history...';
-
-    listContainer.innerHTML = `
-        <div class="empty-state">
-            <div class="empty-state-icon"><i class="fas fa-spinner fa-spin"></i></div>
-            <div class="empty-state-title">${loadingTitle}</div>
-        </div>
-    `;
+    setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('calc'));
 
     try {
+        const stats = await ensureBrowsingClickRankingStats();
+        const statsVersion = getBrowsingRelatedStatsVersion(stats);
+        const snapshotKey = buildBrowsingRelatedSnapshotKey(safeRange, statsVersion);
+        const cachedSnapshot = forceRecompute ? null : getBrowsingRelatedSnapshot(snapshotKey);
+
+        if (cachedSnapshot && Array.isArray(cachedSnapshot.historyItemsExpanded)) {
+            setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('reuse'));
+            if (loadSeq !== browsingRelatedLoadSeq) return;
+            await renderBrowsingRelatedSnapshot(listContainer, cachedSnapshot, safeRange);
+            if (!(browsingRelatedRecomputePending && !userInitiated)) {
+                browsingRelatedRecomputePending = false;
+            }
+            return;
+        }
+
+        // 延迟重算语义：非用户触发时，优先复用当前范围最近快照，不立刻重算。
+        if (browsingRelatedRecomputePending && !userInitiated && !forceRecompute) {
+            const staleSnapshot = getLatestBrowsingRelatedSnapshotForScope(safeRange);
+            if (staleSnapshot) {
+                setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('reuse'));
+                if (loadSeq !== browsingRelatedLoadSeq) return;
+                await renderBrowsingRelatedSnapshot(listContainer, staleSnapshot, safeRange);
+            }
+            return;
+        }
+
+        listContainer.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="empty-state-title">${loadingTitle}</div>
+            </div>
+        `;
+
         const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
         if (!browserAPI || !browserAPI.history || !browserAPI.history.search) {
             throw new Error('History API not available');
@@ -26399,8 +26979,9 @@ async function loadBrowsingRelatedHistory(range = 'day') {
         }
 
         // 获取时间范围（Phase 4.7: 支持自定义日期范围覆盖）
-        const startTime = browsingRelatedCustomBounds ? browsingRelatedCustomBounds.startTime : getTimeRangeStart(range);
-        const endTime = browsingRelatedCustomBounds ? browsingRelatedCustomBounds.endTime : Date.now();
+        const queryBounds = getBrowsingRelatedQueryBounds(safeRange);
+        const startTime = queryBounds.startTime;
+        const endTime = queryBounds.endTime;
 
         // 搜索所有历史记录（不限制数量）
         const historyItems = await new Promise((resolve, reject) => {
@@ -26482,7 +27063,7 @@ async function loadBrowsingRelatedHistory(range = 'day') {
         }
 
         // 用展开后的记录替换原来的
-        const historyItemsExpanded = expandedItems;
+        const baseHistoryItemsExpanded = expandedItems.slice();
 
         // ✨ 获取书签URL和标题集合（用于标识哪些是书签）
         // 优先从「点击记录」日历获取，保持数据一致性
@@ -26523,6 +27104,14 @@ async function loadBrowsingRelatedHistory(range = 'day') {
 
         }
 
+        setBrowsingRelatedSnapshot(snapshotKey, {
+            historyItemsExpanded: baseHistoryItemsExpanded.slice(),
+            bookmarkUrls,
+            bookmarkTitles,
+            savedAt: Date.now()
+        });
+
+        const historyItemsExpanded = baseHistoryItemsExpanded.slice();
         // 按当前排序方式排序（使用展开后的记录）
         if (browsingRelatedSortAsc) {
             // 正序：旧到新
@@ -26533,7 +27122,9 @@ async function loadBrowsingRelatedHistory(range = 'day') {
         }
 
         // 渲染历史记录（根据数量和时间范围自动决定是否懒加载）
-        renderBrowsingRelatedList(listContainer, historyItemsExpanded, bookmarkUrls, bookmarkTitles, range);
+        if (loadSeq !== browsingRelatedLoadSeq) return;
+        renderBrowsingRelatedList(listContainer, historyItemsExpanded, bookmarkUrls, bookmarkTitles, safeRange);
+        browsingRelatedRecomputePending = false;
 
     } catch (error) {
         console.error('[BrowsingRelated] 加载失败:', error);
@@ -26546,6 +27137,10 @@ async function loadBrowsingRelatedHistory(range = 'day') {
                 <div class="empty-state-description">${errorDesc}</div>
             </div>
         `;
+    } finally {
+        if (loadSeq === browsingRelatedLoadSeq) {
+            setBrowsingRelatedComputeStatus(false);
+        }
     }
 }
 
