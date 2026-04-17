@@ -10,10 +10,8 @@ import {
   getSessionsByTimeRange,
   getTrackingStats,
   getTrackingRankingStatsByRange,
-  clearTrackingDisplayData,
   clearCurrentTrackingSessions,
   clearTrackingStatsByRange,
-  syncTrackingData,
   restoreActiveSessionsFromStorage
 } from './active_time_tracker/index.js';
 const browserAPI = (function () {
@@ -22,15 +20,15 @@ const browserAPI = (function () {
   throw new Error('Unsupported browser');
 })();
 
-function normalizeHistoryPanelView(view, fallback = 'widgets') {
+function normalizeHistoryPanelView(view) {
   if (view === 'widgets' || view === 'recommend' || view === 'additions') {
     return view;
   }
-  return fallback;
+  return 'widgets';
 }
 
 function openView(view) {
-  const safeView = normalizeHistoryPanelView(view, 'widgets');
+  const safeView = normalizeHistoryPanelView(view);
   try {
     browserAPI.storage.local.set({
       historyRequestedView: { view: safeView, time: Date.now() }
@@ -291,14 +289,15 @@ function normalizeRecommendCardDataEntry(entry) {
   const priority = Number(entry?.priority);
   const forceDueAt = Number(entry?.forceDueAt || 0);
   const forceDueMovedAt = Number(entry?.forceDueMovedAt || 0);
+  const favicon = String(entry?.favicon || entry?.faviconUrl || '').trim();
 
   return {
     id,
     title,
     name: title,
     url,
-    favicon: null,
-    faviconUrl: null,
+    favicon: favicon || null,
+    faviconUrl: favicon || null,
     priority: Number.isFinite(priority) ? priority : 0.5,
     forceDue: entry?.forceDue === true,
     forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
@@ -317,18 +316,40 @@ function normalizeHistoryCurrentCardsState(state) {
     : [];
   const timestamp = Number(source.timestamp || source.lastUpdated || 0);
   const lastUpdated = Number(source.lastUpdated || source.timestamp || 0);
+  const version = Number(source.version || 0);
 
   return {
     cardIds,
     flippedIds,
     cardData,
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-    lastUpdated: Number.isFinite(lastUpdated) ? lastUpdated : 0
+    lastUpdated: Number.isFinite(lastUpdated) ? lastUpdated : 0,
+    version: Number.isFinite(version) && version > 0 ? Math.floor(version) : 0
   };
 }
 
-async function saveHistoryCurrentCardsState(cardIds = [], flippedIds = [], cardData = []) {
+function buildNextHistoryCurrentCardsVersion(previousState = null, now = Date.now()) {
+  const currentVersion = Number(previousState?.version || 0);
+  const safeCurrentVersion = Number.isFinite(currentVersion) && currentVersion > 0
+    ? Math.floor(currentVersion)
+    : 0;
+  return Math.max(now, safeCurrentVersion + 1);
+}
+
+async function saveHistoryCurrentCardsState(cardIds = [], flippedIds = [], cardData = [], options = {}) {
   const now = Date.now();
+  let previousState = options?.previousState || null;
+  if (!previousState) {
+    try {
+      const result = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+      previousState = normalizeHistoryCurrentCardsState(result?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+    } catch (_) {
+      previousState = normalizeHistoryCurrentCardsState(null);
+    }
+  } else {
+    previousState = normalizeHistoryCurrentCardsState(previousState);
+  }
+
   const payload = {
     [HISTORY_CURRENT_CARDS_STORAGE_KEY]: {
       cardIds: normalizeBookmarkIdList(cardIds),
@@ -337,7 +358,8 @@ async function saveHistoryCurrentCardsState(cardIds = [], flippedIds = [], cardD
         .map(normalizeRecommendCardDataEntry)
         .filter(Boolean),
       timestamp: now,
-      lastUpdated: now
+      lastUpdated: now,
+      version: buildNextHistoryCurrentCardsVersion(previousState, now)
     }
   };
   await browserAPI.storage.local.set(payload);
@@ -375,6 +397,129 @@ function compareRecommendPriorityForQuickReview(a, b) {
   return String(a?.id || '').localeCompare(String(b?.id || ''));
 }
 
+function buildRecommendSkippedOrderMap(skippedIds = []) {
+  const normalized = normalizeRecommendSkippedIds(skippedIds || []);
+  return new Map(normalized.map((id, index) => [id, index]));
+}
+
+function compareRecommendPriorityWithSkippedForQuickReview(a, b, options = {}) {
+  const skippedSet = options?.skippedSet instanceof Set ? options.skippedSet : new Set();
+  const skippedOrderMap = options?.skippedOrderMap instanceof Map ? options.skippedOrderMap : new Map();
+
+  const aId = String(a?.id || '').trim();
+  const bId = String(b?.id || '').trim();
+  const aForceDue = a?.forceDue === true;
+  const bForceDue = b?.forceDue === true;
+  const aSkipped = skippedSet.has(aId);
+  const bSkipped = skippedSet.has(bId);
+  const aDeferred = aSkipped || (aForceDue && Number(a?.forceDueMovedAt || 0) > 0);
+  const bDeferred = bSkipped || (bForceDue && Number(b?.forceDueMovedAt || 0) > 0);
+
+  if (aDeferred !== bDeferred) {
+    return aDeferred ? 1 : -1;
+  }
+
+  if (aForceDue !== bForceDue) {
+    return aForceDue ? -1 : 1;
+  }
+
+  if (aSkipped !== bSkipped) {
+    return aSkipped ? 1 : -1;
+  }
+
+  if (aSkipped && bSkipped) {
+    const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+    const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+  }
+
+  return compareRecommendPriorityForQuickReview(a, b);
+}
+
+function isRecommendQuickReviewItemSkipped(item, skippedSet) {
+  const id = String(item?.id || '').trim();
+  return Boolean(id && skippedSet instanceof Set && skippedSet.has(id));
+}
+
+function compareRecommendForceDueForQuickReview(a, b) {
+  const aMovedAt = Number(a?.forceDueMovedAt || 0);
+  const bMovedAt = Number(b?.forceDueMovedAt || 0);
+  const aMoved = aMovedAt > 0;
+  const bMoved = bMovedAt > 0;
+
+  if (aMoved !== bMoved) {
+    return aMoved ? 1 : -1;
+  }
+  if (aMoved && bMoved && aMovedAt !== bMovedAt) {
+    return aMovedAt - bMovedAt;
+  }
+
+  const dueDiff = Number(a?.forceDueAt || 0) - Number(b?.forceDueAt || 0);
+  if (dueDiff !== 0) return dueDiff;
+  return compareRecommendPriorityForQuickReview(a, b);
+}
+
+function compareRecommendDeferredForQuickReview(a, b, options = {}) {
+  const skippedSet = options?.skippedSet instanceof Set ? options.skippedSet : new Set();
+  const skippedOrderMap = options?.skippedOrderMap instanceof Map ? options.skippedOrderMap : new Map();
+  const aSkipped = isRecommendQuickReviewItemSkipped(a, skippedSet);
+  const bSkipped = isRecommendQuickReviewItemSkipped(b, skippedSet);
+
+  if (aSkipped && bSkipped) {
+    const aId = String(a?.id || '').trim();
+    const bId = String(b?.id || '').trim();
+    const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
+    const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+  }
+
+  const aForceDue = a?.forceDue === true;
+  const bForceDue = b?.forceDue === true;
+  if (aForceDue !== bForceDue) {
+    return aForceDue ? -1 : 1;
+  }
+  if (aForceDue && bForceDue) {
+    return compareRecommendForceDueForQuickReview(a, b);
+  }
+  return compareRecommendPriorityForQuickReview(a, b);
+}
+
+function buildQuickReviewPriorityPools(sortedPool = [], options = {}) {
+  const skippedSet = options?.skippedSet instanceof Set ? options.skippedSet : new Set();
+  const skippedOrderMap = options?.skippedOrderMap instanceof Map ? options.skippedOrderMap : new Map();
+  const activeForceDuePool = [];
+  const normalPool = [];
+  const deferredPool = [];
+
+  for (const item of Array.isArray(sortedPool) ? sortedPool : []) {
+    if (!item) continue;
+    const skipped = isRecommendQuickReviewItemSkipped(item, skippedSet);
+    const forceDue = item.forceDue === true;
+    const movedToTail = forceDue && Number(item.forceDueMovedAt || 0) > 0;
+
+    if (forceDue && !skipped && !movedToTail) {
+      activeForceDuePool.push(item);
+    } else if (!forceDue && !skipped) {
+      normalPool.push(item);
+    } else {
+      deferredPool.push(item);
+    }
+  }
+
+  return {
+    activeForceDuePool: activeForceDuePool.sort(compareRecommendForceDueForQuickReview),
+    normalPool: normalPool.sort(compareRecommendPriorityForQuickReview),
+    deferredPool: deferredPool.sort((a, b) => compareRecommendDeferredForQuickReview(a, b, {
+      skippedSet,
+      skippedOrderMap
+    }))
+  };
+}
+
 function getQuickReviewDomainKey(bookmark) {
   if (!bookmark?.url) return '';
   try {
@@ -387,8 +532,54 @@ function getQuickReviewDomainKey(bookmark) {
   }
 }
 
-function pickWeightedQuickReviewEntry(entries = []) {
+function buildQuickReviewDeterministicHash(input = '') {
+  const text = String(input || '');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function createQuickReviewDeterministicRandom(seedInput = '') {
+  let state = buildQuickReviewDeterministicHash(seedInput);
+  if (state === 0) {
+    state = 1;
+  }
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function buildQuickReviewSelectionSeed(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE) {
+  if (!Array.isArray(pool) || pool.length === 0) {
+    const safeStart = Math.max(0, Math.floor(Number(startIndex) || 0));
+    const safeSize = Math.max(0, Math.floor(Number(batchSize) || 0));
+    return `empty|start:${safeStart}|size:${safeSize}`;
+  }
+
+  const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
+  const safeSize = Math.max(1, Math.floor(Number(batchSize) || 0));
+  const inspectCount = Math.min(pool.length, 96);
+  const ids = [];
+  for (let i = 0; i < inspectCount; i += 1) {
+    const idx = (safeStart + i) % pool.length;
+    ids.push(String(pool[idx]?.id || ''));
+  }
+  return `len:${pool.length}|start:${safeStart}|size:${safeSize}|ids:${ids.join(',')}`;
+}
+
+function createQuickReviewSelectionRandom(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE) {
+  return createQuickReviewDeterministicRandom(
+    buildQuickReviewSelectionSeed(pool, startIndex, batchSize)
+  );
+}
+
+function pickWeightedQuickReviewEntry(entries = [], randomFn = Math.random) {
   if (!Array.isArray(entries) || entries.length === 0) return null;
+  const random = typeof randomFn === 'function' ? randomFn : Math.random;
   let totalWeight = 0;
   for (const entry of entries) {
     const weight = Number(entry?.weight || 0);
@@ -398,10 +589,10 @@ function pickWeightedQuickReviewEntry(entries = []) {
   }
 
   if (!(totalWeight > 0)) {
-    return entries[Math.floor(Math.random() * entries.length)] || null;
+    return entries[Math.floor(random() * entries.length)] || null;
   }
 
-  let roll = Math.random() * totalWeight;
+  let roll = random() * totalWeight;
   for (const entry of entries) {
     const weight = Number(entry?.weight || 0);
     if (!(Number.isFinite(weight) && weight > 0)) continue;
@@ -411,11 +602,12 @@ function pickWeightedQuickReviewEntry(entries = []) {
   return entries[entries.length - 1] || null;
 }
 
-function buildRecommendBatchFromPoolForQuickReview(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE) {
+function buildRecommendBatchFromPoolForQuickReview(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE, options = {}) {
   if (!Array.isArray(pool) || pool.length === 0) return [];
 
   const size = Math.min(Math.max(1, Math.floor(Number(batchSize) || QUICK_REVIEW_RECOMMEND_BATCH_SIZE)), pool.length);
   const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
+  const random = typeof options?.randomFn === 'function' ? options.randomFn : Math.random;
   const topRangeSize = Math.min(pool.length, Math.max(size * 6, 18));
   const exploreRangeSize = Math.min(pool.length, Math.max(size * 10, 30));
   const candidateIndexSet = new Set();
@@ -458,12 +650,12 @@ function buildRecommendBatchFromPoolForQuickReview(pool = [], startIndex = 0, ba
 
       const domain = getQuickReviewDomainKey(entry.item);
       const domainPenalty = (hasAlternativeDomain && domain && selectedDomains.has(domain)) ? 0.45 : 1;
-      const jitter = 0.92 + (Math.random() * 0.16);
+      const jitter = 0.92 + (random() * 0.16);
       const weight = rankWeight * priorityWeight * domainPenalty * jitter;
       return { ...entry, weight };
     });
 
-    const picked = pickWeightedQuickReviewEntry(weighted);
+    const picked = pickWeightedQuickReviewEntry(weighted, random);
     if (!picked?.item) break;
 
     const pickedId = String(picked.item.id || '').trim();
@@ -577,16 +769,40 @@ function normalizeScoreCacheMetadata(source, fallback = null) {
   };
 }
 
-function buildQuickReviewBookmarksFromScoresCache(scoresCache) {
+function buildQuickReviewBookmarksFromScoresCacheWithStats(scoresCache) {
   const source = scoresCache && typeof scoresCache === 'object' ? scoresCache : {};
   const result = [];
+  const stats = {
+    cacheCount: 0,
+    validScoreCount: 0,
+    invalidScoreCount: 0,
+    metadataReadyCount: 0,
+    missingMetadataCount: 0,
+    invalidEntryCount: 0,
+    bookmarkCount: 0
+  };
 
   for (const [bookmarkId, cachedEntry] of Object.entries(source)) {
+    stats.cacheCount += 1;
     const id = String(bookmarkId || '').trim();
-    if (!id || !cachedEntry || typeof cachedEntry !== 'object') continue;
+    if (!id || !cachedEntry || typeof cachedEntry !== 'object') {
+      stats.invalidEntryCount += 1;
+      continue;
+    }
+
+    const score = Number(cachedEntry.S);
+    if (Number.isFinite(score)) {
+      stats.validScoreCount += 1;
+    } else {
+      stats.invalidScoreCount += 1;
+    }
 
     const metadata = normalizeScoreCacheMetadata(cachedEntry);
-    if (!metadata) continue;
+    if (!metadata) {
+      stats.missingMetadataCount += 1;
+      continue;
+    }
+    stats.metadataReadyCount += 1;
 
     const normalized = normalizeQuickReviewBookmarkEntry({
       id,
@@ -602,10 +818,194 @@ function buildQuickReviewBookmarksFromScoresCache(scoresCache) {
 
     if (normalized) {
       result.push(normalized);
+      stats.bookmarkCount += 1;
     }
   }
 
-  return result;
+  return { bookmarks: result, stats };
+}
+
+function buildQuickReviewBookmarksFromScoresCache(scoresCache) {
+  return buildQuickReviewBookmarksFromScoresCacheWithStats(scoresCache).bookmarks;
+}
+
+function normalizeRecommendScoresCacheHealth(stats = {}) {
+  const cacheCount = Math.max(0, Number(stats.cacheCount) || 0);
+  const validScoreCount = Math.max(0, Number(stats.validScoreCount) || 0);
+  const invalidScoreCount = Math.max(0, Number(stats.invalidScoreCount) || 0);
+  const metadataReadyCount = Math.max(0, Number(stats.metadataReadyCount) || 0);
+  const missingMetadataCount = Math.max(0, Number(stats.missingMetadataCount) || 0);
+  const invalidEntryCount = Math.max(0, Number(stats.invalidEntryCount) || 0);
+  const bookmarkCount = Math.max(0, Number(stats.bookmarkCount) || 0);
+  const validScoreRatio = cacheCount > 0 ? validScoreCount / cacheCount : 1;
+  const metadataReadyRatio = cacheCount > 0 ? metadataReadyCount / cacheCount : 1;
+  const healthy = cacheCount === 0
+    || (
+      validScoreCount > 0
+      && metadataReadyCount > 0
+      && validScoreRatio >= SCORE_CACHE_HEALTH_MIN_VALID_RATIO
+      && metadataReadyRatio >= SCORE_CACHE_HEALTH_MIN_METADATA_RATIO
+    );
+
+  return {
+    cacheCount,
+    validScoreCount,
+    invalidScoreCount,
+    metadataReadyCount,
+    missingMetadataCount,
+    invalidEntryCount,
+    bookmarkCount,
+    validScoreRatio,
+    metadataReadyRatio,
+    healthy
+  };
+}
+
+function getRecommendScoresStaleAt(staleMeta) {
+  const staleAt = Number(staleMeta?.staleAt || 0);
+  return Number.isFinite(staleAt) && staleAt > 0 ? staleAt : 0;
+}
+
+function compactRecommendScoresCacheHealth(stats = {}) {
+  const health = normalizeRecommendScoresCacheHealth(stats);
+  return {
+    cacheCount: health.cacheCount,
+    validScoreCount: health.validScoreCount,
+    invalidScoreCount: health.invalidScoreCount,
+    metadataReadyCount: health.metadataReadyCount,
+    missingMetadataCount: health.missingMetadataCount,
+    invalidEntryCount: health.invalidEntryCount,
+    bookmarkCount: health.bookmarkCount,
+    validScoreRatio: Number(health.validScoreRatio.toFixed(4)),
+    metadataReadyRatio: Number(health.metadataReadyRatio.toFixed(4)),
+    healthy: health.healthy
+  };
+}
+
+function getRecommendScoresCacheRepairReason(stats = {}, staleMeta = null) {
+  const staleAt = getRecommendScoresStaleAt(staleMeta);
+  if (staleAt > 0) return String(staleMeta?.reason || 'score-cache-stale');
+
+  const health = normalizeRecommendScoresCacheHealth(stats);
+  if (health.cacheCount <= 0) return '';
+  if (health.validScoreCount <= 0 || health.validScoreRatio < SCORE_CACHE_HEALTH_MIN_VALID_RATIO) {
+    return 'score-cache-invalid-scores';
+  }
+  if (health.metadataReadyCount <= 0 || health.metadataReadyRatio < SCORE_CACHE_HEALTH_MIN_METADATA_RATIO) {
+    return 'score-cache-missing-metadata';
+  }
+  if (health.bookmarkCount <= 0) {
+    return 'score-cache-no-selectable-bookmarks';
+  }
+  return '';
+}
+
+async function markRecommendScoresCacheRepairing(reason = '', stats = {}) {
+  try {
+    await browserAPI.storage.local.set({
+      recommendScoresStaleMeta: {
+        staleAt: Date.now(),
+        reason: reason || 'score-cache-repair',
+        cacheHealth: compactRecommendScoresCacheHealth(stats)
+      }
+    });
+  } catch (_) { }
+}
+
+function queueRecommendScoresCacheRepair(reason = '', stats = {}) {
+  markRecommendScoresCacheRepairing(reason, stats).catch(() => { });
+  if (isBookmarkImporting || isBookmarkBulkChanging || isComputingScores || templateRefineRunning) return;
+  scheduleRecomputeAllScoresSoon(reason || 'score-cache-repair', { forceFull: true });
+}
+
+function shouldHoldQuickReviewForScoreCache(stats = {}, staleMeta = null, scoresReadyResult = null) {
+  const health = normalizeRecommendScoresCacheHealth(stats);
+  const repairReason = getRecommendScoresCacheRepairReason(health, staleMeta);
+  if (repairReason) return repairReason;
+
+  if (health.cacheCount === 0 && scoresReadyResult?.ready === false) {
+    return scoresReadyResult?.mode === 'empty-tree' ? '' : String(scoresReadyResult?.mode || 'score-cache-not-ready');
+  }
+
+  return '';
+}
+
+function normalizeRecommendReviewNextReviewAt(review) {
+  const nextReview = Number(review?.nextReview || 0);
+  return Number.isFinite(nextReview) && nextReview > 0 ? Math.floor(nextReview) : 0;
+}
+
+function buildQuickReviewEligibilityState(postponed = [], reviewData = {}, now = Date.now()) {
+  const postponedWaitingSet = new Set();
+  const forceDuePostponedMap = new Map();
+  for (const item of normalizeRecommendPostponedList(postponed || [])) {
+    if (!item || item.bookmarkId == null) continue;
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (!bookmarkId) continue;
+
+    const postponeUntil = Number(item.postponeUntil || 0);
+    const isManual = item.manuallyAdded === true;
+    if (!isManual && postponeUntil > now) {
+      postponedWaitingSet.add(bookmarkId);
+    } else {
+      forceDuePostponedMap.set(bookmarkId, item);
+    }
+  }
+
+  const reviewedSet = new Set();
+  const reviewWaitingSet = new Set();
+  const forceDueReviewMap = new Map();
+  const reviews = reviewData && typeof reviewData === 'object' ? reviewData : {};
+  for (const [rawBookmarkId, review] of Object.entries(reviews)) {
+    const bookmarkId = String(rawBookmarkId || '').trim();
+    if (!bookmarkId || !review || typeof review !== 'object') continue;
+    reviewedSet.add(bookmarkId);
+
+    const nextReviewAt = normalizeRecommendReviewNextReviewAt(review);
+    if (nextReviewAt > now) {
+      reviewWaitingSet.add(bookmarkId);
+    } else {
+      forceDueReviewMap.set(bookmarkId, review);
+    }
+  }
+
+  return {
+    postponedWaitingSet,
+    forceDuePostponedMap,
+    reviewedSet,
+    reviewWaitingSet,
+    forceDueReviewMap
+  };
+}
+
+function getQuickReviewForceDueInfo(bookmarkId, eligibility, now = Date.now()) {
+  const id = String(bookmarkId || '').trim();
+  if (!id || !eligibility) {
+    return { forceDue: false, forceDueAt: 0, forceDueMovedAt: 0 };
+  }
+
+  const postponedInfo = eligibility.forceDuePostponedMap?.get(id);
+  if (postponedInfo) {
+    const postponeUntil = Number(postponedInfo.postponeUntil || 0);
+    const movedAt = Number(postponedInfo.dueQueueMovedAt || 0);
+    return {
+      forceDue: true,
+      forceDueAt: Number.isFinite(postponeUntil) && postponeUntil > 0 ? postponeUntil : now,
+      forceDueMovedAt: Number.isFinite(movedAt) ? movedAt : 0
+    };
+  }
+
+  const reviewInfo = eligibility.forceDueReviewMap?.get(id);
+  if (reviewInfo) {
+    const nextReviewAt = normalizeRecommendReviewNextReviewAt(reviewInfo);
+    return {
+      forceDue: true,
+      forceDueAt: nextReviewAt,
+      forceDueMovedAt: 0
+    };
+  }
+
+  return { forceDue: false, forceDueAt: 0, forceDueMovedAt: 0 };
 }
 
 function isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet) {
@@ -640,12 +1040,41 @@ function isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet) {
 async function selectQuickReviewCardsRoundState(options = {}) {
   await ensureScoreAlgoVersionReady();
   const force = options?.force === true;
+  let scoresReadyResult = null;
 
   try {
-    await ensureRecommendScoresReady({ reason: force ? 'quick-review-force' : 'quick-review-normal' });
+    scoresReadyResult = await ensureRecommendScoresReady({ reason: force ? 'quick-review-force' : 'quick-review-normal' });
   } catch (_) {}
 
-  const [scoresCache, blocked, postponed, skippedIds, flippedResult, historyCardsResult] = await Promise.all([
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    return selectQuickReviewCardsRoundStateUnlocked({
+      ...(options || {}),
+      scoresReadyChecked: scoresReadyResult != null,
+      scoresReadyResult
+    });
+  });
+}
+
+async function selectQuickReviewCardsRoundStateUnlocked(options = {}) {
+  await ensureScoreAlgoVersionReady();
+  const force = options?.force === true;
+  const batchSize = Math.max(
+    0,
+    Math.min(
+      QUICK_REVIEW_RECOMMEND_BATCH_SIZE,
+      Math.floor(Number(options?.batchSize) || QUICK_REVIEW_RECOMMEND_BATCH_SIZE)
+    )
+  );
+  const shouldPersist = options?.persist !== false;
+  const excludeCardSet = new Set(normalizeBookmarkIdList(options?.excludeCardIds || []));
+
+  if (options?.scoresReadyChecked !== true) {
+    try {
+      options.scoresReadyResult = await ensureRecommendScoresReady({ reason: force ? 'quick-review-force' : 'quick-review-normal' });
+    } catch (_) {}
+  }
+
+  const [scoresCache, blocked, postponed, skippedIds, flippedResult, historyCardsResult, staleMetaResult, reviewData] = await Promise.all([
     getScoresCache(),
     getRecommendBlockedState(),
     getRecommendPostponedList(),
@@ -653,15 +1082,33 @@ async function selectQuickReviewCardsRoundState(options = {}) {
     browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]),
     options?.currentCards
       ? Promise.resolve({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: options.currentCards })
-      : browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
+      : browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]),
+    browserAPI.storage.local.get(['recommendScoresStaleMeta']),
+    getReviewDataForScore()
   ]);
 
-  const bookmarks = buildQuickReviewBookmarksFromScoresCache(scoresCache);
+  const cacheBuild = buildQuickReviewBookmarksFromScoresCacheWithStats(scoresCache);
+  const bookmarks = cacheBuild.bookmarks;
+  const cacheHealth = normalizeRecommendScoresCacheHealth(cacheBuild.stats);
+  const staleMeta = staleMetaResult?.recommendScoresStaleMeta || null;
+  const holdReason = shouldHoldQuickReviewForScoreCache(cacheHealth, staleMeta, options?.scoresReadyResult || null);
+  if (holdReason) {
+    queueRecommendScoresCacheRepair(`quick-review:${holdReason}`, cacheHealth);
+    return {
+      success: false,
+      ready: false,
+      repairing: true,
+      reason: holdReason,
+      cards: [],
+      cacheHealth: compactRecommendScoresCacheHealth(cacheHealth)
+    };
+  }
+
   const currentCards = normalizeHistoryCurrentCardsState(historyCardsResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
   const flippedSet = new Set(normalizeBookmarkIdList(flippedResult?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []));
   const skipped = normalizeRecommendSkippedIds(skippedIds || []);
   const skippedSet = new Set(skipped);
-  const skippedOrderMap = new Map(skipped.map((id, index) => [id, index]));
+  const skippedOrderMap = buildRecommendSkippedOrderMap(skipped);
 
   const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
@@ -672,108 +1119,63 @@ async function selectQuickReviewCardsRoundState(options = {}) {
   );
 
   const now = Date.now();
-  const postponedWaitingSet = new Set();
-  const forceDuePostponedMap = new Map();
-  for (const item of normalizeRecommendPostponedList(postponed || [])) {
-    if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
-    const bookmarkId = String(item.bookmarkId || '').trim();
-    if (!bookmarkId) continue;
-    const postponeUntil = Number(item.postponeUntil || 0);
-    if (postponeUntil > now) {
-      postponedWaitingSet.add(bookmarkId);
-    } else {
-      forceDuePostponedMap.set(bookmarkId, item);
-    }
-  }
+  const eligibility = buildQuickReviewEligibilityState(postponed, reviewData, now);
 
   const baseCandidateBookmarks = bookmarks.filter((bookmark) => {
     const bookmarkId = String(bookmark?.id || '').trim();
-    const forceDue = forceDuePostponedMap.has(bookmarkId);
+    const forceDue = getQuickReviewForceDueInfo(bookmarkId, eligibility, now).forceDue;
 
-    if (!forceDue && flippedSet.has(bookmarkId)) return false;
+    if (excludeCardSet.has(bookmarkId)) return false;
     if (blockedBookmarkSet.has(bookmarkId)) return false;
     if (isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet)) return false;
     if (isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet)) return false;
-    if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
+    if (eligibility.postponedWaitingSet.has(bookmarkId)) return false;
+    if (!forceDue && eligibility.reviewWaitingSet.has(bookmarkId)) return false;
+    if (!forceDue && flippedSet.has(bookmarkId) && !eligibility.reviewedSet.has(bookmarkId)) return false;
     return true;
   });
 
   if (baseCandidateBookmarks.length === 0) {
-    await saveHistoryCurrentCardsState([], [], []);
-    await setRecommendPoolCursorState(0, 0);
-    return { success: true, cards: [], currentCards: normalizeHistoryCurrentCardsState(null) };
+    if (!shouldPersist) {
+      return { success: true, cards: [], currentCards };
+    }
+    const saved = await saveHistoryCurrentCardsState([], [], [], { previousState: currentCards });
+    await setRecommendPoolCursorState(0, 0, { unlocked: true });
+    return { success: true, cards: [], currentCards: saved };
   }
 
   const sortedPool = baseCandidateBookmarks.map((bookmark) => {
     const bookmarkId = String(bookmark?.id || '').trim();
-    const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
+    const forceDueInfo = getQuickReviewForceDueInfo(bookmarkId, eligibility, now);
     const cached = scoresCache?.[bookmarkId];
     return normalizeQuickReviewBookmarkEntry({
       ...bookmark,
       priority: cached && Number.isFinite(Number(cached.S)) ? Number(cached.S) : 0.5,
       scoreTemplate: cached?._template === true,
-      forceDue: !!forceDueInfo,
-      forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
-      forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+      forceDue: forceDueInfo.forceDue === true,
+      forceDueAt: Number(forceDueInfo.forceDueAt || 0),
+      forceDueMovedAt: Number(forceDueInfo.forceDueMovedAt || 0)
     });
-  }).filter(Boolean);
+  }).filter(Boolean).sort((a, b) => compareRecommendPriorityWithSkippedForQuickReview(a, b, {
+    skippedSet,
+    skippedOrderMap
+  }));
 
-  sortedPool.sort(compareRecommendPriorityForQuickReview);
-
-  const forceDuePool = sortedPool
-    .filter(item => item.forceDue)
-    .sort((a, b) => {
-      const aMovedAt = Number(a.forceDueMovedAt || 0);
-      const bMovedAt = Number(b.forceDueMovedAt || 0);
-      const aMoved = aMovedAt > 0;
-      const bMoved = bMovedAt > 0;
-
-      if (aMoved !== bMoved) {
-        return aMoved ? 1 : -1;
-      }
-      if (aMoved && bMoved && aMovedAt !== bMovedAt) {
-        return aMovedAt - bMovedAt;
-      }
-
-      const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
-      if (dueDiff !== 0) return dueDiff;
-      return compareRecommendPriorityForQuickReview(a, b);
-    });
-
-  const compareNormalPoolPriorityWithSkip = (a, b) => {
-    const aId = String(a?.id || '').trim();
-    const bId = String(b?.id || '').trim();
-    const aSkipped = skippedSet.has(aId);
-    const bSkipped = skippedSet.has(bId);
-
-    if (aSkipped !== bSkipped) {
-      return aSkipped ? 1 : -1;
-    }
-
-    if (aSkipped && bSkipped) {
-      const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
-      const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-    }
-
-    return compareRecommendPriorityForQuickReview(a, b);
-  };
-
-  const normalPool = sortedPool
-    .filter(item => !item.forceDue)
-    .sort(compareNormalPoolPriorityWithSkip);
+  const { activeForceDuePool, normalPool, deferredPool } = buildQuickReviewPriorityPools(sortedPool, {
+    skippedSet,
+    skippedOrderMap
+  });
 
   const currentCardIds = normalizeBookmarkIdList(currentCards.cardIds || []);
   const currentNormalCardIds = currentCardIds.filter(id =>
     normalPool.some(item => String(item?.id || '').trim() === id)
   );
+  const currentFlippedSet = new Set(normalizeBookmarkIdList(currentCards.flippedIds || []));
   const currentAllFlipped = currentCardIds.length > 0
-    && currentCardIds.every(id => flippedSet.has(id));
+    && currentCardIds.every(id => currentFlippedSet.has(id));
 
-  const forceDueBatch = forceDuePool.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
-  const normalSlots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - forceDueBatch.length);
+  const forceDueBatch = activeForceDuePool.slice(0, batchSize);
+  const normalSlots = Math.max(0, batchSize - forceDueBatch.length);
   const expectedNormalBatchLen = normalSlots > 0 ? Math.min(normalSlots, normalPool.length) : 0;
 
   const shouldRotateByCurrent = (force || currentAllFlipped) && currentNormalCardIds.length > 0;
@@ -784,7 +1186,7 @@ async function selectQuickReviewCardsRoundState(options = {}) {
       const storedCursor = await getRecommendPoolCursorValueForQuickReview(normalPool.length);
       startIndex = deriveRecommendStartIndexFromCurrentForQuickReview(normalPool, currentNormalCardIds, storedCursor);
     } else {
-      const cursorMeta = await consumeRecommendPoolCursorState(normalPool.length, expectedNormalBatchLen);
+      const cursorMeta = await consumeRecommendPoolCursorState(normalPool.length, expectedNormalBatchLen, { unlocked: true });
       startIndex = Number.isFinite(Number(cursorMeta?.cursorBefore))
         ? Number(cursorMeta.cursorBefore)
         : 0;
@@ -792,21 +1194,35 @@ async function selectQuickReviewCardsRoundState(options = {}) {
   }
 
   const normalBatch = normalSlots > 0
-    ? buildRecommendBatchFromPoolForQuickReview(normalPool, startIndex, normalSlots)
+    ? buildRecommendBatchFromPoolForQuickReview(normalPool, startIndex, normalSlots, {
+      randomFn: createQuickReviewSelectionRandom(normalPool, startIndex, normalSlots)
+    })
     : [];
 
-  const cards = [...forceDueBatch, ...normalBatch].slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+  const deferredSlots = Math.max(0, batchSize - forceDueBatch.length - normalBatch.length);
+  const deferredBatch = deferredSlots > 0
+    ? deferredPool.slice(0, deferredSlots)
+    : [];
+  const cards = [...forceDueBatch, ...normalBatch, ...deferredBatch].slice(0, batchSize);
   const nextCursor = normalPool.length > 0
     ? (startIndex + normalBatch.length) % normalPool.length
     : 0;
 
   if (shouldRotateByCurrent) {
-    await setRecommendPoolCursorState(normalPool.length, nextCursor);
+    await setRecommendPoolCursorState(normalPool.length, nextCursor, { unlocked: true });
   }
 
   const cardIds = cards.map(item => String(item?.id || '').trim()).filter(Boolean);
   const cardData = cards.map(item => normalizeRecommendCardDataEntry(item)).filter(Boolean);
-  const saved = await saveHistoryCurrentCardsState(cardIds, [], cardData);
+  if (!shouldPersist) {
+    return {
+      success: true,
+      cards,
+      currentCards
+    };
+  }
+
+  const saved = await saveHistoryCurrentCardsState(cardIds, [], cardData, { previousState: currentCards });
 
   return {
     success: true,
@@ -818,27 +1234,43 @@ async function selectQuickReviewCardsRoundState(options = {}) {
 async function peekQuickReviewPreloadUrlsState(options = {}) {
   await ensureScoreAlgoVersionReady();
   const limit = Math.max(6, Math.min(30, Number(options?.limit) || 12));
+  let scoresReadyResult = null;
 
   try {
-    await ensureRecommendScoresReady({ reason: 'quick-review-preload' });
+    scoresReadyResult = await ensureRecommendScoresReady({ reason: 'quick-review-preload' });
   } catch (_) {}
 
-  const [scoresCache, blocked, postponed, skippedIds, flippedResult, historyCardsResult] = await Promise.all([
+  const [scoresCache, blocked, postponed, skippedIds, flippedResult, staleMetaResult, reviewData] = await Promise.all([
     getScoresCache(),
     getRecommendBlockedState(),
     getRecommendPostponedList(),
     getRecommendSkippedIds(),
     browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]),
-    browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
+    browserAPI.storage.local.get(['recommendScoresStaleMeta']),
+    getReviewDataForScore()
   ]);
 
-  const bookmarks = buildQuickReviewBookmarksFromScoresCache(scoresCache);
-  const currentCards = normalizeHistoryCurrentCardsState(historyCardsResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
-  const currentCardSet = new Set(normalizeBookmarkIdList(currentCards.cardIds || []));
+  const cacheBuild = buildQuickReviewBookmarksFromScoresCacheWithStats(scoresCache);
+  const bookmarks = cacheBuild.bookmarks;
+  const cacheHealth = normalizeRecommendScoresCacheHealth(cacheBuild.stats);
+  const staleMeta = staleMetaResult?.recommendScoresStaleMeta || null;
+  const holdReason = shouldHoldQuickReviewForScoreCache(cacheHealth, staleMeta, scoresReadyResult);
+  if (holdReason) {
+    queueRecommendScoresCacheRepair(`quick-review-preload:${holdReason}`, cacheHealth);
+    return {
+      success: false,
+      ready: false,
+      repairing: true,
+      reason: holdReason,
+      urls: [],
+      cacheHealth: compactRecommendScoresCacheHealth(cacheHealth)
+    };
+  }
+
   const flippedSet = new Set(normalizeBookmarkIdList(flippedResult?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []));
   const skipped = normalizeRecommendSkippedIds(skippedIds || []);
   const skippedSet = new Set(skipped);
-  const skippedOrderMap = new Map(skipped.map((id, index) => [id, index]));
+  const skippedOrderMap = buildRecommendSkippedOrderMap(skipped);
 
   const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
@@ -849,30 +1281,18 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
   );
 
   const now = Date.now();
-  const postponedWaitingSet = new Set();
-  const forceDuePostponedMap = new Map();
-  for (const item of normalizeRecommendPostponedList(postponed || [])) {
-    if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
-    const bookmarkId = String(item.bookmarkId || '').trim();
-    if (!bookmarkId) continue;
-    const postponeUntil = Number(item.postponeUntil || 0);
-    if (postponeUntil > now) {
-      postponedWaitingSet.add(bookmarkId);
-    } else {
-      forceDuePostponedMap.set(bookmarkId, item);
-    }
-  }
+  const eligibility = buildQuickReviewEligibilityState(postponed, reviewData, now);
 
   const baseCandidateBookmarks = bookmarks.filter((bookmark) => {
     const bookmarkId = String(bookmark?.id || '').trim();
-    const forceDue = forceDuePostponedMap.has(bookmarkId);
+    const forceDue = getQuickReviewForceDueInfo(bookmarkId, eligibility, now).forceDue;
 
-    if (currentCardSet.has(bookmarkId)) return false;
-    if (!forceDue && flippedSet.has(bookmarkId)) return false;
     if (blockedBookmarkSet.has(bookmarkId)) return false;
     if (isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet)) return false;
     if (isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet)) return false;
-    if (!forceDue && postponedWaitingSet.has(bookmarkId)) return false;
+    if (eligibility.postponedWaitingSet.has(bookmarkId)) return false;
+    if (!forceDue && eligibility.reviewWaitingSet.has(bookmarkId)) return false;
+    if (!forceDue && flippedSet.has(bookmarkId) && !eligibility.reviewedSet.has(bookmarkId)) return false;
     return true;
   });
 
@@ -882,54 +1302,25 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
 
   const sortedPool = baseCandidateBookmarks.map((bookmark) => {
     const bookmarkId = String(bookmark?.id || '').trim();
-    const forceDueInfo = forceDuePostponedMap.get(bookmarkId);
+    const forceDueInfo = getQuickReviewForceDueInfo(bookmarkId, eligibility, now);
     const cached = scoresCache?.[bookmarkId];
     return normalizeQuickReviewBookmarkEntry({
       ...bookmark,
       priority: cached && Number.isFinite(Number(cached.S)) ? Number(cached.S) : 0.5,
       scoreTemplate: cached?._template === true,
-      forceDue: !!forceDueInfo,
-      forceDueAt: Number(forceDueInfo?.postponeUntil || 0),
-      forceDueMovedAt: Number(forceDueInfo?.dueQueueMovedAt || 0)
+      forceDue: forceDueInfo.forceDue === true,
+      forceDueAt: Number(forceDueInfo.forceDueAt || 0),
+      forceDueMovedAt: Number(forceDueInfo.forceDueMovedAt || 0)
     });
-  }).filter(Boolean);
+  }).filter(Boolean).sort((a, b) => compareRecommendPriorityWithSkippedForQuickReview(a, b, {
+    skippedSet,
+    skippedOrderMap
+  }));
 
-  sortedPool.sort(compareRecommendPriorityForQuickReview);
-
-  const forceDuePool = sortedPool
-    .filter(item => item.forceDue)
-    .sort((a, b) => {
-      const aMovedAt = Number(a.forceDueMovedAt || 0);
-      const bMovedAt = Number(b.forceDueMovedAt || 0);
-      const aMoved = aMovedAt > 0;
-      const bMoved = bMovedAt > 0;
-
-      if (aMoved !== bMoved) return aMoved ? 1 : -1;
-      if (aMoved && bMoved && aMovedAt !== bMovedAt) return aMovedAt - bMovedAt;
-
-      const dueDiff = Number(a.forceDueAt || 0) - Number(b.forceDueAt || 0);
-      if (dueDiff !== 0) return dueDiff;
-      return compareRecommendPriorityForQuickReview(a, b);
-    });
-
-  const compareNormalPoolPriorityWithSkip = (a, b) => {
-    const aId = String(a?.id || '').trim();
-    const bId = String(b?.id || '').trim();
-    const aSkipped = skippedSet.has(aId);
-    const bSkipped = skippedSet.has(bId);
-
-    if (aSkipped !== bSkipped) return aSkipped ? 1 : -1;
-    if (aSkipped && bSkipped) {
-      const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
-      const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
-      if (aOrder !== bOrder) return aOrder - bOrder;
-    }
-    return compareRecommendPriorityForQuickReview(a, b);
-  };
-
-  const normalPool = sortedPool
-    .filter(item => !item.forceDue)
-    .sort(compareNormalPoolPriorityWithSkip);
+  const { activeForceDuePool, normalPool, deferredPool } = buildQuickReviewPriorityPools(sortedPool, {
+    skippedSet,
+    skippedOrderMap
+  });
 
   const urls = [];
   const seenIds = new Set();
@@ -937,17 +1328,23 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
   const rounds = Math.max(2, Math.ceil(limit / Math.max(1, QUICK_REVIEW_RECOMMEND_BATCH_SIZE)) + 1);
 
   for (let round = 0; round < rounds && urls.length < limit; round += 1) {
-    const forceDueBatch = forceDuePool.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+    const forceDueBatch = activeForceDuePool.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
     const normalSlots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - forceDueBatch.length);
     const normalBatch = normalSlots > 0
-      ? buildRecommendBatchFromPoolForQuickReview(normalPool, cursor, normalSlots)
+      ? buildRecommendBatchFromPoolForQuickReview(normalPool, cursor, normalSlots, {
+        randomFn: createQuickReviewSelectionRandom(normalPool, cursor, normalSlots)
+      })
       : [];
 
     if (normalPool.length > 0) {
       cursor = (cursor + normalBatch.length) % normalPool.length;
     }
 
-    const roundCards = [...forceDueBatch, ...normalBatch].slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+    const deferredSlots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - forceDueBatch.length - normalBatch.length);
+    const deferredBatch = deferredSlots > 0
+      ? deferredPool.slice(0, deferredSlots)
+      : [];
+    const roundCards = [...forceDueBatch, ...normalBatch, ...deferredBatch].slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
     for (const item of roundCards) {
       const id = String(item?.id || '').trim();
       const url = String(item?.url || '').trim();
@@ -959,7 +1356,7 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
   }
 
   if (urls.length < limit) {
-    for (const item of normalPool) {
+    for (const item of [...normalPool, ...deferredPool]) {
       const id = String(item?.id || '').trim();
       const url = String(item?.url || '').trim();
       if (!id || !url || seenIds.has(id)) continue;
@@ -1023,9 +1420,11 @@ async function ensureQuickReviewCandidateState() {
   const currentResult = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
   const currentCards = normalizeHistoryCurrentCardsState(currentResult?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
 
-  const pending = await resolveQuickReviewPendingBookmark(currentCards);
-  if (pending.bookmark) {
-    return { source: 'current', currentCards: pending.currentCards, bookmark: pending.bookmark };
+  if (currentCards.cardIds.length > 0 && currentCards.version > 0) {
+    const pending = await resolveQuickReviewPendingBookmark(currentCards);
+    if (pending.bookmark) {
+      return { source: 'current', currentCards: pending.currentCards, bookmark: pending.bookmark };
+    }
   }
 
   const refreshed = await selectQuickReviewCardsRoundState({ force: true, currentCards });
@@ -1074,48 +1473,31 @@ async function runQuickReviewNextState(source = 'command') {
     }
 
     const bookmarkId = String(bookmark.id || '').trim();
-    let allFlipped = false;
-
-    if (bookmarkId) {
-      try {
-        await appendRecommendFlippedBookmarkState(bookmarkId);
-      } catch (_) {}
-      try {
-        await appendRecommendFlipHistoryRecordState(bookmarkId, Date.now());
-      } catch (_) {}
-      try {
-        await recordRecommendReviewState(bookmarkId);
-      } catch (_) {}
-      try {
-        const markResult = await markHistoryCurrentCardFlippedState(bookmarkId);
-        allFlipped = markResult?.allFlipped === true;
-      } catch (_) {}
-    }
-
-    let roundRefreshed = false;
-    let refreshMarked = false;
-    if (allFlipped) {
-      try {
-        await selectQuickReviewCardsRoundState({ force: true });
-        roundRefreshed = true;
-        try {
-          await markRecommendRefreshExecutedState();
-          refreshMarked = true;
-        } catch (_) {}
-      } catch (_) {}
-    }
+    const actionResult = bookmarkId
+      ? await executeRecommendCardActionState({
+        recommendAction: 'review',
+        bookmarkId,
+        expectedVersion: candidate?.currentCards?.version,
+        timestamp: Date.now(),
+        source: `quick-review:${resolvedSource}`
+      })
+      : { success: false, reason: 'missing_bookmark_id' };
+    const actionSuccess = actionResult && actionResult.success !== false;
 
     return {
-      success: true,
+      success: actionSuccess,
       handled: true,
       source: resolvedSource,
       bookmarkId: bookmarkId || null,
       url: bookmark.url || '',
       openMode: mode,
       tabId: Number.isFinite(Number(openResult?.tabId)) ? Number(openResult.tabId) : null,
-      allFlipped,
-      roundRefreshed,
-      refreshMarked
+      allFlipped: actionResult?.allFlipped === true,
+      roundRefreshed: actionResult?.roundRefreshed === true,
+      refreshMarked: actionResult?.refreshMarked === true,
+      stale: actionResult?.stale === true,
+      reason: actionResult?.reason || '',
+      actionResult
     };
   });
 }
@@ -1160,40 +1542,6 @@ async function resolveWindowIdForSidePanelAction(message, sender) {
     : null;
   if (senderWindowId != null) return senderWindowId;
   return await getCurrentWindowIdAsync();
-}
-
-async function openSidePanelInWindow(windowId, view = null) {
-  if (typeof windowId !== 'number') {
-    return { success: false, error: 'window_unavailable' };
-  }
-  if (typeof browserAPI?.sidePanel?.open !== 'function') {
-    return { success: false, error: 'open_unavailable' };
-  }
-
-  const safeView = normalizeHistoryPanelView(view, '');
-  if (safeView) {
-    try {
-      browserAPI.storage.local.set({
-        historyRequestedView: { view: safeView, time: Date.now() }
-      }, () => {});
-    } catch (_) {}
-  }
-
-  return await new Promise((resolve) => {
-    try {
-      browserAPI.sidePanel.open({ windowId }, () => {
-        const err = browserAPI?.runtime?.lastError;
-        if (err) {
-          resolve({ success: false, error: err.message || 'open_failed' });
-          return;
-        }
-        setSidePanelOpenWindowState(windowId, true);
-        resolve({ success: true, isOpen: true });
-      });
-    } catch (error) {
-      resolve({ success: false, error: error?.message || 'open_failed' });
-    }
-  });
 }
 
 const SIDE_PANEL_CONTEXT = browserAPI?.runtime?.ContextType?.SIDE_PANEL || 'SIDE_PANEL';
@@ -2148,6 +2496,7 @@ const BOOKMARK_MUTATION_FLUSH_DEBOUNCE_MS = 1400;
 const BOOKMARK_MUTATION_FLUSH_MAX_WAIT_MS = 30000;
 const BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE = 200;
 const BOOKMARK_MUTATION_QUEUE_STORAGE_KEY = 'bb_recommend_mutation_queue_v1';
+const BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY = 'bb_recommend_bulk_task_checkpoint_v1';
 const BOOKMARK_MUTATION_QUEUE_SAVE_DEBOUNCE_MS = 900;
 const BOOKMARK_MUTATION_QUEUE_MAX_ITEMS = 6000;
 const BOOKMARK_BULK_CHANGE_FLAG_KEY = 'bookmarkBulkChangeFlag';
@@ -2171,6 +2520,8 @@ const SCORE_TEMPLATE_REFINE_DEBOUNCE_MS = 400;
 const SCORE_TEMPLATE_REFINE_BATCH_SIZE = 360;
 const BULK_TEMPLATE_RECOVERY_DEBOUNCE_MS = 1200;
 const REMOVED_RECOMMEND_PRUNE_DEBOUNCE_MS = 900;
+const SCORE_CACHE_HEALTH_MIN_VALID_RATIO = 0.95;
+const SCORE_CACHE_HEALTH_MIN_METADATA_RATIO = 0.65;
 const RECOMMEND_BACKGROUND_REFRESH_ALARM = 'bb_recommend_background_refresh_v1';
 const RECOMMEND_BACKGROUND_REFRESH_CHECK_PERIOD_MINUTES = 60;
 const RECOMMEND_BACKGROUND_REFRESH_MIN_ATTEMPT_GAP_MS = 5 * 60 * 1000;
@@ -2183,6 +2534,7 @@ const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
 const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
+const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_STATE_MUTATION_CHANNEL = 'recommend_state_mutation_v1';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
 const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
@@ -2328,6 +2680,32 @@ function runSerializedRecommendStateMutation(channel, task) {
   return next;
 }
 
+function normalizeRecommendStateVersion(value) {
+  const version = Number(value);
+  return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
+}
+
+function normalizeRecommendExpectedStateVersion(value) {
+  if (value == null || value === '') return null;
+  const version = Number(value);
+  if (!Number.isFinite(version) || version < 0) return null;
+  return Math.floor(version);
+}
+
+function buildNextRecommendStateVersion(currentVersion = 0, now = Date.now()) {
+  return Math.max(now, normalizeRecommendStateVersion(currentVersion) + 1);
+}
+
+function buildRecommendStateVersionMismatchResponse(kind, currentVersion, reason = 'stale_recommend_state') {
+  return {
+    success: false,
+    stale: true,
+    reason,
+    state: String(kind || 'recommend'),
+    version: normalizeRecommendStateVersion(currentVersion)
+  };
+}
+
 function normalizeRecommendSkippedIds(ids = []) {
   const list = Array.from(new Set(
     (Array.isArray(ids) ? ids : [])
@@ -2361,6 +2739,24 @@ async function getRecommendPostponedList() {
   }
 }
 
+async function getRecommendPostponedStateSnapshot() {
+  try {
+    const result = await browserAPI.storage.local.get([
+      RECOMMEND_POSTPONED_STORAGE_KEY,
+      RECOMMEND_POSTPONED_VERSION_STORAGE_KEY
+    ]);
+    return {
+      postponed: normalizeRecommendPostponedList(result?.[RECOMMEND_POSTPONED_STORAGE_KEY]),
+      version: normalizeRecommendStateVersion(result?.[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY])
+    };
+  } catch (_) {
+    return {
+      postponed: normalizeRecommendPostponedList(null),
+      version: 0
+    };
+  }
+}
+
 function normalizeRecommendBlockedState(blocked) {
   const source = blocked && typeof blocked === 'object' ? blocked : {};
 
@@ -2379,7 +2775,8 @@ function normalizeRecommendBlockedState(blocked) {
   return {
     bookmarks: normalizeIdList(source.bookmarks),
     folders: normalizeIdList(source.folders),
-    domains: normalizeDomainList(source.domains)
+    domains: normalizeDomainList(source.domains),
+    version: normalizeRecommendStateVersion(source.version || source.stateVersion)
   };
 }
 
@@ -2427,9 +2824,21 @@ async function getRecommendBlockedState() {
   }
 }
 
-async function setRecommendBlockedState(blocked) {
+async function setRecommendBlockedState(blocked, options = {}) {
   return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const current = await getRecommendBlockedState();
+    const expectedVersion = normalizeRecommendExpectedStateVersion(
+      options.expectedVersion ?? blocked?.version ?? blocked?.stateVersion
+    );
+    if (expectedVersion == null) {
+      return buildRecommendStateVersionMismatchResponse('blocked', current.version, 'missing_recommend_state_version');
+    }
+    if (expectedVersion !== normalizeRecommendStateVersion(current.version)) {
+      return buildRecommendStateVersionMismatchResponse('blocked', current.version);
+    }
+
     const next = normalizeRecommendBlockedState(blocked);
+    next.version = buildNextRecommendStateVersion(current.version);
     await browserAPI.storage.local.set({
       [RECOMMEND_BLOCKED_STORAGE_KEY]: next
     });
@@ -2440,16 +2849,30 @@ async function setRecommendBlockedState(blocked) {
   });
 }
 
-async function setRecommendPostponedState(postponed) {
+async function setRecommendPostponedState(postponed, options = {}) {
   return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const current = await getRecommendPostponedStateSnapshot();
+    const expectedVersion = normalizeRecommendExpectedStateVersion(
+      options.expectedVersion ?? postponed?.stateVersion ?? postponed?.version
+    );
+    if (expectedVersion == null) {
+      return buildRecommendStateVersionMismatchResponse('postponed', current.version, 'missing_recommend_state_version');
+    }
+    if (expectedVersion !== normalizeRecommendStateVersion(current.version)) {
+      return buildRecommendStateVersionMismatchResponse('postponed', current.version);
+    }
+
     const next = normalizeRecommendPostponedList(postponed);
+    const nextVersion = buildNextRecommendStateVersion(current.version);
     await browserAPI.storage.local.set({
-      [RECOMMEND_POSTPONED_STORAGE_KEY]: next
+      [RECOMMEND_POSTPONED_STORAGE_KEY]: next,
+      [RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]: nextVersion
     });
     return {
       success: true,
       postponed: next,
-      count: next.length
+      count: next.length,
+      version: nextVersion
     };
   });
 }
@@ -2481,20 +2904,21 @@ async function getAllBookmarkUrlIdsForScore() {
   }
 }
 
-async function handleRecommendSkipState(bookmarkId) {
+async function handleRecommendSkipState(bookmarkId, options = {}) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
     return { success: false, mode: 'none', skippedIds: [] };
   }
 
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
-    const [rawSkipped, rawPostponed] = await Promise.all([
+  const task = async () => {
+    const [rawSkipped, postponedSnapshot] = await Promise.all([
       getRecommendSkippedIds(),
-      getRecommendPostponedList()
+      getRecommendPostponedStateSnapshot()
     ]);
 
     const skipped = normalizeRecommendSkippedIds(rawSkipped);
-    const postponed = normalizeRecommendPostponedList(rawPostponed);
+    const postponed = normalizeRecommendPostponedList(postponedSnapshot.postponed);
+    const postponedVersion = normalizeRecommendStateVersion(postponedSnapshot.version);
     const now = Date.now();
 
     let maxMovedAt = 0;
@@ -2518,15 +2942,20 @@ async function handleRecommendSkipState(bookmarkId) {
       target.updatedAt = now;
 
       const nextSkipped = skipped.filter(item => item !== id);
+      nextSkipped.push(id);
+      const normalizedSkipped = normalizeRecommendSkippedIds(nextSkipped);
+      const nextPostponedVersion = buildNextRecommendStateVersion(postponedVersion);
       await browserAPI.storage.local.set({
         [RECOMMEND_POSTPONED_STORAGE_KEY]: postponed,
-        [RECOMMEND_SKIPPED_STORAGE_KEY]: normalizeRecommendSkippedIds(nextSkipped)
+        [RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]: nextPostponedVersion,
+        [RECOMMEND_SKIPPED_STORAGE_KEY]: normalizedSkipped
       });
 
       return {
         success: true,
         mode: 'due-tail',
-        skippedIds: normalizeRecommendSkippedIds(nextSkipped),
+        skippedIds: normalizedSkipped,
+        postponedVersion: nextPostponedVersion,
         dueMoved: true
       };
     }
@@ -2545,7 +2974,11 @@ async function handleRecommendSkipState(bookmarkId) {
       skippedIds: normalized,
       dueMoved: false
     };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
 async function removeRecommendSkippedState(bookmarkId) {
@@ -2645,15 +3078,19 @@ async function recordRecommendViewOpenState(source) {
   });
 }
 
-async function markRecommendRefreshExecutedState() {
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+async function markRecommendRefreshExecutedState(options = {}) {
+  const task = async () => {
     const settings = await getRecommendRefreshSettings();
     settings.lastRefreshTime = Date.now();
     settings.openCountSinceRefresh = 0;
     settings.sidePanelOpenCountSinceRefresh = 0;
     await saveRecommendRefreshSettings(settings);
     return { success: true, settings };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
 function getRecommendBackgroundRefreshThresholdMs(settings = null) {
@@ -2796,13 +3233,13 @@ async function ensureRecommendBackgroundRefreshAlarm(options = {}) {
   return ensureRecommendBackgroundRefreshAlarmPromise;
 }
 
-async function appendRecommendFlippedBookmarkState(bookmarkId) {
+async function appendRecommendFlippedBookmarkState(bookmarkId, options = {}) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
     return { success: false, flippedIds: [] };
   }
 
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+  const task = async () => {
     const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
     const current = Array.isArray(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY])
       ? result[FLIPPED_BOOKMARKS_STORAGE_KEY]
@@ -2813,16 +3250,57 @@ async function appendRecommendFlippedBookmarkState(bookmarkId) {
       await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: normalized });
     }
     return { success: true, flippedIds: normalized };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
-async function markHistoryCurrentCardFlippedState(bookmarkId) {
+async function trimRecommendFlippedBookmarksState(maxItems = 1000, options = {}) {
+  const safeMaxItems = Math.max(1, Math.floor(Number(maxItems) || 1000));
+  const task = async () => {
+    const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
+    const raw = result?.[FLIPPED_BOOKMARKS_STORAGE_KEY];
+    let current = [];
+    if (Array.isArray(raw)) {
+      current = normalizeBookmarkIdList(raw);
+    } else if (raw && typeof raw === 'object') {
+      const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      current = normalizeBookmarkIdList(
+        Object.entries(raw)
+          .filter(([, time]) => Number(time) > oneWeekAgo)
+          .sort((a, b) => Number(a[1]) - Number(b[1]))
+          .map(([id]) => id)
+      );
+    }
+    if (current.length <= safeMaxItems) {
+      return { success: true, trimmed: false, count: current.length, flippedIds: current };
+    }
+
+    const trimmed = current.slice(current.length - safeMaxItems);
+    await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: trimmed });
+    return {
+      success: true,
+      trimmed: true,
+      count: trimmed.length,
+      removed: current.length - trimmed.length,
+      flippedIds: trimmed
+    };
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
+}
+
+async function markHistoryCurrentCardFlippedState(bookmarkId, options = {}) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
     return { success: false, allFlipped: false, historyCurrentCards: null };
   }
 
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+  const task = async () => {
     const result = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
     const current = result?.[HISTORY_CURRENT_CARDS_STORAGE_KEY];
     if (!current || typeof current !== 'object') {
@@ -2853,13 +3331,18 @@ async function markHistoryCurrentCardFlippedState(bookmarkId) {
       cardIds,
       flippedIds,
       timestamp: now,
-      lastUpdated: now
+      lastUpdated: now,
+      version: buildNextHistoryCurrentCardsVersion(current, now)
     };
     await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: next });
 
     const allFlipped = cardIds.length > 0 && cardIds.every(cardId => flippedIds.includes(cardId));
     return { success: true, allFlipped, historyCurrentCards: next };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
 function normalizeRecommendPoolLength(poolLength) {
@@ -2880,8 +3363,8 @@ function normalizeRecommendPoolCursorValue(cursor, poolLength = 0) {
   return ((safeRaw % safePoolLength) + safePoolLength) % safePoolLength;
 }
 
-async function consumeRecommendPoolCursorState(poolLength, consumeCount = 0) {
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+async function consumeRecommendPoolCursorState(poolLength, consumeCount = 0, options = {}) {
+  const task = async () => {
     const safePoolLength = normalizeRecommendPoolLength(poolLength);
     const safeConsumeCount = Math.max(0, Math.floor(Number(consumeCount) || 0));
 
@@ -2909,11 +3392,15 @@ async function consumeRecommendPoolCursorState(poolLength, consumeCount = 0) {
       cursorBefore: currentCursor,
       cursorAfter: nextCursor
     };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
-async function setRecommendPoolCursorState(poolLength, cursor = 0) {
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+async function setRecommendPoolCursorState(poolLength, cursor = 0, options = {}) {
+  const task = async () => {
     const safePoolLength = normalizeRecommendPoolLength(poolLength);
     const normalizedCursor = normalizeRecommendPoolCursorValue(cursor, safePoolLength);
 
@@ -2924,7 +3411,11 @@ async function setRecommendPoolCursorState(poolLength, cursor = 0) {
       poolLength: safePoolLength,
       cursor: normalizedCursor
     };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
 function getLocalDateKey(date) {
@@ -3060,7 +3551,7 @@ function normalizeFlipHistoryRecords(records = []) {
     .slice(-FLIP_HISTORY_MAX_ITEMS);
 }
 
-async function appendRecommendFlipHistoryRecordState(bookmarkId, timestamp = Date.now()) {
+async function appendRecommendFlipHistoryRecordState(bookmarkId, timestamp = Date.now(), options = {}) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
     return { success: false, count: -1 };
@@ -3070,7 +3561,7 @@ async function appendRecommendFlipHistoryRecordState(bookmarkId, timestamp = Dat
     ? Math.floor(Number(timestamp))
     : Date.now();
 
-  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+  const task = async () => {
     const result = await browserAPI.storage.local.get([FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY]);
     const flipHistory = normalizeFlipHistoryRecords(result?.[FLIP_HISTORY_STORAGE_KEY]);
 
@@ -3098,7 +3589,11 @@ async function appendRecommendFlipHistoryRecordState(bookmarkId, timestamp = Dat
       count: trimmed.length,
       indexUpdatedAt: Number(nextIndex?.updatedAt || 0)
     };
-  });
+  };
+
+  return options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task);
 }
 
 function normalizeRecommendReviewState(reviews) {
@@ -3106,21 +3601,22 @@ function normalizeRecommendReviewState(reviews) {
   return { ...reviews };
 }
 
-async function recordRecommendReviewState(bookmarkId) {
+async function recordRecommendReviewState(bookmarkId, options = {}) {
   const id = String(bookmarkId || '').trim();
   if (!id) {
     return { success: false, review: null, postponed: [], skippedIds: [] };
   }
 
-  const state = await runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
-    const [reviewResult, rawPostponed, rawSkipped] = await Promise.all([
+  const task = async () => {
+    const [reviewResult, postponedSnapshot, rawSkipped] = await Promise.all([
       browserAPI.storage.local.get(['recommend_reviews']),
-      getRecommendPostponedList(),
+      getRecommendPostponedStateSnapshot(),
       getRecommendSkippedIds()
     ]);
 
     const reviews = normalizeRecommendReviewState(reviewResult?.recommend_reviews);
-    const postponed = normalizeRecommendPostponedList(rawPostponed);
+    const postponed = normalizeRecommendPostponedList(postponedSnapshot.postponed);
+    const postponedVersion = normalizeRecommendStateVersion(postponedSnapshot.version);
     const skippedIds = normalizeRecommendSkippedIds(rawSkipped);
     const now = Date.now();
 
@@ -3146,10 +3642,12 @@ async function recordRecommendReviewState(bookmarkId) {
     };
 
     reviews[id] = nextReview;
+    const nextPostponedVersion = buildNextRecommendStateVersion(postponedVersion);
 
     await browserAPI.storage.local.set({
       recommend_reviews: reviews,
       [RECOMMEND_POSTPONED_STORAGE_KEY]: nextPostponed,
+      [RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]: nextPostponedVersion,
       [RECOMMEND_SKIPPED_STORAGE_KEY]: nextSkippedIds
     });
 
@@ -3157,13 +3655,532 @@ async function recordRecommendReviewState(bookmarkId) {
       success: true,
       review: nextReview,
       postponed: nextPostponed,
+      postponedVersion: nextPostponedVersion,
       skippedIds: nextSkippedIds
     };
-  });
+  };
+
+  const state = await (options?.unlocked === true
+    ? task()
+    : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task));
 
   await updateSingleBookmarkScore(id);
 
   return state;
+}
+
+function normalizeRecommendActionExpectedVersion(value) {
+  if (value == null || value === '') return null;
+  const version = Number(value);
+  return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
+}
+
+function buildRecommendStaleActionResponse(currentCards, reason = 'stale_current_cards') {
+  return {
+    success: false,
+    stale: true,
+    reason,
+    currentCards: normalizeHistoryCurrentCardsState(currentCards)
+  };
+}
+
+function isRecommendActionVersionStale(currentCards, expectedVersion) {
+  const expected = normalizeRecommendActionExpectedVersion(expectedVersion);
+  if (expected == null) return false;
+  const currentVersion = Number(currentCards?.version || 0);
+  return !Number.isFinite(currentVersion) || Math.floor(currentVersion) !== expected;
+}
+
+async function getHistoryCurrentCardsStateForAction() {
+  try {
+    const result = await browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+    return normalizeHistoryCurrentCardsState(result?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
+  } catch (_) {
+    return normalizeHistoryCurrentCardsState(null);
+  }
+}
+
+async function setRecommendPostponedBookmarkState(bookmarkId, options = {}) {
+  const id = String(bookmarkId || '').trim();
+  if (!id) return { success: false, postponed: [], reason: 'missing_bookmark_id' };
+
+  const postponedSnapshot = await getRecommendPostponedStateSnapshot();
+  const postponed = normalizeRecommendPostponedList(postponedSnapshot.postponed);
+  const postponedVersion = normalizeRecommendStateVersion(postponedSnapshot.version);
+  const now = Date.now();
+  const delayMs = Number(options.delayMs);
+  const explicitUntil = Number(options.postponeUntil);
+  const postponeUntil = Number.isFinite(explicitUntil) && explicitUntil > 0
+    ? Math.floor(explicitUntil)
+    : now + Math.max(0, Number.isFinite(delayMs) ? Math.floor(delayMs) : 0);
+  const manuallyAdded = options.manuallyAdded === true;
+  const existing = postponed.find(item => String(item?.bookmarkId || '').trim() === id);
+
+  if (existing) {
+    existing.postponeUntil = postponeUntil;
+    existing.postponeCount = manuallyAdded
+      ? Number(existing.postponeCount || 0)
+      : Number(existing.postponeCount || 0) + 1;
+    existing.dueQueueMovedAt = 0;
+    existing.manuallyAdded = existing.manuallyAdded === true || manuallyAdded;
+    if (options.groupId != null) existing.groupId = options.groupId;
+    if (options.groupType != null) existing.groupType = options.groupType;
+    if (options.groupName != null) existing.groupName = options.groupName;
+    existing.updatedAt = now;
+  } else {
+    postponed.push({
+      bookmarkId: id,
+      postponeUntil,
+      postponeCount: manuallyAdded ? 0 : 1,
+      dueQueueMovedAt: 0,
+      manuallyAdded,
+      ...(options.groupId != null ? { groupId: options.groupId } : {}),
+      ...(options.groupType != null ? { groupType: options.groupType } : {}),
+      ...(options.groupName != null ? { groupName: options.groupName } : {}),
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  const nextPostponed = normalizeRecommendPostponedList(postponed);
+  const nextPostponedVersion = buildNextRecommendStateVersion(postponedVersion);
+  await browserAPI.storage.local.set({
+    [RECOMMEND_POSTPONED_STORAGE_KEY]: nextPostponed,
+    [RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]: nextPostponedVersion
+  });
+  await updateSingleBookmarkScore(id);
+  return { success: true, postponed: nextPostponed, version: nextPostponedVersion };
+}
+
+async function getSameTitleBookmarkIdsForBlock(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id || !browserAPI?.bookmarks?.get || !browserAPI?.bookmarks?.getTree) return [];
+
+  const targetBookmarks = await new Promise(resolve => {
+    try {
+      browserAPI.bookmarks.get(id, (items) => {
+        if (browserAPI.runtime?.lastError) {
+          resolve([]);
+          return;
+        }
+        resolve(Array.isArray(items) ? items : []);
+      });
+    } catch (_) {
+      resolve([]);
+    }
+  });
+  const target = targetBookmarks && targetBookmarks[0] ? targetBookmarks[0] : null;
+  const title = String(target?.title || '').trim();
+  if (!target || !title) return [id];
+
+  const tree = await new Promise(resolve => {
+    try {
+      browserAPI.bookmarks.getTree(resolve);
+    } catch (_) {
+      resolve([]);
+    }
+  });
+  const ids = [];
+  const traverse = (nodes) => {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      if (node?.url && String(node.title || '').trim() === title && node.id != null) {
+        ids.push(String(node.id));
+      }
+      if (Array.isArray(node?.children)) {
+        traverse(node.children);
+      }
+    }
+  };
+  traverse(tree);
+  return normalizeBookmarkIdList(ids.length > 0 ? ids : [id]);
+}
+
+async function setRecommendBlockedBookmarksState(bookmarkIds = []) {
+  const ids = normalizeBookmarkIdList(bookmarkIds);
+  if (ids.length === 0) return { success: false, blocked: normalizeRecommendBlockedState(null) };
+
+  const blocked = await getRecommendBlockedState();
+  const bookmarkSet = new Set(normalizeBookmarkIdList(blocked.bookmarks || []));
+  ids.forEach(id => bookmarkSet.add(id));
+  const nextBlocked = normalizeRecommendBlockedState({
+    ...blocked,
+    bookmarks: Array.from(bookmarkSet),
+    version: buildNextRecommendStateVersion(blocked.version)
+  });
+
+  await browserAPI.storage.local.set({ [RECOMMEND_BLOCKED_STORAGE_KEY]: nextBlocked });
+  return { success: true, blocked: nextBlocked, blockedBookmarkIds: ids };
+}
+
+async function updateHistoryCurrentCardDataState(cardData = [], expectedVersion = null) {
+  const normalizedCardData = (Array.isArray(cardData) ? cardData : [])
+    .map(normalizeRecommendCardDataEntry)
+    .filter(Boolean);
+  if (normalizedCardData.length === 0) {
+    return { success: false, reason: 'empty_card_data', currentCards: null };
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const currentCards = await getHistoryCurrentCardsStateForAction();
+    const versionStale = isRecommendActionVersionStale(currentCards, expectedVersion);
+    if (versionStale) {
+      return buildRecommendStaleActionResponse(currentCards);
+    }
+
+    const currentIds = normalizeBookmarkIdList(currentCards.cardIds || []);
+    const dataIds = normalizeBookmarkIdList(normalizedCardData.map(item => item.id));
+    if (!areNormalizedBookmarkIdListsEqual(currentIds, dataIds)) {
+      return { success: false, stale: true, reason: 'card_ids_changed', currentCards };
+    }
+
+    const next = {
+      ...currentCards,
+      cardData: normalizedCardData,
+      timestamp: Date.now(),
+      lastUpdated: Date.now()
+    };
+    await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: next });
+    return { success: true, currentCards: next };
+  });
+}
+
+function areNormalizedBookmarkIdListsEqual(a = [], b = []) {
+  const listA = normalizeBookmarkIdList(a);
+  const listB = normalizeBookmarkIdList(b);
+  if (listA.length !== listB.length) return false;
+  for (let i = 0; i < listA.length; i += 1) {
+    if (listA[i] !== listB[i]) return false;
+  }
+  return true;
+}
+
+function buildRecommendCardDataMap(cardData = []) {
+  const map = new Map();
+  for (const item of Array.isArray(cardData) ? cardData : []) {
+    const normalized = normalizeRecommendCardDataEntry(item);
+    const id = String(normalized?.id || '').trim();
+    if (id && normalized) {
+      map.set(id, normalized);
+    }
+  }
+  return map;
+}
+
+async function replaceCurrentCardsForRecommendAction(currentCards, removeIds = [], options = {}) {
+  const normalizedCurrent = normalizeHistoryCurrentCardsState(currentCards);
+  const removedSet = new Set(normalizeBookmarkIdList(removeIds || []));
+  const currentIds = normalizeBookmarkIdList(normalizedCurrent.cardIds || []);
+  const retainedIds = currentIds.filter(id => !removedSet.has(id));
+  const cardDataMap = buildRecommendCardDataMap(normalizedCurrent.cardData || []);
+  const slots = Math.max(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE - retainedIds.length);
+  const excludeCardIds = Array.from(new Set([
+    ...retainedIds,
+    ...Array.from(removedSet)
+  ]));
+
+  let fillCards = [];
+  let selection = null;
+  if (slots > 0) {
+    selection = await selectQuickReviewCardsRoundStateUnlocked({
+      force: options.force !== false,
+      currentCards: normalizedCurrent,
+      scoresReadyChecked: options.scoresReadyChecked === true && options.scoresReadyResult != null,
+      scoresReadyResult: options.scoresReadyResult || null,
+      excludeCardIds,
+      batchSize: slots,
+      persist: false
+    });
+    fillCards = Array.isArray(selection?.cards) ? selection.cards : [];
+  }
+
+  const fillData = fillCards
+    .map(item => normalizeRecommendCardDataEntry(item))
+    .filter(Boolean);
+  const fillQueue = fillData.slice();
+  const nextIds = [];
+  const nextData = [];
+
+  for (const id of currentIds) {
+    if (removedSet.has(id)) {
+      const fill = fillQueue.shift();
+      const fillId = String(fill?.id || '').trim();
+      if (fill && fillId) {
+        nextIds.push(fillId);
+        nextData.push(fill);
+      }
+      continue;
+    }
+
+    const retained = cardDataMap.get(id);
+    if (retained) {
+      nextIds.push(id);
+      nextData.push(retained);
+    }
+  }
+
+  while (nextIds.length < QUICK_REVIEW_RECOMMEND_BATCH_SIZE && fillQueue.length > 0) {
+    const fill = fillQueue.shift();
+    const fillId = String(fill?.id || '').trim();
+    if (!fill || !fillId || nextIds.includes(fillId)) continue;
+    nextIds.push(fillId);
+    nextData.push(fill);
+  }
+
+  const slicedIds = nextIds.slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+  const nextIdSet = new Set(slicedIds);
+  const slicedData = nextData
+    .filter(item => nextIdSet.has(String(item?.id || '').trim()))
+    .slice(0, QUICK_REVIEW_RECOMMEND_BATCH_SIZE);
+  const nextFlippedIds = normalizeBookmarkIdList(normalizedCurrent.flippedIds || [])
+    .filter(id => nextIdSet.has(id));
+
+  const saved = await saveHistoryCurrentCardsState(slicedIds, nextFlippedIds, slicedData, {
+    previousState: normalizedCurrent
+  });
+
+  return {
+    currentCards: saved,
+    cards: slicedData,
+    roundRefreshed: false,
+    partialRefreshed: fillData.length > 0,
+    ready: selection?.ready !== false,
+    repairing: selection?.repairing === true,
+    reason: selection?.reason || null
+  };
+}
+
+async function refreshCurrentCardsForRecommendAction(currentCards, options = {}) {
+  const normalizedCurrent = normalizeHistoryCurrentCardsState(currentCards);
+  const force = options.force !== false;
+  const result = await selectQuickReviewCardsRoundStateUnlocked({
+    force,
+    currentCards: normalizedCurrent,
+    scoresReadyChecked: options.scoresReadyChecked === true && options.scoresReadyResult != null,
+    scoresReadyResult: options.scoresReadyResult || null
+  });
+  if (result?.ready === false) {
+    return {
+      currentCards: normalizedCurrent,
+      cards: normalizedCurrent.cardData || [],
+      roundRefreshed: false,
+      ready: false,
+      repairing: result?.repairing === true,
+      reason: result?.reason || null
+    };
+  }
+  return {
+    currentCards: result?.currentCards ? normalizeHistoryCurrentCardsState(result.currentCards) : normalizeHistoryCurrentCardsState(null),
+    cards: Array.isArray(result?.cards) ? result.cards : [],
+    roundRefreshed: true,
+    ready: result?.ready !== false,
+    repairing: result?.repairing === true,
+    reason: result?.reason || null
+  };
+}
+
+async function executeRecommendCardActionState(message = {}) {
+  const actionType = String(message.recommendAction || message.cardAction || message.type || '').trim();
+  const bookmarkId = String(message.bookmarkId || message.id || '').trim();
+  const expectedVersion = normalizeRecommendActionExpectedVersion(message.expectedVersion);
+
+  if (!bookmarkId || !actionType) {
+    return { success: false, reason: 'invalid_action' };
+  }
+
+  await ensureScoreAlgoVersionReady();
+  let scoresReadyResult = null;
+  if (actionType !== 'open') {
+    try {
+      scoresReadyResult = await ensureRecommendScoresReady({ reason: `recommend-action:${actionType}` });
+    } catch (_) {}
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    const currentCardsBefore = await getHistoryCurrentCardsStateForAction();
+    const currentCardSet = new Set(normalizeBookmarkIdList(currentCardsBefore.cardIds || []));
+    const isCurrentCard = currentCardSet.has(bookmarkId);
+    const requiresVersion = isCurrentCard && ['review', 'skip', 'postpone', 'block'].includes(actionType);
+
+    if (requiresVersion) {
+      if (expectedVersion == null) {
+        return buildRecommendStaleActionResponse(currentCardsBefore, 'missing_current_cards_version');
+      }
+      if (isRecommendActionVersionStale(currentCardsBefore, expectedVersion)) {
+        return buildRecommendStaleActionResponse(currentCardsBefore);
+      }
+    }
+
+    if (actionType === 'open') {
+      return { success: true, action: actionType, currentCards: currentCardsBefore, changedCurrentCards: false };
+    }
+
+    let currentCards = currentCardsBefore;
+    let cards = [];
+    let changedCurrentCards = false;
+    let actionResult = null;
+    let allFlipped = false;
+    let roundRefreshed = false;
+    let refreshMarked = false;
+    const partialErrors = [];
+    const warnings = [];
+
+    const captureReviewWriteStep = async (step, fn, options = {}) => {
+      try {
+        const result = await fn();
+        if (options?.critical === true && result && result.success === false) {
+          const error = new Error(result?.reason || `${step}_failed`);
+          error.result = result;
+          throw error;
+        }
+        return result;
+      } catch (error) {
+        const messageText = error?.message || String(error);
+        partialErrors.push({ step, error: messageText });
+        warnings.push(`[${step}] ${messageText}`);
+        if (options?.critical === true) {
+          throw error;
+        }
+        return null;
+      }
+    };
+
+    if (actionType === 'review') {
+      const review = await captureReviewWriteStep(
+        'recordRecommendReviewState',
+        () => recordRecommendReviewState(bookmarkId, { unlocked: true }),
+        { critical: true }
+      );
+      if (!review || review.success === false) {
+        return {
+          success: false,
+          action: actionType,
+          bookmarkId,
+          isCurrentCard,
+          changedCurrentCards,
+          allFlipped,
+          roundRefreshed,
+          refreshMarked,
+          currentCards,
+          cards,
+          review: review || null,
+          partialErrors,
+          warnings,
+          reason: 'review_write_failed'
+        };
+      }
+      actionResult = { review };
+
+      await captureReviewWriteStep('appendRecommendFlippedBookmarkState', () =>
+        appendRecommendFlippedBookmarkState(bookmarkId, { unlocked: true })
+      );
+      await captureReviewWriteStep('appendRecommendFlipHistoryRecordState', () =>
+        appendRecommendFlipHistoryRecordState(bookmarkId, message.timestamp || Date.now(), { unlocked: true })
+      );
+
+      if (isCurrentCard) {
+        const markResult = await captureReviewWriteStep('markHistoryCurrentCardFlippedState', () =>
+          markHistoryCurrentCardFlippedState(bookmarkId, { unlocked: true })
+        );
+        if (markResult) {
+          allFlipped = markResult?.allFlipped === true;
+          currentCards = normalizeHistoryCurrentCardsState(markResult?.historyCurrentCards || currentCardsBefore);
+          changedCurrentCards = true;
+
+          if (allFlipped) {
+            const refreshed = await captureReviewWriteStep('refreshCurrentCardsForRecommendAction', () =>
+              refreshCurrentCardsForRecommendAction(currentCards, {
+                force: true,
+                scoresReadyChecked: true,
+                scoresReadyResult
+              })
+            );
+            if (refreshed) {
+              currentCards = refreshed.currentCards;
+              cards = refreshed.cards;
+              roundRefreshed = refreshed.roundRefreshed === true;
+              const markRefreshResult = await captureReviewWriteStep('markRecommendRefreshExecutedState', () =>
+                markRecommendRefreshExecutedState({ unlocked: true })
+              );
+              refreshMarked = markRefreshResult?.success === true;
+            }
+          }
+        }
+      }
+    } else if (actionType === 'skip') {
+      actionResult = await handleRecommendSkipState(bookmarkId, { unlocked: true });
+      if (isCurrentCard) {
+        const refreshed = await replaceCurrentCardsForRecommendAction(currentCardsBefore, [bookmarkId], {
+          force: true,
+          scoresReadyChecked: true,
+          scoresReadyResult
+        });
+        currentCards = refreshed.currentCards;
+        cards = refreshed.cards;
+        changedCurrentCards = true;
+        roundRefreshed = refreshed.roundRefreshed === true;
+      }
+    } else if (actionType === 'postpone') {
+      actionResult = await setRecommendPostponedBookmarkState(bookmarkId, {
+        delayMs: message.delayMs,
+        postponeUntil: message.postponeUntil,
+        manuallyAdded: message.manuallyAdded === true,
+        groupId: message.groupId,
+        groupType: message.groupType,
+        groupName: message.groupName
+      });
+      if (isCurrentCard) {
+        const refreshed = await replaceCurrentCardsForRecommendAction(currentCardsBefore, [bookmarkId], {
+          force: true,
+          scoresReadyChecked: true,
+          scoresReadyResult
+        });
+        currentCards = refreshed.currentCards;
+        cards = refreshed.cards;
+        changedCurrentCards = true;
+        roundRefreshed = refreshed.roundRefreshed === true;
+      }
+    } else if (actionType === 'block') {
+      const blockIds = message.scope === 'single'
+        ? [bookmarkId]
+        : await getSameTitleBookmarkIdsForBlock(bookmarkId);
+      actionResult = await setRecommendBlockedBookmarksState(blockIds);
+      const blockedSet = new Set(normalizeBookmarkIdList(actionResult?.blockedBookmarkIds || blockIds));
+      const touchesCurrent = normalizeBookmarkIdList(currentCardsBefore.cardIds || [])
+        .some(id => blockedSet.has(id));
+      if (touchesCurrent) {
+        const removedCurrentIds = normalizeBookmarkIdList(currentCardsBefore.cardIds || [])
+          .filter(id => blockedSet.has(id));
+        const refreshed = await replaceCurrentCardsForRecommendAction(currentCardsBefore, removedCurrentIds, {
+          force: true,
+          scoresReadyChecked: true,
+          scoresReadyResult
+        });
+        currentCards = refreshed.currentCards;
+        cards = refreshed.cards;
+        changedCurrentCards = true;
+        roundRefreshed = refreshed.roundRefreshed === true;
+      }
+    } else {
+      return { success: false, reason: 'unknown_action', action: actionType };
+    }
+
+    return {
+      success: true,
+      action: actionType,
+      bookmarkId,
+      isCurrentCard,
+      changedCurrentCards,
+      allFlipped,
+      roundRefreshed,
+      refreshMarked,
+      currentCards,
+      cards,
+      partialErrors,
+      warnings,
+      ...(actionResult && typeof actionResult === 'object' ? actionResult : {})
+    };
+  });
 }
 
 function collectRemovedNodeIds(node, bookmarkIdSet, folderIdSet) {
@@ -3219,9 +4236,9 @@ async function runRemovedRecommendStatePrune() {
   const removedFolderSet = new Set(removedFolderIds);
 
   await runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
-    const [rawSkipped, rawPostponed, rawBlocked, rawCache, historyCardsResult] = await Promise.all([
+    const [rawSkipped, postponedSnapshot, rawBlocked, rawCache, historyCardsResult] = await Promise.all([
       getRecommendSkippedIds(),
-      getRecommendPostponedList(),
+      getRecommendPostponedStateSnapshot(),
       getRecommendBlockedState(),
       getScoresCache(),
       browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY])
@@ -3236,26 +4253,29 @@ async function runRemovedRecommendStatePrune() {
       updates[RECOMMEND_SKIPPED_STORAGE_KEY] = nextSkipped;
     }
 
-    const normalizedPostponed = normalizeRecommendPostponedList(rawPostponed || []);
+    const normalizedPostponed = normalizeRecommendPostponedList(postponedSnapshot.postponed || []);
     const nextPostponed = normalizedPostponed.filter((item) => {
       const bookmarkId = String(item?.bookmarkId || '').trim();
       return bookmarkId && !removedBookmarkSet.has(bookmarkId);
     });
     if (nextPostponed.length !== normalizedPostponed.length) {
       updates[RECOMMEND_POSTPONED_STORAGE_KEY] = nextPostponed;
+      updates[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY] = buildNextRecommendStateVersion(postponedSnapshot.version);
     }
 
     const blocked = normalizeRecommendBlockedState(rawBlocked);
     const nextBlocked = {
       bookmarks: blocked.bookmarks.filter(id => !removedBookmarkSet.has(String(id || '').trim())),
       folders: blocked.folders.filter(id => !removedFolderSet.has(String(id || '').trim())),
-      domains: blocked.domains.slice()
+      domains: blocked.domains.slice(),
+      version: blocked.version
     };
 
     if (
       nextBlocked.bookmarks.length !== blocked.bookmarks.length
       || nextBlocked.folders.length !== blocked.folders.length
     ) {
+      nextBlocked.version = buildNextRecommendStateVersion(blocked.version);
       updates[RECOMMEND_BLOCKED_STORAGE_KEY] = nextBlocked;
     }
 
@@ -3299,7 +4319,8 @@ async function runRemovedRecommendStatePrune() {
           flippedIds: nextFlippedIds,
           ...(Array.isArray(cardData) ? { cardData } : {}),
           timestamp: now,
-          lastUpdated: now
+          lastUpdated: now,
+          version: buildNextHistoryCurrentCardsVersion(historyCurrentCards, now)
         };
       }
     }
@@ -3362,14 +4383,22 @@ async function ensureRecommendScoresReady(options = {}) {
 
   recommendScoresReadyPromise = (async () => {
     try {
-      const existingCache = await getScoresCache();
-      const existingCount = Object.keys(existingCache || {}).length;
-      if (existingCount > 0) {
+      const [existingCache, staleMetaResult] = await Promise.all([
+        getScoresCache(),
+        browserAPI.storage.local.get(['recommendScoresStaleMeta'])
+      ]);
+      const existingBuild = buildQuickReviewBookmarksFromScoresCacheWithStats(existingCache);
+      const existingHealth = normalizeRecommendScoresCacheHealth(existingBuild.stats);
+      const staleMeta = staleMetaResult?.recommendScoresStaleMeta || null;
+      const repairReason = getRecommendScoresCacheRepairReason(existingHealth, staleMeta);
+
+      if (existingHealth.cacheCount > 0 && !repairReason) {
         return {
           success: true,
           ready: true,
           mode: 'existing',
-          cacheCount: existingCount
+          cacheCount: existingHealth.cacheCount,
+          cacheHealth: compactRecommendScoresCacheHealth(existingHealth)
         };
       }
 
@@ -3378,7 +4407,10 @@ async function ensureRecommendScoresReady(options = {}) {
           success: true,
           ready: false,
           mode: 'bulk-pending',
-          cacheCount: existingCount
+          repairing: !!repairReason,
+          reason: repairReason || 'bulk-pending',
+          cacheCount: existingHealth.cacheCount,
+          cacheHealth: compactRecommendScoresCacheHealth(existingHealth)
         };
       }
 
@@ -3387,12 +4419,26 @@ async function ensureRecommendScoresReady(options = {}) {
           success: true,
           ready: false,
           mode: 'computing',
-          cacheCount: existingCount
+          repairing: !!repairReason,
+          reason: repairReason || 'computing',
+          cacheCount: existingHealth.cacheCount,
+          cacheHealth: compactRecommendScoresCacheHealth(existingHealth)
         };
       }
 
       const ids = await getAllBookmarkUrlIdsForScore();
       if (!Array.isArray(ids) || ids.length === 0) {
+        if (existingHealth.cacheCount > 0) {
+          await saveScoresCache({});
+        }
+        try {
+          await browserAPI.storage.local.set({
+            recommendScoresStaleMeta: {
+              staleAt: 0,
+              reason: `ensure-ready:${reason}:empty-tree`
+            }
+          });
+        } catch (_) { }
         return {
           success: true,
           ready: true,
@@ -3410,23 +4456,33 @@ async function ensureRecommendScoresReady(options = {}) {
       }
 
       const nextCache = await getScoresCache();
-      const nextCount = Object.keys(nextCache || {}).length;
+      const nextBuild = buildQuickReviewBookmarksFromScoresCacheWithStats(nextCache);
+      const nextHealth = normalizeRecommendScoresCacheHealth(nextBuild.stats);
+      const nextRepairReason = getRecommendScoresCacheRepairReason(nextHealth, null);
 
-      try {
-        await browserAPI.storage.local.set({
-          recommendScoresStaleMeta: {
-            staleAt: 0,
-            reason: `ensure-ready:${reason}`
-          }
-        });
-      } catch (_) { }
+      if (nextRepairReason) {
+        await markRecommendScoresCacheRepairing(`ensure-ready:${nextRepairReason}`, nextHealth);
+        queueRecommendScoresCacheRepair(`ensure-ready:${nextRepairReason}:full`, nextHealth);
+      } else {
+        try {
+          await browserAPI.storage.local.set({
+            recommendScoresStaleMeta: {
+              staleAt: 0,
+              reason: `ensure-ready:${reason}`
+            }
+          });
+        } catch (_) { }
+      }
 
       return {
         success: true,
-        ready: nextCount > 0,
+        ready: nextHealth.cacheCount > 0 && !nextRepairReason,
         mode: ids.length >= SCORE_TEMPLATE_BATCH_THRESHOLD ? 'template' : 'incremental',
-        cacheCount: nextCount,
-        bookmarkCount: ids.length
+        repairing: !!nextRepairReason,
+        reason: nextRepairReason || undefined,
+        cacheCount: nextHealth.cacheCount,
+        bookmarkCount: ids.length,
+        cacheHealth: compactRecommendScoresCacheHealth(nextHealth)
       };
     } catch (e) {
       console.warn('[S-score] ensure-ready failed:', e);
@@ -3463,15 +4519,27 @@ function scheduleRecomputeAllScoresSoon(reason = '', options = {}) {
   scheduledRecomputeTimer = setTimeout(() => {
     scheduledRecomputeTimer = null;
     if (isBookmarkImporting || isBookmarkBulkChanging) return;
+    if (isComputingScores || templateRefineRunning) {
+      scheduleRecomputeAllScoresSoon(reason, { forceFull });
+      return;
+    }
     computeAllBookmarkScores({ forceFull })
-      .then(() => {
+      .then((ok) => {
+        if (ok === false) {
+          markRecommendScoresCacheRepairing(`${reason || 'scheduled-recompute'}:not-computed`).catch(() => { });
+          return;
+        }
         try {
           browserAPI.storage.local.set({
             recommendScoresStaleMeta: { staleAt: 0, reason: reason || '' }
           });
         } catch (_) { }
       })
-      .catch(() => { });
+      .catch((error) => {
+        markRecommendScoresCacheRepairing(`${reason || 'scheduled-recompute'}:failed`, {
+          error: error?.message || String(error)
+        }).catch(() => { });
+      });
   }, 800);
 }
 
@@ -3532,11 +4600,8 @@ async function exitBookmarkBulkChangeMode() {
     });
   } catch (_) { }
 
-  // 导入场景：不要自动全量重算，避免导入结束“立刻重算”再次拉跨浏览器；交给 UI 按需触发。
   const reason = String(lastBulkReason || '');
-  if (!reason.startsWith('import')) {
-    await scheduleBulkTemplateRecovery(`bulk-exit:${reason || 'unknown'}`);
-  }
+  await scheduleBulkTemplateRecovery(`bulk-exit:${reason || 'unknown'}`);
   bookmarkBulkHasRemoval = false;
 }
 
@@ -3759,35 +4824,17 @@ async function getScoresCache() {
 async function saveScoresCache(cache) {
   try {
     await browserAPI.storage.local.set({ recommend_scores_cache: cache, recommend_scores_time: Date.now() });
+    return true;
   } catch (error) {
-    if (error.message && error.message.includes('QUOTA')) {
+    const message = error?.message || String(error);
+    if (message.includes('QUOTA')) {
       console.warn('[S-score] storage quota reached, cleaning...');
       try {
         const keysToCheck = [FLIPPED_BOOKMARKS_STORAGE_KEY, 'thumbnailCache', RECOMMEND_POSTPONED_STORAGE_KEY];
         const data = await browserAPI.storage.local.get(keysToCheck);
 
         if (data[FLIPPED_BOOKMARKS_STORAGE_KEY]) {
-          const raw = data[FLIPPED_BOOKMARKS_STORAGE_KEY];
-          let normalized = [];
-
-          if (Array.isArray(raw)) {
-            normalized = raw
-              .map(id => String(id || '').trim())
-              .filter(Boolean);
-          } else if (raw && typeof raw === 'object') {
-            const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-            normalized = Object.entries(raw)
-              .filter(([, time]) => Number(time) > oneWeekAgo)
-              .sort((a, b) => Number(a[1]) - Number(b[1]))
-              .map(([id]) => String(id || '').trim())
-              .filter(Boolean);
-          }
-
-          if (normalized.length > 1000) {
-            normalized = normalized.slice(normalized.length - 1000);
-          }
-
-          await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: normalized });
+          await trimRecommendFlippedBookmarksState(1000, { unlocked: true });
         }
 
         if (data.thumbnailCache) {
@@ -3795,11 +4842,16 @@ async function saveScoresCache(cache) {
         }
 
         await browserAPI.storage.local.set({ recommend_scores_cache: cache, recommend_scores_time: Date.now() });
+        return true;
       } catch (retryError) {
         console.error('[S-score] save after cleanup failed:', retryError);
+        await markRecommendScoresCacheRepairing('score-cache-save-failed', buildQuickReviewBookmarksFromScoresCacheWithStats(cache).stats);
+        throw retryError;
       }
     } else {
       console.error('[S-score] save failed:', error);
+      await markRecommendScoresCacheRepairing('score-cache-save-failed', buildQuickReviewBookmarksFromScoresCacheWithStats(cache).stats);
+      throw error;
     }
   }
 }
@@ -4445,17 +5497,17 @@ async function getBookmarkAncestorMapForIds(ids) {
   return result;
 }
 
-async function updateSingleBookmarkScore(bookmarkId) {
+async function updateSingleBookmarkScore(bookmarkId, options = {}) {
   try {
-    if (isBookmarkImporting || isBookmarkBulkChanging) return;
+    if (isBookmarkImporting || isBookmarkBulkChanging) return false;
     const id = String(bookmarkId || '').trim();
-    if (!id) return;
+    if (!id) return false;
 
     const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get([id], resolve));
-    if (!bookmarks || bookmarks.length === 0) return;
+    if (!bookmarks || bookmarks.length === 0) return false;
 
     const bookmark = bookmarks[0];
-    if (!bookmark || !bookmark.url) return;
+    if (!bookmark || !bookmark.url) return false;
     const ancestorFolderIds = await getAncestorFolderIdsByParentIdForScore(bookmark.parentId);
     const bookmarkForScore = {
       ...bookmark,
@@ -4523,8 +5575,11 @@ async function updateSingleBookmarkScore(bookmarkId) {
       bookmark: bookmarkForScore
     });
     await saveScoresCache(cache);
+    return true;
   } catch (e) {
     console.warn('[S-score] incremental update failed:', e);
+    if (options?.throwOnFailure === true) throw e;
+    return false;
   }
 }
 
@@ -4868,8 +5923,10 @@ async function updateBookmarkScoresByIds(ids) {
   if (unique.length <= 3) {
     let updated = 0;
     for (const id of unique) {
-      await updateSingleBookmarkScore(id);
-      updated += 1;
+      const ok = await updateSingleBookmarkScore(id, { throwOnFailure: true });
+      if (ok) {
+        updated += 1;
+      }
     }
     return updated;
   }
@@ -5029,6 +6086,101 @@ function normalizeBookmarkMutationQueuePayload(payload) {
       ? Number(source.updatedAt)
       : 0
   };
+}
+
+function normalizeBookmarkBulkTaskCheckpoint(task) {
+  const source = task && typeof task === 'object' ? task : {};
+  const scoreIds = normalizeBookmarkIdList(source.scoreIds || []).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS);
+  const movedIds = normalizeBookmarkIdList(source.movedIds || []).slice(0, BOOKMARK_MUTATION_QUEUE_MAX_ITEMS);
+  const changedUrls = normalizeBookmarkMutationQueueUrlList(source.changedUrls || []);
+  const total = scoreIds.length;
+  const cursor = Math.max(0, Math.min(total, Math.floor(Number(source.cursor) || 0)));
+  const stage = ['score', 'moved', 'favicon', 'done', 'failed'].includes(source.stage)
+    ? source.stage
+    : 'score';
+  const now = Date.now();
+
+  return {
+    version: 1,
+    taskId: String(source.taskId || `mutation-${now}`).trim(),
+    type: String(source.type || 'bookmark-mutation'),
+    stage,
+    scoreIds,
+    movedIds,
+    changedUrls,
+    cursor,
+    completed: Math.max(0, Math.min(total, Math.floor(Number(source.completed ?? cursor) || 0))),
+    total,
+    chunkSize: Math.max(1, Math.floor(Number(source.chunkSize) || BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE)),
+    needContinue: source.needContinue !== false && stage !== 'done',
+    queuedAt: Number.isFinite(Number(source.queuedAt)) && Number(source.queuedAt) > 0
+      ? Number(source.queuedAt)
+      : now,
+    updatedAt: Number.isFinite(Number(source.updatedAt)) && Number(source.updatedAt) > 0
+      ? Number(source.updatedAt)
+      : now,
+    lastSuccessAt: Number.isFinite(Number(source.lastSuccessAt)) && Number(source.lastSuccessAt) > 0
+      ? Number(source.lastSuccessAt)
+      : 0,
+    lastError: String(source.lastError || '')
+  };
+}
+
+function hasBookmarkBulkTaskCheckpoint(task) {
+  const normalized = normalizeBookmarkBulkTaskCheckpoint(task);
+  if (!normalized.needContinue || normalized.stage === 'done') return false;
+  return normalized.scoreIds.length > normalized.cursor
+    || normalized.movedIds.length > 0
+    || normalized.changedUrls.length > 0;
+}
+
+async function writeBookmarkBulkTaskCheckpoint(taskPatch = {}) {
+  const task = normalizeBookmarkBulkTaskCheckpoint({
+    ...(taskPatch || {}),
+    updatedAt: Date.now()
+  });
+  await browserAPI.storage.local.set({ [BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY]: task });
+  return task;
+}
+
+async function clearBookmarkBulkTaskCheckpoint(reason = '') {
+  try {
+    await browserAPI.storage.local.remove([BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY]);
+    return { success: true, reason };
+  } catch (error) {
+    return { success: false, reason, error: error?.message || String(error) };
+  }
+}
+
+async function restoreBookmarkBulkTaskCheckpoint(reason = 'startup') {
+  try {
+    const result = await browserAPI.storage.local.get([BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY]);
+    const task = normalizeBookmarkBulkTaskCheckpoint(result?.[BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY]);
+    if (!hasBookmarkBulkTaskCheckpoint(task)) {
+      await clearBookmarkBulkTaskCheckpoint(`${reason}:empty`);
+      return { success: true, restoredCount: 0, reason };
+    }
+
+    if (task.stage === 'score' || task.stage === 'failed') {
+      task.scoreIds.slice(task.cursor).forEach(id => pendingChangedScoreBookmarkIds.add(id));
+    }
+    if (task.stage === 'score' || task.stage === 'moved' || task.stage === 'failed') {
+      task.movedIds.forEach(id => pendingMovedBookmarkIds.add(id));
+    }
+    if (task.stage === 'score' || task.stage === 'moved' || task.stage === 'favicon' || task.stage === 'failed') {
+      task.changedUrls.forEach(url => pendingChangedBookmarkUrls.add(url));
+    }
+
+    const restoredCount = getPendingBookmarkMutationCount();
+    await persistPendingBookmarkMutationQueueNow(`${reason}:bulk-checkpoint`);
+    await clearBookmarkBulkTaskCheckpoint(`${reason}:merged`);
+    if (restoredCount > 0) {
+      queueBookmarkMutationFlush();
+    }
+    return { success: true, restoredCount, reason };
+  } catch (error) {
+    return { success: false, restoredCount: 0, reason, error: error?.message || String(error) };
+  }
 }
 
 function hasBookmarkMutationQueuePayload(payload) {
@@ -5273,20 +6425,83 @@ async function flushQueuedBookmarkMutations() {
 
   try {
     const scoreIds = normalizeBookmarkIdList([...createdIds, ...changedIds]);
+    let bulkCheckpoint = null;
+    let checkpointWriteEnabled = true;
+    const writeBulkCheckpointBestEffort = async (taskPatch = null) => {
+      if (!taskPatch || checkpointWriteEnabled !== true) {
+        return null;
+      }
+
+      try {
+        return await writeBookmarkBulkTaskCheckpoint(taskPatch);
+      } catch (error) {
+        checkpointWriteEnabled = false;
+        console.warn('[Recommend] bulk checkpoint write failed, continue without checkpoint:', error);
+        return null;
+      }
+    };
+
+    if (scoreIds.length > 0 || movedIds.length > 0 || changedUrls.length > 0) {
+      bulkCheckpoint = await writeBulkCheckpointBestEffort({
+        taskId: `mutation-${Date.now()}`,
+        type: 'bookmark-mutation',
+        stage: scoreIds.length > 0 ? 'score' : (movedIds.length > 0 ? 'moved' : 'favicon'),
+        scoreIds,
+        movedIds,
+        changedUrls,
+        cursor: 0,
+        completed: 0,
+        total: scoreIds.length,
+        chunkSize: BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE,
+        needContinue: true,
+        queuedAt: bookmarkMutationInFlightState?.queuedAt || Date.now()
+      });
+    }
+
     for (let i = 0; i < scoreIds.length; i += BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE) {
       const chunk = scoreIds.slice(i, i + BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE);
       if (chunk.length === 0) continue;
       await updateBookmarkScoresByIds(chunk);
+      if (bulkCheckpoint) {
+        bulkCheckpoint = await writeBulkCheckpointBestEffort({
+          ...bulkCheckpoint,
+          stage: 'score',
+          cursor: Math.min(i + chunk.length, scoreIds.length),
+          completed: Math.min(i + chunk.length, scoreIds.length),
+          lastSuccessAt: Date.now(),
+          lastError: ''
+        });
+      }
       if (i + BOOKMARK_MUTATION_FLUSH_CHUNK_SIZE < scoreIds.length) {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
 
     if (movedIds.length > 0) {
+      if (bulkCheckpoint) {
+        bulkCheckpoint = await writeBulkCheckpointBestEffort({
+          ...bulkCheckpoint,
+          stage: 'moved',
+          cursor: scoreIds.length,
+          completed: scoreIds.length,
+          lastSuccessAt: Date.now(),
+          lastError: ''
+        });
+      }
       await runMovedScoreMetadataRefresh(movedIds);
     }
 
     if (changedUrls.length > 0) {
+      if (bulkCheckpoint) {
+        bulkCheckpoint = await writeBulkCheckpointBestEffort({
+          ...bulkCheckpoint,
+          stage: 'favicon',
+          cursor: scoreIds.length,
+          completed: scoreIds.length,
+          lastSuccessAt: Date.now(),
+          lastError: ''
+        });
+      }
       for (const url of changedUrls) {
         try {
           browserAPI.runtime.sendMessage({
@@ -5296,6 +6511,8 @@ async function flushQueuedBookmarkMutations() {
         } catch (_) { }
       }
     }
+
+    await clearBookmarkBulkTaskCheckpoint('flush-complete');
 
     bookmarkMutationInFlightState = null;
     bookmarkMutationFlushInProgress = false;
@@ -5309,6 +6526,18 @@ async function flushQueuedBookmarkMutations() {
     bookmarkMutationFlushQueuedAt = 0;
     await persistPendingBookmarkMutationQueueNow('flush-commit');
   } catch (error) {
+    try {
+      const result = await browserAPI.storage.local.get([BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY]);
+      const task = result?.[BOOKMARK_BULK_TASK_CHECKPOINT_STORAGE_KEY];
+      if (task && typeof task === 'object') {
+        await writeBookmarkBulkTaskCheckpoint({
+          ...task,
+          stage: task.stage || 'failed',
+          needContinue: true,
+          lastError: error?.message || String(error)
+        });
+      }
+    } catch (_) { }
     bookmarkMutationFlushInProgress = false;
     throw error;
   }
@@ -5351,15 +6580,16 @@ function scheduleRecommendStartupSelfHeal(reason = 'startup') {
   startupRecommendSelfHealPromise = (async () => {
     try {
       await ensureRecommendBackgroundRefreshAlarm({ force: true });
-      const [restoreResult, healResult] = await Promise.all([
+      const [restoreResult, bulkCheckpointResult, healResult] = await Promise.all([
         restoreBookmarkMutationQueueState(reason),
+        restoreBookmarkBulkTaskCheckpoint(reason),
         healStaleBookmarkBulkChangeState(reason)
       ]);
 
       return {
         success: true,
         reason,
-        restoredCount: Number(restoreResult?.restoredCount || 0),
+        restoredCount: Number(restoreResult?.restoredCount || 0) + Number(bulkCheckpointResult?.restoredCount || 0),
         healedBulkFlag: healResult?.healed === true
       };
     } catch (error) {
@@ -5838,6 +7068,48 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (action === 'executeRecommendCardAction') {
+    (async () => {
+      try {
+        const result = await executeRecommendCardActionState(message || {});
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'updateHistoryCurrentCardData') {
+    (async () => {
+      try {
+        const result = await updateHistoryCurrentCardDataState(message.cardData || [], message.expectedVersion);
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'saveHistoryCurrentCardsState') {
+    (async () => {
+      try {
+        const result = await runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+          return saveHistoryCurrentCardsState(
+            message.cardIds || [],
+            message.flippedIds || [],
+            message.cardData || []
+          );
+        });
+        sendResponse({ success: true, currentCards: result });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (action === 'peekRecommendPreloadUrls') {
     (async () => {
       try {
@@ -5857,30 +7129,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const mode = await setQuickReviewOpenModeState(message.mode);
         sendResponse({ success: true, mode });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'getQuickReviewOpenMode') {
-    (async () => {
-      try {
-        const mode = await getQuickReviewOpenModeState();
-        sendResponse({ success: true, mode });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'recordBrowsingDeletion') {
-    (async () => {
-      try {
-        await recordDeletionForCalibration(message.payload || {});
-        sendResponse({ success: true });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -6021,18 +7269,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (action === 'clearTrackingDisplayData') {
-    (async () => {
-      try {
-        await clearTrackingDisplayData();
-        sendResponse({ success: true });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
   if (action === 'clearCurrentTrackingSessions') {
     (async () => {
       try {
@@ -6051,18 +7287,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const range = message.range || 'all';
         const result = await clearTrackingStatsByRange(range);
         sendResponse({ success: true, cleared: result?.cleared || 0 });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'syncTrackingData') {
-    (async () => {
-      try {
-        const result = await syncTrackingData();
-        sendResponse({ success: true, result });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -6094,54 +7318,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (action === 'appendRecommendFlippedBookmark') {
-    (async () => {
-      try {
-        const result = await appendRecommendFlippedBookmarkState(message.bookmarkId);
-        sendResponse({ success: true, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'markHistoryCurrentCardFlippedState') {
-    (async () => {
-      try {
-        const result = await markHistoryCurrentCardFlippedState(message.bookmarkId);
-        sendResponse({ success: true, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'appendRecommendFlipHistoryRecord') {
-    (async () => {
-      try {
-        const result = await appendRecommendFlipHistoryRecordState(message.bookmarkId, message.timestamp);
-        sendResponse({ success: result?.success !== false, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'recordRecommendReviewState') {
-    (async () => {
-      try {
-        const result = await recordRecommendReviewState(message.bookmarkId);
-        sendResponse({ success: result?.success !== false, ...(result || {}) });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
   if (action === 'computeBookmarkScores') {
     (async () => {
       try {
@@ -6159,7 +7335,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         if (message.bookmarkId) {
-          await updateSingleBookmarkScore(message.bookmarkId);
+          await updateSingleBookmarkScore(message.bookmarkId, { throwOnFailure: true });
         }
         sendResponse({ success: true });
       } catch (e) {
@@ -6229,8 +7405,10 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (action === 'setRecommendBlockedState') {
     (async () => {
       try {
-        const result = await setRecommendBlockedState(message.blocked);
-        sendResponse({ success: true, ...(result || {}) });
+        const result = await setRecommendBlockedState(message.blocked, {
+          expectedVersion: message.expectedVersion
+        });
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -6241,8 +7419,10 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (action === 'setRecommendPostponedState') {
     (async () => {
       try {
-        const result = await setRecommendPostponedState(message.postponed);
-        sendResponse({ success: true, ...(result || {}) });
+        const result = await setRecommendPostponedState(message.postponed, {
+          expectedVersion: message.expectedVersion
+        });
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -6262,10 +7442,10 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (action === 'handleRecommendSkipState') {
+  if (action === 'removeRecommendSkippedState') {
     (async () => {
       try {
-        const result = await handleRecommendSkipState(message.bookmarkId);
+        const result = await removeRecommendSkippedState(message.bookmarkId);
         sendResponse({ success: true, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
@@ -6274,11 +7454,11 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (action === 'removeRecommendSkippedState') {
+  if (action === 'trimRecommendFlippedBookmarks') {
     (async () => {
       try {
-        const result = await removeRecommendSkippedState(message.bookmarkId);
-        sendResponse({ success: true, ...(result || {}) });
+        const result = await trimRecommendFlippedBookmarksState(message.maxItems);
+        sendResponse({ success: result?.success !== false, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -6396,26 +7576,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (action === 'openSidePanelFromHistoryPage') {
-    (async () => {
-      try {
-        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
-        const view = typeof message.view === 'string'
-          ? normalizeHistoryPanelView(message.view, '')
-          : null;
-        const result = await openSidePanelInWindow(windowId, view);
-        if (!result || result.success !== true) {
-          sendResponse({ success: false, error: result?.error || 'open_failed' });
-          return;
-        }
-        sendResponse({ success: true, isOpen: true });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
   if (action === 'getSidePanelStateFromHistoryPage') {
     (async () => {
       try {
@@ -6443,35 +7603,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
         sendResponse({ success: true, isOpen: false });
-      } catch (e) {
-        sendResponse({ success: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (action === 'toggleSidePanelFromHistoryPage') {
-    (async () => {
-      try {
-        const windowId = await resolveWindowIdForSidePanelAction(message, sender);
-        if (windowId == null) {
-          sendResponse({ success: false, error: 'window_unavailable' });
-          return;
-        }
-        const view = typeof message.view === 'string'
-          ? normalizeHistoryPanelView(message.view, '')
-          : null;
-        const isOpen = await getSidePanelOpenStateForWindow(windowId);
-        const result = isOpen
-          ? await closeSidePanelInWindow(windowId)
-          : await openSidePanelInWindow(windowId, view);
-
-        if (!result || result.success !== true) {
-          sendResponse({ success: false, error: result?.error || 'toggle_failed' });
-          return;
-        }
-
-        sendResponse({ success: true, isOpen: result.isOpen === true });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }

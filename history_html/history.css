@@ -3726,6 +3726,11 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
     transform: translateY(-4px);
 }
 
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:hover,
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:focus-within {
+    transform: none;
+}
+
 .widgets-cards-row .recommend-card.is-opening:hover,
 .widgets-cards-row .recommend-card.is-opening:focus-within {
     transform: translateY(-4px);
@@ -3807,6 +3812,14 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
     transform: translateY(-50%) translateX(0);
 }
 
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:hover .card-footer,
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:focus-within .card-footer {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(8px);
+}
+
 .widgets-cards-row .card-actions {
     flex-wrap: nowrap;
     justify-content: flex-end;
@@ -3839,6 +3852,12 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
     visibility: visible;
     pointer-events: auto;
     transform: translateY(0) scale(1);
+}
+
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:hover .card-debug-btn,
+.widgets-cards-row.recommend-actions-suppressed .recommend-card:focus-within .card-debug-btn {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.96);
 }
 
 .widgets-cards-row .card-debug-btn i {
@@ -9631,6 +9650,16 @@ a.tree-label.tree-bookmark-link:hover {
     border-color: var(--accent-primary);
 }
 
+.cards-row.recommend-actions-suppressed .recommend-card:hover,
+.cards-row.recommend-actions-suppressed .recommend-card:focus-within {
+    transform: none;
+    box-shadow: none;
+}
+
+.cards-row.recommend-actions-suppressed .recommend-card:hover::before {
+    opacity: 0;
+}
+
 .recommend-card:hover::before {
     opacity: 1;
 }
@@ -9735,6 +9764,10 @@ a.tree-label.tree-bookmark-link:hover {
 .recommend-card.force-due:hover {
     border-color: #ff9800;
     box-shadow: 0 0 0 1px rgba(255, 152, 0, 0.35), var(--shadow-lg);
+}
+
+.cards-row.recommend-actions-suppressed .recommend-card.force-due:hover {
+    transform: none;
 }
 
 [data-theme="dark"] .recommend-card.force-due {
@@ -9933,6 +9966,10 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
     transform: scale(1.1);
 }
 
+.cards-row.recommend-actions-suppressed .card-btn:hover {
+    transform: none;
+}
+
 .card-btn-later {
     color: var(--text-secondary);
 }
@@ -9965,9 +10002,33 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
 
 /* 稍后复习弹窗 */
 .later-modal {
-    max-width: 340px;
+    width: min(420px, calc(100vw - 32px));
+    max-width: 420px;
     padding: 24px 28px 28px;
     position: relative;
+}
+
+.later-modal-header {
+    padding-right: 28px;
+    margin-bottom: 18px;
+}
+
+.later-modal-header h3 {
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.later-modal-bookmark {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .later-modal-close {
@@ -10011,7 +10072,7 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
     gap: 10px;
     padding: 16px 32px;
     border: 2px solid var(--accent-primary);
-    border-radius: 12px;
+    border-radius: 8px;
     background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary, #6366f1));
     color: white;
     cursor: pointer;
@@ -10020,7 +10081,7 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
     transition: all 0.2s;
 }
 
-.later-recommend-btn:hover {
+.later-recommend-btn:not(:disabled):hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
 }
@@ -10059,10 +10120,17 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
     gap: 10px;
     padding: 20px 16px;
     border: 2px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 8px;
     background: var(--bg-secondary);
     cursor: pointer;
     transition: all 0.2s;
+}
+
+.later-option:disabled,
+.later-recommend-btn:disabled {
+    cursor: wait;
+    opacity: 0.65;
+    transform: none;
 }
 
 .later-option i {
@@ -10076,13 +10144,13 @@ html.side-panel-mode .widgets-cards-row .recommend-debug {
     font-weight: 500;
 }
 
-.later-option:hover {
+.later-option:not(:disabled):hover {
     border-color: var(--accent-primary);
     background: var(--bg-tertiary);
     transform: translateY(-2px);
 }
 
-.later-option:active {
+.later-option:not(:disabled):active {
     transform: translateY(0);
 }
 

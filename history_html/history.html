@@ -458,7 +458,7 @@
                 <div class="modal-content recommend-search-modal">
                     <div class="modal-header">
                         <h3 id="recommendSearchModalTitle">推荐候选</h3>
-                        <button id="recommendSearchModalClose" class="modal-close" aria-label="Close">×</button>
+                        <button id="recommendSearchModalClose" class="modal-close" aria-label="关闭">×</button>
                     </div>
                     <div class="modal-body">
                         <div class="recommend-search-card">
@@ -482,6 +482,9 @@
                             </button>
                             <button class="modal-btn danger" id="recommendSearchModalBlockBtn">
                                 <i class="fas fa-ban"></i> 屏蔽
+                            </button>
+                            <button class="modal-btn" id="recommendSearchModalReviewBtn">
+                                <i class="fas fa-check"></i> 标记已复习
                             </button>
                             <button class="modal-btn primary" id="recommendSearchModalOpenBtn">
                                 <i class="fas fa-external-link-alt"></i> 打开
@@ -1695,13 +1698,17 @@
     <!-- 稍后复习弹窗 -->
     <div id="laterModal" class="modal content-center">
         <div class="modal-content later-modal">
-            <button class="later-modal-close" id="laterModalClose">
+            <button class="later-modal-close" id="laterModalClose" type="button" aria-label="关闭">
                 <i class="fas fa-times"></i>
             </button>
+            <div class="later-modal-header">
+                <h3 id="laterModalTitle">稍后复习</h3>
+                <div class="later-modal-bookmark" id="laterModalBookmarkTitle">--</div>
+            </div>
             <!-- P值推荐区域 -->
             <div class="later-recommend" id="laterRecommendSection">
                 <div class="later-recommend-label" id="laterRecommendLabel">根据浏览习惯推荐</div>
-                <button class="later-recommend-btn" id="laterRecommendBtn">
+                <button class="later-recommend-btn" id="laterRecommendBtn" type="button">
                     <i class="fas fa-magic"></i>
                     <span id="laterRecommendDays">3 天后</span>
                 </button>
@@ -1710,21 +1717,21 @@
                 <span id="laterOrText">或自定义</span>
             </div>
             <div class="later-options">
-                <button class="later-option" data-delay="3600000">
+                <button class="later-option" type="button" data-delay="3600000">
                     <i class="fas fa-clock"></i>
-                    <span data-i18n="laterIn1Hour">1小时后</span>
+                    <span id="laterIn1HourText">1小时后</span>
                 </button>
-                <button class="later-option" data-delay="86400000">
+                <button class="later-option" type="button" data-delay="86400000">
                     <i class="fas fa-sun"></i>
-                    <span data-i18n="laterTomorrow">明天</span>
+                    <span id="laterTomorrowText">明天</span>
                 </button>
-                <button class="later-option" data-delay="259200000">
+                <button class="later-option" type="button" data-delay="259200000">
                     <i class="fas fa-calendar-day"></i>
-                    <span data-i18n="laterIn3Days">3天后</span>
+                    <span id="laterIn3DaysText">3天后</span>
                 </button>
-                <button class="later-option" data-delay="604800000">
+                <button class="later-option" type="button" data-delay="604800000">
                     <i class="fas fa-calendar-week"></i>
-                    <span data-i18n="laterIn1Week">1周后</span>
+                    <span id="laterIn1WeekText">1周后</span>
                 </button>
             </div>
         </div>

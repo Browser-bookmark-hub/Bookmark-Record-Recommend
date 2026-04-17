@@ -210,6 +210,7 @@ const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
 const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
+const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
 const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
 const QUICK_REVIEW_OPEN_MODE_STORAGE_KEY = 'quickReviewOpenMode';
@@ -3615,6 +3616,30 @@ const i18n = {pageTitle: {
     },cardSkipTitle: {
         'zh_CN': '跳过',
         'en': 'Skip'
+    },recommendSearchModalTitle: {
+        'zh_CN': '推荐候选',
+        'en': 'Recommendation Candidate'
+    },recommendSearchDebugTitle: {
+        'zh_CN': '诊断',
+        'en': 'Debug'
+    },recommendSearchLaterText: {
+        'zh_CN': '待复习',
+        'en': 'To Review'
+    },recommendSearchSkipText: {
+        'zh_CN': '跳过',
+        'en': 'Skip'
+    },recommendSearchBlockText: {
+        'zh_CN': '屏蔽',
+        'en': 'Block'
+    },recommendSearchReviewText: {
+        'zh_CN': '标记已复习',
+        'en': 'Mark Reviewed'
+    },recommendSearchOpenText: {
+        'zh_CN': '打开',
+        'en': 'Open'
+    },recommendSearchCloseText: {
+        'zh_CN': '关闭',
+        'en': 'Close'
     },addTabFolder: {
         'zh_CN': '从文件夹',
         'en': 'From folder'
@@ -3717,6 +3742,21 @@ const i18n = {pageTitle: {
     },laterOrText: {
         'zh_CN': '或自定义',
         'en': 'or custom'
+    },laterModalTitle: {
+        'zh_CN': '稍后复习',
+        'en': 'Review Later'
+    },laterIn1Hour: {
+        'zh_CN': '1小时后',
+        'en': 'In 1 hour'
+    },laterTomorrow: {
+        'zh_CN': '明天',
+        'en': 'Tomorrow'
+    },laterIn3Days: {
+        'zh_CN': '3天后',
+        'en': 'In 3 days'
+    },laterIn1Week: {
+        'zh_CN': '1周后',
+        'en': 'In 1 week'
     }
 ,exportTooltip: {
         'zh_CN': '导出记录',
@@ -4827,6 +4867,32 @@ function applyLanguage() {
         btn.setAttribute('aria-label', title);
     });
 
+    const setRecommendSearchIconButton = (id, iconClass, text) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.innerHTML = `<i class="${iconClass}"></i> ${text}`;
+        btn.title = text;
+        btn.setAttribute('aria-label', text);
+    };
+    const recommendSearchModalTitle = document.getElementById('recommendSearchModalTitle');
+    if (recommendSearchModalTitle) recommendSearchModalTitle.textContent = i18n.recommendSearchModalTitle[currentLang];
+    document.querySelectorAll('.recommend-search-debug-header').forEach(el => {
+        el.textContent = i18n.recommendSearchDebugTitle[currentLang];
+    });
+    setRecommendSearchIconButton('recommendSearchModalLaterBtn', 'fas fa-clock', i18n.recommendSearchLaterText[currentLang]);
+    setRecommendSearchIconButton('recommendSearchModalSkipBtn', 'fas fa-forward', i18n.recommendSearchSkipText[currentLang]);
+    setRecommendSearchIconButton('recommendSearchModalBlockBtn', 'fas fa-ban', i18n.recommendSearchBlockText[currentLang]);
+    setRecommendSearchIconButton('recommendSearchModalReviewBtn', 'fas fa-check', i18n.recommendSearchReviewText[currentLang]);
+    setRecommendSearchIconButton('recommendSearchModalOpenBtn', 'fas fa-external-link-alt', i18n.recommendSearchOpenText[currentLang]);
+    const recommendSearchModalClose = document.getElementById('recommendSearchModalClose');
+    if (recommendSearchModalClose) recommendSearchModalClose.setAttribute('aria-label', i18n.recommendSearchCloseText[currentLang]);
+    const recommendSearchModalCloseBtn = document.getElementById('recommendSearchModalCloseBtn');
+    if (recommendSearchModalCloseBtn) {
+        recommendSearchModalCloseBtn.textContent = i18n.recommendSearchCloseText[currentLang];
+        recommendSearchModalCloseBtn.title = i18n.recommendSearchCloseText[currentLang];
+        recommendSearchModalCloseBtn.setAttribute('aria-label', i18n.recommendSearchCloseText[currentLang]);
+    }
+
     const blockManageTitle = document.getElementById('blockManageTitle');
     if (blockManageTitle) blockManageTitle.textContent = i18n.blockManageTitle[currentLang];
     const blockedBookmarksTitle = document.getElementById('blockedBookmarksTitle');
@@ -4856,6 +4922,19 @@ function applyLanguage() {
     if (laterRecommendLabel) laterRecommendLabel.textContent = i18n.laterRecommendLabel[currentLang];
     const laterOrText = document.getElementById('laterOrText');
     if (laterOrText) laterOrText.textContent = i18n.laterOrText[currentLang];
+    const laterModalTitle = document.getElementById('laterModalTitle');
+    if (laterModalTitle) laterModalTitle.textContent = i18n.laterModalTitle[currentLang];
+    const laterIn1HourText = document.getElementById('laterIn1HourText');
+    if (laterIn1HourText) laterIn1HourText.textContent = i18n.laterIn1Hour[currentLang];
+    const laterTomorrowText = document.getElementById('laterTomorrowText');
+    if (laterTomorrowText) laterTomorrowText.textContent = i18n.laterTomorrow[currentLang];
+    const laterIn3DaysText = document.getElementById('laterIn3DaysText');
+    if (laterIn3DaysText) laterIn3DaysText.textContent = i18n.laterIn3Days[currentLang];
+    const laterIn1WeekText = document.getElementById('laterIn1WeekText');
+    if (laterIn1WeekText) laterIn1WeekText.textContent = i18n.laterIn1Week[currentLang];
+    const laterModalClose = document.getElementById('laterModalClose');
+    if (laterModalClose) laterModalClose.setAttribute('aria-label', currentLang === 'en' ? 'Close' : '关闭');
+    syncLaterModalTexts();
 
     const langText = document.querySelector('#langToggle .lang-text');
     if (langText) langText.textContent = currentLang === 'zh_CN' ? 'EN' : '中';
@@ -7771,10 +7850,6 @@ function isWidgetsInteractionActive(options = {}) {
     return false;
 }
 
-function isWidgetsRecommendInteractionActive() {
-    return isWidgetsInteractionActive();
-}
-
 function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = currentLang) {
     const cardSignature = (Array.isArray(cards) ? cards : [])
         .map((card) => {
@@ -7788,7 +7863,8 @@ function buildWidgetsRecommendCardSignature(cards = [], flippedIds = [], lang = 
             const forceDueMovedAt = Number.isFinite(Number(card?.forceDueMovedAt))
                 ? Math.floor(Number(card?.forceDueMovedAt))
                 : 0;
-            return [id, safePriority, forceDue, forceDueAt, forceDueMovedAt].join(':');
+            const currentCardsVersion = getRecommendActionExpectedVersion(card) || 0;
+            return [id, currentCardsVersion, safePriority, forceDue, forceDueAt, forceDueMovedAt].join(':');
         })
         .join('|');
 
@@ -12788,7 +12864,6 @@ async function renderWidgetsRecommendCards(options = {}) {
     }
 
     let currentCards = null;
-    let seededFromSnapshotFirst = false;
     if (preferSnapshotFirst && !allowBootstrap && (!Array.isArray(recommendCards) || recommendCards.length === 0)) {
         try {
             const snapshot = readRecommendCardsSnapshot();
@@ -12810,70 +12885,43 @@ async function renderWidgetsRecommendCards(options = {}) {
                         lastUpdated: Number(snapshot.ts || Date.now())
                     };
                     seedFaviconMemoryFromCardData(snapshotCards);
-                    seededFromSnapshotFirst = true;
                 }
             }
         } catch (_) { }
     }
 
-    if (!seededFromSnapshotFirst) {
-        try {
-            currentCards = await getHistoryCurrentCards();
-            syncRecommendLastUpdatedFromState(currentCards);
-            if (Array.isArray(currentCards?.cardData)) {
-                seedFaviconMemoryFromCardData(currentCards.cardData);
-            }
-        } catch (_) { }
+    try {
+        const fetchedCurrentCards = await getHistoryCurrentCards();
+        if (fetchedCurrentCards) {
+            currentCards = fetchedCurrentCards;
+        }
+        syncRecommendLastUpdatedFromState(currentCards);
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+    } catch (_) { }
+
+    const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(currentCards);
+    if (needsVersionedRound) {
+        recommendCards = [];
+        lastWidgetsRecommendCardSignature = '';
+        cards.forEach((card) => {
+            setCardEmpty(card);
+        });
     }
-
-    const hydrateRecommendCardsFromCurrentState = (state) => {
-        if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
-            return [];
-        }
-
-        const cachedCardDataMap = new Map();
-        if (Array.isArray(state.cardData)) {
-            state.cardData.forEach((data) => {
-                if (data && data.id) cachedCardDataMap.set(data.id, data);
-            });
-        }
-        if (cachedCardDataMap.size === 0) {
-            return [];
-        }
-
-        return state.cardIds
-            .map(id => cachedCardDataMap.get(id) || null)
-            .filter(Boolean)
-            .map((bookmark) => {
-                const safeTitle = bookmark.title || bookmark.name || bookmark.url || '';
-                const safeUrl = bookmark.url || '';
-                const safeFavicon = bookmark.favicon || bookmark.faviconUrl || null;
-                const quickPriority = Number(bookmark.priority);
-                return {
-                    ...bookmark,
-                    title: safeTitle,
-                    name: safeTitle,
-                    url: safeUrl,
-                    favicon: safeFavicon,
-                    faviconUrl: safeFavicon,
-                    priority: Number.isFinite(quickPriority) ? quickPriority : 0.5,
-                    factors: bookmark.factors || {}
-                };
-            });
-    };
 
     // 后台快捷复习可能在 UI 关闭时推进，recommendCards 可能滞后于当前轮次。
     // 一旦发现不一致，强制丢弃前台缓存，按 storage 的 historyCurrentCards 重建。
     const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
     const localRecommendIds = normalizeRecommendCardIdList((Array.isArray(recommendCards) ? recommendCards : []).map(item => item?.id));
-    if (currentCardIds.length > 0 && !areRecommendCardIdListsEqual(localRecommendIds, currentCardIds)) {
+    if (!needsVersionedRound && currentCardIds.length > 0 && !areRecommendCardIdListsEqual(localRecommendIds, currentCardIds)) {
         recommendCards = [];
         lastWidgetsRecommendCardSignature = '';
     }
 
-    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && currentCards?.cardIds?.length) {
+    if (!needsVersionedRound && (!Array.isArray(recommendCards) || recommendCards.length === 0) && currentCards?.cardIds?.length) {
         try {
-            const quickCards = hydrateRecommendCardsFromCurrentState(currentCards);
+            const quickCards = hydrateRecommendCardsFromCurrentCardsState(currentCards);
             if (quickCards.length > 0) {
                 recommendCards = quickCards;
                 writeRecommendCardsSnapshot(
@@ -12884,7 +12932,7 @@ async function renderWidgetsRecommendCards(options = {}) {
         } catch (_) { }
     }
 
-    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && !allowBootstrap) {
+    if (!needsVersionedRound && (!Array.isArray(recommendCards) || recommendCards.length === 0) && !allowBootstrap) {
         try {
             const snapshot = readRecommendCardsSnapshot();
             const snapshotIds = normalizeRecommendCardIdList(
@@ -12914,10 +12962,13 @@ async function renderWidgetsRecommendCards(options = {}) {
         } catch (_) { }
     }
 
-    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && allowBootstrap && !widgetsRecommendBootstrapAttempted) {
-        widgetsRecommendBootstrapAttempted = true;
+    const shouldTryBackendRound = needsVersionedRound || (allowBootstrap && !widgetsRecommendBootstrapAttempted);
+    if ((!Array.isArray(recommendCards) || recommendCards.length === 0) && shouldTryBackendRound) {
+        if (!needsVersionedRound) {
+            widgetsRecommendBootstrapAttempted = true;
+        }
         try {
-            const backendRound = await selectRecommendCardsRoundShared(false);
+            const backendRound = await selectRecommendCardsRoundShared(force || needsVersionedRound);
             if (backendRound && Array.isArray(backendRound.cards)) {
                 recommendCards = backendRound.cards
                     .map(normalizeRecommendSnapshotCard)
@@ -12936,7 +12987,7 @@ async function renderWidgetsRecommendCards(options = {}) {
             }
 
             if ((!Array.isArray(recommendCards) || recommendCards.length === 0)) {
-                const fallbackCards = hydrateRecommendCardsFromCurrentState(currentCards);
+                const fallbackCards = hydrateRecommendCardsFromCurrentCardsState(currentCards);
                 if (fallbackCards.length > 0) {
                     recommendCards = fallbackCards;
                 }
@@ -12950,6 +13001,10 @@ async function renderWidgetsRecommendCards(options = {}) {
         } catch (e) {
             console.warn('[Widgets] 初始化推荐卡片失败:', e);
         }
+    }
+
+    if (Array.isArray(recommendCards) && recommendCards.length > 0) {
+        recommendCards = attachRecommendStateVersionToCards(recommendCards, currentCards);
     }
 
     const flippedSet = new Set(currentCards?.flippedIds || []);
@@ -15046,7 +15101,7 @@ async function saveSharedRecommendWindowId(windowId) {
     await browserAPI.storage.local.set({ recommendWindowId: windowId });
 }
 
-let historyLastSaveTime = 0;
+let historyLastSelfWriteVersion = 0;
 
 // 在推荐窗口中打开链接
 const recommendOpenInFlightKeys = new Set();
@@ -15714,6 +15769,7 @@ function normalizeRecommendSnapshotCard(card) {
     const priority = Number(card.priority);
     const forceDueAt = Number(card.forceDueAt || 0);
     const forceDueMovedAt = Number(card.forceDueMovedAt || 0);
+    const currentCardsVersion = getRecommendActionExpectedVersion(card);
     return {
         id: card.id,
         title: card.title || card.name || card.url || '',
@@ -15724,7 +15780,8 @@ function normalizeRecommendSnapshotCard(card) {
         priority: Number.isFinite(priority) ? priority : 0.5,
         forceDue: card.forceDue === true,
         forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
-        forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0
+        forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0,
+        ...(currentCardsVersion != null ? { currentCardsVersion } : {})
     };
 }
 
@@ -15755,6 +15812,8 @@ function mergeRecommendSnapshotCardsWithCardData(snapshotCards = [], cardData = 
         const mergedPriority = Number.isFinite(priority)
             ? priority
             : (Number.isFinite(fallbackPriority) ? fallbackPriority : 0.5);
+        const currentCardsVersion = getRecommendActionExpectedVersion(card)
+            ?? getRecommendActionExpectedVersion(fromData);
 
         return {
             ...fromData,
@@ -15764,7 +15823,8 @@ function mergeRecommendSnapshotCardsWithCardData(snapshotCards = [], cardData = 
             url,
             favicon,
             faviconUrl: favicon,
-            priority: mergedPriority
+            priority: mergedPriority,
+            ...(currentCardsVersion != null ? { currentCardsVersion } : {})
         };
     }).filter(Boolean).slice(0, 3);
 }
@@ -15843,6 +15903,203 @@ async function selectRecommendCardsRoundShared(force = false) {
     return null;
 }
 
+async function dispatchRecommendCardAction(recommendAction, bookmark, options = {}) {
+    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || options.bookmarkId || '').trim();
+    if (!bookmarkId || !recommendAction) {
+        return { success: false, reason: 'invalid_action' };
+    }
+
+    const expectedVersion = await resolveRecommendActionExpectedVersion(
+        bookmarkId,
+        bookmark,
+        options.expectedVersion
+    );
+
+    let response = null;
+    const sendAction = async (version) => browserAPI.runtime.sendMessage({
+        action: 'executeRecommendCardAction',
+        recommendAction,
+        bookmarkId,
+        expectedVersion: version,
+        source: options.source || (recommendSearchPreviewActive ? 'search' : currentView || 'unknown'),
+        delayMs: options.delayMs,
+        postponeUntil: options.postponeUntil,
+        manuallyAdded: options.manuallyAdded === true,
+        groupId: options.groupId,
+        groupType: options.groupType,
+        groupName: options.groupName,
+        scope: options.scope,
+        timestamp: options.timestamp || Date.now()
+    });
+
+    try {
+        response = await sendAction(expectedVersion);
+    } catch (error) {
+        return { success: false, reason: 'background_failed', error: error?.message || String(error) };
+    }
+
+    if (response?.success === false && response?.reason === 'missing_current_cards_version') {
+        const retryVersion = await resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, { allowRefresh: true });
+        if (retryVersion != null && retryVersion !== expectedVersion) {
+            try {
+                response = await sendAction(retryVersion);
+            } catch (error) {
+                return { success: false, reason: 'background_failed', error: error?.message || String(error) };
+            }
+        }
+    }
+
+    if (!response || response.success === false) {
+        if (response?.stale) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Recommendations changed, refreshing'
+                    : '推荐状态已变化，正在刷新');
+            } catch (_) { }
+            await refreshRecommendCardSurfaces(false);
+        }
+        return response || { success: false, reason: 'no_response' };
+    }
+
+    if (Array.isArray(response.skippedIds)) {
+        skippedBookmarks = new Set(normalizeSkippedBookmarkIds(response.skippedIds));
+    }
+    if (Array.isArray(response.postponed)) {
+        await schedulePostponedExpiryRefresh(normalizePostponedList(response.postponed));
+    }
+    if (response.currentCards && typeof response.currentCards === 'object') {
+        syncRecommendLastUpdatedFromState(response.currentCards);
+        if (Array.isArray(response.currentCards.cardData)) {
+            seedFaviconMemoryFromCardData(response.currentCards.cardData);
+        }
+    }
+
+    return response;
+}
+
+async function refreshRecommendCardSurfaces(force = false) {
+    const normalizedForce = force === true;
+    const tasks = [];
+
+    if (document.getElementById('cardsRow')) {
+        tasks.push(refreshRecommendCards(normalizedForce));
+    }
+
+    if (document.getElementById('widgetsCardsRow')) {
+        tasks.push((async () => {
+            await renderWidgetsRecommendCards({
+                force: normalizedForce,
+                allowDuringInteraction: true,
+                allowBootstrap: false
+            });
+            if (currentView === 'widgets') {
+                applyWidgetsSmartSort();
+            }
+        })());
+    }
+
+    await Promise.all(tasks);
+}
+
+function hydrateRecommendCardsFromCurrentCardsState(state = null) {
+    if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
+        return [];
+    }
+
+    const cardDataMap = new Map();
+    if (Array.isArray(state.cardData)) {
+        state.cardData.forEach((item) => {
+            const id = String(item?.id || '').trim();
+            if (id) cardDataMap.set(id, item);
+        });
+    }
+    if (cardDataMap.size === 0) {
+        return [];
+    }
+
+    const version = getRecommendCurrentCardsVersion(state);
+    return state.cardIds
+        .map(id => cardDataMap.get(String(id || '').trim()) || null)
+        .filter(Boolean)
+        .map((bookmark) => {
+            const normalized = normalizeRecommendSnapshotCard(bookmark);
+            if (!normalized) return null;
+            return {
+                ...normalized,
+                factors: bookmark?.factors || {},
+                currentCardsVersion: version
+            };
+        })
+        .filter(Boolean)
+        .slice(0, RECOMMEND_BATCH_SIZE);
+}
+
+function renderRecommendCurrentCardsStateToRows(currentCards, options = {}) {
+    if (!currentCards || typeof currentCards !== 'object') return false;
+
+    const cardsToRender = hydrateRecommendCardsFromCurrentCardsState(currentCards);
+    const flippedIds = Array.isArray(currentCards.flippedIds)
+        ? currentCards.flippedIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+    const flippedSet = new Set(flippedIds);
+    const selectors = Array.isArray(options.selectors) && options.selectors.length > 0
+        ? options.selectors
+        : ['#cardsRow', '#widgetsCardsRow'];
+
+    let rendered = false;
+    selectors.forEach((selector) => {
+        const cardsRow = document.querySelector(selector);
+        if (!cardsRow) return;
+        const slots = cardsRow.querySelectorAll('.recommend-card');
+        if (!slots || slots.length === 0) return;
+
+        slots.forEach((card, index) => {
+            if (index < cardsToRender.length) {
+                const bookmark = cardsToRender[index];
+                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
+            } else {
+                setCardEmpty(card);
+            }
+        });
+        rendered = true;
+    });
+
+    if (!rendered) return false;
+
+    recommendCards = cardsToRender.slice();
+    seedFaviconMemoryFromCardData(cardsToRender);
+    syncRecommendLastUpdatedFromState(currentCards);
+
+    try {
+        writeRecommendCardsSnapshot(cardsToRender, flippedIds);
+    } catch (_) { }
+
+    lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
+        recommendCards,
+        flippedIds,
+        currentLang
+    );
+
+    return true;
+}
+
+async function applyRecommendActionCurrentCardsToSurfaces(actionResult, fallbackForce = false) {
+    suppressRecommendCardActionHover(null);
+
+    if (actionResult?.currentCards && typeof actionResult.currentCards === 'object') {
+        markHistoryCurrentCardsSelfWrite(actionResult.currentCards);
+        const applied = renderRecommendCurrentCardsStateToRows(actionResult.currentCards);
+        if (applied) {
+            suppressRecommendCardActionHover(null);
+            return true;
+        }
+    }
+
+    await refreshRecommendCardSurfaces(fallbackForce === true);
+    suppressRecommendCardActionHover(null);
+    return false;
+}
+
 function applyRecommendSnapshotToCardRows(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.cards) || snapshot.cards.length === 0) return false;
 
@@ -15887,6 +16144,78 @@ function normalizeRecommendCardIdList(ids = []) {
         .filter(Boolean);
 }
 
+function getRecommendCurrentCardsVersion(state = null) {
+    const version = Number(state?.version || 0);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
+}
+
+function markHistoryCurrentCardsSelfWrite(state = null) {
+    const version = getRecommendCurrentCardsVersion(state);
+    historyLastSelfWriteVersion = version > 0 ? version : 0;
+}
+
+function hasLegacyVersionlessRecommendCurrentCardsState(state = null) {
+    const cardIds = normalizeRecommendCardIdList(state?.cardIds || []);
+    return cardIds.length > 0 && getRecommendCurrentCardsVersion(state) <= 0;
+}
+
+function attachRecommendStateVersionToCards(cards = [], state = null) {
+    const version = getRecommendCurrentCardsVersion(state);
+    return (Array.isArray(cards) ? cards : []).map(card => ({
+        ...card,
+        currentCardsVersion: version
+    }));
+}
+
+function getRecommendActionExpectedVersion(bookmark = null) {
+    const version = Number(
+        bookmark?.currentCardsVersion
+        ?? bookmark?._currentCardsVersion
+        ?? bookmark?.recommendStateVersion
+        ?? 0
+    );
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
+}
+
+function normalizeRecommendActionVersionValue(value) {
+    const version = Number(value);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
+}
+
+async function resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, options = {}) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return null;
+
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        if (!currentIds.includes(id)) return null;
+        const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
+        if (currentVersion != null) return currentVersion;
+        if (options?.allowRefresh !== true) return null;
+
+        const backendRound = await selectRecommendCardsRoundShared(true);
+        const refreshedCards = backendRound?.currentCards && typeof backendRound.currentCards === 'object'
+            ? backendRound.currentCards
+            : await getHistoryCurrentCards();
+        const refreshedIds = normalizeRecommendCardIdList(refreshedCards?.cardIds || []);
+        if (!refreshedIds.includes(id)) return null;
+        return normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(refreshedCards));
+    } catch (_) {
+        return null;
+    }
+}
+
+async function resolveRecommendActionExpectedVersion(bookmarkId, bookmark = null, explicitVersion = null) {
+    const explicit = normalizeRecommendActionVersionValue(explicitVersion);
+    if (explicit != null) return explicit;
+
+    const fromBookmark = getRecommendActionExpectedVersion(bookmark);
+    if (fromBookmark != null) return fromBookmark;
+
+    return resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId);
+}
+
 function areRecommendCardIdListsEqual(a = [], b = []) {
     const listA = normalizeRecommendCardIdList(a);
     const listB = normalizeRecommendCardIdList(b);
@@ -15905,6 +16234,10 @@ async function hydrateRecommendCardsFromSnapshotForSidePanel() {
         const currentCards = await getHistoryCurrentCards();
         if (Array.isArray(currentCards?.cardData)) {
             seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+        if (hasLegacyVersionlessRecommendCurrentCardsState(currentCards)) {
+            clearRecommendCardsSnapshot();
+            return false;
         }
         const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
         const snapshotCardIds = normalizeRecommendCardIdList((snapshot.cards || []).map(card => card?.id));
@@ -15925,7 +16258,10 @@ async function hydrateRecommendCardsFromSnapshotForSidePanel() {
         const currentFlippedIds = normalizeRecommendCardIdList(currentCards?.flippedIds || []);
         return applyRecommendSnapshotToCardRows({
             ...snapshot,
-            cards: mergedSnapshotCards.length > 0 ? mergedSnapshotCards : snapshot.cards,
+            cards: attachRecommendStateVersionToCards(
+                mergedSnapshotCards.length > 0 ? mergedSnapshotCards : snapshot.cards,
+                currentCards
+            ),
             flippedIds: currentFlippedIds
         });
     } catch (_) {
@@ -15957,25 +16293,27 @@ async function hasPendingRecommendRoundState() {
 
 // 保存当前显示的卡片状态（本页面共享）
 async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
-    const now = Date.now();
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'saveHistoryCurrentCardsState',
+            cardIds: normalizeRecommendCardIdList(cardIds || []),
+            flippedIds: normalizeRecommendCardIdList(flippedIds || []),
+            cardData: Array.isArray(cardData) ? cardData : []
+        });
 
-    // 标记本次保存时间，防止触发循环刷新
-    historyLastSaveTime = now;
-
-    const dataToSave = {
-        [HISTORY_CURRENT_CARDS_STORAGE_KEY]: {
-            cardIds: cardIds,
-            flippedIds: flippedIds,
-            timestamp: now,
-            lastUpdated: now
+        if (!response || response.success === false) {
+            return false;
         }
-    };
-    // 如果提供了卡片数据（包含url和favicon），也保存它们
-    if (cardData && cardData.length > 0) {
-        dataToSave[HISTORY_CURRENT_CARDS_STORAGE_KEY].cardData = cardData;
+
+        const nextCards = response.currentCards;
+        if (nextCards && typeof nextCards === 'object') {
+            syncRecommendLastUpdatedFromState(nextCards);
+            markHistoryCurrentCardsSelfWrite(nextCards);
+        }
+        return true;
+    } catch (_) {
+        return false;
     }
-    syncRecommendLastUpdatedFromState(dataToSave[HISTORY_CURRENT_CARDS_STORAGE_KEY]);
-    await browserAPI.storage.local.set(dataToSave);
 }
 
 // 异步获取并保存当前卡片的数据（含priority和favicon）
@@ -16021,88 +16359,29 @@ async function saveCardFaviconsToStorage(bookmarks) {
             }
         }));
 
-        // 更新storage中的卡片数据
-        const now = Date.now();
-        currentCards.cardData = cardData;
-        currentCards.timestamp = now;
-        currentCards.lastUpdated = now;
-        syncRecommendLastUpdatedFromState(currentCards);
-        historyLastSaveTime = now; // 防止触发循环刷新
-        await browserAPI.storage.local.set({ [HISTORY_CURRENT_CARDS_STORAGE_KEY]: currentCards });
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'updateHistoryCurrentCardData',
+            cardData,
+            expectedVersion: getRecommendCurrentCardsVersion(currentCards)
+        });
+        if (!response || response.success === false) {
+            return;
+        }
+
+        const nextCards = response.currentCards || {
+            ...currentCards,
+            cardData
+        };
+        syncRecommendLastUpdatedFromState(nextCards);
+        markHistoryCurrentCardsSelfWrite(nextCards);
 
         try {
-            const flippedIds = Array.isArray(currentCards.flippedIds) ? currentCards.flippedIds : [];
+            const flippedIds = Array.isArray(nextCards.flippedIds) ? nextCards.flippedIds : [];
             writeRecommendCardsSnapshot(cardData, flippedIds);
         } catch (_) { }
     } catch (error) {
         // 静默处理错误
     }
-}
-
-// 标记卡片为已勾选，并检查是否全部勾选
-async function markHistoryCardFlipped(bookmarkId) {
-    const normalizedId = String(bookmarkId || '').trim();
-    if (!normalizedId) return false;
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'markHistoryCurrentCardFlippedState',
-            bookmarkId: normalizedId
-        });
-
-        if (response && response.success) {
-            const state = response.historyCurrentCards;
-            const flippedIds = Array.isArray(state?.flippedIds) ? state.flippedIds : [];
-
-            try {
-                const snapshot = readRecommendCardsSnapshot();
-                if (snapshot && Array.isArray(snapshot.cards) && snapshot.cards.length > 0) {
-                    const hasTarget = snapshot.cards.some(card => String(card?.id) === normalizedId);
-                    if (hasTarget) {
-                        writeRecommendCardsSnapshot(snapshot.cards, flippedIds);
-                    }
-                }
-            } catch (_) { }
-
-            if (typeof response.allFlipped === 'boolean') {
-                return response.allFlipped;
-            }
-            if (Array.isArray(state?.cardIds) && state.cardIds.length > 0) {
-                const flippedSet = new Set(flippedIds.map(id => String(id || '')));
-                return state.cardIds.every(id => flippedSet.has(String(id || '')));
-            }
-            return false;
-        }
-    } catch (_) { }
-
-    const currentCards = await getHistoryCurrentCards();
-    if (!currentCards) return false;
-    if (!Array.isArray(currentCards.flippedIds)) {
-        currentCards.flippedIds = [];
-    }
-    if (!Array.isArray(currentCards.cardIds)) {
-        currentCards.cardIds = [];
-    }
-
-    // 添加到已勾选列表
-    if (!currentCards.flippedIds.includes(normalizedId)) {
-        currentCards.flippedIds.push(normalizedId);
-        await saveHistoryCurrentCards(currentCards.cardIds, currentCards.flippedIds);
-
-        try {
-            const snapshot = readRecommendCardsSnapshot();
-            if (snapshot && Array.isArray(snapshot.cards) && snapshot.cards.length > 0) {
-                const hasTarget = snapshot.cards.some(card => String(card?.id) === normalizedId);
-                if (hasTarget) {
-                    writeRecommendCardsSnapshot(snapshot.cards, currentCards.flippedIds);
-                }
-            }
-        } catch (_) { }
-    }
-
-    // 检查是否全部勾选
-    const allFlipped = currentCards.cardIds.every(id => currentCards.flippedIds.includes(String(id || '')));
-    return allFlipped;
 }
 
 function shouldUseCompactRecommendCardPriority(card) {
@@ -16122,6 +16401,47 @@ function formatRecommendCardPriority(priority, compact = false) {
     return compact
         ? `S${Number(priority).toFixed(2)}`
         : `S = ${Number(priority).toFixed(3)}`;
+}
+
+const recommendActionSuppressTimers = new WeakMap();
+
+function blurRecommendCardActionFocus(target = null) {
+    try {
+        const active = document.activeElement;
+        if (!active || typeof active.blur !== 'function') return;
+        const shouldBlur = target
+            ? target.contains(active)
+            : Boolean(active.closest?.('.recommend-card'));
+        if (shouldBlur) {
+            active.blur();
+        }
+    } catch (_) { }
+}
+
+function suppressRecommendCardActionHover(target = null, durationMs = 900) {
+    blurRecommendCardActionFocus(target);
+
+    const rows = new Set();
+    try {
+        const row = target?.closest?.('.cards-row');
+        if (row) rows.add(row);
+    } catch (_) { }
+
+    document.querySelectorAll('#cardsRow, #widgetsCardsRow').forEach((row) => rows.add(row));
+
+    rows.forEach((row) => {
+        if (!row) return;
+        row.classList.add('recommend-actions-suppressed');
+        const existingTimer = recommendActionSuppressTimers.get(row);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            row.classList.remove('recommend-actions-suppressed');
+            recommendActionSuppressTimers.delete(row);
+        }, durationMs);
+        recommendActionSuppressTimers.set(row, timer);
+    });
 }
 
 // 更新单个卡片显示
@@ -16152,6 +16472,12 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
     }
     card.dataset.url = bookmark.url;
     card.dataset.bookmarkId = bookmark.id;
+    const currentCardsVersion = getRecommendActionExpectedVersion(bookmark);
+    if (currentCardsVersion != null) {
+        card.dataset.currentCardsVersion = String(currentCardsVersion);
+    } else {
+        delete card.dataset.currentCardsVersion;
+    }
 
     let dueBadge = card.querySelector('.card-due-badge');
     if (!dueBadge) {
@@ -16284,14 +16610,22 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
                 return;
             }
 
-            await markBookmarkFlipped(bookmark.id);
-            await recordReview(bookmark.id);
+            const actionResult = await dispatchRecommendCardAction('review', bookmark, {
+                source: 'recommend_card',
+                timestamp: Date.now()
+            });
+            if (!actionResult || actionResult.success === false) {
+                const msg = currentLang === 'en' ? 'Review update failed, please retry' : '复习状态更新失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
             card.classList.add('flipped');
 
-            // 更新本地卡片勾选状态（若三张都完成则自动切到下一批）
-            const allCardsFlipped = await markHistoryCardFlipped(bookmark.id);
-            if (allCardsFlipped) {
-                await refreshRecommendCards(true);
+            if (actionResult.changedCurrentCards) {
+                await applyRecommendActionCurrentCardsToSurfaces(actionResult);
+            }
+            if (currentView === 'recommend') {
+                await loadHeatmapData();
             }
         } finally {
             card.dataset.opening = '0';
@@ -16309,6 +16643,7 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         btnLater.onclick = (e) => {
             e.stopPropagation();
             e.preventDefault();
+            suppressRecommendCardActionHover(card);
             showLaterModal(bookmark);
         };
     }
@@ -16319,9 +16654,15 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         btnSkip.onclick = async (e) => {
             e.stopPropagation();
             e.preventDefault();
+            suppressRecommendCardActionHover(card);
 
-            await handleRecommendSkip(bookmark);
-            await refreshRecommendCards(true);
+            const result = await dispatchRecommendCardAction('skip', bookmark, { source: 'recommend_card' });
+            if (!result || result.success === false) {
+                const msg = currentLang === 'en' ? 'Skip failed, please retry' : '跳过失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+            await applyRecommendActionCurrentCardsToSurfaces(result);
         };
     }
 
@@ -16331,9 +16672,18 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         btnBlock.onclick = async (e) => {
             e.stopPropagation();
             e.preventDefault();
-            await blockBookmark(bookmark.id);
+            suppressRecommendCardActionHover(card);
+            const result = await dispatchRecommendCardAction('block', bookmark, {
+                source: 'recommend_card',
+                scope: 'sameTitle'
+            });
+            if (!result || result.success === false) {
+                const msg = currentLang === 'en' ? 'Block failed, please retry' : '屏蔽失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
             await loadBlockedLists();
-            await refreshRecommendCards(true);
+            await applyRecommendActionCurrentCardsToSurfaces(result);
         };
     }
 }
@@ -16556,9 +16906,8 @@ function formatRecommendScoreDebugText(debug) {
 let recommendSearchPreviewActive = false;
 let recommendSearchModalItem = null;
 
-async function handleRecommendSearchOpenAndEarlyReview(item, options = {}) {
+async function handleRecommendSearchOpenOnly(item, options = {}) {
     const closeAfterOpen = options.closeAfterOpen === true;
-    const bookmarkId = String(item?.id || item?.bookmarkId || '').trim();
     const url = String(item?.url || '').trim();
 
     if (!url) {
@@ -16567,32 +16916,16 @@ async function handleRecommendSearchOpenAndEarlyReview(item, options = {}) {
 
     const openResult = await openInRecommendWindow(url);
     if (!openResult || !openResult.success) {
-        const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
+        const msg = currentLang === 'en' ? 'Open failed' : '打开失败';
         try { showToast(msg); } catch (_) { }
         return { success: false, reason: 'open-failed' };
-    }
-
-    let updated = false;
-    if (bookmarkId) {
-        const review = await recordReview(bookmarkId);
-        updated = Boolean(review);
-    } else {
-        updated = await requestRecommendScoreUpdate('updateBookmarkScoreByUrl', { url });
     }
 
     if (closeAfterOpen) {
         closeRecommendSearchModal();
     }
 
-    if (updated) {
-        try {
-            if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
-                window.refreshRecommendSearchIfNeeded();
-            }
-        } catch (_) { }
-    }
-
-    return { success: true, updated };
+    return { success: true, updated: false };
 }
 
 function closeRecommendSearchModal() {
@@ -16612,6 +16945,7 @@ function initRecommendSearchModal() {
     const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
     const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
     const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
     const openBtn = document.getElementById('recommendSearchModalOpenBtn');
     if (closeBtn) closeBtn.addEventListener('click', closeRecommendSearchModal);
     if (closeBtn2) closeBtn2.addEventListener('click', closeRecommendSearchModal);
@@ -16632,8 +16966,10 @@ function initRecommendSearchModal() {
             const item = recommendSearchModalItem;
             if (!item || !item.id) return;
 
-            await handleRecommendSkip(item);
-            await refreshRecommendCards(true);
+            const result = await dispatchRecommendCardAction('skip', item, { source: 'recommend_search' });
+            if (result && result.success !== false) {
+                await applyRecommendActionCurrentCardsToSurfaces(result);
+            }
             closeRecommendSearchModal();
         });
     }
@@ -16643,9 +16979,46 @@ function initRecommendSearchModal() {
             e.preventDefault();
             const item = recommendSearchModalItem;
             if (!item || !item.id) return;
-            await blockBookmark(item.id);
+            const result = await dispatchRecommendCardAction('block', item, {
+                source: 'recommend_search',
+                scope: 'sameTitle'
+            });
+            if (!result || result.success === false) return;
             await loadBlockedLists();
-            await refreshRecommendCards(true);
+            await applyRecommendActionCurrentCardsToSurfaces(result);
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (reviewBtn) {
+        reviewBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+
+            const result = await dispatchRecommendCardAction('review', item, {
+                source: 'recommend_search_mark_reviewed',
+                timestamp: Date.now()
+            });
+            if (!result || result.success === false) {
+                try {
+                    showToast(currentLang === 'en'
+                        ? 'Review update failed, please retry'
+                        : '复习状态更新失败，请重试');
+                } catch (_) { }
+                return;
+            }
+            if (result.changedCurrentCards) {
+                await applyRecommendActionCurrentCardsToSurfaces(result);
+            }
+            if (currentView === 'recommend') {
+                await loadHeatmapData();
+            }
+            try {
+                if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
+                    window.refreshRecommendSearchIfNeeded();
+                }
+            } catch (_) { }
             closeRecommendSearchModal();
         });
     }
@@ -16655,7 +17028,7 @@ function initRecommendSearchModal() {
             e.preventDefault();
             const item = recommendSearchModalItem;
             if (!item || !item.url) return;
-            await handleRecommendSearchOpenAndEarlyReview(item, { closeAfterOpen: true });
+            await handleRecommendSearchOpenOnly(item, { closeAfterOpen: true });
         });
     }
 
@@ -16678,6 +17051,7 @@ async function showRecommendSearchResultCard(item) {
     const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
     const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
     const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
 
     const bookmarkId = item && (item.id || item.bookmarkId);
     const priority = (item && Number.isFinite(item.scoreS)) ? item.scoreS
@@ -16726,6 +17100,21 @@ async function showRecommendSearchResultCard(item) {
         } catch (_) { }
     }
 
+    let isCurrentRecommendCard = false;
+    if (bookmarkId) {
+        try {
+            const currentCards = await getHistoryCurrentCards();
+            const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+            isCurrentRecommendCard = currentIds.includes(String(bookmarkId));
+            if (isCurrentRecommendCard) {
+                const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
+                if (currentVersion != null) {
+                    bookmark.currentCardsVersion = currentVersion;
+                }
+            }
+        } catch (_) { }
+    }
+
     if (titleEl) {
         titleEl.textContent = bookmark.title || (currentLang === 'zh_CN' ? '（无标题）' : '(Untitled)');
     }
@@ -16737,7 +17126,7 @@ async function showRecommendSearchResultCard(item) {
             urlEl.setAttribute('data-skip-global-open-fallback', '1');
             urlEl.onclick = async (e) => {
                 e.preventDefault();
-                await handleRecommendSearchOpenAndEarlyReview(bookmark, { closeAfterOpen: false });
+                await handleRecommendSearchOpenOnly(bookmark, { closeAfterOpen: false });
             };
         } else {
             urlEl.setAttribute('href', '#');
@@ -16787,7 +17176,11 @@ async function showRecommendSearchResultCard(item) {
         openBtn.disabled = !bookmark.url;
     }
     if (laterBtn) laterBtn.disabled = !bookmark.id;
-    if (skipBtn) skipBtn.disabled = !bookmark.id;
+    if (reviewBtn) reviewBtn.disabled = !bookmark.id;
+    if (skipBtn) {
+        skipBtn.disabled = !bookmark.id || !isCurrentRecommendCard;
+        skipBtn.style.display = isCurrentRecommendCard ? '' : 'none';
+    }
     if (blockBtn) blockBtn.disabled = !bookmark.id;
 
     recommendSearchModalItem = bookmark;
@@ -16845,12 +17238,42 @@ function normalizeBlockedDomains(domains = []) {
     ));
 }
 
+function normalizeRecommendStateVersion(value) {
+    const version = Number(value);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
+}
+
+function attachRecommendListStateVersion(list, version) {
+    const normalized = Array.isArray(list) ? list : [];
+    try {
+        Object.defineProperty(normalized, 'stateVersion', {
+            value: normalizeRecommendStateVersion(version),
+            enumerable: false,
+            configurable: true,
+            writable: true
+        });
+    } catch (_) {
+        normalized.stateVersion = normalizeRecommendStateVersion(version);
+    }
+    return normalized;
+}
+
+function getRecommendStateVersion(source) {
+    return normalizeRecommendStateVersion(
+        source?.version
+        ?? source?.stateVersion
+        ?? source?._version
+        ?? 0
+    );
+}
+
 function normalizeBlockedState(blocked) {
     const source = blocked && typeof blocked === 'object' ? blocked : {};
     return {
         bookmarks: normalizeBlockedListIds(source.bookmarks),
         folders: normalizeBlockedListIds(source.folders),
-        domains: normalizeBlockedDomains(source.domains)
+        domains: normalizeBlockedDomains(source.domains),
+        version: getRecommendStateVersion(source)
     };
 }
 
@@ -16885,39 +17308,61 @@ function normalizePostponedList(postponed = []) {
         }
     }
 
-    return Array.from(byId.values());
+    return attachRecommendListStateVersion(
+        Array.from(byId.values()),
+        getRecommendStateVersion(postponed)
+    );
 }
 
 async function saveBlockedBookmarks(blockedInput) {
+    const expectedVersion = getRecommendStateVersion(blockedInput);
     const blocked = normalizeBlockedState(blockedInput);
     try {
         const response = await browserAPI.runtime.sendMessage({
             action: 'setRecommendBlockedState',
-            blocked
+            blocked,
+            expectedVersion
         });
         if (response && response.success) {
             return normalizeBlockedState(response.blocked || blocked);
         }
-    } catch (_) { }
+        if (response && response.stale) {
+            throw new Error(response.reason || 'stale_recommend_state');
+        }
+    } catch (error) {
+        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
+            throw error;
+        }
+    }
 
-    await browserAPI.storage.local.set({ [RECOMMEND_BLOCKED_STORAGE_KEY]: blocked });
-    return blocked;
+    throw new Error('background_unavailable');
 }
 
 async function savePostponedBookmarks(postponedInput) {
+    const expectedVersion = getRecommendStateVersion(postponedInput);
     const postponed = normalizePostponedList(postponedInput);
     try {
         const response = await browserAPI.runtime.sendMessage({
             action: 'setRecommendPostponedState',
-            postponed
+            postponed,
+            expectedVersion
         });
         if (response && response.success) {
-            return normalizePostponedList(response.postponed || postponed);
+            return attachRecommendListStateVersion(
+                normalizePostponedList(response.postponed || postponed),
+                response.version
+            );
         }
-    } catch (_) { }
+        if (response && response.stale) {
+            throw new Error(response.reason || 'stale_recommend_state');
+        }
+    } catch (error) {
+        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
+            throw error;
+        }
+    }
 
-    await browserAPI.storage.local.set({ [RECOMMEND_POSTPONED_STORAGE_KEY]: postponed });
-    return postponed;
+    throw new Error('background_unavailable');
 }
 
 async function ensureRecommendScoresReadyForView(reason = '') {
@@ -16959,40 +17404,6 @@ async function getSkippedBookmarksPersisted() {
     }
 }
 
-async function saveSkippedBookmarksPersisted(ids = []) {
-    try {
-        const list = normalizeSkippedBookmarkIds(Array.isArray(ids) ? ids : Array.from(ids || []));
-        await browserAPI.storage.local.set({ [RECOMMEND_SKIPPED_STORAGE_KEY]: list });
-        skippedBookmarks = new Set(list);
-        return list;
-    } catch (e) {
-        console.warn('[跳过] 保存持久化跳过列表失败:', e);
-        return Array.from(skippedBookmarks);
-    }
-}
-
-async function addSkippedBookmarkPersisted(bookmarkId) {
-    const id = String(bookmarkId || '').trim();
-    if (!id) return false;
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'handleRecommendSkipState',
-            bookmarkId: id
-        });
-        if (response && response.success) {
-            const next = normalizeSkippedBookmarkIds(response.skippedIds || []);
-            skippedBookmarks = new Set(next);
-            return true;
-        }
-    } catch (_) { }
-
-    const current = await getSkippedBookmarksPersisted();
-    const next = current.filter(item => item !== id);
-    next.push(id);
-    await saveSkippedBookmarksPersisted(next);
-    return true;
-}
-
 async function removeSkippedBookmarkPersisted(bookmarkId) {
     const id = String(bookmarkId || '').trim();
     if (!id) return false;
@@ -17008,42 +17419,7 @@ async function removeSkippedBookmarkPersisted(bookmarkId) {
         }
     } catch (_) { }
 
-    const current = await getSkippedBookmarksPersisted();
-    const next = current.filter(item => item !== id);
-    await saveSkippedBookmarksPersisted(next);
-    skippedBookmarks.delete(id);
-    return true;
-}
-
-async function handleRecommendSkip(bookmark) {
-    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || '').trim();
-    if (!bookmarkId) {
-        return { applied: false, mode: 'none' };
-    }
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'handleRecommendSkipState',
-            bookmarkId
-        });
-
-        if (response && response.success) {
-            const nextSkipped = normalizeSkippedBookmarkIds(response.skippedIds || []);
-            skippedBookmarks = new Set(nextSkipped);
-            return {
-                applied: true,
-                mode: response.mode || (response.dueMoved ? 'due-tail' : 'skip')
-            };
-        }
-    } catch (_) { }
-
-    const movedToTail = await moveForceDueBookmarkToTail(bookmarkId);
-    if (movedToTail) {
-        return { applied: true, mode: 'due-tail' };
-    }
-
-    await addSkippedBookmarkPersisted(bookmarkId);
-    return { applied: true, mode: 'skip' };
+    return false;
 }
 
 async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {}) {
@@ -17078,54 +17454,6 @@ async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {})
     return { requested: ids.length, updated };
 }
 
-// 屏蔽书签（按标题匹配，同名书签一起屏蔽）
-async function blockBookmark(bookmarkId) {
-    try {
-        // 获取当前书签信息
-        const bookmarks = await new Promise(resolve => {
-            browserAPI.bookmarks.get(bookmarkId, resolve);
-        });
-        if (!bookmarks || bookmarks.length === 0) return false;
-        const targetBookmark = bookmarks[0];
-        const targetTitle = targetBookmark.title;
-
-        // 获取所有书签
-        const allBookmarks = await new Promise(resolve => {
-            browserAPI.bookmarks.getTree(tree => {
-                const result = [];
-                function traverse(nodes) {
-                    for (const node of nodes) {
-                        if (node.url) result.push(node);
-                        if (node.children) traverse(node.children);
-                    }
-                }
-                traverse(tree);
-                resolve(result);
-            });
-        });
-
-        // 找到所有同标题的书签
-        const sameTitle = allBookmarks.filter(b => b.title === targetTitle);
-
-        const blocked = await getBlockedBookmarks();
-        let blockedCount = 0;
-
-        for (const b of sameTitle) {
-            if (!blocked.bookmarks.includes(b.id)) {
-                blocked.bookmarks.push(b.id);
-                blockedCount++;
-            }
-        }
-
-        await saveBlockedBookmarks(blocked);
-
-        return true;
-    } catch (e) {
-        console.error('[屏蔽] 屏蔽书签失败:', e);
-        return false;
-    }
-}
-
 // 恢复屏蔽的书签
 async function unblockBookmark(bookmarkId) {
     try {
@@ -17145,8 +17473,14 @@ async function unblockBookmark(bookmarkId) {
 // 获取稍后复习数据
 async function getPostponedBookmarks() {
     try {
-        const result = await browserAPI.storage.local.get(RECOMMEND_POSTPONED_STORAGE_KEY);
-        return normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]);
+        const result = await browserAPI.storage.local.get([
+            RECOMMEND_POSTPONED_STORAGE_KEY,
+            RECOMMEND_POSTPONED_VERSION_STORAGE_KEY
+        ]);
+        return attachRecommendListStateVersion(
+            normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]),
+            result[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]
+        );
     } catch (e) {
         console.error('[稍后] 获取稍后复习数据失败:', e);
         return [];
@@ -17247,33 +17581,16 @@ async function schedulePostponedExpiryRefresh(postponedInput = null) {
 // 添加稍后复习
 async function postponeBookmark(bookmarkId, delayMs) {
     try {
-        const postponed = await getPostponedBookmarks();
-        const existing = postponed.find(p => p.bookmarkId === bookmarkId);
-        const now = Date.now();
-
-        if (existing) {
-            existing.postponeUntil = now + delayMs;
-            existing.postponeCount = (existing.postponeCount || 0) + 1;
-            existing.dueQueueMovedAt = 0;
-            existing.updatedAt = now;
-        } else {
-            postponed.push({
-                bookmarkId,
-                postponeUntil: now + delayMs,
-                postponeCount: 1,
-                dueQueueMovedAt: 0,
-                createdAt: now,
-                updatedAt: now
-            });
-        }
-
-        const nextPostponed = await savePostponedBookmarks(postponed);
-        await schedulePostponedExpiryRefresh(nextPostponed);
-
-        return true;
+        const sourceBookmark = currentLaterBookmark && String(currentLaterBookmark.id || '') === String(bookmarkId || '')
+            ? currentLaterBookmark
+            : { id: bookmarkId };
+        return await dispatchRecommendCardAction('postpone', sourceBookmark, {
+            source: 'later_modal',
+            delayMs
+        });
     } catch (e) {
         console.error('[稍后] 推迟书签失败:', e);
-        return false;
+        return { success: false, reason: 'postpone_failed', error: e?.message || String(e) };
     }
 }
 
@@ -17281,9 +17598,11 @@ async function postponeBookmark(bookmarkId, delayMs) {
 async function cancelPostpone(bookmarkId) {
     try {
         let postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
         const hadManualPostponed = postponed.some(p => p.manuallyAdded);
 
         postponed = postponed.filter(p => p.bookmarkId !== bookmarkId);
+        attachRecommendListStateVersion(postponed, expectedVersion);
         const nextPostponed = await savePostponedBookmarks(postponed);
         await schedulePostponedExpiryRefresh(nextPostponed);
 
@@ -17311,8 +17630,10 @@ async function cancelPostpone(bookmarkId) {
 async function cleanExpiredPostponed() {
     try {
         let postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
         const before = postponed.length;
         postponed = postponed.filter(p => p && p.bookmarkId != null);
+        attachRecommendListStateVersion(postponed, expectedVersion);
         let nextPostponed = postponed;
         if (postponed.length !== before) {
             nextPostponed = await savePostponedBookmarks(postponed);
@@ -17327,6 +17648,7 @@ async function cleanExpiredPostponed() {
 // 稍后复习弹窗相关
 let currentLaterBookmark = null;
 let currentLaterRecommendedDays = 3; // P值推荐的天数
+let laterModalActionInFlight = false;
 
 // 根据P值计算推荐间隔天数
 function calculateRecommendedDays(priority, factors) {
@@ -17366,8 +17688,82 @@ function formatRecommendDays(days) {
     }
 }
 
+function getLaterModalActionButtons(modal = null) {
+    const root = modal || document.getElementById('laterModal');
+    if (!root) return [];
+    return Array.from(root.querySelectorAll('#laterModalClose, #laterRecommendBtn, .later-option'));
+}
+
+function setLaterModalBusy(isBusy) {
+    laterModalActionInFlight = isBusy === true;
+    const modal = document.getElementById('laterModal');
+    if (modal) {
+        modal.classList.toggle('is-busy', laterModalActionInFlight);
+        modal.setAttribute('aria-busy', laterModalActionInFlight ? 'true' : 'false');
+    }
+    getLaterModalActionButtons(modal).forEach((button) => {
+        button.disabled = laterModalActionInFlight;
+    });
+}
+
+function syncLaterModalTexts() {
+    const recommendDaysEl = document.getElementById('laterRecommendDays');
+    if (recommendDaysEl) {
+        recommendDaysEl.textContent = formatRecommendDays(currentLaterRecommendedDays);
+    }
+}
+
+async function submitLaterModalDelay(delayMs) {
+    if (laterModalActionInFlight) return;
+
+    const bookmarkId = String(currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || '').trim();
+    if (!bookmarkId) {
+        try {
+            showToast(currentLang === 'en'
+                ? 'No bookmark selected'
+                : '未选择书签');
+        } catch (_) { }
+        return;
+    }
+
+    const safeDelay = Number(delayMs);
+    if (!Number.isFinite(safeDelay) || safeDelay <= 0) {
+        try {
+            showToast(currentLang === 'en'
+                ? 'Invalid postpone time'
+                : '稍后时间无效');
+        } catch (_) { }
+        return;
+    }
+
+    setLaterModalBusy(true);
+    try {
+        const result = await postponeBookmark(bookmarkId, safeDelay);
+        if (!result || result.success === false) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Unable to postpone, please retry'
+                    : '稍后复习失败，请重试');
+            } catch (_) { }
+            return;
+        }
+
+        hideLaterModal({ force: true });
+        await loadPostponedList();
+        await applyRecommendActionCurrentCardsToSurfaces(result);
+    } finally {
+        setLaterModalBusy(false);
+    }
+}
+
 function showLaterModal(bookmark) {
-    currentLaterBookmark = bookmark;
+    initLaterModal();
+
+    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || '').trim();
+    currentLaterBookmark = {
+        ...(bookmark || {}),
+        id: bookmarkId
+    };
     const modal = document.getElementById('laterModal');
     if (!modal) return;
 
@@ -17378,67 +17774,69 @@ function showLaterModal(bookmark) {
         currentLaterRecommendedDays = 3; // 默认3天
     }
 
-    // 更新推荐按钮显示
-    const recommendDaysEl = document.getElementById('laterRecommendDays');
-    if (recommendDaysEl) {
-        recommendDaysEl.textContent = formatRecommendDays(currentLaterRecommendedDays);
+    const bookmarkTitleEl = document.getElementById('laterModalBookmarkTitle');
+    if (bookmarkTitleEl) {
+        const title = String(bookmark?.title || bookmark?.name || bookmark?.url || '').trim();
+        bookmarkTitleEl.textContent = title || '--';
+        bookmarkTitleEl.title = title || '';
     }
 
+    syncLaterModalTexts();
+    setLaterModalBusy(false);
     modal.classList.add('show');
 
 }
 
-function hideLaterModal() {
+function hideLaterModal(options = {}) {
+    const force = options?.force === true;
+    if (laterModalActionInFlight && !force) {
+        return false;
+    }
+
     const modal = document.getElementById('laterModal');
     if (modal) {
         modal.classList.remove('show');
+        modal.removeAttribute('aria-busy');
     }
     currentLaterBookmark = null;
+    if (!laterModalActionInFlight || !force) {
+        laterModalActionInFlight = false;
+    }
+    return true;
 }
 
 function initLaterModal() {
     const modal = document.getElementById('laterModal');
     if (!modal) return;
+    if (modal.hasAttribute('data-bound')) return;
+    modal.setAttribute('data-bound', 'true');
 
-    // 关闭按钮
-    const closeBtn = document.getElementById('laterModalClose');
-    if (closeBtn) {
-        closeBtn.onclick = hideLaterModal;
-    }
-
-    // 点击背景关闭
-    modal.onclick = (e) => {
+    modal.addEventListener('click', async (e) => {
         if (e.target === modal) {
+            if (laterModalActionInFlight) return;
             hideLaterModal();
+            return;
         }
-    };
 
-    // P值推荐按钮
-    const recommendBtn = document.getElementById('laterRecommendBtn');
-    if (recommendBtn) {
-        recommendBtn.onclick = async () => {
-            if (!currentLaterBookmark) return;
-
-            const delayMs = currentLaterRecommendedDays * 24 * 60 * 60 * 1000;
-            await postponeBookmark(currentLaterBookmark.id, delayMs);
+        if (e.target.closest('#laterModalClose')) {
+            e.preventDefault();
+            if (laterModalActionInFlight) return;
             hideLaterModal();
-            await loadPostponedList();
-            await refreshRecommendCards();
-        };
-    }
+            return;
+        }
 
-    // 自定义选项按钮
-    const options = modal.querySelectorAll('.later-option');
-    options.forEach(option => {
-        option.onclick = async () => {
-            if (!currentLaterBookmark) return;
+        const recommendBtn = e.target.closest('#laterRecommendBtn');
+        if (recommendBtn) {
+            e.preventDefault();
+            await submitLaterModalDelay(currentLaterRecommendedDays * 24 * 60 * 60 * 1000);
+            return;
+        }
 
-            const delayMs = parseInt(option.dataset.delay);
-            await postponeBookmark(currentLaterBookmark.id, delayMs);
-            hideLaterModal();
-            await loadPostponedList();
-            await refreshRecommendCards();
-        };
+        const option = e.target.closest('.later-option');
+        if (option) {
+            e.preventDefault();
+            await submitLaterModalDelay(Number(option.dataset.delay));
+        }
     });
 }
 
@@ -19793,171 +20191,15 @@ async function preloadRecommendCandidatesForNextRefresh(limit = 6) {
         const urls = Array.isArray(response?.urls)
             ? response.urls.map((item) => String(item || '').trim()).filter(Boolean)
             : [];
-        if (response?.success && urls.length > 0) {
+        if (!response?.success) {
+            return 0;
+        }
+        if (urls.length > 0) {
             preloadHighResFavicons(urls.slice(0, safeLimit));
             return Math.min(safeLimit, urls.length);
         }
+        return 0;
     } catch (_) {
-        // 回退到前端本地口径
-    }
-
-    try {
-        const [scoresCache, flippedBookmarks, blocked, postponed, currentCards] = await Promise.all([
-            getScoresCache(),
-            getFlippedBookmarks(),
-            getBlockedBookmarks(),
-            getPostponedBookmarks(),
-            getHistoryCurrentCards()
-        ]);
-
-        if (!scoresCache || Object.keys(scoresCache).length === 0) return 0;
-
-        const bookmarks = Object.entries(scoresCache)
-            .map(([bookmarkId, cached]) => {
-                if (!cached || typeof cached !== 'object') return null;
-                const id = String(bookmarkId || '').trim();
-                const url = String(cached.url || '').trim();
-                if (!id || !url) return null;
-
-                const title = String(cached.title || cached.name || url).trim() || url;
-                const parentId = String(cached.parentId || '').trim();
-                const ancestorFolderIds = Array.isArray(cached.ancestorFolderIds)
-                    ? cached.ancestorFolderIds.map(item => String(item || '').trim()).filter(Boolean)
-                    : [];
-                const rawDateAdded = Number(cached.dateAdded || 0);
-
-                return {
-                    id,
-                    url,
-                    title,
-                    name: title,
-                    parentId,
-                    ancestorFolderIds,
-                    dateAdded: Number.isFinite(rawDateAdded) ? rawDateAdded : 0
-                };
-            })
-            .filter(Boolean);
-
-        if (bookmarks.length === 0) return 0;
-
-        if (Array.isArray(currentCards?.cardData)) {
-            seedFaviconMemoryFromCardData(currentCards.cardData);
-        }
-
-        const currentCardIds = new Set((Array.isArray(currentCards?.cardIds) ? currentCards.cardIds : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const flippedSet = new Set((Array.isArray(flippedBookmarks) ? flippedBookmarks : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const skippedPersisted = await getSkippedBookmarksPersisted();
-        const skippedSet = new Set([
-            ...Array.from(skippedBookmarks),
-            ...skippedPersisted
-        ].map(id => String(id || '').trim()).filter(Boolean));
-        skippedBookmarks = skippedSet;
-        const skippedOrderMap = new Map(
-            skippedPersisted
-                .map((id, index) => [String(id || '').trim(), index])
-                .filter(([id]) => Boolean(id))
-        );
-        const blockedBookmarkSet = new Set((Array.isArray(blocked?.bookmarks) ? blocked.bookmarks : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const blockedFolderSet = new Set((Array.isArray(blocked?.folders) ? blocked.folders : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean));
-        const blockedDomainSet = new Set((Array.isArray(blocked?.domains) ? blocked.domains : [])
-            .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
-            .filter(Boolean));
-
-        const now = Date.now();
-        const postponedSet = new Set(
-            (Array.isArray(postponed) ? postponed : [])
-                .filter(p => p && p.postponeUntil > now && !p.manuallyAdded)
-                .map(p => String(p.bookmarkId || ''))
-                .filter(Boolean)
-        );
-        const forceDueSet = new Set(
-            (Array.isArray(postponed) ? postponed : [])
-                .filter(p => p && !p.manuallyAdded && Number(p.postponeUntil || 0) <= now)
-                .map(p => String(p.bookmarkId || ''))
-                .filter(Boolean)
-        );
-
-        const isInBlockedFolder = (bookmark) => {
-            if (!blockedFolderSet.size) return false;
-            const parentId = String(bookmark?.parentId || '').trim();
-            if (parentId && blockedFolderSet.has(parentId)) return true;
-            const ancestorFolderIds = Array.isArray(bookmark.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
-            for (const folderId of ancestorFolderIds) {
-                const normalizedFolderId = String(folderId || '').trim();
-                if (normalizedFolderId && blockedFolderSet.has(normalizedFolderId)) return true;
-            }
-            return false;
-        };
-
-        const isBlockedDomain = (bookmark) => {
-            if (!blockedDomainSet.size || !bookmark.url) return false;
-            try {
-                const hostname = String(new URL(bookmark.url).hostname || '').trim().toLowerCase().replace(/^www\./, '');
-                return blockedDomainSet.has(hostname);
-            } catch (_) {
-                return false;
-            }
-        };
-
-        const compareCandidatePriorityWithSkip = (a, b) => {
-            const aId = String(a?.id || '');
-            const bId = String(b?.id || '');
-            const aSkipped = skippedSet.has(aId) && !forceDueSet.has(aId);
-            const bSkipped = skippedSet.has(bId) && !forceDueSet.has(bId);
-
-            if (aSkipped !== bSkipped) {
-                return aSkipped ? 1 : -1;
-            }
-
-            if (aSkipped && bSkipped) {
-                const aOrder = skippedOrderMap.has(aId) ? skippedOrderMap.get(aId) : Number.MAX_SAFE_INTEGER;
-                const bOrder = skippedOrderMap.has(bId) ? skippedOrderMap.get(bId) : Number.MAX_SAFE_INTEGER;
-                if (aOrder !== bOrder) {
-                    return aOrder - bOrder;
-                }
-            }
-
-            return compareRecommendPriority(a, b);
-        };
-
-        const candidates = bookmarks
-            .filter((bookmark) => {
-                const bookmarkId = String(bookmark?.id || '');
-                const forceDue = forceDueSet.has(bookmarkId);
-                if (!bookmark || !bookmark.url) return false;
-                if (currentCardIds.has(bookmarkId)) return false;
-                if (!forceDue && flippedSet.has(bookmarkId)) return false;
-                if (blockedBookmarkSet.has(bookmarkId)) return false;
-                if (isInBlockedFolder(bookmark)) return false;
-                if (isBlockedDomain(bookmark)) return false;
-                if (!forceDue && postponedSet.has(bookmarkId)) return false;
-                return true;
-            })
-            .map((bookmark) => {
-                const cached = scoresCache[bookmark.id];
-                return {
-                    ...bookmark,
-                    priority: cached && Number.isFinite(cached.S) ? cached.S : 0.5
-                };
-            })
-            .sort(compareCandidatePriorityWithSkip)
-            .slice(0, Math.max(3, safeLimit));
-
-        const urlsToPreload = candidates.map(item => item.url).filter(Boolean);
-        if (urlsToPreload.length === 0) return 0;
-
-        preloadHighResFavicons(urlsToPreload);
-        return urlsToPreload.length;
-    } catch (error) {
-        console.warn('[自动刷新] 预加载下一批推荐 favicon 失败:', error);
         return 0;
     }
 }
@@ -20344,7 +20586,14 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
             }
 
             await cancelPostpone(p.bookmarkId);
-            await recordReview(p.bookmarkId);
+            await dispatchRecommendCardAction('review', {
+                id: p.bookmarkId,
+                url: bookmark.url,
+                title: bookmark.title || bookmark.url || ''
+            }, {
+                source: 'postponed_list',
+                timestamp: Date.now()
+            });
             await loadPostponedList();
         };
 
@@ -20679,22 +20928,17 @@ async function saveScoresCache(cache) {
 async function cleanupStorageQuota() {
     try {
         // 1. 清理超过1000条的已翻阅记录
-        const result = await new Promise(resolve => {
-            browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY], resolve);
+        await browserAPI.runtime.sendMessage({
+            action: 'trimRecommendFlippedBookmarks',
+            maxItems: 1000
         });
-        const flipped = Array.isArray(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY])
-            ? result[FLIPPED_BOOKMARKS_STORAGE_KEY]
-            : [];
-        if (flipped.length > 1000) {
-            const trimmed = flipped.slice(-1000);
-            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: trimmed });
-
-        }
 
         // 2. 清理无效的稍后复习记录（保留到期待复习，直到用户复习/取消）
         const postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
         const validPostponed = postponed.filter(p => p && p.bookmarkId != null);
         if (validPostponed.length < postponed.length) {
+            attachRecommendListStateVersion(validPostponed, expectedVersion);
             await savePostponedBookmarks(validPostponed);
 
         }
@@ -20954,80 +21198,6 @@ async function getReviewData() {
     }
 }
 
-// 记录一次复习
-async function recordReview(bookmarkId) {
-    const normalizedId = String(bookmarkId || '').trim();
-    if (!normalizedId) return null;
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'recordRecommendReviewState',
-            bookmarkId: normalizedId
-        });
-
-        if (response && response.success && response.review) {
-            const nextPostponed = normalizePostponedList(response.postponed || []);
-            await schedulePostponedExpiryRefresh(nextPostponed);
-
-            const nextSkipped = normalizeSkippedBookmarkIds(response.skippedIds || []);
-            skippedBookmarks = new Set(nextSkipped);
-
-
-            return response.review;
-        }
-    } catch (_) { }
-
-    try {
-        const reviews = await getReviewData();
-        const existing = reviews[normalizedId];
-        const now = Date.now();
-
-        // 复习完成后：从待复习池移出（含手动插队/延后到期）
-        const postponed = await getPostponedBookmarks();
-        const postponeInfo = postponed.find(p => String(p?.bookmarkId || '') === normalizedId);
-        if (postponeInfo) {
-            const nextPostponed = await savePostponedBookmarks(
-                postponed.filter(p => String(p?.bookmarkId || '') !== normalizedId)
-            );
-            await schedulePostponedExpiryRefresh(nextPostponed);
-
-        }
-
-        // 复习完成后，清除“已跳过”状态（允许后续再次进入推荐）
-        await removeSkippedBookmarkPersisted(normalizedId);
-
-        if (existing) {
-            // 简化版SM-2：每次复习间隔翻倍，最大30天
-            const newInterval = Math.min(existing.interval * 2, 30);
-            reviews[normalizedId] = {
-                lastReview: now,
-                interval: newInterval,
-                reviewCount: existing.reviewCount + 1,
-                nextReview: now + newInterval * 24 * 60 * 60 * 1000
-            };
-        } else {
-            // 首次复习，间隔1天
-            reviews[normalizedId] = {
-                lastReview: now,
-                interval: 1,
-                reviewCount: 1,
-                nextReview: now + 1 * 24 * 60 * 60 * 1000
-            };
-        }
-
-        await browserAPI.storage.local.set({ recommend_reviews: reviews });
-
-
-        // R因子变化，发消息给background.js更新S值
-        browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId: normalizedId });
-
-        return reviews[normalizedId];
-    } catch (e) {
-        console.error('[复习] 记录复习失败:', e);
-        return null;
-    }
-}
-
 // 获取书签的复习状态
 function getReviewStatus(bookmarkId, reviewData) {
     const review = reviewData[bookmarkId];
@@ -21138,46 +21308,6 @@ async function getFlippedBookmarks() {
     });
 }
 
-// 标记书签为已翻过，并记录翻牌时间
-async function markBookmarkFlipped(bookmarkId) {
-    const normalizedId = String(bookmarkId || '').trim();
-    if (!normalizedId) return;
-
-
-
-    let flippedCount = null;
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'appendRecommendFlippedBookmark',
-            bookmarkId: normalizedId
-        });
-        if (response && response.success) {
-            flippedCount = Array.isArray(response.flippedIds) ? response.flippedIds.length : null;
-        }
-    } catch (_) { }
-
-    if (flippedCount == null) {
-        const flipped = await getFlippedBookmarks();
-        if (!flipped.includes(normalizedId)) {
-            flipped.push(normalizedId);
-            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: flipped });
-        }
-        flippedCount = flipped.length;
-    }
-
-
-    // 记录翻牌时间（用于热力图，写入固定日索引）
-    const flipHistoryCount = await appendFlipHistoryRecord(normalizedId, Date.now());
-    if (flipHistoryCount >= 0) {
-
-    }
-
-    // 立即刷新热力图
-    if (currentView === 'recommend') {
-        await loadHeatmapData();
-    }
-}
-
 async function refreshRecommendCards(force = false) {
     const cardsRow = document.getElementById('cardsRow');
     if (!cardsRow) return;
@@ -21194,16 +21324,21 @@ async function refreshRecommendCards(force = false) {
             if (Array.isArray(prefetchedCurrentCards?.cardData)) {
                 seedFaviconMemoryFromCardData(prefetchedCurrentCards.cardData);
             }
-            const snapshot = readRecommendCardsSnapshot();
-            if (snapshot) {
-                const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(
-                    snapshot.cards,
-                    prefetchedCurrentCards?.cardData
-                );
-                if (mergedSnapshotCards.length > 0) {
-                    applyRecommendSnapshotToCardRows({ ...snapshot, cards: mergedSnapshotCards });
-                } else {
-                    applyRecommendSnapshotToCardRows(snapshot);
+            const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(prefetchedCurrentCards);
+            if (!needsVersionedRound) {
+                const snapshot = readRecommendCardsSnapshot();
+                if (snapshot) {
+                    const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(
+                        snapshot.cards,
+                        prefetchedCurrentCards?.cardData
+                    );
+                    const snapshotCards = mergedSnapshotCards.length > 0
+                        ? mergedSnapshotCards
+                        : snapshot.cards;
+                    applyRecommendSnapshotToCardRows({
+                        ...snapshot,
+                        cards: attachRecommendStateVersionToCards(snapshotCards, prefetchedCurrentCards)
+                    });
                 }
             }
         } catch (_) { }
@@ -21215,37 +21350,13 @@ async function refreshRecommendCards(force = false) {
         if (Array.isArray(currentCards?.cardData)) {
             seedFaviconMemoryFromCardData(currentCards.cardData);
         }
-
-        const hydrateRecommendCardsFromCurrentState = (state) => {
-            if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
-                return [];
-            }
-
-            const cardDataMap = new Map();
-            if (Array.isArray(state.cardData)) {
-                state.cardData.forEach((item) => {
-                    const id = String(item?.id || '').trim();
-                    if (id) cardDataMap.set(id, item);
-                });
-            }
-            if (cardDataMap.size === 0) {
-                return [];
-            }
-
-            return state.cardIds
-                .map(id => cardDataMap.get(String(id || '').trim()) || null)
-                .filter(Boolean)
-                .map((bookmark) => {
-                    const normalized = normalizeRecommendSnapshotCard(bookmark);
-                    if (!normalized) return null;
-                    return {
-                        ...normalized,
-                        factors: bookmark?.factors || {}
-                    };
-                })
-                .filter(Boolean)
-                .slice(0, RECOMMEND_BATCH_SIZE);
-        };
+        const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(currentCards);
+        if (needsVersionedRound) {
+            recommendCards = [];
+            cards.forEach((card) => {
+                setCardEmpty(card);
+            });
+        }
 
         const syncRefreshSettingsAfterForce = async () => {
             if (!force) return;
@@ -21270,14 +21381,14 @@ async function refreshRecommendCards(force = false) {
         };
 
         // 有保存的当前轮次就直接显示，不额外做前端聚合计算。
-        if (currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
+        if (!needsVersionedRound && currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
             const normalizedFlipped = Array.isArray(currentCards.flippedIds)
                 ? currentCards.flippedIds.map(id => String(id || ''))
                 : [];
             const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
 
             if (!allFlipped) {
-                const savedCards = hydrateRecommendCardsFromCurrentState(currentCards);
+                const savedCards = hydrateRecommendCardsFromCurrentCardsState(currentCards);
                 if (savedCards.length > 0) {
                     recommendCards = savedCards;
                     const flippedSet = new Set(normalizedFlipped.map(id => String(id || '').trim()));
@@ -21299,19 +21410,23 @@ async function refreshRecommendCards(force = false) {
         }
 
         // 统一使用后台选卡路径，和快捷复习共享同一套轮转/游标/过滤逻辑
-        const backendRound = await selectRecommendCardsRoundShared(force);
+        const backendRound = await selectRecommendCardsRoundShared(force || needsVersionedRound);
         if (backendRound && Array.isArray(backendRound.cards)) {
-            const normalizedCards = backendRound.cards
-                .map(normalizeRecommendSnapshotCard)
-                .filter(Boolean)
-                .slice(0, RECOMMEND_BATCH_SIZE);
             const backendCurrentCards = backendRound.currentCards && typeof backendRound.currentCards === 'object'
                 ? backendRound.currentCards
                 : null;
+            const normalizedCards = attachRecommendStateVersionToCards(
+                backendRound.cards
+                    .map(normalizeRecommendSnapshotCard)
+                    .filter(Boolean)
+                    .slice(0, RECOMMEND_BATCH_SIZE),
+                backendCurrentCards
+            );
             const backendFlippedIds = Array.isArray(backendCurrentCards?.flippedIds)
                 ? backendCurrentCards.flippedIds.map(id => String(id || '')).filter(Boolean)
                 : [];
             syncRecommendLastUpdatedFromState(backendCurrentCards);
+            markHistoryCurrentCardsSelfWrite(backendCurrentCards);
 
             if (Array.isArray(backendCurrentCards?.cardData)) {
                 seedFaviconMemoryFromCardData(backendCurrentCards.cardData);
@@ -21360,7 +21475,7 @@ async function refreshRecommendCards(force = false) {
             return;
         }
 
-        if (force) {
+        if (force || needsVersionedRound) {
             try {
                 showToast(currentLang === 'en'
                     ? 'Refresh unavailable, please retry'
@@ -21993,58 +22108,6 @@ function collectMonthBookmarkCountsFromHeatmapIndex(index, year, month) {
     });
 
     return stats;
-}
-
-async function appendFlipHistoryRecord(bookmarkId, timestamp = Date.now()) {
-    const id = String(bookmarkId || '').trim();
-    if (!id) return -1;
-
-    const safeTimestamp = Number.isFinite(Number(timestamp)) && Number(timestamp) > 0
-        ? Math.floor(Number(timestamp))
-        : Date.now();
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'appendRecommendFlipHistoryRecord',
-            bookmarkId: id,
-            timestamp: safeTimestamp
-        });
-        if (response && response.success) {
-            const count = Number(response.count);
-            return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
-        }
-    } catch (_) { }
-
-    try {
-        const result = await browserAPI.storage.local.get([FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY]);
-        const flipHistory = Array.isArray(result?.[FLIP_HISTORY_STORAGE_KEY])
-            ? result[FLIP_HISTORY_STORAGE_KEY]
-            : [];
-
-        flipHistory.push({
-            bookmarkId: id,
-            timestamp: safeTimestamp
-        });
-
-        const trimmed = flipHistory.length > FLIP_HISTORY_MAX_ITEMS
-            ? flipHistory.slice(flipHistory.length - FLIP_HISTORY_MAX_ITEMS)
-            : flipHistory;
-
-        const nextIndex = appendFlipEventToHeatmapIndex(
-            result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY],
-            { bookmarkId: id, timestamp: safeTimestamp }
-        );
-
-        await browserAPI.storage.local.set({
-            [FLIP_HISTORY_STORAGE_KEY]: trimmed,
-            [HEATMAP_DAILY_INDEX_STORAGE_KEY]: nextIndex
-        });
-
-        return trimmed.length;
-    } catch (error) {
-        console.warn('[热力图] 写入翻牌记录失败:', error);
-        return -1;
-    }
 }
 
 async function loadHeatmapData() {
@@ -26138,17 +26201,15 @@ function handleStorageChange(changes, namespace) {
     // 当前三卡变化（跨实例同步）
     if (changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]) {
         syncRecommendLastUpdatedFromState(changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue || null);
-        const changedTs = Number(
-            changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.timestamp
-            || changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue?.lastUpdated
-            || 0
-        );
-        const isSelfWrite = historyLastSaveTime > 0
-            && changedTs > 0
-            && changedTs === historyLastSaveTime;
+        const changedVersion = getRecommendCurrentCardsVersion(changes[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.newValue || null);
+        const isSelfWrite = historyLastSelfWriteVersion > 0
+            && changedVersion > 0
+            && changedVersion === historyLastSelfWriteVersion;
 
         if (!isSelfWrite) {
             scheduleRecommendCardsRefreshFromStateSync();
+        } else {
+            historyLastSelfWriteVersion = 0;
         }
     }
 
@@ -26400,15 +26461,6 @@ function setupRealtimeMessageListener() {
                         // 静默处理错误
                     });
                 }
-            }
-        } else if (message.action === 'clearLocalStorage') {
-            // 收到来自 background.js 的清除 localStorage 请求（"恢复到初始状态"功能）
-
-            try {
-                localStorage.clear();
-
-            } catch (e) {
-                console.warn('[history.js] 清除 localStorage 失败:', e);
             }
         } else if (message.action === 'browsingCalibrationCompleted') {
             refreshBrowsingHistoryFromCache({ silent: true });
