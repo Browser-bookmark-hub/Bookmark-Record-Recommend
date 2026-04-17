@@ -8906,9 +8906,10 @@ function updateWidgetsAdditionsToggleLabel() {
     const viewBtn = document.getElementById('widgetsAdditionsViewToggleBtn');
     if (viewBtn) {
         const safeMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), safeRange);
+        const currentLabel = getWidgetsMiniViewModeLabel(safeMode, safeRange);
         const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
         const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
-        viewBtn.textContent = nextLabel;
+        viewBtn.textContent = currentLabel;
         viewBtn.title = getToggleToTitle(nextLabel);
         viewBtn.setAttribute('aria-label', viewBtn.title);
     }
@@ -8929,9 +8930,10 @@ function updateWidgetsHistoryToggleLabel() {
     const viewBtn = document.getElementById('widgetsHistoryViewToggleBtn');
     if (viewBtn) {
         const safeMode = getWidgetsEffectiveMiniViewMode(readWidgetsHistoryViewMode(), safeRange);
+        const currentLabel = getWidgetsMiniViewModeLabel(safeMode, safeRange);
         const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
         const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
-        viewBtn.textContent = nextLabel;
+        viewBtn.textContent = currentLabel;
         viewBtn.title = getToggleToTitle(nextLabel);
         viewBtn.setAttribute('aria-label', viewBtn.title);
     }
@@ -8944,12 +8946,15 @@ function updateWidgetsRankingVisualToggleLabel(mode) {
     const safeMode = mode
         ? normalizeWidgetsRankingVisualMode(mode)
         : readWidgetsRankingVisualMode();
-    const nextMode = safeMode === 'pie' ? 'list' : 'pie';
-    const label = nextMode === 'pie'
+    const currentLabel = safeMode === 'pie'
         ? i18n.widgetsRankingVisualPie[currentLang]
         : i18n.widgetsRankingVisualList[currentLang];
-    btn.textContent = label;
-    btn.title = getToggleToTitle(label);
+    const nextMode = safeMode === 'pie' ? 'list' : 'pie';
+    const nextLabel = nextMode === 'pie'
+        ? i18n.widgetsRankingVisualPie[currentLang]
+        : i18n.widgetsRankingVisualList[currentLang];
+    btn.textContent = currentLabel;
+    btn.title = getToggleToTitle(nextLabel);
     btn.setAttribute('aria-label', btn.title);
 }
 
@@ -10609,7 +10614,7 @@ function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
     chartWrap.appendChild(svg);
 
     const meta = document.createElement('div');
-    meta.className = 'widgets-mini-chart-meta';
+    meta.className = 'widgets-mini-chart-meta widgets-mini-chart-meta-pie';
     const hintText = document.createElement('span');
     hintText.className = 'widgets-mini-chart-range';
     hintText.textContent = currentLang === 'zh_CN' ? '悬停查看占比' : 'Hover to view ratio';
@@ -10618,9 +10623,9 @@ function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
     totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
     meta.appendChild(hintText);
     meta.appendChild(totalText);
-    chartWrap.appendChild(meta);
 
     shell.appendChild(chartWrap);
+    shell.appendChild(meta);
 
     widgetList.appendChild(shell);
 }

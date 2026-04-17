@@ -3221,20 +3221,40 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabili
 
 .widgets-pie-shell {
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
     width: 100%;
 }
 
 .widgets-mini-chart-wrap.widgets-mini-chart-wrap-pie {
-    width: min(100%, 248px);
-    min-height: 178px;
+    width: min(100%, 286px);
+    min-height: 0;
+    border: none;
+    background: transparent;
+    padding: 0;
 }
 
 .widgets-pie-svg {
     width: 100%;
-    height: 152px;
+    height: 178px;
     display: block;
+}
+
+.widgets-mini-chart-meta.widgets-mini-chart-meta-pie {
+    width: 100%;
+    margin-top: 2px;
+    padding: 0 4px;
+    box-sizing: border-box;
+}
+
+.widgets-mini-chart-meta.widgets-mini-chart-meta-pie .widgets-mini-chart-range {
+    text-align: left;
+}
+
+.widgets-mini-chart-meta.widgets-mini-chart-meta-pie .widgets-mini-chart-total {
+    margin-left: auto;
+    text-align: right;
 }
 
 .widgets-pie-segment {
@@ -4090,12 +4110,12 @@ html.side-panel-mode .widgets-pie-shell {
 }
 
 html.side-panel-mode .widgets-mini-chart-wrap.widgets-mini-chart-wrap-pie {
-    width: min(100%, 220px);
-    min-height: 170px;
+    width: min(100%, 246px);
+    min-height: 0;
 }
 
 html.side-panel-mode .widgets-pie-svg {
-    height: 136px;
+    height: 158px;
 }
 
 html.side-panel-mode .widgets-related-actions {
