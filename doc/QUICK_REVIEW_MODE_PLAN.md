@@ -37,8 +37,8 @@ UI only triggers and displays:
 
 ## 6. Shortcut Constraint
 Keep only one quick-review command with suggested key:
-1. Windows/Linux: `Ctrl+Down`
-2. macOS: `Alt+Down`
+1. Windows/Linux: `Alt+S`
+2. macOS: `Alt+S`
 
 ## 7. Acceptance Criteria
 1. Pressing shortcut works with no side panel/page open.

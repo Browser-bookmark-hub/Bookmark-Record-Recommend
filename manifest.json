@@ -48,10 +48,10 @@
     },
     "quick_review_next": {
       "suggested_key": {
-        "default": "Ctrl+Down",
-        "mac": "Alt+Down",
-        "windows": "Ctrl+Down",
-        "linux": "Ctrl+Down"
+        "default": "Alt+S",
+        "mac": "Alt+S",
+        "windows": "Alt+S",
+        "linux": "Alt+S"
       },
       "description": "Quick review: start or open next card"
     }

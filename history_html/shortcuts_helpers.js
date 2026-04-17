@@ -24,7 +24,7 @@ function updateShortcutsDisplay() {
         const defaultPrefix = 'Alt+';
         const keyRecommend = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '4'));
         const keyAdditions = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '5'));
-        const keyQuickReview = formatKey(safe(shortcuts.quick_review_next, isMac ? 'Alt+Down' : 'Ctrl+Down'));
+        const keyQuickReview = formatKey(safe(shortcuts.quick_review_next, 'Alt+S'));
         const signature = `${lang}|${keyRecommend}|${keyAdditions}|${keyQuickReview}`;
 
         if (signature === shortcutsRenderSignature) {

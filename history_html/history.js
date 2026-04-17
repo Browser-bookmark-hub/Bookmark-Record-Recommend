@@ -4897,7 +4897,7 @@ function formatShortcutForDisplay(shortcut) {
 function buildQuickReviewTooltipText(shortcutText) {
     const shortcut = (typeof shortcutText === 'string' && shortcutText.trim())
         ? shortcutText.trim()
-        : formatShortcutForDisplay(isMacLikePlatform() ? 'Alt+Down' : 'Ctrl+Down');
+        : formatShortcutForDisplay('Alt+S');
     if (currentLang === 'en') {
         return `Quick Review (${shortcut})`;
     }
@@ -4944,7 +4944,7 @@ function bindQuickReviewTooltipRefreshTriggers() {
 function updateQuickReviewShortcutDisplay() {
     const textEl = document.getElementById('openShortcutsSettingsText');
 
-    const defaultShortcut = formatShortcutForDisplay(isMacLikePlatform() ? 'Alt+Down' : 'Ctrl+Down');
+    const defaultShortcut = formatShortcutForDisplay('Alt+S');
     const unsetText = i18n.quickReviewShortcutUnset?.[currentLang] || (currentLang === 'en' ? 'Not Set' : '未设置');
 
     const applyText = (text) => {
