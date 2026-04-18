@@ -10,7 +10,7 @@
 
     const params = new URLSearchParams(window.location.search || '');
     const requestedView = params.get('view');
-    const safeView = requestedView === 'widgets' || requestedView === 'recommend' || requestedView === 'additions'
+    const safeView = requestedView === 'widgets' || requestedView === 'recommend' || requestedView === 'additions' || requestedView === 'sync'
       ? requestedView
       : '';
 

@@ -21,7 +21,7 @@ const browserAPI = (function () {
 })();
 
 function normalizeHistoryPanelView(view) {
-  if (view === 'widgets' || view === 'recommend' || view === 'additions') {
+  if (view === 'widgets' || view === 'recommend' || view === 'additions' || view === 'sync') {
     return view;
   }
   return 'widgets';

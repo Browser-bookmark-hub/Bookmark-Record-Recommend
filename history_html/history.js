@@ -23,7 +23,7 @@ try {
 
 window.currentLang = currentLang; // 暴露给其他模块使用
 // 允许外部页面限制可用视图（拆分插件时使用）
-const DEFAULT_VIEWS = ['widgets', 'recommend', 'additions'];
+const DEFAULT_VIEWS = ['widgets', 'recommend', 'additions', 'sync'];
 const ALLOWED_VIEWS = (Array.isArray(window.__ALLOWED_VIEWS) && window.__ALLOWED_VIEWS.length)
     ? window.__ALLOWED_VIEWS
     : DEFAULT_VIEWS;
@@ -72,8 +72,295 @@ let currentView = (() => {
     }
 })();
 
+let syncViewBound = false;
+let syncViewInitialized = false;
+let syncConfigState = null;
+let syncDocsState = [];
+let syncCurrentDocId = null;
+let syncStatusState = {
+    text: '',
+    localized: null,
+    time: ''
+};
+let syncConfigInputSaveTimer = null;
+let syncEditorAutoSaveTimer = null;
+let syncEditorPendingSavePromise = null;
+let syncMarkdownPreviewTimer = null;
+let syncEditorLifecycleBound = false;
+let syncMarkdownGlobalTooltipEl = null;
+let syncMarkdownGlobalTooltipBound = false;
+let syncMarkdownGlobalTooltipActiveBtn = null;
+let syncRepoCollapsed = false;
+let syncPushPackageInfoVisible = false;
+let syncRawHighVolumeInfoVisible = false;
+let syncPullPolicyInfoVisible = false;
+let syncControlPanelCollapsed = false;
+let syncControlPanelCollapseBound = false;
+let syncControlPanelLayoutTimer = null;
+let syncControlPanelLayoutObserver = null;
+let syncControlPanelCollapsedStateHydrated = false;
+let syncFilesCardLayoutBound = false;
+let syncFilesCardLayoutTimer = null;
+let syncFilesCardOriginalParent = null;
+let syncFilesCardOriginalNextSibling = null;
+let syncFilesCardLayoutObserver = null;
+let syncRemoteDocCacheState = {};
+
 const isSidePanelMode = detectSidePanelModeFromLocation();
 const LAST_ACTIVE_VIEW_STORAGE_KEY = getLastActiveViewStorageKey(isSidePanelMode);
+const SYNC_CONFIG_STORAGE_KEY = 'aiSyncConfig_v1';
+const SYNC_DOCS_STORAGE_KEY = 'aiSyncDocuments_v1';
+const SYNC_CLOUD_SNAPSHOT_STORAGE_KEY = 'aiSyncCloudSnapshot_v1';
+const SYNC_REMOTE_DOC_CACHE_STORAGE_KEY = 'aiSyncRemoteDocCache_v1';
+const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2';
+const SYNC_REALTIME_MARKDOWN_RENDER = true;
+const SYNC_PROVIDER_GITHUB = 'github';
+const SYNC_PROVIDER_LOCAL = 'local';
+const SYNC_GITHUB_DEFAULT_BASE_PATH = 'bookmark-record-recommend/sync';
+const SYNC_GITHUB_LEGACY_BASE_PATH = 'sync/bookmark-record-recommend';
+const SYNC_GITHUB_RESULTS_SUBDIR = 'ai/results';
+const SYNC_GITHUB_INPUT_DOCS_SUBDIR = 'ai/input-docs';
+const SYNC_GITHUB_DATA_SNAPSHOTS_ROOT = 'data/snapshots';
+const SYNC_AGENT_DOC_ID = '__agent_rules__';
+const SYNC_AGENT_DOC_NAME = 'AGENTS.md';
+const SYNC_RULE_DOC_NAME_ALIASES = Object.freeze(['agents.md', 'agent.md', 'claude.md']);
+const SYNC_DOC_KIND_AGENT = 'agent';
+const SYNC_DOC_KIND_INPUT = 'input';
+const SYNC_DOC_KIND_RESULT = 'result';
+const SYNC_AGENT_FORMAT_GUIDE_ZH = `## 8. 结果 Markdown 格式（必须遵循本地格式工具）
+- 结果文件（ai/results/**/*.md）必须兼容本地渲染与格式工具，不输出额外方言语法。
+- 标题：\`#\`、\`##\`、\`###\`
+- 加粗：\`**文本**\`
+- 斜体：\`*文本*\`
+- 高亮：\`==文本==\`
+- 删除线：\`~~文本~~\`
+- 行内代码：\`\`代码\`\`
+- 代码块：\`\`\` ... \`\`\`
+- 无序列表：\`- 项目\`
+- 有序列表：\`1. 项目\`
+- 任务列表：\`- [ ] 项目\` / \`- [x] 项目\`
+- 引用：\`> 引用\`
+- 链接：\`[文本](https://...)\`
+- Callout：
+  \`> [!note] 标题\`
+  \`> 内容\`
+- 不使用 \`[[wikilink]]\` 双链语法。`;
+const SYNC_AGENT_FORMAT_GUIDE_EN = `## 8. Result Markdown Format (Must Follow Local Formatting Tools)
+- Result files (ai/results/**/*.md) must remain compatible with local renderer and formatting tools.
+- Headings: \`#\`, \`##\`, \`###\`
+- Bold: \`**text**\`
+- Italic: \`*text*\`
+- Highlight: \`==text==\`
+- Strikethrough: \`~~text~~\`
+- Inline code: \`\`code\`\`
+- Code block: \`\`\` ... \`\`\`
+- Bullet list: \`- item\`
+- Numbered list: \`1. item\`
+- Task list: \`- [ ] item\` / \`- [x] item\`
+- Quote: \`> quote\`
+- Link: \`[text](https://...)\`
+- Callout:
+  \`> [!note] Title\`
+  \`> Content\`
+- Do not use \`[[wikilink]]\` syntax.`;
+const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark-Record-Recommend AI 规则
+
+## 1. 身份与目标
+我是你的书签助理。目标：
+- 按日/周/月总结阅读活动
+- 基于 S 计算池给出"值得打开 / 值得复习 / 可屏蔽"的建议
+- 打开任意书签时，能还原它的上下文
+
+## 2. 可读输入（路径白名单 + Git）
+- data/latest.json                  # 6 个数据桶的当前快照
+- data/snapshots/current.json       # 覆盖快照（每次推送覆盖，历史以 Git commits 为准）
+- <rules-file>.md            # 本文件（根目录，可改名，如 CLAUDE.md）
+- ai/input-docs/...          # 用户本地草稿
+- GitHub Commits API         # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Compare API         # /repos/{owner}/{repo}/compare/{base}...{head}
+- GitHub Commit API          # /repos/{owner}/{repo}/commits/{sha}
+
+## 3. Git 优先流程（先看差异，再读快照）
+1. 先读取 basePath 下最近 commits（建议最近 20 条），按时间排序。
+2. 对最新 commit 与上一个 commit 执行 compare，提取 changed files、additions/deletions、patch 摘要。
+3. 优先分析变更路径：\`data/latest.json\`、\`ai/input-docs/*.md\`、\`ai/results/**/*.md\`。
+4. 输出结论时，必须标注引用的 commit SHA（短 SHA）与对应路径。
+5. 当 Git API 不可用时，退回 \`data/latest.json\` + \`data/snapshots/current.json\` 继续分析。
+
+## 4. 必写输出（路径白名单）
+- ai/results/latest.md                       # 覆盖写
+- ai/results/daily/<YYYY-MM-DD>.md           # 日报
+- ai/results/weekly/<YYYY-Www>.md            # 周报
+- ai/results/monthly/<YYYY-MM>.md            # 月报
+- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # 追加写（可选）
+
+## 5. 重要性权重（对"重要"的定义）
+1. **待复习**（recommend_reviews / recommend_postponed）= 最高优先级。
+   这是用户提前标注过的"我喜欢这类内容"的强信号；
+   payload 里 recommend_reviews_similar 已按文件夹 + 标题相似度给出 Top 5 候选，请优先引用。
+2. 高频点击 + 长时间捕捉（timeTracking.rankings.composite）= 次高。
+3. 近 7 天新加但未打开（bookmarkRecords.additionsRecords vs clickRecords）= 需要提醒。
+4. 屏蔽（recommend_blocked.bookmarks/folders/domains）= 永远排除。
+
+## 6. 输出模板
+### latest.md
+\`\`\`md
+# 现在该看什么
+## 复习优先（基于待复习 + 相似推荐）
+## 值得打开的新书签
+## 建议屏蔽 / 跳过
+## 信号来源（简要）
+\`\`\`
+
+### daily / weekly / monthly
+见本计划书 §5。
+
+## 7. 风格与禁忌
+- 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
+- 引用书签时给出：\`(bookmarkId)\` + 标题 + 所在文件夹路径。
+- 参考 recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
+  不同模式的"重要"定义会略有偏移。
+- 不泄露 Token / Owner / Repo 等同步配置字段。
+
+${SYNC_AGENT_FORMAT_GUIDE_ZH}
+`;
+const SYNC_AGENT_DOC_TEMPLATE_ZH = SYNC_AGENT_DOC_TEMPLATE;
+const SYNC_AGENT_DOC_TEMPLATE_EN = `# AGENTS.md — Bookmark-Record-Recommend AI Rules
+
+## 1. Role & Goal
+You are the bookmark assistant. Goals:
+- Summarize browsing activity daily/weekly/monthly
+- Recommend what to open/review/block using S-score signals
+- Recover context for any selected bookmark
+
+## 2. Readable Inputs (Path Allowlist + Git)
+- data/latest.json                  # current snapshot of 6 data buckets
+- data/snapshots/current.json       # overwrite snapshot (history tracked by Git commits)
+- <rules-file>.md           # this file at repo root (rename allowed, e.g. CLAUDE.md)
+- ai/input-docs/...         # local user drafts
+- GitHub Commits API        # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Compare API        # /repos/{owner}/{repo}/compare/{base}...{head}
+- GitHub Commit API         # /repos/{owner}/{repo}/commits/{sha}
+
+## 3. Git-First Workflow (Diff before Snapshot)
+1. Read recent commits under \`basePath\` first (recommend latest 20).
+2. Compare \`HEAD\` vs previous commit and extract changed paths, additions/deletions, and patch summary.
+3. Prioritize changed files: \`data/latest.json\`, \`ai/input-docs/*.md\`, and \`ai/results/**/*.md\`.
+4. Always cite short commit SHA and file paths in conclusions.
+5. If Git APIs are unavailable, fall back to \`data/latest.json\` + \`data/snapshots/current.json\`.
+
+## 4. Required Outputs (Path Allowlist)
+- ai/results/latest.md                       # overwrite
+- ai/results/daily/<YYYY-MM-DD>.md           # daily report
+- ai/results/weekly/<YYYY-Www>.md            # weekly report
+- ai/results/monthly/<YYYY-MM>.md            # monthly report
+- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # append-only run log (optional)
+
+## 5. Importance Weights
+1. Review queue (recommend_reviews / recommend_postponed) = highest priority
+2. High clicks + strong time-tracking signals = second priority
+3. Newly added but unopened in last 7 days = reminder candidates
+4. Blocked bookmarks/folders/domains = always excluded
+
+## 6. Output Structure
+### latest.md
+\`\`\`md
+# What to Read Now
+## Review First
+## Worth Opening
+## Skip / Block Suggestions
+## Signal Sources
+\`\`\`
+
+### daily / weekly / monthly
+Follow the same importance strategy in section 5.
+
+## 7. Style & Safety
+- Output Markdown only
+- Include (bookmarkId), title, and folder path when citing bookmarks
+- Respect recommend mode (default / archaeology / consolidate / wander / priority)
+- Never leak token/owner/repo sync settings
+
+${SYNC_AGENT_FORMAT_GUIDE_EN}
+`;
+
+function getDefaultSyncAgentDocTemplate(lang = currentLang) {
+    return String(lang || '').toLowerCase() === 'en'
+        ? SYNC_AGENT_DOC_TEMPLATE_EN
+        : SYNC_AGENT_DOC_TEMPLATE_ZH;
+}
+
+const SYNC_GITHUB_DATA_LATEST_PATH = 'data/latest.json';
+const SYNC_GITHUB_DATA_SNAPSHOT_PATH = `${SYNC_GITHUB_DATA_SNAPSHOTS_ROOT}/current.json`;
+const SYNC_GITHUB_META_STATE_PATH = 'meta/sync_state.json';
+const SYNC_GITHUB_PULL_MAX_FILES = 60;
+const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
+
+const SYNC_DEFAULT_CONFIG = Object.freeze({
+    remoteProvider: SYNC_PROVIDER_GITHUB,
+    githubRepoToken: '',
+    githubRepoOwner: '',
+    githubRepoName: '',
+    githubRepoBranch: 'main',
+    githubRepoBasePath: SYNC_GITHUB_DEFAULT_BASE_PATH,
+    recommendPool: true,
+    recommendEvents: true,
+    bookmarkRecords: true,
+    timeTracking: true,
+    bookmarkTreeSnapshot: true,
+    rawHighVolume: false
+});
+syncConfigState = { ...SYNC_DEFAULT_CONFIG };
+
+const SYNC_PACKAGE_FIELDS = Object.freeze([
+    {
+        key: 'recommendPool',
+        checkboxId: 'syncPushPackageRecommend',
+        textId: 'syncPushPackageRecommendText',
+        i18nKey: 'syncPushPackageRecommendPoolText',
+        defaultEnabled: true
+    },
+    {
+        key: 'recommendEvents',
+        checkboxId: 'syncPushPackageWidgets',
+        textId: 'syncPushPackageWidgetsText',
+        i18nKey: 'syncPushPackageRecommendEventsText',
+        defaultEnabled: true
+    },
+    {
+        key: 'bookmarkRecords',
+        checkboxId: 'syncPushPackageRecords',
+        textId: 'syncPushPackageRecordsText',
+        i18nKey: 'syncPushPackageBookmarkRecordsText',
+        defaultEnabled: true
+    },
+    {
+        key: 'timeTracking',
+        checkboxId: 'syncPushPackageTracking',
+        textId: 'syncPushPackageTrackingText',
+        i18nKey: 'syncPushPackageTimeTrackingText',
+        defaultEnabled: true
+    },
+    {
+        key: 'bookmarkTreeSnapshot',
+        checkboxId: 'syncPushPackageBookmarkTreeSnapshot',
+        textId: 'syncPushPackageBookmarkTreeSnapshotText',
+        i18nKey: 'syncPushPackageBookmarkTreeSnapshotText',
+        defaultEnabled: true
+    },
+    {
+        key: 'rawHighVolume',
+        checkboxId: 'syncPushPackageRawHighVolume',
+        textId: 'syncPushPackageRawHighVolumeText',
+        i18nKey: 'syncPushPackageRawHighVolumeText',
+        defaultEnabled: false
+    }
+]);
+const SYNC_DYNAMIC_PACKAGE_FIELDS = Object.freeze(
+    SYNC_PACKAGE_FIELDS.filter((field) => field.key === 'bookmarkTreeSnapshot' || field.key === 'rawHighVolume')
+);
+
+const SYNC_DEFAULT_DOCS = Object.freeze([]);
 
 const HEADER_STORAGE_SCOPE_SUFFIX = isSidePanelMode ? '__sidepanel' : '';
 const HEADER_COLLAPSE_STATE_KEY = `headerCollapseState${HEADER_STORAGE_SCOPE_SUFFIX}`;
@@ -217,6 +504,8 @@ const QUICK_REVIEW_OPEN_MODE_STORAGE_KEY = 'quickReviewOpenMode';
 const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
 const FLIP_HISTORY_STORAGE_KEY = 'flipHistory';
 const HEATMAP_DAILY_INDEX_STORAGE_KEY = 'flipHistoryDailyIndexV1';
+const RECOMMEND_ACTIVE_MODE_STORAGE_KEY = 'recommendActiveMode';
+const RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY = 'recommendActiveModeSwitchedAt';
 const FLIP_HISTORY_MAX_ITEMS = 12000;
 const FLIP_HISTORY_RETENTION_DAYS = 420;
 const FLIP_HISTORY_DAY_RECORDS_MAX = 300;
@@ -817,7 +1106,6 @@ let recommendCandidatesPreloadTimer = null;
 let recommendCandidatesPreloadInFlight = false;
 let recommendCandidatesPreloadQueuedLimit = 0;
 let recommendCandidatesPreloadLastRunAt = 0;
-syncQuickReviewOpenModeToBackground(quickReviewOpenMode);
 
 function ensureHistoryPolling() {
     if (historyPollingTimer) return;
@@ -2652,6 +2940,7 @@ const FaviconCache = {
 
 // 浏览器 API 兼容性
 const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
+syncQuickReviewOpenModeToBackground(quickReviewOpenMode);
 
 function getCacheStorageArea() {
     try {
@@ -2929,6 +3218,9 @@ const i18n = {pageTitle: {
     },navWidgets: {
         'zh_CN': '小组件',
         'en': 'Widgets'
+    },navSync: {
+        'zh_CN': '同步/AI分析',
+        'en': 'Sync / AI'
     },sidePanelTitleWidgets: {
         'zh_CN': '小组件',
         'en': 'Widgets'
@@ -2938,6 +3230,168 @@ const i18n = {pageTitle: {
     },sidePanelTitleAdditions: {
         'zh_CN': '记录',
         'en': 'Record'
+    },sidePanelTitleSync: {
+        'zh_CN': '同步',
+        'en': 'Sync'
+    },syncViewTitle: {
+        'zh_CN': '同步 / AI分析',
+        'en': 'Sync / AI Analysis'
+    },syncViewDescription: {
+        'zh_CN': '手动推送推荐/记录数据，并拉取 AI 结果 Markdown。',
+        'en': 'Manually push recommendation/record data and pull AI Markdown outputs.'
+    },syncControlPanelCollapseBtnText: {
+        'zh_CN': '折叠',
+        'en': 'Collapse'
+    },syncControlPanelExpandBtnText: {
+        'zh_CN': '展开',
+        'en': 'Expand'
+    },syncRepoSettingsTitle: {
+        'zh_CN': '配置方式',
+        'en': 'Configuration'
+    },syncProviderLabel: {
+        'zh_CN': '同步方式',
+        'en': 'Sync Provider'
+    },syncProviderGithubOption: {
+        'zh_CN': 'GitHub Repo',
+        'en': 'GitHub Repo'
+    },syncProviderLocalOption: {
+        'zh_CN': '本地快照（仅本机）',
+        'en': 'Local Snapshot (Local Only)'
+    },syncGithubTokenLabel: {
+        'zh_CN': 'GitHub Token',
+        'en': 'GitHub Token'
+    },syncGithubOwnerLabel: {
+        'zh_CN': '仓库 Owner',
+        'en': 'Repository Owner'
+    },syncGithubRepoLabel: {
+        'zh_CN': '仓库名',
+        'en': 'Repository Name'
+    },syncGithubBranchLabel: {
+        'zh_CN': '分支',
+        'en': 'Branch'
+    },syncGithubBasePathLabel: {
+        'zh_CN': '同步根路径',
+        'en': 'Sync Base Path'
+    },syncRepoTestBtnText: {
+        'zh_CN': '测试连接',
+        'en': 'Test Connection'
+    },syncRepoOpenHtmlBtnText: {
+        'zh_CN': '配置说明',
+        'en': 'Guide'
+    },syncRepoStatusIdle: {
+        'zh_CN': '等待配置',
+        'en': 'Waiting for configuration'
+    },syncSettingsTitle: {
+        'zh_CN': '推送数据包',
+        'en': 'Push Bundles'
+    },syncPushPackageInfoBtnText: {
+        'zh_CN': '说明',
+        'en': 'Info'
+    },syncPushPackageInfoModalCloseLabel: {
+        'zh_CN': '关闭',
+        'en': 'Close'
+    },syncPushPackagePathTitle: {
+        'zh_CN': '推送到云端路径结构',
+        'en': 'Cloud Path Layout'
+    },syncPushPackageRecommendPoolText: {
+        'zh_CN': '推荐数据池（S 值与候选池）',
+        'en': 'Recommendation pool (S-score and candidate pool)'
+    },syncPushPackageRecommendEventsText: {
+        'zh_CN': '推荐行为事件（复习/翻卡/跳过/屏蔽）',
+        'en': 'Recommendation events (review/flip/skip/block)'
+    },syncPushPackageBookmarkRecordsText: {
+        'zh_CN': '书签记录（新增/点击/点击排行/关联记录）',
+        'en': 'Bookmark records (additions/clicks/ranking/related)'
+    },syncPushPackageTimeTrackingText: {
+        'zh_CN': '时间捕捉（按天/周/月统计）',
+        'en': 'Time tracking (daily/weekly/monthly stats)'
+    },syncPushPackageBookmarkTreeSnapshotText: {
+        'zh_CN': '书签树快照（结构与元信息）',
+        'en': 'Bookmark tree snapshot (structure + metadata)'
+    },syncPushPackageRawHighVolumeText: {
+        'zh_CN': '原始记录明细',
+        'en': 'Raw records'
+    },syncPushPackageRawHighVolumeInfoBtnLabel: {
+        'zh_CN': '说明',
+        'en': 'Info'
+    },syncPushPackageRawHighVolumeInfoTitle: {
+        'zh_CN': '原始记录明细说明',
+        'en': 'Raw Records Info'
+    },syncPushPackageRawHighVolumeInfoText: {
+        'zh_CN': '包含原始新增记录、原始浏览历史、翻牌历史。该包体量更大且包含更多访问细节，默认关闭以减少推送体量并降低隐私暴露面，仅在需要深度回溯时再勾选。',
+        'en': 'Includes raw additions, raw browsing history, and flip history. This package is larger and carries finer visit details, so it stays off by default to reduce push size and privacy exposure; enable it only for deep backtracking.'
+    },syncPushPackageRecommendText: {
+        'zh_CN': '推荐数据池（S 值与候选池）',
+        'en': 'Recommendation pool (S-score and candidate pool)'
+    },syncPushPackageRecordsText: {
+        'zh_CN': '书签记录（新增/点击/点击排行/关联记录）',
+        'en': 'Bookmark records (additions/clicks/ranking/related)'
+    },syncPushPackageWidgetsText: {
+        'zh_CN': '推荐行为事件（复习/翻卡/跳过/屏蔽）',
+        'en': 'Recommendation events (review/flip/skip/block)'
+    },syncPushPackageTrackingText: {
+        'zh_CN': '时间捕捉（按天/周/月统计）',
+        'en': 'Time tracking (daily/weekly/monthly stats)'
+    },syncPullPolicyInfoBtnLabel: {
+        'zh_CN': '说明',
+        'en': 'Info'
+    },syncPullPolicyInfoText: {
+        'zh_CN': '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。',
+        'en': 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
+    },syncPullBtnText: {
+        'zh_CN': '拉取更新',
+        'en': 'Pull Updates'
+    },syncPushBtnText: {
+        'zh_CN': '推送当前',
+        'en': 'Push'
+    },syncRepoCollapseBtnCollapseText: {
+        'zh_CN': '折叠配置方式',
+        'en': 'Collapse Config'
+    },syncRepoCollapseBtnExpandText: {
+        'zh_CN': '展开配置方式',
+        'en': 'Expand Config'
+    },syncFilesTitle: {
+        'zh_CN': '查看',
+        'en': 'View'
+    },syncNewFileText: {
+        'zh_CN': '新建',
+        'en': 'New'
+    },syncEditModeText: {
+        'zh_CN': '编辑',
+        'en': 'Edit'
+    },syncEditModeDoneText: {
+        'zh_CN': '完成',
+        'en': 'Done'
+    },syncFileItemEditText: {
+        'zh_CN': '编辑',
+        'en': 'Edit'
+    },syncFileItemDeleteText: {
+        'zh_CN': '删除',
+        'en': 'Delete'
+    },syncMarkdownToolsLabel: {
+        'zh_CN': '格式工具',
+        'en': 'Format Tools'
+    },syncSaveDocBtnText: {
+        'zh_CN': '保存',
+        'en': 'Save'
+    },syncMarkdownEmpty: {
+        'zh_CN': '暂无 Markdown 文件。点击“拉取”或“新建”。',
+        'en': 'No Markdown files yet. Click Pull or New.'
+    },syncStatusIdle: {
+        'zh_CN': '状态：未同步',
+        'en': 'Status: Not synced'
+    },syncStatusLoaded: {
+        'zh_CN': '状态：已加载本地同步数据',
+        'en': 'Status: Loaded local sync data'
+    },syncStatusPushed: {
+        'zh_CN': '状态：已推送到云端快照',
+        'en': 'Status: Pushed to cloud snapshot'
+    },syncStatusPulled: {
+        'zh_CN': '状态：已从云端拉取并更新',
+        'en': 'Status: Pulled and updated from cloud snapshot'
+    },syncStatusNoCloud: {
+        'zh_CN': '状态：云端暂无可拉取快照',
+        'en': 'Status: No cloud snapshot to pull'
     },widgetsViewTitle: {
         'zh_CN': '小组件',
         'en': 'Widgets'
@@ -4266,6 +4720,7 @@ function getViewTitleText(view = currentView) {
     if (safeView === 'widgets') return (i18n.sidePanelTitleWidgets && i18n.sidePanelTitleWidgets[currentLang]) || i18n.navWidgets[currentLang];
     if (safeView === 'additions') return (i18n.sidePanelTitleAdditions && i18n.sidePanelTitleAdditions[currentLang]) || i18n.navAdditions[currentLang];
     if (safeView === 'recommend') return (i18n.sidePanelTitleRecommend && i18n.sidePanelTitleRecommend[currentLang]) || i18n.navRecommend[currentLang];
+    if (safeView === 'sync') return (i18n.sidePanelTitleSync && i18n.sidePanelTitleSync[currentLang]) || i18n.navSync[currentLang];
     return i18n.pageTitle[currentLang];
 }
 
@@ -4338,6 +4793,120 @@ function applyLanguage() {
     if (navRecommendText) navRecommendText.textContent = i18n.navRecommend[currentLang];
     const navWidgetsText = document.getElementById('navWidgetsText');
     if (navWidgetsText) navWidgetsText.textContent = i18n.navWidgets[currentLang];
+    const navSyncText = document.getElementById('navSyncText');
+    if (navSyncText) navSyncText.textContent = i18n.navSync[currentLang];
+
+    const syncViewTitle = document.getElementById('syncViewTitle');
+    if (syncViewTitle) syncViewTitle.textContent = i18n.syncViewTitle[currentLang];
+    const syncViewDescription = document.getElementById('syncViewDescription');
+    if (syncViewDescription) syncViewDescription.textContent = i18n.syncViewDescription[currentLang];
+    const syncControlPanelCollapseBtnText = document.getElementById('syncControlPanelCollapseBtnText');
+    if (syncControlPanelCollapseBtnText) syncControlPanelCollapseBtnText.textContent = i18n.syncControlPanelCollapseBtnText[currentLang];
+    const syncControlPanelExpandBtnText = document.getElementById('syncControlPanelExpandBtnText');
+    if (syncControlPanelExpandBtnText) syncControlPanelExpandBtnText.textContent = i18n.syncControlPanelExpandBtnText[currentLang];
+    const syncRepoSettingsTitle = document.getElementById('syncRepoSettingsTitle');
+    if (syncRepoSettingsTitle) syncRepoSettingsTitle.textContent = i18n.syncRepoSettingsTitle[currentLang];
+    const syncProviderLabel = document.getElementById('syncProviderLabel');
+    if (syncProviderLabel) syncProviderLabel.textContent = i18n.syncProviderLabel[currentLang];
+    const syncProviderGithubOption = document.getElementById('syncProviderGithubOption');
+    if (syncProviderGithubOption) syncProviderGithubOption.textContent = i18n.syncProviderGithubOption[currentLang];
+    const syncProviderLocalOption = document.getElementById('syncProviderLocalOption');
+    if (syncProviderLocalOption) syncProviderLocalOption.textContent = i18n.syncProviderLocalOption[currentLang];
+    const syncGithubTokenLabel = document.getElementById('syncGithubTokenLabel');
+    if (syncGithubTokenLabel) syncGithubTokenLabel.textContent = i18n.syncGithubTokenLabel[currentLang];
+    const syncGithubOwnerLabel = document.getElementById('syncGithubOwnerLabel');
+    if (syncGithubOwnerLabel) syncGithubOwnerLabel.textContent = i18n.syncGithubOwnerLabel[currentLang];
+    const syncGithubRepoLabel = document.getElementById('syncGithubRepoLabel');
+    if (syncGithubRepoLabel) syncGithubRepoLabel.textContent = i18n.syncGithubRepoLabel[currentLang];
+    const syncGithubBranchLabel = document.getElementById('syncGithubBranchLabel');
+    if (syncGithubBranchLabel) syncGithubBranchLabel.textContent = i18n.syncGithubBranchLabel[currentLang];
+    const syncGithubBasePathLabel = document.getElementById('syncGithubBasePathLabel');
+    if (syncGithubBasePathLabel) syncGithubBasePathLabel.textContent = i18n.syncGithubBasePathLabel[currentLang];
+    const syncRepoTestBtnText = document.getElementById('syncRepoTestBtnText');
+    if (syncRepoTestBtnText) syncRepoTestBtnText.textContent = i18n.syncRepoTestBtnText[currentLang];
+    const syncRepoOpenHtmlBtnText = document.getElementById('syncRepoOpenHtmlBtnText');
+    if (syncRepoOpenHtmlBtnText) syncRepoOpenHtmlBtnText.textContent = i18n.syncRepoOpenHtmlBtnText[currentLang];
+    const syncRepoStatusText = document.getElementById('syncRepoStatusText');
+    if (syncRepoStatusText && (!syncRepoStatusText.textContent || !String(syncRepoStatusText.textContent).trim())) {
+        syncRepoStatusText.textContent = i18n.syncRepoStatusIdle[currentLang];
+    }
+    updateSyncRepoFormState();
+    const syncSettingsTitle = document.getElementById('syncSettingsTitle');
+    if (syncSettingsTitle) syncSettingsTitle.textContent = i18n.syncSettingsTitle[currentLang];
+    const syncPushPackageInfoBtnText = document.getElementById('syncPushPackageInfoBtnText');
+    if (syncPushPackageInfoBtnText) syncPushPackageInfoBtnText.textContent = i18n.syncPushPackageInfoBtnText[currentLang];
+    const syncPushPackageInfoModalClose = document.getElementById('syncPushPackageInfoModalClose');
+    if (syncPushPackageInfoModalClose) {
+        const closeLabel = getSyncText('syncPushPackageInfoModalCloseLabel', currentLang === 'zh_CN' ? '关闭' : 'Close');
+        syncPushPackageInfoModalClose.setAttribute('aria-label', closeLabel);
+        syncPushPackageInfoModalClose.title = closeLabel;
+    }
+    ensureSyncPackageOptionElements();
+    SYNC_PACKAGE_FIELDS.forEach((field) => {
+        const textEl = document.getElementById(field.textId);
+        const i18nPayload = i18n[field.i18nKey] || i18n.syncPushPackageRecommendPoolText;
+        if (textEl && i18nPayload?.[currentLang]) {
+            textEl.textContent = i18nPayload[currentLang];
+        }
+    });
+    const rawInfoBtn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
+    if (rawInfoBtn) {
+        const rawInfoBtnLabel = getSyncText('syncPushPackageRawHighVolumeInfoBtnLabel', currentLang === 'zh_CN' ? '说明' : 'Info');
+        rawInfoBtn.title = rawInfoBtnLabel;
+        rawInfoBtn.setAttribute('aria-label', rawInfoBtnLabel);
+    }
+    const rawInfoTitle = document.getElementById('syncPushPackageRawHighVolumeInfoTitle');
+    if (rawInfoTitle) {
+        rawInfoTitle.textContent = getSyncText('syncPushPackageRawHighVolumeInfoTitle', currentLang === 'zh_CN' ? '原始记录明细说明' : 'Raw Records Info');
+    }
+    const rawInfoText = document.getElementById('syncPushPackageRawHighVolumeInfoText');
+    if (rawInfoText) {
+        rawInfoText.textContent = getSyncText(
+            'syncPushPackageRawHighVolumeInfoText',
+            currentLang === 'zh_CN'
+                ? '包含原始新增记录、原始浏览历史、翻牌历史。该包体量更大且包含更多访问细节，默认关闭以减少推送体量并降低隐私暴露面，仅在需要深度回溯时再勾选。'
+                : 'Includes raw additions, raw browsing history, and flip history. This package is larger and carries finer visit details, so it stays off by default to reduce push size and privacy exposure; enable it only for deep backtracking.'
+        );
+    }
+    const syncPullPolicyInfoBtn = document.getElementById('syncPullPolicyInfoBtn');
+    if (syncPullPolicyInfoBtn) {
+        const label = getSyncText('syncPullPolicyInfoBtnLabel', currentLang === 'zh_CN' ? '说明' : 'Info');
+        syncPullPolicyInfoBtn.title = label;
+        syncPullPolicyInfoBtn.setAttribute('aria-label', label);
+    }
+    const syncPullPolicyInfoText = document.getElementById('syncPullPolicyInfoText');
+    if (syncPullPolicyInfoText) {
+        syncPullPolicyInfoText.textContent = getSyncText(
+            'syncPullPolicyInfoText',
+            currentLang === 'zh_CN'
+                ? '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。'
+                : 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
+        );
+    }
+    const syncPullBtnText = document.getElementById('syncPullBtnText');
+    if (syncPullBtnText) syncPullBtnText.textContent = i18n.syncPullBtnText[currentLang];
+    const syncPushBtnText = document.getElementById('syncPushBtnText');
+    if (syncPushBtnText) syncPushBtnText.textContent = i18n.syncPushBtnText[currentLang];
+    const syncNewFileText = document.getElementById('syncNewFileText');
+    if (syncNewFileText) syncNewFileText.textContent = i18n.syncNewFileText[currentLang];
+    const syncMarkdownToolsLabel = document.getElementById('syncMarkdownToolsLabel');
+    if (syncMarkdownToolsLabel) syncMarkdownToolsLabel.textContent = getSyncText('syncMarkdownToolsLabel', currentLang === 'zh_CN' ? '格式工具' : 'Format Tools');
+    refreshSyncMarkdownToolLabels();
+    updateSyncEditModeButtonText();
+    const syncSaveDocBtnText = document.getElementById('syncSaveDocBtnText');
+    if (syncSaveDocBtnText) syncSaveDocBtnText.textContent = i18n.syncSaveDocBtnText[currentLang];
+    updateSyncSaveButtonTooltip();
+    const syncMarkdownEmpty = document.getElementById('syncMarkdownEmpty');
+    if (syncMarkdownEmpty) syncMarkdownEmpty.textContent = i18n.syncMarkdownEmpty[currentLang];
+    updateSyncPathInfoText();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    setSyncPushPackageInfoVisible(syncPushPackageInfoVisible);
+    setSyncRawHighVolumeInfoVisible(syncRawHighVolumeInfoVisible);
+    setSyncPullPolicyInfoVisible(syncPullPolicyInfoVisible);
+    updateSyncRepoCollapseButton();
+    updateSyncStatusUI();
+    scheduleSyncControlPanelLayout(0);
 
     const widgetsViewTitle = document.getElementById('widgetsViewTitle');
     if (widgetsViewTitle) widgetsViewTitle.textContent = i18n.widgetsViewTitle[currentLang];
@@ -5177,7 +5746,7 @@ function updateMainSearchVisibility() {
     const searchContainer = document.querySelector('.search-container');
     if (!searchContainer) return;
 
-    const shouldHide = currentView === 'widgets';
+    const shouldHide = currentView === 'widgets' || currentView === 'sync';
     searchContainer.classList.toggle('search-container-hidden', shouldHide);
 
     if (shouldHide) {
@@ -7531,9 +8100,5532 @@ function renderCurrentView() {
         case 'recommend':
             renderRecommendView();
             break;
+        case 'sync': {
+            const syncViewRoot = document.getElementById('syncView');
+            if (!syncViewRoot) {
+                console.warn('[SyncView] #syncView not found, fallback to widgets view');
+                currentView = 'widgets';
+                renderWidgetsView();
+                break;
+            }
+            renderSyncView();
+            break;
+        }
         default:
             break;
     }
+}
+
+// =============================================================================
+// 同步 / AI 分析视图
+// =============================================================================
+
+function getSyncText(key, fallback = '') {
+    try {
+        if (i18n?.[key]?.[currentLang] != null) {
+            return i18n[key][currentLang];
+        }
+    } catch (_) { }
+    return fallback;
+}
+
+function getSyncNowLabel(timestamp = Date.now()) {
+    try {
+        return formatTime(timestamp);
+    } catch (_) {
+        return String(timestamp);
+    }
+}
+
+function cloneSyncDefaultDocs() {
+    return SYNC_DEFAULT_DOCS.map((doc) => ({
+        id: String(doc.id || doc.name || `doc-${Date.now()}`),
+        name: String(doc.name || doc.id || 'agent.md'),
+        markdown: String(doc.markdown || ''),
+        updatedAt: Number(doc.updatedAt || Date.now()),
+        localEdited: Boolean(doc.localEdited)
+    }));
+}
+
+function normalizeSyncRelativePath(path = '') {
+    return String(path || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '')
+        .replace(/\/+/g, '/');
+}
+
+function joinSyncRelativePath(...parts) {
+    const output = [];
+    parts.forEach((part) => {
+        const normalized = normalizeSyncRelativePath(part);
+        if (normalized) output.push(normalized);
+    });
+    return output.join('/');
+}
+
+function getSyncPathBasename(path = '') {
+    const normalized = normalizeSyncRelativePath(path);
+    if (!normalized) return '';
+    const segments = normalized.split('/');
+    return segments[segments.length - 1] || '';
+}
+
+function getCurrentSyncAgentDocName(docsInput = syncDocsState) {
+    const docs = Array.isArray(docsInput) ? docsInput : [];
+    const agentDoc = docs.find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
+    return sanitizeSyncDocName(agentDoc?.name, SYNC_AGENT_DOC_NAME);
+}
+
+function buildSyncDateKey(timestamp = Date.now()) {
+    const d = new Date(Number(timestamp) || Date.now());
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function buildSyncTimeKey(timestamp = Date.now()) {
+    const d = new Date(Number(timestamp) || Date.now());
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}${mm}${ss}`;
+}
+
+function buildSyncLocalSnapshotFileName(timestamp = Date.now()) {
+    const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
+    const timeKey = buildSyncTimeKey(timestamp);
+    return `bookmark-record-recommend-sync-snapshot-${dateKey}-${timeKey}.json`;
+}
+
+function buildSyncLocalExportArchiveName(timestamp = Date.now()) {
+    const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
+    const timeKey = buildSyncTimeKey(timestamp);
+    return `bookmark-record-recommend-sync-snapshot-${dateKey}-${timeKey}.zip`;
+}
+
+async function downloadSyncLocalSnapshot(snapshotInput) {
+    const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
+    const ts = Number(snapshot?.updatedAt || Date.now()) || Date.now();
+    const filename = buildSyncLocalSnapshotFileName(ts);
+    let jsonText = '';
+    try {
+        jsonText = JSON.stringify(snapshot, null, 2);
+    } catch (error) {
+        return {
+            success: false,
+            filename,
+            error: String(error?.message || error || 'snapshot_serialize_failed')
+        };
+    }
+    if (typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return {
+            success: false,
+            filename,
+            error: 'browser_download_api_unavailable'
+        };
+    }
+
+    const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const revokeObjectUrl = () => {
+        try { URL.revokeObjectURL(objectUrl); } catch (_) { }
+    };
+
+    try {
+        let downloadApiError = '';
+        const tryBrowserDownload = async (saveAs) => {
+            return await new Promise((resolve) => {
+                try {
+                    browserAPI.downloads.download(
+                        {
+                            url: objectUrl,
+                            filename,
+                            saveAs: !!saveAs,
+                            conflictAction: 'uniquify'
+                        },
+                        (downloadId) => {
+                            const lastError = browserAPI?.runtime?.lastError;
+                            if (lastError) {
+                                resolve({
+                                    success: false,
+                                    error: String(lastError.message || lastError || 'downloads_api_failed')
+                                });
+                                return;
+                            }
+                            resolve({ success: typeof downloadId === 'number' && downloadId > 0 });
+                        }
+                    );
+                } catch (error) {
+                    resolve({
+                        success: false,
+                        error: String(error?.message || error || 'downloads_api_exception')
+                    });
+                }
+            });
+        };
+
+        if (browserAPI?.downloads && typeof browserAPI.downloads.download === 'function') {
+            const saveAsResult = await tryBrowserDownload(true);
+            if (saveAsResult?.success) {
+                return {
+                    success: true,
+                    filename,
+                    method: 'downloads_api_save_as'
+                };
+            }
+            downloadApiError = String(saveAsResult?.error || '');
+
+            const isUserCanceled = /cancel(ed|led)?|user canceled|user cancelled/i.test(downloadApiError);
+            if (!isUserCanceled) {
+                const autoResult = await tryBrowserDownload(false);
+                if (autoResult?.success) {
+                    return {
+                        success: true,
+                        filename,
+                        method: 'downloads_api_auto'
+                    };
+                }
+                downloadApiError = String(autoResult?.error || downloadApiError || '');
+            }
+        }
+
+        if (!document?.body) {
+            return {
+                success: false,
+                filename,
+                error: downloadApiError || 'document_body_unavailable'
+            };
+        }
+        try {
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = filename;
+            anchor.rel = 'noopener';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            return {
+                success: true,
+                filename,
+                method: 'anchor'
+            };
+        } catch (error) {
+            return {
+                success: false,
+                filename,
+                error: String(error?.message || error || downloadApiError || 'anchor_download_failed')
+            };
+        }
+    } finally {
+        setTimeout(revokeObjectUrl, 1500);
+    }
+}
+
+function normalizeSyncDownloadPathSegment(segment = '') {
+    return String(segment || '')
+        .trim()
+        .replace(/[\\:*?"<>|]+/g, '-')
+        .replace(/\s+/g, ' ')
+        || 'untitled';
+}
+
+let syncZipCrc32TableCache = null;
+
+function getSyncZipCrc32Table() {
+    if (syncZipCrc32TableCache) return syncZipCrc32TableCache;
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+        let value = i;
+        for (let j = 0; j < 8; j += 1) {
+            if (value & 1) {
+                value = (0xEDB88320 ^ (value >>> 1)) >>> 0;
+            } else {
+                value = value >>> 1;
+            }
+        }
+        table[i] = value >>> 0;
+    }
+    syncZipCrc32TableCache = table;
+    return table;
+}
+
+function computeSyncZipCrc32(bytesInput) {
+    const bytes = bytesInput instanceof Uint8Array ? bytesInput : new Uint8Array(bytesInput || []);
+    const table = getSyncZipCrc32Table();
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i += 1) {
+        crc = (table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8)) >>> 0;
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function buildSyncZipDosTimeDate(timestamp = Date.now()) {
+    const d = new Date(Number(timestamp) || Date.now());
+    const year = Math.min(2107, Math.max(1980, d.getFullYear()));
+    const month = Math.min(12, Math.max(1, d.getMonth() + 1));
+    const day = Math.min(31, Math.max(1, d.getDate()));
+    const hour = Math.min(23, Math.max(0, d.getHours()));
+    const minute = Math.min(59, Math.max(0, d.getMinutes()));
+    const second = Math.min(59, Math.max(0, d.getSeconds()));
+    return {
+        dosTime: ((hour << 11) | (minute << 5) | Math.floor(second / 2)) & 0xFFFF,
+        dosDate: (((year - 1980) << 9) | (month << 5) | day) & 0xFFFF
+    };
+}
+
+function concatSyncUint8Arrays(chunks = []) {
+    const validChunks = Array.isArray(chunks) ? chunks.filter((chunk) => chunk instanceof Uint8Array && chunk.length > 0) : [];
+    let totalLength = 0;
+    validChunks.forEach((chunk) => {
+        totalLength += chunk.length;
+    });
+    const output = new Uint8Array(totalLength);
+    let offset = 0;
+    validChunks.forEach((chunk) => {
+        output.set(chunk, offset);
+        offset += chunk.length;
+    });
+    return output;
+}
+
+function buildSyncLocalExportZipEntryPath(path = '') {
+    const normalized = normalizeSyncRelativePath(path);
+    if (!normalized) return '';
+    return normalized
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => normalizeSyncDownloadPathSegment(segment))
+        .join('/');
+}
+
+function buildSyncLocalExportZipBlob(bundleInput) {
+    const bundle = bundleInput && typeof bundleInput === 'object' ? bundleInput : {};
+    const files = Array.isArray(bundle.files) ? bundle.files : [];
+    if (!files.length) {
+        return {
+            success: false,
+            error: 'empty_export_files',
+            entries: []
+        };
+    }
+    if (typeof TextEncoder !== 'function') {
+        return {
+            success: false,
+            error: 'text_encoder_unavailable',
+            entries: []
+        };
+    }
+    const encoder = new TextEncoder();
+    const entryMap = new Map();
+    files.forEach((file) => {
+        const safePath = buildSyncLocalExportZipEntryPath(file?.path || '');
+        if (!safePath) return;
+        entryMap.set(safePath, {
+            path: safePath,
+            text: String(file?.text || '')
+        });
+    });
+    const entries = Array.from(entryMap.values());
+    if (!entries.length) {
+        return {
+            success: false,
+            error: 'empty_export_files',
+            entries: []
+        };
+    }
+    if (entries.length > 0xFFFF) {
+        return {
+            success: false,
+            error: 'zip_entry_limit_exceeded',
+            entries
+        };
+    }
+
+    const localChunks = [];
+    const centralChunks = [];
+    let localOffset = 0;
+    let centralDirectorySize = 0;
+    const zipTimestamp = Number(bundle?.timestamp || Date.now()) || Date.now();
+    const { dosTime, dosDate } = buildSyncZipDosTimeDate(zipTimestamp);
+
+    for (let i = 0; i < entries.length; i += 1) {
+        const entry = entries[i];
+        const nameBytes = encoder.encode(entry.path);
+        const dataBytes = encoder.encode(entry.text);
+        if (dataBytes.length > 0xFFFFFFFF) {
+            return {
+                success: false,
+                error: 'zip_entry_size_limit_exceeded',
+                entries
+            };
+        }
+        const crc32 = computeSyncZipCrc32(dataBytes);
+
+        const localHeader = new Uint8Array(30 + nameBytes.length);
+        const localView = new DataView(localHeader.buffer);
+        localView.setUint32(0, 0x04034b50, true);
+        localView.setUint16(4, 20, true);
+        localView.setUint16(6, 0, true);
+        localView.setUint16(8, 0, true);
+        localView.setUint16(10, dosTime, true);
+        localView.setUint16(12, dosDate, true);
+        localView.setUint32(14, crc32, true);
+        localView.setUint32(18, dataBytes.length >>> 0, true);
+        localView.setUint32(22, dataBytes.length >>> 0, true);
+        localView.setUint16(26, nameBytes.length, true);
+        localView.setUint16(28, 0, true);
+        localHeader.set(nameBytes, 30);
+        localChunks.push(localHeader, dataBytes);
+
+        const centralHeader = new Uint8Array(46 + nameBytes.length);
+        const centralView = new DataView(centralHeader.buffer);
+        centralView.setUint32(0, 0x02014b50, true);
+        centralView.setUint16(4, 20, true);
+        centralView.setUint16(6, 20, true);
+        centralView.setUint16(8, 0, true);
+        centralView.setUint16(10, 0, true);
+        centralView.setUint16(12, dosTime, true);
+        centralView.setUint16(14, dosDate, true);
+        centralView.setUint32(16, crc32, true);
+        centralView.setUint32(20, dataBytes.length >>> 0, true);
+        centralView.setUint32(24, dataBytes.length >>> 0, true);
+        centralView.setUint16(28, nameBytes.length, true);
+        centralView.setUint16(30, 0, true);
+        centralView.setUint16(32, 0, true);
+        centralView.setUint16(34, 0, true);
+        centralView.setUint16(36, 0, true);
+        centralView.setUint32(38, 0, true);
+        centralView.setUint32(42, localOffset >>> 0, true);
+        centralHeader.set(nameBytes, 46);
+        centralChunks.push(centralHeader);
+
+        localOffset += localHeader.length + dataBytes.length;
+        centralDirectorySize += centralHeader.length;
+    }
+
+    const endRecord = new Uint8Array(22);
+    const endView = new DataView(endRecord.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, entries.length, true);
+    endView.setUint16(10, entries.length, true);
+    endView.setUint32(12, centralDirectorySize >>> 0, true);
+    endView.setUint32(16, localOffset >>> 0, true);
+    endView.setUint16(20, 0, true);
+
+    const zipBytes = concatSyncUint8Arrays([...localChunks, ...centralChunks, endRecord]);
+    if (!zipBytes.length || typeof Blob === 'undefined') {
+        return {
+            success: false,
+            error: 'zip_blob_unavailable',
+            entries
+        };
+    }
+
+    return {
+        success: true,
+        entries,
+        blob: new Blob([zipBytes], { type: 'application/zip' })
+    };
+}
+
+async function downloadSyncBlobAsFile(blobInput, filenameInput, options = {}) {
+    const blob = blobInput instanceof Blob ? blobInput : null;
+    const filename = String(filenameInput || '').trim();
+    if (!blob || !filename) {
+        return {
+            success: false,
+            filename,
+            error: 'invalid_download_blob'
+        };
+    }
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return {
+            success: false,
+            filename,
+            error: 'browser_download_api_unavailable'
+        };
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    const revokeObjectUrl = () => {
+        try { URL.revokeObjectURL(objectUrl); } catch (_) { }
+    };
+
+    try {
+        let downloadApiError = '';
+        const tryBrowserDownload = async (saveAs) => {
+            return await new Promise((resolve) => {
+                try {
+                    browserAPI.downloads.download(
+                        {
+                            url: objectUrl,
+                            filename,
+                            saveAs: !!saveAs,
+                            conflictAction: 'uniquify'
+                        },
+                        (downloadId) => {
+                            const lastError = browserAPI?.runtime?.lastError;
+                            if (lastError) {
+                                resolve({
+                                    success: false,
+                                    error: String(lastError.message || lastError || 'downloads_api_failed')
+                                });
+                                return;
+                            }
+                            resolve({ success: typeof downloadId === 'number' && downloadId > 0 });
+                        }
+                    );
+                } catch (error) {
+                    resolve({
+                        success: false,
+                        error: String(error?.message || error || 'downloads_api_exception')
+                    });
+                }
+            });
+        };
+
+        if (browserAPI?.downloads && typeof browserAPI.downloads.download === 'function') {
+            const preferSaveAs = !!options?.preferSaveAs;
+            const firstResult = await tryBrowserDownload(preferSaveAs);
+            if (firstResult?.success) {
+                return {
+                    success: true,
+                    filename,
+                    method: preferSaveAs ? 'downloads_api_save_as' : 'downloads_api_auto'
+                };
+            }
+            downloadApiError = String(firstResult?.error || '');
+            const isUserCanceled = /cancel(ed|led)?|user canceled|user cancelled/i.test(downloadApiError);
+            if (!isUserCanceled) {
+                const secondResult = await tryBrowserDownload(!preferSaveAs);
+                if (secondResult?.success) {
+                    return {
+                        success: true,
+                        filename,
+                        method: preferSaveAs ? 'downloads_api_auto' : 'downloads_api_save_as'
+                    };
+                }
+                downloadApiError = String(secondResult?.error || downloadApiError || '');
+            }
+        }
+
+        if (!document?.body) {
+            return {
+                success: false,
+                filename,
+                error: downloadApiError || 'document_body_unavailable'
+            };
+        }
+
+        try {
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = filename;
+            anchor.rel = 'noopener';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            return {
+                success: true,
+                filename,
+                method: 'anchor'
+            };
+        } catch (error) {
+            return {
+                success: false,
+                filename,
+                error: String(error?.message || error || downloadApiError || 'anchor_download_failed')
+            };
+        }
+    } finally {
+        setTimeout(revokeObjectUrl, 1500);
+    }
+}
+
+function buildSyncLocalExportBundle(repoConfigInput, snapshotInput) {
+    const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
+    const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
+    const nowTs = Number(snapshot?.updatedAt || Date.now()) || Date.now();
+    const paths = buildSyncRepoPaths(repoConfig, nowTs);
+    const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
+
+    const files = [
+        {
+            path: paths.dataLatestPath,
+            text: JSON.stringify(snapshot, null, 2)
+        },
+        {
+            path: paths.dataSnapshotPath,
+            text: JSON.stringify(snapshot, null, 2)
+        }
+    ];
+
+    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const docsIndex = {
+        schema: 'bookmark-record-recommend.ai-input-docs-index.v1',
+        updatedAt: nowTs,
+        updatedAtText: getSyncNowLabel(nowTs),
+        docs: []
+    };
+
+    docs.forEach((doc, index) => {
+        const kind = doc?.kind || SYNC_DOC_KIND_INPUT;
+        if (kind === SYNC_DOC_KIND_AGENT) {
+            const ruleFileName = sanitizeSyncDocName(doc?.name, SYNC_AGENT_DOC_NAME);
+            const ruleFilePath = joinSyncRelativePath(paths.basePath, ruleFileName);
+            files.push({
+                path: ruleFilePath,
+                text: String(doc?.markdown || '')
+            });
+            return;
+        }
+        if (kind === SYNC_DOC_KIND_RESULT) {
+            return;
+        }
+        const safeRelativePath = sanitizeSyncDocRelativePath(doc?.name, `doc-${index + 1}.md`);
+        const docPath = joinSyncRelativePath(inputDocsRoot, safeRelativePath);
+        docsIndex.docs.push({
+            name: safeRelativePath,
+            path: docPath,
+            updatedAt: Number(doc?.updatedAt || nowTs) || nowTs
+        });
+        files.push({
+            path: docPath,
+            text: String(doc?.markdown || '')
+        });
+    });
+
+    files.push({
+        path: joinSyncRelativePath(inputDocsRoot, 'index.json'),
+        text: JSON.stringify(docsIndex, null, 2)
+    });
+
+    const metaState = {
+        schema: 'bookmark-record-recommend.ai-sync-state.v1',
+        provider: SYNC_PROVIDER_LOCAL,
+        branch: String(repoConfig.branch || '').trim() || 'main',
+        basePath: paths.basePath,
+        pushedAt: nowTs,
+        pushedAtText: getSyncNowLabel(nowTs),
+        packageCount: Number(snapshot?.packageCount || 0),
+        docsCount: docs.length
+    };
+    files.push({
+        path: paths.metaStatePath,
+        text: JSON.stringify(metaState, null, 2)
+    });
+
+    const dedupedMap = new Map();
+    files.forEach((entry) => {
+        const normalizedPath = normalizeSyncRelativePath(entry?.path || '');
+        if (!normalizedPath) return;
+        dedupedMap.set(normalizedPath, {
+            path: normalizedPath,
+            text: String(entry?.text || '')
+        });
+    });
+
+    return {
+        timestamp: nowTs,
+        rootFolder: '',
+        files: Array.from(dedupedMap.values())
+    };
+}
+
+async function downloadSyncLocalExportBundle(snapshotInput, repoConfigInput = syncConfigState) {
+    const bundle = buildSyncLocalExportBundle(repoConfigInput, snapshotInput);
+    const files = Array.isArray(bundle.files) ? bundle.files : [];
+    if (!files.length) {
+        return {
+            success: false,
+            error: 'empty_export_files',
+            rootFolder: bundle.rootFolder || '',
+            filesTotal: 0,
+            downloadedCount: 0,
+            failedCount: 0,
+            failed: []
+        };
+    }
+
+    const archiveName = buildSyncLocalExportArchiveName(bundle.timestamp);
+    const zipResult = buildSyncLocalExportZipBlob(bundle);
+    if (!zipResult?.success || !(zipResult.blob instanceof Blob)) {
+        const fallback = await downloadSyncLocalSnapshot(snapshotInput);
+        return {
+            success: !!fallback?.success,
+            exportMode: 'json_fallback',
+            fallbackUsed: true,
+            fallbackReason: String(zipResult?.error || 'zip_build_failed'),
+            fallback,
+            archiveName: String(fallback?.filename || ''),
+            archiveEntries: files.length,
+            rootFolder: bundle.rootFolder || '',
+            filesTotal: 1,
+            downloadedCount: fallback?.success ? 1 : 0,
+            failedCount: fallback?.success ? 0 : 1,
+            failed: fallback?.success ? [] : [{ path: '', error: String(fallback?.error || 'downloads_api_unavailable') }]
+        };
+    }
+    const downloadResult = await downloadSyncBlobAsFile(zipResult.blob, archiveName, { preferSaveAs: false });
+    const failed = downloadResult?.success
+        ? []
+        : [{ path: archiveName, error: String(downloadResult?.error || 'download_failed') }];
+    return {
+        success: !!downloadResult?.success,
+        exportMode: 'zip',
+        archiveName,
+        archiveEntries: zipResult.entries.length,
+        method: String(downloadResult?.method || ''),
+        rootFolder: bundle.rootFolder || '',
+        filesTotal: 1,
+        downloadedCount: downloadResult?.success ? 1 : 0,
+        failedCount: downloadResult?.success ? 0 : 1,
+        failed
+    };
+}
+
+function sanitizeSyncDocName(name = '', fallback = 'ai-result.md') {
+    const raw = String(name || '').trim() || fallback;
+    const normalized = raw
+        .replace(/[\\:*?"<>|]+/g, '-')
+        .replace(/\/+/g, '/')
+        .replace(/^\/+|\/+$/g, '');
+    const leaf = normalized.split('/').filter(Boolean).pop() || fallback;
+    return leaf.toLowerCase().endsWith('.md') ? leaf : `${leaf}.md`;
+}
+
+function sanitizeSyncDocRelativePath(name = '', fallback = 'ai-result.md') {
+    const normalized = normalizeSyncRelativePath(String(name || '').trim());
+    const raw = normalized || String(fallback || 'ai-result.md').trim();
+    const safeSegments = raw
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => {
+            const safe = String(segment || '')
+                .trim()
+                .replace(/[\\:*?"<>|]+/g, '-')
+                .replace(/\s+/g, ' ');
+            return safe || 'untitled';
+        });
+    let output = safeSegments.join('/');
+    if (!output) output = String(fallback || 'ai-result.md').trim() || 'ai-result.md';
+    if (!/\.md$/i.test(output)) output = `${output}.md`;
+    return normalizeSyncRelativePath(output) || 'ai-result.md';
+}
+
+function buildSyncRepoConfig(configInput = syncConfigState) {
+    const config = normalizeSyncConfig(configInput || null);
+    return {
+        provider: String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        token: String(config.githubRepoToken || '').trim(),
+        owner: String(config.githubRepoOwner || '').trim(),
+        repo: String(config.githubRepoName || '').trim(),
+        branch: String(config.githubRepoBranch || 'main').trim() || 'main',
+        basePath: normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
+            || SYNC_GITHUB_DEFAULT_BASE_PATH
+    };
+}
+
+function buildSyncRepoPaths(repoConfig, timestamp = Date.now()) {
+    const basePath = normalizeSyncRelativePath(repoConfig?.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    return {
+        basePath,
+        resultsRootPath: joinSyncRelativePath(basePath, SYNC_GITHUB_RESULTS_SUBDIR),
+        dataLatestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_LATEST_PATH),
+        dataSnapshotPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_SNAPSHOT_PATH),
+        metaStatePath: joinSyncRelativePath(basePath, SYNC_GITHUB_META_STATE_PATH)
+    };
+}
+
+function getSyncResultsRootPath(configInput = syncConfigState) {
+    const config = buildSyncRepoConfig(configInput);
+    return joinSyncRelativePath(config.basePath, SYNC_GITHUB_RESULTS_SUBDIR);
+}
+
+function buildSyncCloudPathDiagram(configInput = syncConfigState) {
+    const repoConfig = buildSyncRepoConfig(configInput);
+    const basePath = normalizeSyncRelativePath(repoConfig.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    const ruleFileName = getCurrentSyncAgentDocName(syncDocsState);
+    const isZh = currentLang === 'zh_CN';
+
+    const rows = isZh
+        ? [
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI分析规则文档：限定可读路径、结果格式、分析流程与引用要求。' },
+            { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: '“查看”区输入文档索引：记录任务 Markdown 的文件名与更新时间。' },
+            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: '输入任务文档：你在“查看”里维护的问题、上下文、约束与补充说明。' },
+            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI 输出结果文档：latest/daily/weekly/monthly/runs 等分析结果。' },
+            { branch: '|--', path: 'data/latest.json', op: '[PUSH]', desc: '本次勾选数据包总快照：推荐数据池、推荐行为、书签记录（新增日历/点击明细/点击排行/关联记录）、时间捕捉、书签树快照；勾选“原始记录明细”时还会包含原始新增记录与原始浏览历史。' },
+            { branch: '|--', path: 'data/snapshots/current.json', op: '[PUSH]', desc: '覆盖快照：每次推送覆盖写入；历史回溯依赖 Git commit 时间线与 compare。' },
+            { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: '同步目录提交时间线：查看最近改动文件与变更频率。' },
+            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '两次提交差异摘要：查看新增/修改/删除文件与改动规模。' },
+            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' }
+        ]
+        : [
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Sync/AI rule document: defines readable paths, output format, analysis flow, and citation rules.' },
+            { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: 'Input-doc index in the View panel: file names and update timestamps.' },
+            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: 'Input task docs: prompts, context, constraints, and notes you maintain in View.' },
+            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI result docs: latest/daily/weekly/monthly/runs outputs.' },
+            { branch: '|--', path: 'data/latest.json', op: '[PUSH]', desc: 'Snapshot of selected packages: recommendation pool, recommendation events, bookmark records (additions calendar/click rows/click ranking/related records), time tracking, bookmark-tree snapshot; plus raw additions and raw browsing history when Raw Records is enabled.' },
+            { branch: '|--', path: 'data/snapshots/current.json', op: '[PUSH]', desc: 'Overwrite snapshot on each push; historical backtracking should use Git commits and compare.' },
+            { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: 'Commit timeline for the sync directory and change frequency.' },
+            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary between two commits (added/updated/deleted files).' },
+            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' }
+        ];
+
+    const pathWidth = rows.reduce((max, row) => Math.max(max, String(row.path || '').length), 0);
+    const lines = [`${basePath}/`];
+    rows.forEach((row) => {
+        const pathText = String(row.path || '').padEnd(pathWidth, ' ');
+        lines.push(`${row.branch} ${pathText} ${row.op} ${row.desc}`);
+    });
+    return lines.join('\n');
+}
+
+function updateSyncPathInfoText() {
+    const config = buildSyncRepoConfig(syncConfigState);
+    const basePath = normalizeSyncRelativePath(config.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    const ruleFileName = getCurrentSyncAgentDocName(syncDocsState);
+    const ruleExamplePath = `${basePath}/${ruleFileName}`;
+    const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
+    const hasUserCreatedDoc = docs.some((doc) => doc && doc.kind === SYNC_DOC_KIND_INPUT);
+    const filesTitle = document.getElementById('syncFilesTitle');
+    if (filesTitle) {
+        filesTitle.textContent = getSyncText('syncFilesTitle', currentLang === 'zh_CN' ? '查看' : 'View');
+    }
+    const filesHint = document.getElementById('syncFilesPathHint');
+    if (filesHint) {
+        if (hasUserCreatedDoc) {
+            filesHint.textContent = currentLang === 'zh_CN'
+                ? '说明：条目支持编辑与删除；删除后在下次推送时会同步删除云端对应文件。'
+                : 'Note: items support edit/delete; deleted items are removed from cloud on next push.';
+        } else {
+            filesHint.textContent = currentLang === 'zh_CN'
+                ? `顶层说明：${ruleFileName} 是规则文件（位于 ${ruleExamplePath}），用于定义 AI 处理规则（含 Git commit/diff 优先读取）；新建 Markdown 后，这里会自动切换为拉取来源说明。`
+                : `Top-level note: ${ruleFileName} is the rule file at ${ruleExamplePath}. It defines AI rules with a Git commit/diff-first workflow. After creating Markdown files, this hint switches to pull-source info.`;
+        }
+    }
+    const pathTitle = document.getElementById('syncPushPackagePathTitle');
+    if (pathTitle) {
+        pathTitle.textContent = getSyncText('syncPushPackagePathTitle', currentLang === 'zh_CN' ? '推送到云端路径结构' : 'Cloud Path Layout');
+    }
+    const pathDiagram = document.getElementById('syncPushPackagePathDiagram');
+    if (pathDiagram) {
+        pathDiagram.textContent = buildSyncCloudPathDiagram(syncConfigState);
+    }
+}
+
+function setSyncPushPackageInfoVisible(visible) {
+    syncPushPackageInfoVisible = !!visible;
+    const modal = document.getElementById('syncPushPackageInfoModal');
+    if (modal) {
+        modal.classList.toggle('show', syncPushPackageInfoVisible);
+    }
+    const btn = document.getElementById('syncPushPackageInfoBtn');
+    if (btn) btn.setAttribute('aria-expanded', syncPushPackageInfoVisible ? 'true' : 'false');
+}
+
+function setSyncRawHighVolumeInfoVisible(visible) {
+    syncRawHighVolumeInfoVisible = !!visible;
+    const panel = document.getElementById('syncPushPackageRawHighVolumeInfoPanel');
+    if (panel) panel.hidden = !syncRawHighVolumeInfoVisible;
+    const btn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
+    if (btn) btn.setAttribute('aria-expanded', syncRawHighVolumeInfoVisible ? 'true' : 'false');
+}
+
+function setSyncPullPolicyInfoVisible(visible) {
+    syncPullPolicyInfoVisible = !!visible;
+    const panel = document.getElementById('syncPullPolicyInfoPanel');
+    if (panel) panel.hidden = !syncPullPolicyInfoVisible;
+    const btn = document.getElementById('syncPullPolicyInfoBtn');
+    if (btn) btn.setAttribute('aria-expanded', syncPullPolicyInfoVisible ? 'true' : 'false');
+}
+
+function hydrateSyncControlPanelCollapsedState() {
+    if (syncControlPanelCollapsedStateHydrated) return;
+    syncControlPanelCollapsedStateHydrated = true;
+    try {
+        const raw = String(localStorage.getItem(SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY) || '').trim().toLowerCase();
+        if (!raw) return;
+        if (raw === '1' || raw === 'true' || raw === 'collapsed') {
+            syncControlPanelCollapsed = true;
+            return;
+        }
+        if (raw === '0' || raw === 'false' || raw === 'expanded') {
+            syncControlPanelCollapsed = false;
+        }
+    } catch (_) { }
+}
+
+function persistSyncControlPanelCollapsedState() {
+    try {
+        localStorage.setItem(SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY, syncControlPanelCollapsed ? '1' : '0');
+    } catch (_) { }
+}
+
+function isSyncSingleColumnLayout() {
+    return window.matchMedia('(max-width: 360px)').matches;
+}
+
+function isSyncStackedPanelLayout() {
+    return window.matchMedia('(max-width: 920px)').matches;
+}
+
+function scheduleSyncControlPanelLayout(delayMs = 0) {
+    if (syncControlPanelLayoutTimer) clearTimeout(syncControlPanelLayoutTimer);
+    syncControlPanelLayoutTimer = setTimeout(() => {
+        syncControlPanelLayoutTimer = null;
+        applySyncControlPanelLayout();
+    }, Math.max(0, Number(delayMs) || 0));
+}
+
+function applySyncControlPanelLayout() {
+    const layout = document.querySelector('#syncView .sync-view-layout');
+    const controlPanel = document.querySelector('#syncView .sync-control-panel');
+    const expandRow = document.getElementById('syncControlPanelExpandRow');
+    const collapseBtn = document.getElementById('syncControlPanelCollapseBtn');
+    const expandBtn = document.getElementById('syncControlPanelExpandBtn');
+    const collapseBtnText = document.getElementById('syncControlPanelCollapseBtnText');
+    const collapseBtnIcon = collapseBtn?.querySelector('i');
+    if (!layout || !controlPanel) return;
+
+    const collapsed = syncControlPanelCollapsed === true;
+
+    layout.classList.toggle('sync-left-collapsed', collapsed);
+    controlPanel.classList.toggle('is-collapsed', collapsed);
+    if (expandRow) expandRow.hidden = true;
+
+    const collapseTitle = getSyncText('syncControlPanelCollapseBtnText', currentLang === 'zh_CN' ? '折叠' : 'Collapse');
+    const expandTitle = getSyncText('syncControlPanelExpandBtnText', currentLang === 'zh_CN' ? '展开' : 'Expand');
+    const actionLabel = collapsed ? expandTitle : collapseTitle;
+
+    if (collapseBtn) {
+        collapseBtn.disabled = false;
+        collapseBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        collapseBtn.title = actionLabel;
+    }
+    if (collapseBtnText) {
+        collapseBtnText.textContent = actionLabel;
+    }
+    if (collapseBtnIcon) {
+        if (isSyncStackedPanelLayout()) {
+            collapseBtnIcon.className = collapsed ? 'fas fa-angle-down' : 'fas fa-angle-up';
+        } else {
+            collapseBtnIcon.className = collapsed ? 'fas fa-angle-right' : 'fas fa-angle-left';
+        }
+    }
+    if (expandBtn) {
+        expandBtn.disabled = false;
+        expandBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        expandBtn.title = expandTitle;
+    }
+}
+
+function bindSyncControlPanelLayout() {
+    if (syncControlPanelCollapseBound) return;
+    syncControlPanelCollapseBound = true;
+
+    const collapseBtn = document.getElementById('syncControlPanelCollapseBtn');
+    if (collapseBtn) {
+        collapseBtn.addEventListener('click', () => {
+            syncControlPanelCollapsed = !syncControlPanelCollapsed;
+            persistSyncControlPanelCollapsedState();
+            scheduleSyncControlPanelLayout(0);
+        });
+    }
+
+    const expandBtn = document.getElementById('syncControlPanelExpandBtn');
+    if (expandBtn) {
+        expandBtn.addEventListener('click', () => {
+            syncControlPanelCollapsed = false;
+            persistSyncControlPanelCollapsedState();
+            scheduleSyncControlPanelLayout(0);
+        });
+    }
+
+    window.addEventListener('resize', () => scheduleSyncControlPanelLayout(60));
+
+    if (typeof ResizeObserver === 'function') {
+        const layout = document.querySelector('#syncView .sync-view-layout');
+        if (layout) {
+            syncControlPanelLayoutObserver = new ResizeObserver(() => {
+                scheduleSyncControlPanelLayout(40);
+            });
+            syncControlPanelLayoutObserver.observe(layout);
+        }
+    }
+}
+
+function scheduleSyncFilesCardLayout(delayMs = 0) {
+    if (syncFilesCardLayoutTimer) clearTimeout(syncFilesCardLayoutTimer);
+    syncFilesCardLayoutTimer = setTimeout(() => {
+        syncFilesCardLayoutTimer = null;
+        applySyncFilesCardLayout();
+    }, Math.max(0, Number(delayMs) || 0));
+}
+
+function applySyncFilesCardLayout() {
+    const filesCard = document.getElementById('syncFilesCardContainer');
+    const renderMount = document.getElementById('syncFilesCardRenderMount');
+    const renderPanel = document.querySelector('#syncView .sync-render-panel');
+    if (!filesCard || !renderMount) return;
+
+    if (!syncFilesCardOriginalParent) {
+        syncFilesCardOriginalParent = filesCard.parentNode;
+        syncFilesCardOriginalNextSibling = filesCard.nextSibling;
+    }
+
+    const useSingleColumnLayout = isSyncSingleColumnLayout();
+    if (!useSingleColumnLayout) {
+        if (filesCard.parentNode !== renderMount) {
+            renderMount.appendChild(filesCard);
+        }
+        if (renderPanel) renderPanel.classList.add('has-sync-files-top');
+        return;
+    }
+
+    if (renderPanel) renderPanel.classList.remove('has-sync-files-top');
+    if (filesCard.parentNode === syncFilesCardOriginalParent) return;
+
+    const fallbackAnchor = syncFilesCardOriginalParent?.querySelector?.('.sync-state-row') || null;
+    const anchorSibling = (syncFilesCardOriginalNextSibling && syncFilesCardOriginalNextSibling.parentNode === syncFilesCardOriginalParent)
+        ? syncFilesCardOriginalNextSibling
+        : fallbackAnchor;
+    if (anchorSibling) {
+        syncFilesCardOriginalParent.insertBefore(filesCard, anchorSibling);
+    } else {
+        syncFilesCardOriginalParent.appendChild(filesCard);
+    }
+}
+
+function bindSyncFilesCardLayout() {
+    if (syncFilesCardLayoutBound) return;
+    syncFilesCardLayoutBound = true;
+
+    window.addEventListener('resize', () => scheduleSyncFilesCardLayout(60));
+
+    if (typeof ResizeObserver === 'function') {
+        const layout = document.querySelector('#syncView .sync-view-layout');
+        if (layout) {
+            syncFilesCardLayoutObserver = new ResizeObserver(() => {
+                scheduleSyncFilesCardLayout(40);
+            });
+            syncFilesCardLayoutObserver.observe(layout);
+        }
+    }
+}
+
+function getSyncTokenGuideThemeParam() {
+    const attrTheme = String(document.documentElement.getAttribute('data-theme') || '').toLowerCase();
+    const knownTheme = String(currentTheme || '').toLowerCase();
+    if (attrTheme === 'dark' || attrTheme === 'light') return attrTheme;
+    if (knownTheme === 'dark' || knownTheme === 'light') return knownTheme;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function openSyncTokenGuidePage() {
+    if (!browserAPI || !browserAPI.runtime || typeof browserAPI.runtime.getURL !== 'function') {
+        showToast(currentLang === 'zh_CN' ? '无法打开说明页：运行时不可用' : 'Cannot open guide page: runtime unavailable');
+        return;
+    }
+
+    const langParam = currentLang === 'en' ? 'en' : 'zh';
+    const themeParam = getSyncTokenGuideThemeParam();
+    const guideUrl = `${browserAPI.runtime.getURL('github-token-guide.html')}?lang=${encodeURIComponent(langParam)}&theme=${encodeURIComponent(themeParam)}`;
+
+    if (browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
+        browserAPI.tabs.create({ url: guideUrl });
+        return;
+    }
+
+    window.open(guideUrl, '_blank', 'noopener');
+}
+
+function canCollapseSyncRepoCard(configInput = syncConfigState) {
+    return !!document.getElementById('syncRepoCard');
+}
+
+function updateSyncRepoCollapseButton() {
+    const card = document.getElementById('syncRepoCard');
+    const btn = document.getElementById('syncRepoCollapseBtn');
+    const text = document.getElementById('syncRepoCollapseBtnText');
+    const icon = btn?.querySelector('i');
+    const canCollapse = canCollapseSyncRepoCard(syncConfigState);
+    const collapsed = syncRepoCollapsed && canCollapse;
+
+    if (card) card.classList.toggle('is-collapsed', collapsed);
+
+    const labelKey = collapsed ? 'syncRepoCollapseBtnExpandText' : 'syncRepoCollapseBtnCollapseText';
+    const fallback = collapsed
+        ? (currentLang === 'zh_CN' ? '展开配置方式' : 'Expand Config')
+        : (currentLang === 'zh_CN' ? '折叠配置方式' : 'Collapse Config');
+    const label = getSyncText(labelKey, fallback);
+    if (text) text.textContent = label;
+
+    if (icon) {
+        icon.className = collapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+    }
+    if (btn) {
+        btn.disabled = !canCollapse;
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.title = label;
+    }
+}
+
+function markSyncRepoConnected(configInput = syncConfigState) {
+    void configInput;
+    updateSyncRepoCollapseButton();
+}
+
+function getSyncRepoMissingReason(repoConfig) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    if (config.provider !== SYNC_PROVIDER_GITHUB) {
+        return { code: '', text: '' };
+    }
+    if (!config.token) {
+        return {
+            code: 'missing_token',
+            text: currentLang === 'zh_CN' ? 'GitHub Token 未配置' : 'GitHub token is not configured'
+        };
+    }
+    if (!config.owner || !config.repo) {
+        return {
+            code: 'missing_repo',
+            text: currentLang === 'zh_CN' ? 'Owner / Repo 未配置' : 'Owner / repo is not configured'
+        };
+    }
+    return { code: '', text: '' };
+}
+
+function normalizeSyncGitHubToken(token) {
+    return String(token || '')
+        .trim()
+        .replace(/^(?:Bearer|token)\s+/i, '')
+        .trim();
+}
+
+function buildSyncGitHubAuthHeader(token) {
+    const normalized = normalizeSyncGitHubToken(token);
+    if (!normalized) return '';
+    return `Bearer ${normalized}`;
+}
+
+function encodeSyncGitHubPath(path) {
+    return String(path || '')
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+}
+
+function syncTextToBase64(text) {
+    const bytes = new TextEncoder().encode(String(text == null ? '' : text));
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+}
+
+function syncBase64ToText(contentBase64) {
+    const raw = String(contentBase64 || '').replace(/\s+/g, '');
+    if (!raw) return '';
+    const binary = atob(raw);
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+}
+
+function parseSyncJsonSafe(raw, fallback = null) {
+    try {
+        return JSON.parse(String(raw || ''));
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function formatSyncGitHubError(error) {
+    if (!error) return currentLang === 'zh_CN' ? '未知错误' : 'Unknown error';
+    if (String(error.code || '') === 'SYNC_GITHUB_TIMEOUT') {
+        return currentLang === 'zh_CN'
+            ? 'GitHub 请求超时，请检查网络后重试'
+            : 'GitHub request timed out. Check network and retry.';
+    }
+    const status = Number(error.status);
+    if (status === 401) {
+        return currentLang === 'zh_CN'
+            ? 'GitHub Token 无效或无权限（401）'
+            : 'GitHub token is invalid or unauthorized (401)';
+    }
+    if (status === 403) {
+        return currentLang === 'zh_CN'
+            ? 'GitHub 拒绝访问（403）'
+            : 'GitHub access denied (403)';
+    }
+    if (status === 404) {
+        return currentLang === 'zh_CN'
+            ? '仓库/分支/路径不存在（404）'
+            : 'Repository/branch/path not found (404)';
+    }
+    const message = String(error.message || '').trim();
+    if (message) return message;
+    return currentLang === 'zh_CN' ? 'GitHub 请求失败' : 'GitHub request failed';
+}
+
+async function syncGitHubRequestRaw(url, {
+    method = 'GET',
+    token = '',
+    headers = {},
+    body = undefined,
+    timeoutMs = SYNC_GITHUB_REQUEST_TIMEOUT_MS
+} = {}) {
+    const authHeader = buildSyncGitHubAuthHeader(token);
+    const requestHeaders = {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...headers
+    };
+    if (authHeader) requestHeaders.Authorization = authHeader;
+
+    const controller = (typeof AbortController === 'function') ? new AbortController() : null;
+    const requestTimeout = Math.max(1000, Number(timeoutMs) || SYNC_GITHUB_REQUEST_TIMEOUT_MS);
+    let timeoutId = null;
+    if (controller) {
+        timeoutId = setTimeout(() => {
+            try { controller.abort(); } catch (_) { }
+        }, requestTimeout);
+    }
+
+    let response = null;
+    try {
+        response = await fetch(url, {
+            method: String(method || 'GET').toUpperCase(),
+            headers: requestHeaders,
+            body,
+            cache: 'no-store',
+            signal: controller ? controller.signal : undefined
+        });
+    } catch (error) {
+        if (error && error.name === 'AbortError') {
+            const timeoutError = new Error(currentLang === 'zh_CN' ? '请求超时' : 'Request timed out');
+            timeoutError.code = 'SYNC_GITHUB_TIMEOUT';
+            timeoutError.timeoutMs = requestTimeout;
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+    }
+
+    const text = await response.text();
+    let json = null;
+    try {
+        json = text ? JSON.parse(text) : null;
+    } catch (_) {
+        json = null;
+    }
+
+    if (!response.ok) {
+        const error = new Error(
+            (json && typeof json.message === 'string' && json.message)
+            || `${response.status} ${response.statusText}`.trim()
+            || (currentLang === 'zh_CN' ? '请求失败' : 'Request failed')
+        );
+        error.status = response.status;
+        error.response = json || text;
+        throw error;
+    }
+
+    return { response, text, json };
+}
+
+async function syncGitHubRequestJson(url, options = {}) {
+    const result = await syncGitHubRequestRaw(url, options);
+    return result.json;
+}
+
+async function getSyncGitHubRepoInfo(repoConfig) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    return await syncGitHubRequestJson(
+        `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}`,
+        { token: config.token }
+    );
+}
+
+async function resolveSyncGitHubBranch(repoConfig, { repoInfo = null } = {}) {
+    const branch = String(repoConfig?.branch || '').trim();
+    if (branch) return branch;
+    const info = repoInfo || await getSyncGitHubRepoInfo(repoConfig);
+    const defaultBranch = String(info?.default_branch || '').trim();
+    if (!defaultBranch) {
+        throw new Error(currentLang === 'zh_CN' ? '未读取到默认分支' : 'Unable to resolve default branch');
+    }
+    return defaultBranch;
+}
+
+async function syncGitHubGetBranchRef(repoConfig, branch) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safeBranch = String(branch || '').trim();
+    if (!safeBranch) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN' ? '缺少分支名' : 'Missing branch name'
+        };
+    }
+    try {
+        const json = await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/ref/heads/${encodeURIComponent(safeBranch)}`,
+            { token: config.token }
+        );
+        const sha = String(json?.object?.sha || '').trim();
+        if (!sha) {
+            return {
+                success: false,
+                error: currentLang === 'zh_CN' ? '分支引用缺少 SHA' : 'Branch ref missing SHA'
+            };
+        }
+        return {
+            success: true,
+            branch: safeBranch,
+            sha,
+            ref: String(json?.ref || '')
+        };
+    } catch (error) {
+        if (Number(error?.status) === 404) {
+            return {
+                success: false,
+                notFound: true,
+                branch: safeBranch,
+                error: currentLang === 'zh_CN'
+                    ? `分支不存在：${safeBranch}`
+                    : `Branch not found: ${safeBranch}`
+            };
+        }
+        return { success: false, branch: safeBranch, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function createSyncGitHubBranchFromBase(repoConfig, targetBranch, baseBranch, baseSha) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safeTargetBranch = String(targetBranch || '').trim();
+    const safeBaseBranch = String(baseBranch || '').trim();
+    const safeBaseSha = String(baseSha || '').trim();
+    if (!safeTargetBranch || !safeBaseBranch || !safeBaseSha) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN' ? '分支创建参数不完整' : 'Missing branch creation inputs'
+        };
+    }
+    try {
+        await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/refs`,
+            {
+                method: 'POST',
+                token: config.token,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ref: `refs/heads/${safeTargetBranch}`,
+                    sha: safeBaseSha
+                })
+            }
+        );
+        return {
+            success: true,
+            branch: safeTargetBranch,
+            baseBranch: safeBaseBranch,
+            baseSha: safeBaseSha
+        };
+    } catch (error) {
+        const message = String(error?.response?.message || error?.message || '');
+        const alreadyExists = Number(error?.status) === 422 && /already exists/i.test(message);
+        if (alreadyExists) {
+            return {
+                success: true,
+                branch: safeTargetBranch,
+                baseBranch: safeBaseBranch,
+                baseSha: safeBaseSha,
+                alreadyExists: true
+            };
+        }
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function ensureSyncGitHubBranch(repoConfig, { createIfMissing = false, repoInfo = null } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const info = repoInfo || await getSyncGitHubRepoInfo(config);
+    const defaultBranch = String(info?.default_branch || '').trim();
+    const resolvedBranch = await resolveSyncGitHubBranch(config, { repoInfo: info });
+    const branchRef = await syncGitHubGetBranchRef(config, resolvedBranch);
+    if (branchRef.success) {
+        return {
+            success: true,
+            branch: resolvedBranch,
+            defaultBranch,
+            fullName: String(info?.full_name || `${config.owner}/${config.repo}`),
+            branchWillBeCreated: false,
+            branchCreated: false
+        };
+    }
+    if (!branchRef.notFound) {
+        return {
+            success: false,
+            error: branchRef.error || (currentLang === 'zh_CN' ? '读取分支失败' : 'Failed to read branch')
+        };
+    }
+    if (!createIfMissing) {
+        return {
+            success: true,
+            branch: resolvedBranch,
+            defaultBranch,
+            fullName: String(info?.full_name || `${config.owner}/${config.repo}`),
+            branchWillBeCreated: true,
+            branchCreated: false
+        };
+    }
+    const sourceBranch = defaultBranch || resolvedBranch;
+    if (!sourceBranch) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN'
+                ? '无法创建分支：未读取到默认分支'
+                : 'Unable to create branch: default branch unavailable'
+        };
+    }
+    if (sourceBranch.toLowerCase() === resolvedBranch.toLowerCase()) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN'
+                ? `无法创建分支：默认分支 ${sourceBranch} 不存在`
+                : `Unable to create branch: default branch ${sourceBranch} is missing`
+        };
+    }
+    const sourceRef = await syncGitHubGetBranchRef(config, sourceBranch);
+    if (!sourceRef.success) {
+        return {
+            success: false,
+            error: sourceRef.error || (currentLang === 'zh_CN' ? '读取默认分支失败' : 'Failed to read default branch ref')
+        };
+    }
+    const createResult = await createSyncGitHubBranchFromBase(config, resolvedBranch, sourceBranch, sourceRef.sha);
+    if (!createResult.success) {
+        return {
+            success: false,
+            error: createResult.error || (currentLang === 'zh_CN' ? '创建分支失败' : 'Failed to create branch')
+        };
+    }
+    return {
+        success: true,
+        branch: resolvedBranch,
+        defaultBranch,
+        fullName: String(info?.full_name || `${config.owner}/${config.repo}`),
+        branchWillBeCreated: false,
+        branchCreated: !createResult.alreadyExists
+    };
+}
+
+async function testSyncGitHubConnection(repoConfig) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const missing = getSyncRepoMissingReason(config);
+    if (missing.code) {
+        return { success: false, error: missing.text };
+    }
+    try {
+        const info = await getSyncGitHubRepoInfo(config);
+        const branchInfo = await ensureSyncGitHubBranch(config, { createIfMissing: false, repoInfo: info });
+        if (!branchInfo.success) {
+            return {
+                success: false,
+                error: branchInfo.error || (currentLang === 'zh_CN' ? '连接失败' : 'Connection failed')
+            };
+        }
+        return {
+            success: true,
+            fullName: String(branchInfo.fullName || info?.full_name || `${config.owner}/${config.repo}`),
+            resolvedBranch: String(branchInfo.branch || ''),
+            branchWillBeCreated: branchInfo.branchWillBeCreated === true,
+            defaultBranch: String(branchInfo.defaultBranch || '')
+        };
+    } catch (error) {
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubGetFile(repoConfig, path, { branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safePath = normalizeSyncRelativePath(path);
+    if (!safePath) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    }
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const encodedPath = encodeSyncGitHubPath(safePath);
+    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encodedPath}?ref=${encodeURIComponent(resolvedBranch)}`;
+    try {
+        const json = await syncGitHubRequestJson(url, { token: config.token });
+        if (!json || typeof json !== 'object' || json.type !== 'file') {
+            return {
+                success: false,
+                error: currentLang === 'zh_CN' ? '目标路径不是文件' : 'Target path is not a file'
+            };
+        }
+        let contentBase64 = String(json.content || '').replace(/\s+/g, '');
+        if (!contentBase64 && Number(json.size || 0) > 0) {
+            const rawResult = await syncGitHubRequestRaw(url, {
+                token: config.token,
+                headers: { Accept: 'application/vnd.github.raw' }
+            });
+            contentBase64 = syncTextToBase64(String(rawResult.text || ''));
+        }
+        return {
+            success: true,
+            path: String(json.path || safePath),
+            sha: String(json.sha || ''),
+            size: Number(json.size || 0),
+            contentBase64,
+            text: syncBase64ToText(contentBase64)
+        };
+    } catch (error) {
+        if (Number(error?.status) === 404) {
+            return {
+                success: false,
+                notFound: true,
+                error: currentLang === 'zh_CN' ? '云端文件不存在' : 'Remote file not found'
+            };
+        }
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubListDirEntries(repoConfig, rootPath, { branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const normalizedRoot = normalizeSyncRelativePath(rootPath);
+    if (!normalizedRoot) return { success: true, entries: [] };
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const encoded = encodeSyncGitHubPath(normalizedRoot);
+    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encoded}?ref=${encodeURIComponent(resolvedBranch)}`;
+    let json = null;
+    try {
+        json = await syncGitHubRequestJson(url, { token: config.token });
+    } catch (error) {
+        if (Number(error?.status) === 404) {
+            return { success: true, entries: [] };
+        }
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+
+    const entries = [];
+    const pushEntry = (entry = {}) => {
+        const path = normalizeSyncRelativePath(entry.path || normalizedRoot);
+        const type = String(entry.type || '').trim().toLowerCase();
+        if (!path || !type) return;
+        entries.push({
+            path,
+            type,
+            name: String(entry.name || getSyncPathBasename(path) || ''),
+            sha: String(entry.sha || ''),
+            size: Number(entry.size || 0)
+        });
+    };
+    if (Array.isArray(json)) {
+        json.forEach((entry) => pushEntry(entry));
+    } else if (json && typeof json === 'object') {
+        pushEntry(json);
+    }
+    return { success: true, entries };
+}
+
+async function syncGitHubPutFile(repoConfig, { path, text, message = '', branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safePath = normalizeSyncRelativePath(path);
+    if (!safePath) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    }
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const encodedPath = encodeSyncGitHubPath(safePath);
+    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encodedPath}`;
+
+    let existingSha = '';
+    try {
+        const existing = await syncGitHubRequestJson(
+            `${url}?ref=${encodeURIComponent(resolvedBranch)}`,
+            { token: config.token }
+        );
+        if (existing && typeof existing === 'object' && existing.type === 'file' && existing.sha) {
+            existingSha = String(existing.sha);
+        }
+    } catch (error) {
+        if (Number(error?.status) !== 404) {
+            return { success: false, error: formatSyncGitHubError(error) };
+        }
+    }
+
+    const payload = {
+        message: String(message || '').trim() || `Bookmark Sync: ${safePath}`,
+        content: syncTextToBase64(String(text == null ? '' : text)),
+        branch: resolvedBranch
+    };
+    if (existingSha) payload.sha = existingSha;
+
+    try {
+        const json = await syncGitHubRequestJson(url, {
+            method: 'PUT',
+            token: config.token,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return {
+            success: true,
+            path: String(json?.content?.path || safePath),
+            sha: String(json?.content?.sha || ''),
+            commitSha: String(json?.commit?.sha || '')
+        };
+    } catch (error) {
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubDeleteFile(repoConfig, { path, sha = '', message = '', branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safePath = normalizeSyncRelativePath(path);
+    if (!safePath) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    }
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const encodedPath = encodeSyncGitHubPath(safePath);
+    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encodedPath}`;
+
+    let existingSha = String(sha || '').trim();
+    if (!existingSha) {
+        try {
+            const existing = await syncGitHubRequestJson(
+                `${url}?ref=${encodeURIComponent(resolvedBranch)}`,
+                { token: config.token }
+            );
+            if (!existing || typeof existing !== 'object' || existing.type !== 'file' || !existing.sha) {
+                return {
+                    success: false,
+                    error: currentLang === 'zh_CN' ? '目标路径不是文件，无法删除' : 'Target path is not a file'
+                };
+            }
+            existingSha = String(existing.sha);
+        } catch (error) {
+            if (Number(error?.status) === 404) {
+                return { success: true, path: safePath, notFound: true };
+            }
+            return { success: false, error: formatSyncGitHubError(error) };
+        }
+    }
+
+    const payload = {
+        message: String(message || '').trim() || `Bookmark Sync: delete ${safePath}`,
+        sha: existingSha,
+        branch: resolvedBranch
+    };
+
+    try {
+        const json = await syncGitHubRequestJson(url, {
+            method: 'DELETE',
+            token: config.token,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return {
+            success: true,
+            path: safePath,
+            commitSha: String(json?.commit?.sha || '')
+        };
+    } catch (error) {
+        if (Number(error?.status) === 404) {
+            return { success: true, path: safePath, notFound: true };
+        }
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubListFiles(repoConfig, rootPath, { branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const normalizedRoot = normalizeSyncRelativePath(rootPath);
+    if (!normalizedRoot) return { success: true, files: [] };
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const queue = [normalizedRoot];
+    const visited = new Set();
+    const files = [];
+
+    while (queue.length > 0) {
+        const dirPath = String(queue.shift() || '').trim();
+        if (!dirPath || visited.has(dirPath)) continue;
+        visited.add(dirPath);
+        const listResult = await syncGitHubListDirEntries(config, dirPath, { branch: resolvedBranch });
+        if (!listResult.success) {
+            return { success: false, error: listResult.error || (currentLang === 'zh_CN' ? '读取云端目录失败' : 'Failed to read remote directory') };
+        }
+        const entries = Array.isArray(listResult.entries) ? listResult.entries : [];
+        entries.forEach((entry) => {
+            const type = String(entry?.type || '').trim().toLowerCase();
+            const entryPath = normalizeSyncRelativePath(entry?.path || '');
+            if (!entryPath) return;
+            if (type === 'dir') {
+                if (!visited.has(entryPath)) queue.push(entryPath);
+                return;
+            }
+            if (type === 'file') {
+                files.push({
+                    path: entryPath,
+                    sha: String(entry?.sha || ''),
+                    size: Number(entry?.size || 0)
+                });
+            }
+        });
+    }
+
+    return { success: true, files };
+}
+
+async function syncGitHubReadLatestCommitAtByPath(repoConfig, path, { branch = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safePath = normalizeSyncRelativePath(path);
+    if (!safePath) {
+        return { success: false, committedAt: 0, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    }
+    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
+    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/commits?sha=${encodeURIComponent(resolvedBranch)}&path=${encodeURIComponent(safePath)}&per_page=1`;
+    try {
+        const json = await syncGitHubRequestJson(url, { token: config.token });
+        const first = Array.isArray(json) && json.length > 0 ? json[0] : null;
+        const committedDateText = String(first?.commit?.committer?.date || first?.commit?.author?.date || '').trim();
+        const committedAtRaw = committedDateText ? Date.parse(committedDateText) : 0;
+        const committedAt = Number.isFinite(committedAtRaw) ? committedAtRaw : 0;
+        return { success: true, committedAt };
+    } catch (error) {
+        return { success: false, committedAt: 0, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubReadCommittedAtMap(repoConfig, pathsInput, { branch = '', maxWorkers = 4 } = {}) {
+    const uniquePaths = Array.from(new Set((Array.isArray(pathsInput) ? pathsInput : [])
+        .map((path) => normalizeSyncRelativePath(path))
+        .filter(Boolean)));
+    const committedAtByPath = Object.create(null);
+    if (!uniquePaths.length) {
+        return {
+            success: true,
+            committedAtByPath,
+            failedCount: 0,
+            firstError: ''
+        };
+    }
+    const queue = uniquePaths.slice();
+    const workerCount = Math.max(1, Math.min(Number(maxWorkers) || 4, uniquePaths.length));
+    let failedCount = 0;
+    let firstError = '';
+    const workers = new Array(workerCount).fill(0).map(async () => {
+        while (queue.length) {
+            const path = queue.shift();
+            if (!path) continue;
+            const result = await syncGitHubReadLatestCommitAtByPath(repoConfig, path, { branch });
+            if (result?.success) {
+                committedAtByPath[path] = Number(result.committedAt || 0) || 0;
+                continue;
+            }
+            committedAtByPath[path] = 0;
+            failedCount += 1;
+            if (!firstError && result?.error) {
+                firstError = String(result.error);
+            }
+        }
+    });
+    await Promise.all(workers);
+    return {
+        success: failedCount === 0,
+        committedAtByPath,
+        failedCount,
+        firstError
+    };
+}
+
+function normalizeSyncConfig(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const readBoolean = (primaryKey, fallback = false) => {
+        if (Object.prototype.hasOwnProperty.call(src, primaryKey)) {
+            return src[primaryKey] !== false;
+        }
+        return fallback;
+    };
+    const readString = (primaryKey, fallback = '') => {
+        if (!Object.prototype.hasOwnProperty.call(src, primaryKey)) {
+            return String(fallback || '');
+        }
+        return String(src[primaryKey] == null ? '' : src[primaryKey]).trim();
+    };
+
+    const legacyRecommend = src.pushRecommend !== false;
+    const legacyRecords = src.pushRecords !== false;
+    const legacyWidgets = src.pushWidgets !== false;
+    const legacyTracking = src.pushTracking !== false;
+    const providerRaw = readString('remoteProvider', SYNC_PROVIDER_GITHUB).toLowerCase();
+    const remoteProvider = providerRaw === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
+    const githubRepoBranch = readString('githubRepoBranch', 'main');
+    let githubRepoBasePath = normalizeSyncRelativePath(readString('githubRepoBasePath', SYNC_GITHUB_DEFAULT_BASE_PATH));
+    if (githubRepoBasePath === SYNC_GITHUB_LEGACY_BASE_PATH) {
+        githubRepoBasePath = SYNC_GITHUB_DEFAULT_BASE_PATH;
+    }
+
+    // Legacy v0 grouped recommendation pool + recommendation events under pushRecommend.
+    // Legacy v0 exposed tracking data through both pushTracking and pushWidgets.
+    return {
+        remoteProvider,
+        githubRepoToken: readString('githubRepoToken', ''),
+        githubRepoOwner: readString('githubRepoOwner', ''),
+        githubRepoName: readString('githubRepoName', ''),
+        githubRepoBranch: githubRepoBranch || 'main',
+        githubRepoBasePath: githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH,
+        recommendPool: readBoolean('recommendPool', legacyRecommend),
+        recommendEvents: readBoolean('recommendEvents', legacyRecommend),
+        bookmarkRecords: readBoolean('bookmarkRecords', legacyRecords),
+        timeTracking: readBoolean('timeTracking', (legacyTracking || legacyWidgets)),
+        bookmarkTreeSnapshot: readBoolean('bookmarkTreeSnapshot', true),
+        rawHighVolume: readBoolean('rawHighVolume', false)
+    };
+}
+
+function buildSanitizedSyncConfigSnapshot(configInput) {
+    const config = normalizeSyncConfig(configInput || null);
+    const hasToken = !!String(config.githubRepoToken || '').trim();
+    const hasOwner = !!String(config.githubRepoOwner || '').trim();
+    const hasRepo = !!String(config.githubRepoName || '').trim();
+    return {
+        remoteProvider: config.remoteProvider,
+        githubRepoBranch: String(config.githubRepoBranch || 'main').trim() || 'main',
+        githubRepoBasePath: normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
+            || SYNC_GITHUB_DEFAULT_BASE_PATH,
+        githubRepoToken: '',
+        githubRepoOwner: '',
+        githubRepoName: '',
+        githubRepoTokenConfigured: hasToken,
+        githubRepoOwnerConfigured: hasOwner,
+        githubRepoNameConfigured: hasRepo,
+        recommendPool: config.recommendPool !== false,
+        recommendEvents: config.recommendEvents !== false,
+        bookmarkRecords: config.bookmarkRecords !== false,
+        timeTracking: config.timeTracking !== false,
+        bookmarkTreeSnapshot: config.bookmarkTreeSnapshot !== false,
+        rawHighVolume: config.rawHighVolume === true
+    };
+}
+
+function getSyncPackageField(key) {
+    return SYNC_PACKAGE_FIELDS.find((item) => item.key === key) || null;
+}
+
+function getSyncPackageCheckboxByKey(key) {
+    const field = getSyncPackageField(key);
+    if (!field) return null;
+    return document.getElementById(field.checkboxId);
+}
+
+function getSyncPackageTextByKey(key) {
+    const field = getSyncPackageField(key);
+    if (!field) return null;
+    return document.getElementById(field.textId);
+}
+
+function createSyncPackageSettingItem(field, insertBeforeEl = null) {
+    if (!field) return null;
+    const settingsTitleEl = document.getElementById('syncSettingsTitle');
+    const settingsCard = settingsTitleEl?.closest('.sync-settings-card') || settingsTitleEl?.parentElement;
+    if (!settingsCard) return null;
+
+    let labelEl = document.getElementById(field.checkboxId)?.closest('label.sync-setting-item');
+    if (!labelEl) {
+        labelEl = document.createElement('label');
+        labelEl.className = 'sync-setting-item';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = field.checkboxId;
+        const text = document.createElement('span');
+        text.id = field.textId;
+        text.className = 'sync-setting-item-text';
+        labelEl.appendChild(checkbox);
+        labelEl.appendChild(text);
+        if (insertBeforeEl && insertBeforeEl.parentElement === settingsCard) {
+            settingsCard.insertBefore(labelEl, insertBeforeEl);
+        } else {
+            settingsCard.appendChild(labelEl);
+        }
+    } else {
+        let textEl = labelEl.querySelector('span');
+        if (!textEl) {
+            textEl = document.createElement('span');
+            labelEl.appendChild(textEl);
+        }
+        textEl.id = field.textId;
+        textEl.classList.add('sync-setting-item-text');
+    }
+    return labelEl;
+}
+
+function ensureSyncPackageOptionElements() {
+    SYNC_DYNAMIC_PACKAGE_FIELDS.forEach((field) => {
+        createSyncPackageSettingItem(field, null);
+    });
+}
+
+function buildSyncDocId(name = '', index = 0) {
+    const base = String(name || `doc-${index + 1}`)
+        .trim()
+        .toLowerCase()
+        .replace(/[^\w.\-]+/g, '-')
+        .replace(/\-+/g, '-')
+        .replace(/^\-+|\-+$/g, '') || `doc-${index + 1}`;
+    return base;
+}
+
+function isSyncRuleDocName(name = '') {
+    const normalized = sanitizeSyncDocName(String(name || '').trim(), SYNC_AGENT_DOC_NAME).toLowerCase();
+    return SYNC_RULE_DOC_NAME_ALIASES.includes(normalized);
+}
+
+function normalizeSyncDocKind(kind = '') {
+    const raw = String(kind || '').trim().toLowerCase();
+    if (raw === SYNC_DOC_KIND_AGENT) return SYNC_DOC_KIND_AGENT;
+    if (raw === SYNC_DOC_KIND_RESULT) return SYNC_DOC_KIND_RESULT;
+    return SYNC_DOC_KIND_INPUT;
+}
+
+function buildSyncDocMergeKeyFromParts(kind = '', name = '') {
+    const normalizedKind = normalizeSyncDocKind(kind);
+    const normalizedName = normalizedKind === SYNC_DOC_KIND_AGENT
+        ? sanitizeSyncDocName(name, SYNC_AGENT_DOC_NAME).toLowerCase()
+        : normalizeSyncRelativePath(String(name || '').trim()).toLowerCase();
+    return `${normalizedKind}:${normalizedName || '__unnamed__'}`;
+}
+
+function buildSyncDocMergeKey(doc = null) {
+    if (!doc || typeof doc !== 'object') return '';
+    return buildSyncDocMergeKeyFromParts(
+        doc.kind || (doc.id === SYNC_AGENT_DOC_ID ? SYNC_DOC_KIND_AGENT : SYNC_DOC_KIND_INPUT),
+        doc.name || ''
+    );
+}
+
+function normalizeSyncRemoteDocCache(raw) {
+    const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const normalized = {};
+    Object.entries(src).forEach(([rawKey, rawValue]) => {
+        const key = String(rawKey || '').trim();
+        if (!key) return;
+        const value = rawValue && typeof rawValue === 'object' ? rawValue : {};
+        normalized[key] = {
+            markdown: String(value.markdown || ''),
+            remoteSha: String(value.remoteSha || ''),
+            remotePath: normalizeSyncRelativePath(value.remotePath || ''),
+            updatedAt: Number(value.updatedAt || 0) || 0
+        };
+    });
+    return normalized;
+}
+
+function updateSyncRemoteDocCacheEntry(doc = null, meta = null) {
+    const key = buildSyncDocMergeKey(doc);
+    if (!key) return;
+    const details = meta && typeof meta === 'object' ? meta : {};
+    syncRemoteDocCacheState[key] = {
+        markdown: String(doc?.markdown || ''),
+        remoteSha: String(details.remoteSha || ''),
+        remotePath: normalizeSyncRelativePath(details.remotePath || doc?.name || ''),
+        updatedAt: Number(details.updatedAt || Date.now()) || Date.now()
+    };
+}
+
+function normalizeSyncDocs(rawDocs) {
+    const used = new Set();
+    const normalized = [];
+    const rawList = Array.isArray(rawDocs) ? rawDocs : [];
+    let hasAgent = false;
+    rawList.forEach((item, index) => {
+        if (!item || typeof item !== 'object') return;
+        const name = String(item.name || item.id || `doc-${index + 1}.md`).trim() || `doc-${index + 1}.md`;
+        const kindRaw = String(item.kind || '').trim();
+        const isAgent = kindRaw === SYNC_DOC_KIND_AGENT
+            || String(item.id || '') === SYNC_AGENT_DOC_ID
+            || isSyncRuleDocName(name);
+        const kind = isAgent
+            ? SYNC_DOC_KIND_AGENT
+            : (kindRaw === SYNC_DOC_KIND_RESULT ? SYNC_DOC_KIND_RESULT : SYNC_DOC_KIND_INPUT);
+        const normalizedName = isAgent ? sanitizeSyncDocName(name, SYNC_AGENT_DOC_NAME) : name;
+        let id = isAgent ? SYNC_AGENT_DOC_ID : String(item.id || buildSyncDocId(name, index));
+        if (!id) id = buildSyncDocId(name, index);
+        let suffix = 1;
+        while (used.has(id)) {
+            suffix += 1;
+            id = isAgent ? `${SYNC_AGENT_DOC_ID}-${suffix}` : `${buildSyncDocId(name, index)}-${suffix}`;
+        }
+        used.add(id);
+        if (isAgent) hasAgent = true;
+        const rawMarkdown = String(item.markdown || item.content || '');
+        normalized.push({
+            id,
+            name: normalizedName,
+            kind,
+            markdown: rawMarkdown,
+            updatedAt: Number(item.updatedAt || Date.now()),
+            localEdited: Boolean(item.localEdited)
+        });
+    });
+    if (!hasAgent) {
+        normalized.unshift({
+            id: SYNC_AGENT_DOC_ID,
+            name: SYNC_AGENT_DOC_NAME,
+            kind: SYNC_DOC_KIND_AGENT,
+            markdown: getDefaultSyncAgentDocTemplate(currentLang),
+            updatedAt: Date.now(),
+            localEdited: false
+        });
+    } else {
+        const agentIdx = normalized.findIndex((doc) => doc.id === SYNC_AGENT_DOC_ID);
+        if (agentIdx > 0) {
+            const [agentDoc] = normalized.splice(agentIdx, 1);
+            normalized.unshift(agentDoc);
+        }
+    }
+    return normalized;
+}
+
+function syncStorageGet(keys) {
+    return new Promise((resolve) => {
+        try {
+            if (!browserAPI?.storage?.local?.get) {
+                resolve({});
+                return;
+            }
+            browserAPI.storage.local.get(keys, (result) => {
+                try {
+                    const err = browserAPI?.runtime?.lastError;
+                    if (err) {
+                        resolve({});
+                        return;
+                    }
+                } catch (_) { }
+                resolve(result && typeof result === 'object' ? result : {});
+            });
+        } catch (_) {
+            resolve({});
+        }
+    });
+}
+
+function syncStorageGetStrict(keys) {
+    return new Promise((resolve) => {
+        try {
+            if (!browserAPI?.storage?.local?.get) {
+                resolve({ ok: false, data: {}, error: 'storage_unavailable' });
+                return;
+            }
+            browserAPI.storage.local.get(keys, (result) => {
+                try {
+                    const err = browserAPI?.runtime?.lastError;
+                    if (err) {
+                        resolve({
+                            ok: false,
+                            data: {},
+                            error: String(err.message || 'storage_get_failed')
+                        });
+                        return;
+                    }
+                } catch (_) { }
+                resolve({
+                    ok: true,
+                    data: result && typeof result === 'object' ? result : {},
+                    error: ''
+                });
+            });
+        } catch (error) {
+            resolve({
+                ok: false,
+                data: {},
+                error: String(error?.message || 'storage_get_failed')
+            });
+        }
+    });
+}
+
+function syncStorageSet(payload) {
+    return new Promise((resolve) => {
+        try {
+            if (!browserAPI?.storage?.local?.set) {
+                resolve(false);
+                return;
+            }
+            browserAPI.storage.local.set(payload || {}, () => {
+                try {
+                    const err = browserAPI?.runtime?.lastError;
+                    if (err) {
+                        resolve(false);
+                        return;
+                    }
+                } catch (_) { }
+                resolve(true);
+            });
+        } catch (_) {
+            resolve(false);
+        }
+    });
+}
+
+function getSyncCurrentDocIndex() {
+    if (!Array.isArray(syncDocsState) || !syncDocsState.length) return -1;
+    return syncDocsState.findIndex((doc) => doc && doc.id === syncCurrentDocId);
+}
+
+function getSyncCurrentDoc() {
+    const index = getSyncCurrentDocIndex();
+    if (index < 0) return null;
+    return syncDocsState[index] || null;
+}
+
+function updateSyncStatusUI() {
+    const statusEl = document.getElementById('syncStatusText');
+    const timeEl = document.getElementById('syncLastActionTime');
+    let localizedText = '';
+    if (syncStatusState.localized && typeof syncStatusState.localized === 'object') {
+        localizedText = String(
+            syncStatusState.localized[currentLang]
+            || syncStatusState.localized.zh_CN
+            || syncStatusState.localized.en
+            || ''
+        );
+    }
+    if (statusEl) {
+        statusEl.textContent = localizedText || syncStatusState.text || getSyncText('syncStatusIdle', '状态：未同步');
+    }
+    if (timeEl) {
+        timeEl.textContent = syncStatusState.time || '--';
+    }
+}
+
+function setSyncStatusText(textOrLocalized) {
+    if (textOrLocalized && typeof textOrLocalized === 'object' && (textOrLocalized.zh_CN || textOrLocalized.en)) {
+        syncStatusState.localized = {
+            zh_CN: String(textOrLocalized.zh_CN || ''),
+            en: String(textOrLocalized.en || '')
+        };
+        syncStatusState.text = '';
+    } else {
+        syncStatusState.localized = null;
+        syncStatusState.text = String(textOrLocalized || getSyncText('syncStatusIdle', '状态：未同步'));
+    }
+    syncStatusState.time = getSyncNowLabel(Date.now());
+    updateSyncStatusUI();
+}
+
+function getSyncI18nPair(key, fallbackZh = '', fallbackEn = '') {
+    const zh = String((i18n?.[key]?.zh_CN) || fallbackZh || '');
+    const en = String((i18n?.[key]?.en) || fallbackEn || '');
+    return { zh_CN: zh, en };
+}
+
+function setSyncRepoStatusText(textOrLocalized, type = 'neutral') {
+    const statusEl = document.getElementById('syncRepoStatusText');
+    if (!statusEl) return;
+    let text = '';
+    if (textOrLocalized && typeof textOrLocalized === 'object' && (textOrLocalized.zh_CN || textOrLocalized.en)) {
+        text = String(textOrLocalized[currentLang] || textOrLocalized.zh_CN || textOrLocalized.en || '');
+    } else {
+        text = String(textOrLocalized || '');
+    }
+    statusEl.textContent = text || getSyncText('syncRepoStatusIdle', '等待配置');
+    statusEl.classList.remove('sync-repo-status-neutral', 'sync-repo-status-success', 'sync-repo-status-error');
+    if (type === 'success') {
+        statusEl.classList.add('sync-repo-status-success');
+    } else if (type === 'error') {
+        statusEl.classList.add('sync-repo-status-error');
+    } else {
+        statusEl.classList.add('sync-repo-status-neutral');
+    }
+}
+
+function updateSyncRepoFormState() {
+    const provider = String(syncConfigState?.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
+    const isGithub = provider === SYNC_PROVIDER_GITHUB;
+    const inputIds = [
+        'syncGithubTokenInput',
+        'syncGithubOwnerInput',
+        'syncGithubRepoInput',
+        'syncGithubBranchInput',
+        'syncGithubBasePathInput'
+    ];
+    inputIds.forEach((id) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.disabled = !isGithub;
+    });
+    const testBtn = document.getElementById('syncRepoTestBtn');
+    if (testBtn) {
+        testBtn.disabled = !isGithub;
+    }
+    const statusEl = document.getElementById('syncRepoStatusText');
+    const currentStatus = String(statusEl?.textContent || '').trim();
+    const isLocalModeStatus = /本地快照模式|local snapshot mode/i.test(currentStatus);
+    if (!isGithub) {
+        setSyncRepoStatusText({
+            zh_CN: '当前使用本地快照模式',
+            en: 'Using local snapshot mode'
+        }, 'neutral');
+    } else if (!currentStatus || isLocalModeStatus) {
+        setSyncRepoStatusText(getSyncText('syncRepoStatusIdle', '等待配置'), 'neutral');
+    }
+    updateSyncRepoCollapseButton();
+}
+
+function countEnabledSyncPackages(config) {
+    if (!config || typeof config !== 'object') return 0;
+    return SYNC_PACKAGE_FIELDS.reduce((count, field) => count + (config[field.key] ? 1 : 0), 0);
+}
+
+function getSyncPushPayloadErrorI18n(error) {
+    const code = String(error?.message || error || '').trim();
+    if (code === 'storage_unavailable' || code === 'storage_get_failed' || code === 'sync_storage_get_failed') {
+        return {
+            status: {
+                zh_CN: '状态：推送失败（读取同步数据失败）',
+                en: 'Status: Push failed (failed to read sync data)'
+            },
+            toast: {
+                zh_CN: '推送失败：读取同步数据失败',
+                en: 'Push failed: unable to read sync data'
+            }
+        };
+    }
+
+    return {
+        status: {
+            zh_CN: '状态：推送失败（同步打包失败）',
+            en: 'Status: Push failed (payload build failed)'
+        },
+        toast: {
+            zh_CN: '推送失败：同步数据打包异常',
+            en: 'Push failed: sync payload build error'
+        }
+    };
+}
+
+function applySyncConfigToUI() {
+    ensureSyncPackageOptionElements();
+    const providerSelect = document.getElementById('syncProviderSelect');
+    if (providerSelect) providerSelect.value = String(syncConfigState.remoteProvider || SYNC_PROVIDER_GITHUB);
+    const ownerInput = document.getElementById('syncGithubOwnerInput');
+    if (ownerInput) ownerInput.value = String(syncConfigState.githubRepoOwner || '');
+    const repoInput = document.getElementById('syncGithubRepoInput');
+    if (repoInput) repoInput.value = String(syncConfigState.githubRepoName || '');
+    const branchInput = document.getElementById('syncGithubBranchInput');
+    if (branchInput) branchInput.value = String(syncConfigState.githubRepoBranch || 'main');
+    const basePathInput = document.getElementById('syncGithubBasePathInput');
+    if (basePathInput) basePathInput.value = String(syncConfigState.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH);
+    const tokenInput = document.getElementById('syncGithubTokenInput');
+    if (tokenInput) tokenInput.value = String(syncConfigState.githubRepoToken || '');
+    SYNC_PACKAGE_FIELDS.forEach((field) => {
+        const checkbox = getSyncPackageCheckboxByKey(field.key);
+        if (!checkbox) return;
+        checkbox.checked = !!syncConfigState[field.key];
+    });
+    updateSyncRepoFormState();
+    updateSyncPathInfoText();
+    setSyncPushPackageInfoVisible(syncPushPackageInfoVisible);
+}
+
+function readSyncConfigFromUI() {
+    ensureSyncPackageOptionElements();
+    const next = {
+        remoteProvider: String(document.getElementById('syncProviderSelect')?.value || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        githubRepoToken: String(document.getElementById('syncGithubTokenInput')?.value || '').trim(),
+        githubRepoOwner: String(document.getElementById('syncGithubOwnerInput')?.value || '').trim(),
+        githubRepoName: String(document.getElementById('syncGithubRepoInput')?.value || '').trim(),
+        githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim(),
+        githubRepoBasePath: String(document.getElementById('syncGithubBasePathInput')?.value || '').trim()
+    };
+    SYNC_PACKAGE_FIELDS.forEach((field) => {
+        const checkbox = getSyncPackageCheckboxByKey(field.key);
+        if (checkbox) {
+            next[field.key] = checkbox.checked !== false;
+        } else {
+            next[field.key] = field.defaultEnabled !== false;
+        }
+    });
+    syncConfigState = normalizeSyncConfig(next);
+    updateSyncRepoFormState();
+    updateSyncPathInfoText();
+    return syncConfigState;
+}
+
+async function saveSyncConfigToStorage() {
+    return await syncStorageSet({ [SYNC_CONFIG_STORAGE_KEY]: { ...syncConfigState } });
+}
+
+async function persistSyncConfigFromUI({ showErrorToast = true } = {}) {
+    readSyncConfigFromUI();
+    const saved = await saveSyncConfigToStorage();
+    if (!saved && showErrorToast) {
+        showToast(currentLang === 'zh_CN' ? '同步配置保存失败，请重试' : 'Failed to save sync settings. Please retry.');
+    }
+    return saved;
+}
+
+function scheduleSyncConfigSaveFromUI(delayMs = 280) {
+    if (syncConfigInputSaveTimer) {
+        clearTimeout(syncConfigInputSaveTimer);
+        syncConfigInputSaveTimer = null;
+    }
+    syncConfigInputSaveTimer = setTimeout(() => {
+        syncConfigInputSaveTimer = null;
+        void persistSyncConfigFromUI({ showErrorToast: false }).then((saved) => {
+            if (!saved) {
+                setSyncRepoStatusText(
+                    currentLang === 'zh_CN' ? '配置自动保存失败' : 'Auto-save failed',
+                    'error'
+                );
+            }
+        });
+    }, Math.max(120, Number(delayMs) || 280));
+}
+
+async function saveSyncDocsToStorage() {
+    return await syncStorageSet({
+        [SYNC_DOCS_STORAGE_KEY]: syncDocsState.map((doc) => ({
+            id: doc.id,
+            name: doc.name,
+            kind: doc.kind || SYNC_DOC_KIND_INPUT,
+            markdown: doc.markdown,
+            updatedAt: doc.updatedAt,
+            localEdited: !!doc.localEdited
+        }))
+    });
+}
+
+async function saveSyncRemoteDocCacheToStorage() {
+    return await syncStorageSet({
+        [SYNC_REMOTE_DOC_CACHE_STORAGE_KEY]: syncRemoteDocCacheState
+    });
+}
+
+function clearSyncEditorAutoSaveTimer() {
+    if (!syncEditorAutoSaveTimer) return;
+    clearTimeout(syncEditorAutoSaveTimer);
+    syncEditorAutoSaveTimer = null;
+}
+
+function flushSyncEditorAutoSave({
+    reason = 'auto',
+    renderList = false,
+    quiet = true
+} = {}) {
+    clearSyncEditorAutoSaveTimer();
+
+    if (syncEditorPendingSavePromise) {
+        return syncEditorPendingSavePromise;
+    }
+
+    syncEditorPendingSavePromise = (async () => {
+        if (!isSyncEditModeEnabled()) return false;
+        const changed = commitSyncEditorToCurrentDoc({ markEdited: true });
+        if (!changed) return false;
+
+        const saved = await saveSyncDocsToStorage();
+        if (!saved) {
+            if (!quiet) {
+                showToast(currentLang === 'zh_CN' ? '自动保存失败，请稍后重试' : 'Auto-save failed, please retry');
+            }
+            return false;
+        }
+
+        if (renderList) {
+            renderSyncFileList();
+        }
+        return true;
+    })().catch((error) => {
+        console.error('[SyncView] auto-save failed:', reason, error);
+        if (!quiet) {
+            showToast(currentLang === 'zh_CN' ? '自动保存失败，请稍后重试' : 'Auto-save failed, please retry');
+        }
+        return false;
+    }).finally(() => {
+        syncEditorPendingSavePromise = null;
+    });
+
+    return syncEditorPendingSavePromise;
+}
+
+function scheduleSyncEditorAutoSave(delayMs = 220) {
+    if (!isSyncEditModeEnabled()) return;
+    clearSyncEditorAutoSaveTimer();
+    syncEditorAutoSaveTimer = setTimeout(() => {
+        syncEditorAutoSaveTimer = null;
+        void flushSyncEditorAutoSave({
+            reason: 'typing',
+            renderList: false,
+            quiet: true
+        });
+    }, Math.max(80, Number(delayMs) || 220));
+}
+
+async function exitSyncEditModeAndPersist({
+    reason = 'manual-exit',
+    renderList = true,
+    quiet = true
+} = {}) {
+    if (!isSyncEditModeEnabled()) return false;
+    clearSyncEditorAutoSaveTimer();
+
+    const changed = commitSyncEditorToCurrentDoc({ markEdited: true });
+    setSyncEditModeEnabled(false);
+    updateSyncSaveButtonState();
+    if (renderList) {
+        renderSyncFileList();
+    }
+    renderSyncMarkdown();
+
+    if (!changed) return false;
+
+    if (syncEditorPendingSavePromise) {
+        try {
+            const pendingResult = await syncEditorPendingSavePromise;
+            if (pendingResult) return true;
+        } catch (_) { }
+    }
+
+    const saved = await saveSyncDocsToStorage();
+    if (!saved) {
+        console.warn('[SyncView] exit-save failed:', reason);
+        if (!quiet) {
+            showToast(currentLang === 'zh_CN' ? '自动保存失败，请稍后重试' : 'Auto-save failed, please retry');
+        }
+    }
+    return !!saved;
+}
+
+function syncDocExistsByName(name) {
+    const safe = String(name || '').trim().toLowerCase();
+    if (!safe) return false;
+    return syncDocsState.some((doc) => String(doc?.name || '').trim().toLowerCase() === safe);
+}
+
+function buildSyncNewFileName(base = 'new-note.md') {
+    const rawBase = String(base || 'new-note.md').trim() || 'new-note.md';
+    let safeName = rawBase.endsWith('.md') ? rawBase : `${rawBase}.md`;
+    if (!syncDocExistsByName(safeName)) return safeName;
+    let i = 2;
+    const baseNoExt = safeName.replace(/\.md$/i, '');
+    while (syncDocExistsByName(`${baseNoExt}-${i}.md`)) {
+        i += 1;
+    }
+    return `${baseNoExt}-${i}.md`;
+}
+
+function getSyncDocGroupKey(doc) {
+    if (!doc) return 'other';
+    if (doc.kind === SYNC_DOC_KIND_AGENT) return 'agent';
+    const name = String(doc.name || '');
+    const firstSeg = name.split('/')[0] || '';
+    if (firstSeg === 'daily') return 'daily';
+    if (firstSeg === 'weekly') return 'weekly';
+    if (firstSeg === 'monthly') return 'monthly';
+    if (firstSeg === 'runs') return 'runs';
+    if (!name.includes('/')) return 'root';
+    return 'other';
+}
+
+function getSyncGroupLabel(groupKey) {
+    const dict = {
+        agent:   { zh_CN: '规则文件', en: 'Rule file' },
+        root:    { zh_CN: '顶层', en: 'Top-level' },
+        daily:   { zh_CN: '日报', en: 'Daily' },
+        weekly:  { zh_CN: '周报', en: 'Weekly' },
+        monthly: { zh_CN: '月报', en: 'Monthly' },
+        runs:    { zh_CN: '历史 runs', en: 'History runs' },
+        other:   { zh_CN: '其他', en: 'Other' }
+    };
+    return dict[groupKey]?.[currentLang] || groupKey;
+}
+
+function ensureSyncRenderPanelVisible({ force = false } = {}) {
+    const renderPanel = document.querySelector('#syncView .sync-render-panel');
+    if (!renderPanel) return;
+
+    const rect = renderPanel.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const visibleTop = Math.max(0, rect.top);
+    const visibleBottom = Math.min(viewportHeight, rect.bottom);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    const visibilityRatio = rect.height > 0 ? (visibleHeight / rect.height) : 0;
+    const alreadyVisible = visibilityRatio >= 0.45;
+
+    if (force || !alreadyVisible) {
+        renderPanel.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+    }
+
+    const markdownRenderEl = document.getElementById('syncMarkdownRender');
+    if (markdownRenderEl && !markdownRenderEl.hidden) {
+        markdownRenderEl.scrollTop = 0;
+    }
+    const markdownEditorEl = document.getElementById('syncMarkdownEditor');
+    if (markdownEditorEl && !markdownEditorEl.hidden) {
+        markdownEditorEl.scrollTop = 0;
+    }
+}
+
+function renderSyncFileList() {
+    const listEl = document.getElementById('syncFileList');
+    if (!listEl) return;
+
+    const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
+    const topLevelPullSource = `${getSyncResultsRootPath(syncConfigState)}/**/*.md`;
+    updateSyncPathInfoText();
+    if (!docs.length) {
+        listEl.innerHTML = '';
+        return;
+    }
+
+    if (!syncCurrentDocId || !docs.some((doc) => doc.id === syncCurrentDocId)) {
+        syncCurrentDocId = docs[0].id;
+    }
+
+    const groupOrder = ['agent', 'root', 'daily', 'weekly', 'monthly', 'runs', 'other'];
+    const groups = new Map();
+    docs.forEach((doc) => {
+        const key = getSyncDocGroupKey(doc);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(doc);
+    });
+
+    listEl.innerHTML = '';
+    groupOrder.forEach((groupKey) => {
+        const list = groups.get(groupKey);
+        if (!list || !list.length) return;
+        if (groupKey !== 'agent') {
+            const header = document.createElement('div');
+            header.className = 'sync-file-group-header';
+            const groupLabel = getSyncGroupLabel(groupKey);
+            if (groupKey === 'root') {
+                const sourceText = currentLang === 'zh_CN'
+                    ? `（顶层拉取来源：${topLevelPullSource}）`
+                    : `(Top-level pull source: ${topLevelPullSource})`;
+                header.classList.add('sync-file-group-header-with-source');
+                header.innerHTML = `<span>${escapeHtml(groupLabel)}</span><span class="sync-file-group-source">${escapeHtml(sourceText)}</span>`;
+            } else {
+                header.textContent = groupLabel;
+            }
+            listEl.appendChild(header);
+        }
+        list.forEach((doc) => {
+            const isAgent = doc.kind === SYNC_DOC_KIND_AGENT;
+            const isResult = doc.kind === SYNC_DOC_KIND_RESULT;
+            const item = document.createElement('div');
+            item.className = `sync-file-item${doc.id === syncCurrentDocId ? ' active' : ''}${isAgent ? ' sync-file-item-agent' : ''}${isResult ? ' sync-file-item-result' : ''}`;
+            item.dataset.docId = doc.id;
+
+            const mainBtn = document.createElement('button');
+            mainBtn.type = 'button';
+            mainBtn.className = 'sync-file-main';
+            const timeText = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
+            const dirtyText = doc.localEdited ? (currentLang === 'zh_CN' ? '本地编辑' : 'Local edit') : '';
+            const kindLabel = isAgent
+                ? (currentLang === 'zh_CN' ? '规则' : 'Rules')
+                : (isResult ? (currentLang === 'zh_CN' ? '结果' : 'Result') : '');
+            const iconCls = isAgent ? 'fas fa-gavel' : (isResult ? 'fas fa-file-alt' : 'fas fa-pen');
+            mainBtn.innerHTML = `
+                <span class="sync-file-name">
+                    <i class="${iconCls}"></i>
+                    <span class="sync-file-name-text">${escapeHtml(doc.name || '--')}</span>
+                    ${kindLabel ? `<span class="sync-file-kind">${escapeHtml(kindLabel)}</span>` : ''}
+                </span>
+                <span class="sync-file-meta">${escapeHtml([timeText, dirtyText].filter(Boolean).join(' · '))}</span>
+            `;
+            mainBtn.addEventListener('click', () => {
+                commitSyncEditorToCurrentDoc({ markEdited: false });
+                syncCurrentDocId = doc.id;
+                renderSyncFileList();
+                renderSyncMarkdown();
+                ensureSyncRenderPanelVisible();
+            });
+
+            const editLabel = getSyncText('syncFileItemEditText', currentLang === 'zh_CN' ? '编辑' : 'Edit');
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-edit-btn';
+            editBtn.setAttribute('aria-label', editLabel);
+            editBtn.title = editLabel;
+            editBtn.innerHTML = '<i class="fas fa-edit"></i>';
+            editBtn.addEventListener('click', async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                    await renameSyncDocByIdFromPrompt(doc.id, { focusDoc: true });
+                } catch (error) {
+                    console.error('[SyncView] rename doc from list failed:', error);
+                }
+            });
+
+            const deleteLabel = getSyncText('syncFileItemDeleteText', currentLang === 'zh_CN' ? '删除' : 'Delete');
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-delete-btn';
+            deleteBtn.setAttribute('aria-label', deleteLabel);
+            deleteBtn.title = deleteLabel;
+            deleteBtn.innerHTML = '<i class="fas fa-times"></i>';
+            deleteBtn.addEventListener('click', async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                    await deleteSyncDocById(doc.id, { focusNeighbor: true });
+                } catch (error) {
+                    console.error('[SyncView] delete doc from list failed:', error);
+                }
+            });
+
+            const actions = document.createElement('div');
+            actions.className = 'sync-file-item-actions';
+            actions.appendChild(editBtn);
+            actions.appendChild(deleteBtn);
+
+            item.appendChild(mainBtn);
+            item.appendChild(actions);
+            listEl.appendChild(item);
+        });
+    });
+}
+
+function isSyncEditModeEnabled() {
+    if (SYNC_REALTIME_MARKDOWN_RENDER) return true;
+    const btn = document.getElementById('syncEditModeBtn');
+    return !!(btn && btn.getAttribute('aria-pressed') === 'true');
+}
+
+function setSyncEditModeEnabled(enabled) {
+    const btn = document.getElementById('syncEditModeBtn');
+    if (!btn) return;
+    if (SYNC_REALTIME_MARKDOWN_RENDER) {
+        btn.setAttribute('aria-pressed', 'true');
+        return;
+    }
+    const next = !!enabled;
+    btn.setAttribute('aria-pressed', next ? 'true' : 'false');
+}
+
+function focusSyncEditorToEnd() {
+    const activeEditor = document.getElementById('syncMarkdownEditor');
+    if (!activeEditor || activeEditor.hidden) return false;
+    activeEditor.focus();
+    const cursor = String(activeEditor.value || '').length;
+    activeEditor.setSelectionRange(cursor, cursor);
+    return true;
+}
+
+function enterSyncEditModeFromPanel() {
+    if (SYNC_REALTIME_MARKDOWN_RENDER) {
+        if (!getSyncCurrentDoc()) return false;
+        renderSyncMarkdown();
+        focusSyncEditorToEnd();
+        return true;
+    }
+    if (isSyncEditModeEnabled()) return true;
+    if (!getSyncCurrentDoc()) return false;
+    setSyncEditModeEnabled(true);
+    updateSyncSaveButtonState();
+    renderSyncMarkdown();
+    focusSyncEditorToEnd();
+    return true;
+}
+
+function getSyncMarkdownToolLabels(action = '') {
+    const labelsZh = {
+        undo: '撤销',
+        redo: '重做',
+        copy: '复制',
+        h1: '一级标题',
+        h2: '二级标题',
+        h3: '三级标题',
+        bold: '加粗',
+        italic: '斜体',
+        highlight: '高亮',
+        strike: '删除线',
+        code: '行内代码',
+        codeblock: '代码块',
+        ul: '无序列表',
+        ol: '有序列表',
+        task: '任务列表',
+        quote: '引用',
+        link: '链接',
+        callout: 'Callout 模板'
+    };
+    const labelsEn = {
+        undo: 'Undo',
+        redo: 'Redo',
+        copy: 'Copy',
+        h1: 'Heading 1',
+        h2: 'Heading 2',
+        h3: 'Heading 3',
+        bold: 'Bold',
+        italic: 'Italic',
+        highlight: 'Highlight',
+        strike: 'Strikethrough',
+        code: 'Inline code',
+        codeblock: 'Code block',
+        ul: 'Bullet list',
+        ol: 'Numbered list',
+        task: 'Task list',
+        quote: 'Quote',
+        link: 'Link',
+        callout: 'Callout template'
+    };
+    const safeAction = String(action || '').trim();
+    return {
+        zh: labelsZh[safeAction] || safeAction,
+        en: labelsEn[safeAction] || safeAction
+    };
+}
+
+function refreshSyncMarkdownToolLabels() {
+    const toolsRoot = document.getElementById('syncMarkdownTools');
+    if (!toolsRoot) return;
+    const buttons = toolsRoot.querySelectorAll('.sync-md-tool-btn[data-action]');
+    buttons.forEach((button) => {
+        const action = String(button.getAttribute('data-action') || '').trim();
+        if (!action) return;
+        const labels = getSyncMarkdownToolLabels(action);
+        const ariaLabel = currentLang === 'zh_CN' ? labels.zh : labels.en;
+        const tooltipLabel = `${labels.zh} / ${labels.en}`;
+        if (!ariaLabel) return;
+        button.setAttribute('aria-label', ariaLabel);
+        button.setAttribute('data-tooltip', tooltipLabel);
+        button.removeAttribute('title');
+    });
+}
+
+function ensureSyncMarkdownGlobalTooltipEl() {
+    if (syncMarkdownGlobalTooltipEl && document.body.contains(syncMarkdownGlobalTooltipEl)) {
+        return syncMarkdownGlobalTooltipEl;
+    }
+    const el = document.createElement('div');
+    el.className = 'sync-md-global-tooltip';
+    el.setAttribute('data-placement', 'top');
+    document.body.appendChild(el);
+    syncMarkdownGlobalTooltipEl = el;
+    return syncMarkdownGlobalTooltipEl;
+}
+
+function hideSyncMarkdownGlobalTooltip() {
+    if (!syncMarkdownGlobalTooltipEl) return;
+    syncMarkdownGlobalTooltipEl.classList.remove('visible');
+    syncMarkdownGlobalTooltipEl.setAttribute('data-placement', 'top');
+    syncMarkdownGlobalTooltipActiveBtn = null;
+}
+
+function positionSyncMarkdownGlobalTooltipForButton(button) {
+    if (!button || !syncMarkdownGlobalTooltipEl) return;
+    const rect = button.getBoundingClientRect();
+    const tooltipRect = syncMarkdownGlobalTooltipEl.getBoundingClientRect();
+    const viewportPadding = 8;
+    let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+    if (left < viewportPadding) left = viewportPadding;
+    if (left + tooltipRect.width > window.innerWidth - viewportPadding) {
+        left = window.innerWidth - tooltipRect.width - viewportPadding;
+    }
+
+    const aboveTop = rect.top - tooltipRect.height - 10;
+    const canPlaceAbove = aboveTop >= viewportPadding;
+    const top = canPlaceAbove ? aboveTop : (rect.bottom + 10);
+
+    syncMarkdownGlobalTooltipEl.style.left = `${Math.round(left)}px`;
+    syncMarkdownGlobalTooltipEl.style.top = `${Math.round(top)}px`;
+    syncMarkdownGlobalTooltipEl.setAttribute('data-placement', canPlaceAbove ? 'top' : 'bottom');
+}
+
+function showSyncMarkdownGlobalTooltip(button) {
+    if (!button) return;
+    const text = String(button.getAttribute('data-tooltip') || '').trim();
+    if (!text) return;
+    const tooltipEl = ensureSyncMarkdownGlobalTooltipEl();
+    tooltipEl.textContent = text;
+    tooltipEl.classList.add('visible');
+    positionSyncMarkdownGlobalTooltipForButton(button);
+    syncMarkdownGlobalTooltipActiveBtn = button;
+}
+
+function bindSyncMarkdownGlobalTooltipEvents() {
+    if (syncMarkdownGlobalTooltipBound) return;
+    const toolsRoot = document.getElementById('syncMarkdownTools');
+    if (!toolsRoot) return;
+    syncMarkdownGlobalTooltipBound = true;
+
+    const toolButtons = toolsRoot.querySelectorAll('.sync-md-tool-btn[data-action]');
+    toolButtons.forEach((button) => {
+        button.addEventListener('mouseenter', () => showSyncMarkdownGlobalTooltip(button));
+        button.addEventListener('mouseleave', () => hideSyncMarkdownGlobalTooltip());
+        button.addEventListener('focus', () => showSyncMarkdownGlobalTooltip(button));
+        button.addEventListener('blur', () => hideSyncMarkdownGlobalTooltip());
+    });
+
+    toolsRoot.addEventListener('mousedown', () => hideSyncMarkdownGlobalTooltip());
+    toolsRoot.addEventListener('scroll', hideSyncMarkdownGlobalTooltip, { passive: true });
+    document.addEventListener('pointerdown', (event) => {
+        if (!(event.target instanceof Element)) {
+            hideSyncMarkdownGlobalTooltip();
+            return;
+        }
+        if (event.target.closest('#syncMarkdownTools')) return;
+        hideSyncMarkdownGlobalTooltip();
+    }, true);
+    window.addEventListener('scroll', () => {
+        if (!syncMarkdownGlobalTooltipActiveBtn) return;
+        positionSyncMarkdownGlobalTooltipForButton(syncMarkdownGlobalTooltipActiveBtn);
+    }, { passive: true });
+    window.addEventListener('resize', () => {
+        if (!syncMarkdownGlobalTooltipActiveBtn) return;
+        positionSyncMarkdownGlobalTooltipForButton(syncMarkdownGlobalTooltipActiveBtn);
+    }, { passive: true });
+}
+
+function updateSyncSaveButtonTooltip() {
+    const saveBtn = document.getElementById('syncSaveDocBtn');
+    if (!saveBtn) return;
+    const label = getSyncText('syncSaveDocBtnText', currentLang === 'zh_CN' ? '保存' : 'Save');
+    saveBtn.setAttribute('aria-label', label);
+    saveBtn.setAttribute('data-tooltip', label);
+    saveBtn.removeAttribute('title');
+}
+
+function updateSyncEditModeButtonText() {
+    const btn = document.getElementById('syncEditModeBtn');
+    if (!btn) return;
+    if (SYNC_REALTIME_MARKDOWN_RENDER) {
+        btn.hidden = true;
+        btn.setAttribute('aria-pressed', 'true');
+        return;
+    }
+    const editing = isSyncEditModeEnabled();
+    const nextText = editing
+        ? getSyncText('syncEditModeDoneText', currentLang === 'zh_CN' ? '完成' : 'Done')
+        : getSyncText('syncEditModeText', currentLang === 'zh_CN' ? '编辑' : 'Edit');
+    const textEl = document.getElementById('syncEditModeText');
+    if (textEl) textEl.textContent = nextText;
+    btn.setAttribute('aria-label', nextText);
+    btn.setAttribute('data-tooltip', nextText);
+    btn.removeAttribute('title');
+    const iconEl = btn.querySelector('i');
+    if (iconEl) {
+        iconEl.className = editing ? 'fas fa-check' : 'fas fa-pen';
+    }
+}
+
+function setSyncMarkdownToolsVisible(visible) {
+    const toolsEl = document.getElementById('syncMarkdownTools');
+    if (!toolsEl) return;
+    toolsEl.hidden = !visible;
+}
+
+function getSyncMarkdownEditorSelection(editor) {
+    const value = String(editor?.value || '');
+    const safeStart = Math.max(0, Math.min(Number(editor?.selectionStart || 0), value.length));
+    const safeEnd = Math.max(safeStart, Math.min(Number(editor?.selectionEnd || 0), value.length));
+    return { value, start: safeStart, end: safeEnd };
+}
+
+function execSyncEditorCommand(command = '') {
+    const cmd = String(command || '').trim().toLowerCase();
+    if (!cmd || typeof document.execCommand !== 'function') return false;
+    try {
+        return document.execCommand(cmd);
+    } catch (_) {
+        return false;
+    }
+}
+
+function copySyncEditorSelection(editor) {
+    if (!editor) return false;
+    const start = Number(editor.selectionStart || 0);
+    const end = Number(editor.selectionEnd || 0);
+    const hasSelection = end > start;
+    const hadFocus = document.activeElement === editor;
+    if (!hadFocus) editor.focus();
+    if (!hasSelection) {
+        editor.select();
+    }
+    const copied = execSyncEditorCommand('copy');
+    editor.setSelectionRange(start, end);
+    return copied;
+}
+
+function applySyncInlineWrapToEditor(editor, prefix, suffix, placeholder) {
+    if (!editor) return;
+    const { value, start, end } = getSyncMarkdownEditorSelection(editor);
+    const selectedText = value.slice(start, end);
+    const hasSelection = end > start;
+    const content = hasSelection ? selectedText : String(placeholder || '');
+    const replacement = `${prefix}${content}${suffix}`;
+    editor.setRangeText(replacement, start, end, 'end');
+    if (!hasSelection && content) {
+        const from = start + prefix.length;
+        editor.setSelectionRange(from, from + content.length);
+    }
+}
+
+function normalizeSyncMarkdownLineForList(line = '') {
+    return String(line || '')
+        .replace(/^\s*>\s?/, '')
+        .replace(/^\s*#{1,6}\s+/, '')
+        .replace(/^\s*-\s+\[(?: |x|X)\]\s+/, '')
+        .replace(/^\s*(?:[-*+]|\d+\.)\s+/, '');
+}
+
+function applySyncBlockPrefixToEditor(editor, prefixBuilder) {
+    if (!editor || typeof prefixBuilder !== 'function') return;
+    const { value, start, end } = getSyncMarkdownEditorSelection(editor);
+    const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const nextLineBreak = value.indexOf('\n', end);
+    const lineEnd = nextLineBreak >= 0 ? nextLineBreak : value.length;
+    const segment = value.slice(lineStart, lineEnd);
+    const lines = segment.split('\n');
+    const replacement = lines.map((line, index) => {
+        if (!String(line || '').trim() && lines.length > 1) return line;
+        return prefixBuilder(String(line || ''), index, lines.length);
+    }).join('\n');
+    editor.setRangeText(replacement, lineStart, lineEnd, 'end');
+    editor.setSelectionRange(lineStart, lineStart + replacement.length);
+}
+
+function applySyncLinkToEditor(editor) {
+    if (!editor) return;
+    const isZh = currentLang === 'zh_CN';
+    const { value, start, end } = getSyncMarkdownEditorSelection(editor);
+    const selectedText = value.slice(start, end);
+    const trimmed = selectedText.trim();
+    const linkTextPlaceholder = isZh ? '链接文本' : 'link text';
+    const linkLabel = isZh ? '链接' : 'link';
+    const urlPlaceholder = 'https://example.com';
+    let replacement = '';
+    if (trimmed) {
+        replacement = /^https?:\/\/\S+$/i.test(trimmed)
+            ? `[${linkLabel}](${trimmed})`
+            : `[${selectedText}](${urlPlaceholder})`;
+    } else {
+        replacement = `[${linkTextPlaceholder}](${urlPlaceholder})`;
+    }
+    editor.setRangeText(replacement, start, end, 'end');
+    const urlStart = start + Math.max(0, replacement.lastIndexOf('(') + 1);
+    const urlEnd = start + Math.max(0, replacement.length - 1);
+    editor.setSelectionRange(urlStart, urlEnd);
+}
+
+function applySyncCalloutToEditor(editor) {
+    if (!editor) return;
+    const isZh = currentLang === 'zh_CN';
+    const { value, start, end } = getSyncMarkdownEditorSelection(editor);
+    const selectedText = value.slice(start, end);
+    const bodyRaw = String(selectedText || '').trim();
+    const body = bodyRaw || (isZh ? '在这里填写说明' : 'Write details here');
+    const title = isZh ? '提示标题' : 'Note title';
+    const bodyLines = body.split('\n').map((line) => `> ${line}`);
+    const replacement = `> [!note] ${title}\n${bodyLines.join('\n')}`;
+    editor.setRangeText(replacement, start, end, 'end');
+    const titleStart = start + '> [!note] '.length;
+    editor.setSelectionRange(titleStart, titleStart + title.length);
+}
+
+function applySyncCodeBlockToEditor(editor) {
+    if (!editor) return;
+    const isZh = currentLang === 'zh_CN';
+    const { value, start, end } = getSyncMarkdownEditorSelection(editor);
+    const selectedText = value.slice(start, end);
+    const body = selectedText || (isZh ? '在这里写代码' : 'write code here');
+    const replacement = `\`\`\`\n${body}\n\`\`\``;
+    editor.setRangeText(replacement, start, end, 'end');
+    if (!selectedText) {
+        const bodyStart = start + 4;
+        editor.setSelectionRange(bodyStart, bodyStart + body.length);
+    }
+}
+
+function applySyncMarkdownToolAction(action = '') {
+    const editor = document.getElementById('syncMarkdownEditor');
+    if (!editor || editor.hidden || !isSyncEditModeEnabled()) return;
+    const isZh = currentLang === 'zh_CN';
+    let shouldDispatchInput = false;
+    switch (String(action || '').trim()) {
+        case 'undo': {
+            const changed = execSyncEditorCommand('undo');
+            shouldDispatchInput = changed;
+            break;
+        }
+        case 'redo': {
+            const changed = execSyncEditorCommand('redo');
+            shouldDispatchInput = changed;
+            break;
+        }
+        case 'copy': {
+            const copied = copySyncEditorSelection(editor);
+            if (copied) {
+                showToast(getSyncText('exportSuccessCopy', currentLang === 'zh_CN' ? '已复制到剪贴板' : 'Copied to clipboard'));
+            } else {
+                showToast(currentLang === 'zh_CN' ? '复制失败，请使用 Ctrl/Cmd+C' : 'Copy failed, please use Ctrl/Cmd+C');
+            }
+            break;
+        }
+        case 'h1':
+            applySyncBlockPrefixToEditor(editor, (line) => `# ${line.replace(/^\s*#{1,6}\s+/, '')}`);
+            shouldDispatchInput = true;
+            break;
+        case 'h2':
+            applySyncBlockPrefixToEditor(editor, (line) => `## ${line.replace(/^\s*#{1,6}\s+/, '')}`);
+            shouldDispatchInput = true;
+            break;
+        case 'h3':
+            applySyncBlockPrefixToEditor(editor, (line) => `### ${line.replace(/^\s*#{1,6}\s+/, '')}`);
+            shouldDispatchInput = true;
+            break;
+        case 'bold':
+            applySyncInlineWrapToEditor(editor, '**', '**', isZh ? '文本' : 'text');
+            shouldDispatchInput = true;
+            break;
+        case 'italic':
+            applySyncInlineWrapToEditor(editor, '*', '*', isZh ? '文本' : 'text');
+            shouldDispatchInput = true;
+            break;
+        case 'highlight':
+            applySyncInlineWrapToEditor(editor, '==', '==', isZh ? '高亮内容' : 'highlight');
+            shouldDispatchInput = true;
+            break;
+        case 'strike':
+            applySyncInlineWrapToEditor(editor, '~~', '~~', isZh ? '删除线内容' : 'strikethrough');
+            shouldDispatchInput = true;
+            break;
+        case 'code':
+            applySyncInlineWrapToEditor(editor, '`', '`', isZh ? '代码' : 'code');
+            shouldDispatchInput = true;
+            break;
+        case 'codeblock':
+            applySyncCodeBlockToEditor(editor);
+            shouldDispatchInput = true;
+            break;
+        case 'ul':
+            applySyncBlockPrefixToEditor(editor, (line) => `- ${normalizeSyncMarkdownLineForList(line)}`);
+            shouldDispatchInput = true;
+            break;
+        case 'ol':
+            applySyncBlockPrefixToEditor(editor, (line, index) => `${index + 1}. ${normalizeSyncMarkdownLineForList(line)}`);
+            shouldDispatchInput = true;
+            break;
+        case 'task':
+            applySyncBlockPrefixToEditor(editor, (line) => `- [ ] ${normalizeSyncMarkdownLineForList(line)}`);
+            shouldDispatchInput = true;
+            break;
+        case 'quote':
+            applySyncBlockPrefixToEditor(editor, (line) => `> ${String(line || '').replace(/^\s*>\s?/, '')}`);
+            shouldDispatchInput = true;
+            break;
+        case 'link':
+            applySyncLinkToEditor(editor);
+            shouldDispatchInput = true;
+            break;
+        case 'callout':
+            applySyncCalloutToEditor(editor);
+            shouldDispatchInput = true;
+            break;
+        default:
+            return;
+    }
+    editor.focus();
+    if (shouldDispatchInput) {
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
+function normalizeSyncMarkdownMatchText(text = '') {
+    return String(text || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function tokenizeSyncMarkdownMatchText(text = '') {
+    const normalized = normalizeSyncMarkdownMatchText(text);
+    if (!normalized) return [];
+    const matches = normalized.match(/[a-z0-9\u4e00-\u9fff]+/g);
+    return Array.isArray(matches) ? matches : [];
+}
+
+function stripSyncMarkdownLineSyntax(line = '') {
+    return String(line || '')
+        .replace(/^\s*#{1,6}\s+/, '')
+        .replace(/^\s*>\s?/, '')
+        .replace(/^\s*-\s+\[(?: |x|X)\]\s+/, '')
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+        .trim();
+}
+
+function buildSyncMarkdownCursorContext(editorEl) {
+    const value = String(editorEl?.value || '');
+    const cursor = Math.max(0, Math.min(Number(editorEl?.selectionStart || 0), value.length));
+    const beforeCursorRaw = value.slice(Math.max(0, cursor - 240), cursor);
+    const lines = value.split('\n');
+    const lineCount = lines.length || 1;
+    const before = value.slice(0, cursor);
+    let lineIndex = Math.max(0, Math.min(lineCount - 1, before.split('\n').length - 1));
+
+    if (!String(lines[lineIndex] || '').trim()) {
+        let fallbackIndex = lineIndex;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < lineCount; i += 1) {
+            if (!String(lines[i] || '').trim()) continue;
+            const distance = Math.abs(i - lineIndex);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                fallbackIndex = i;
+            }
+        }
+        lineIndex = fallbackIndex;
+    }
+
+    const lineText = String(lines[lineIndex] || '');
+    const lineCoreRaw = stripSyncMarkdownLineSyntax(lineText) || lineText;
+    const lineCore = normalizeSyncMarkdownMatchText(lineCoreRaw);
+    const lineTokens = tokenizeSyncMarkdownMatchText(lineCoreRaw);
+
+    const anchorRaw = beforeCursorRaw
+        .split('\n')
+        .slice(-3)
+        .map((line) => stripSyncMarkdownLineSyntax(line) || line)
+        .join(' ');
+    const anchorCore = normalizeSyncMarkdownMatchText(anchorRaw);
+    const anchorTokens = tokenizeSyncMarkdownMatchText(anchorRaw);
+
+    const isHeadingLine = /^\s*#{1,6}\s+/.test(lineText);
+    const isListLine = /^\s*-\s+\[(?: |x|X)\]\s+/.test(lineText) || /^\s*(?:[-*+]|\d+[.)])\s+/.test(lineText);
+
+    let blockStart = lineIndex;
+    let blockEnd = lineIndex;
+    while (blockStart > 0 && String(lines[blockStart - 1] || '').trim()) blockStart -= 1;
+    while (blockEnd < lineCount - 1 && String(lines[blockEnd + 1] || '').trim()) blockEnd += 1;
+    const blockRaw = lines.slice(blockStart, blockEnd + 1)
+        .map((line) => stripSyncMarkdownLineSyntax(line) || line)
+        .join(' ');
+    const blockCore = normalizeSyncMarkdownMatchText(blockRaw);
+    const blockTokens = tokenizeSyncMarkdownMatchText(blockRaw);
+
+    let headingCore = '';
+    for (let i = lineIndex; i >= 0; i -= 1) {
+        const line = String(lines[i] || '');
+        if (!/^\s*#{1,6}\s+/.test(line)) continue;
+        headingCore = normalizeSyncMarkdownMatchText(stripSyncMarkdownLineSyntax(line));
+        break;
+    }
+    const headingTokens = tokenizeSyncMarkdownMatchText(headingCore);
+
+    return {
+        anchorCore,
+        anchorTokens,
+        lineCore,
+        lineTokens,
+        blockCore,
+        blockTokens,
+        headingCore,
+        headingTokens,
+        isHeadingLine,
+        isListLine
+    };
+}
+
+function buildSyncMarkdownRenderMatchCandidates(renderEl) {
+    if (!renderEl) return [];
+    renderEl.querySelectorAll('[data-sync-match-node="1"]').forEach((el) => {
+        el.removeAttribute('data-sync-match-node');
+        el.classList.remove('is-active-line');
+    });
+
+    const selector = 'h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,table,hr';
+    const elements = Array.from(renderEl.querySelectorAll(selector)).filter((el) => el instanceof HTMLElement);
+    const candidates = [];
+
+    elements.forEach((el) => {
+        const tagName = String(el.tagName || '').toLowerCase();
+        const rawText = String(el.innerText || el.textContent || '').trim();
+        const normalizedText = normalizeSyncMarkdownMatchText(rawText);
+        const tokenList = tokenizeSyncMarkdownMatchText(rawText);
+        if (!normalizedText && tagName !== 'hr') return;
+        el.setAttribute('data-sync-match-node', '1');
+        candidates.push({
+            el,
+            tagName,
+            rawText,
+            normalizedText,
+            tokenSet: new Set(tokenList)
+        });
+    });
+
+    if (candidates.length) return candidates;
+
+    const fallback = renderEl.firstElementChild;
+    if (fallback instanceof HTMLElement) {
+        fallback.setAttribute('data-sync-match-node', '1');
+        return [{
+            el: fallback,
+            tagName: String(fallback.tagName || '').toLowerCase(),
+            rawText: String(fallback.innerText || fallback.textContent || '').trim(),
+            normalizedText: normalizeSyncMarkdownMatchText(fallback.innerText || fallback.textContent || ''),
+            tokenSet: new Set(tokenizeSyncMarkdownMatchText(fallback.innerText || fallback.textContent || ''))
+        }];
+    }
+    return [];
+}
+
+function countSyncMarkdownTokenOverlap(tokens = [], tokenSet = new Set()) {
+    if (!Array.isArray(tokens) || !tokens.length || !(tokenSet instanceof Set) || !tokenSet.size) return 0;
+    let overlap = 0;
+    tokens.forEach((token) => {
+        if (tokenSet.has(token)) overlap += 1;
+    });
+    return overlap;
+}
+
+function scoreSyncMarkdownRenderCandidate(candidate, context) {
+    const tag = String(candidate?.tagName || '');
+    const normalized = String(candidate?.normalizedText || '');
+    const tokenSet = candidate?.tokenSet instanceof Set ? candidate.tokenSet : new Set();
+    if (!tag) return Number.NEGATIVE_INFINITY;
+
+    const {
+        anchorCore = '',
+        anchorTokens = [],
+        lineCore = '',
+        lineTokens = [],
+        blockCore = '',
+        blockTokens = [],
+        headingCore = '',
+        headingTokens = [],
+        isHeadingLine = false,
+        isListLine = false
+    } = context || {};
+
+    let score = 0;
+
+    if (isHeadingLine && /^h[1-6]$/.test(tag)) score += 160;
+    if (isListLine && tag === 'li') score += 130;
+    if (tag === 'hr') score -= 140;
+
+    if (anchorCore) {
+        if (normalized === anchorCore) score += 2400;
+        else if (normalized.includes(anchorCore)) score += 1900 + Math.min(260, anchorCore.length * 4);
+        else if (anchorCore.includes(normalized) && normalized.length >= 12) score += 520;
+    }
+
+    const anchorOverlap = countSyncMarkdownTokenOverlap(anchorTokens, tokenSet);
+    if (anchorTokens.length > 0) {
+        score += anchorOverlap * 86;
+        score += (anchorOverlap / anchorTokens.length) * 420;
+    }
+
+    if (lineCore) {
+        if (normalized === lineCore) score += 1400;
+        else if (normalized.includes(lineCore)) score += 950 + Math.min(180, lineCore.length * 4);
+        else if (lineCore.includes(normalized) && normalized.length >= 10) score += 360;
+    }
+
+    if (headingCore) {
+        if (/^h[1-6]$/.test(tag) && normalized === headingCore) score += 1200;
+        else if (/^h[1-6]$/.test(tag) && normalized.includes(headingCore)) score += 640;
+        else if (normalized.includes(headingCore)) score += 220;
+    }
+
+    if (blockCore) {
+        if (normalized === blockCore) score += 520;
+        else if (normalized.includes(blockCore)) score += 380;
+        else if (blockCore.includes(normalized) && normalized.length >= 14) score += 260;
+    }
+
+    const lineOverlap = countSyncMarkdownTokenOverlap(lineTokens, tokenSet);
+    if (lineTokens.length > 0) {
+        score += lineOverlap * 64;
+        score += (lineOverlap / lineTokens.length) * 260;
+    }
+
+    const blockOverlap = countSyncMarkdownTokenOverlap(blockTokens, tokenSet);
+    if (blockTokens.length > 0) {
+        score += blockOverlap * 18;
+        score += (blockOverlap / blockTokens.length) * 120;
+    }
+
+    const headingOverlap = countSyncMarkdownTokenOverlap(headingTokens, tokenSet);
+    if (headingTokens.length > 0) {
+        score += headingOverlap * 34;
+    }
+
+    if (normalized.length > 280) {
+        score -= Math.min(220, (normalized.length - 280) * 0.35);
+    }
+    return score;
+}
+
+function pickSyncMarkdownRenderFallbackByScroll(candidates, editorEl, renderEl) {
+    if (!Array.isArray(candidates) || !candidates.length || !editorEl || !renderEl) return null;
+    const editorScrollable = Math.max(0, editorEl.scrollHeight - editorEl.clientHeight);
+    const ratio = editorScrollable > 0
+        ? Math.max(0, Math.min(1, editorEl.scrollTop / editorScrollable))
+        : 0;
+    const renderScrollable = Math.max(0, renderEl.scrollHeight - renderEl.clientHeight);
+    const targetY = ratio * renderScrollable + renderEl.clientHeight * 0.35;
+
+    let best = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    candidates.forEach((candidate) => {
+        const el = candidate?.el;
+        if (!(el instanceof HTMLElement)) return;
+        const midY = el.offsetTop + el.offsetHeight * 0.5;
+        const distance = Math.abs(midY - targetY);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    });
+    return best;
+}
+
+function updateSyncMarkdownRenderActiveLine({ scrollIntoView = false } = {}) {
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    const renderEl = document.getElementById('syncMarkdownRender');
+    if (!editorEl || editorEl.hidden || !renderEl || renderEl.hidden) return;
+
+    const context = buildSyncMarkdownCursorContext(editorEl);
+    const candidates = buildSyncMarkdownRenderMatchCandidates(renderEl);
+    if (!candidates.length) return;
+
+    let bestCandidate = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    candidates.forEach((candidate) => {
+        const score = scoreSyncMarkdownRenderCandidate(candidate, context);
+        if (score > bestScore) {
+            bestScore = score;
+            bestCandidate = candidate;
+        }
+    });
+
+    const fallback = pickSyncMarkdownRenderFallbackByScroll(candidates, editorEl, renderEl);
+    if (!bestCandidate) {
+        bestCandidate = fallback;
+    } else if (fallback && bestScore < 220) {
+        bestCandidate = fallback;
+    }
+
+    if (!bestCandidate || !(bestCandidate.el instanceof HTMLElement)) return;
+    candidates.forEach((candidate) => {
+        if (candidate?.el instanceof HTMLElement) {
+            candidate.el.classList.toggle('is-active-line', candidate === bestCandidate);
+        }
+    });
+
+    if (!scrollIntoView) return;
+    const blockEl = bestCandidate.el;
+    const viewportTop = renderEl.scrollTop;
+    const viewportBottom = viewportTop + renderEl.clientHeight;
+    const blockTop = blockEl.offsetTop;
+    const blockBottom = blockTop + blockEl.offsetHeight;
+    if (blockTop < viewportTop + 28 || blockBottom > viewportBottom - 28) {
+        renderEl.scrollTop = Math.max(0, blockTop - Math.floor(renderEl.clientHeight * 0.28));
+    }
+}
+
+function syncSyncMarkdownActiveLine({
+    scrollPreview = false
+} = {}) {
+    updateSyncMarkdownRenderActiveLine({ scrollIntoView: !!scrollPreview });
+}
+
+function renderSyncMarkdownPreview(markdownText = '') {
+    const renderEl = document.getElementById('syncMarkdownRender');
+    if (!renderEl || renderEl.hidden) return;
+    const markdown = String(markdownText || '');
+    try {
+        if (window.marked && typeof window.marked.parse === 'function') {
+            const rawHtml = window.marked.parse(markdown);
+            renderEl.innerHTML = sanitizeSyncMarkdownHtml(rawHtml, markdown);
+            hardenSyncRenderedLinks(renderEl);
+        } else {
+            renderEl.innerHTML = `<pre>${escapeHtml(markdown)}</pre>`;
+        }
+    } catch (_) {
+        renderEl.innerHTML = `<pre>${escapeHtml(markdown)}</pre>`;
+    }
+    syncSyncMarkdownActiveLine({ scrollPreview: false });
+}
+
+function clearSyncMarkdownPreviewTimer() {
+    if (!syncMarkdownPreviewTimer) return;
+    clearTimeout(syncMarkdownPreviewTimer);
+    syncMarkdownPreviewTimer = null;
+}
+
+function scheduleSyncMarkdownPreview(delayMs = 90) {
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    if (!editorEl) return;
+    clearSyncMarkdownPreviewTimer();
+    const waitMs = Math.max(0, Number(delayMs) || 0);
+    if (waitMs <= 0) {
+        renderSyncMarkdownPreview(editorEl.value || '');
+        return;
+    }
+    syncMarkdownPreviewTimer = setTimeout(() => {
+        syncMarkdownPreviewTimer = null;
+        renderSyncMarkdownPreview(editorEl.value || '');
+    }, waitMs);
+}
+
+function renderSyncMarkdown() {
+    const emptyEl = document.getElementById('syncMarkdownEmpty');
+    const livePaneEl = document.getElementById('syncMarkdownLivePane');
+    const editorPaneEl = document.getElementById('syncMarkdownEditorPane');
+    const renderPaneEl = document.getElementById('syncMarkdownRenderPane');
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    const renderEl = document.getElementById('syncMarkdownRender');
+    const fileNameEl = document.getElementById('syncActiveFileName');
+    const fileTimeEl = document.getElementById('syncActiveFileTime');
+
+    if (!emptyEl || !livePaneEl || !editorEl || !renderEl || !fileNameEl || !fileTimeEl) {
+        return;
+    }
+    updateSyncEditModeButtonText();
+    updateSyncSaveButtonTooltip();
+    refreshSyncMarkdownToolLabels();
+
+    const doc = getSyncCurrentDoc();
+    if (!doc) {
+        emptyEl.hidden = false;
+        livePaneEl.hidden = true;
+        if (editorPaneEl) editorPaneEl.hidden = true;
+        if (renderPaneEl) renderPaneEl.hidden = true;
+        editorEl.hidden = true;
+        renderEl.hidden = true;
+        setSyncMarkdownToolsVisible(false);
+        delete editorEl.dataset.syncDocId;
+        fileNameEl.textContent = '--';
+        fileTimeEl.textContent = '--';
+        clearSyncMarkdownPreviewTimer();
+        updateSyncSaveButtonState();
+        return;
+    }
+
+    fileNameEl.textContent = doc.name || '--';
+    fileTimeEl.textContent = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
+    emptyEl.hidden = true;
+    livePaneEl.hidden = false;
+    if (editorPaneEl) editorPaneEl.hidden = false;
+    if (renderPaneEl) renderPaneEl.hidden = false;
+    editorEl.hidden = false;
+    renderEl.hidden = false;
+    setSyncMarkdownToolsVisible(true);
+
+    const markdown = String(doc.markdown || '');
+    const nextDocId = String(doc.id || '');
+    const boundDocId = String(editorEl.dataset.syncDocId || '');
+    if (boundDocId !== nextDocId) {
+        editorEl.value = markdown;
+        editorEl.dataset.syncDocId = nextDocId;
+        editorEl.scrollTop = 0;
+        renderEl.scrollTop = 0;
+    }
+    renderSyncMarkdownPreview(editorEl.value || markdown);
+    syncSyncMarkdownActiveLine({ scrollPreview: false });
+    updateSyncSaveButtonState();
+}
+
+function sanitizeSyncMarkdownHtml(rawHtml, fallbackMarkdown = '') {
+    if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+        return window.DOMPurify.sanitize(String(rawHtml || ''), {
+            ALLOWED_TAGS: [
+                'a', 'p', 'br', 'hr', 'strong', 'em', 'code', 'pre', 'blockquote',
+                'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                'table', 'thead', 'tbody', 'tr', 'th', 'td',
+                'img', 'span', 'div'
+            ],
+            ALLOWED_ATTR: ['href', 'title', 'alt', 'src', 'class', 'id', 'target', 'rel'],
+            ALLOW_DATA_ATTR: false,
+            FORBID_TAGS: ['script', 'iframe', 'style', 'object', 'embed', 'form', 'input', 'button'],
+            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur']
+        });
+    }
+    return `<pre>${escapeHtml(String(fallbackMarkdown || ''))}</pre>`;
+}
+
+function hardenSyncRenderedLinks(rootEl) {
+    if (!rootEl) return;
+    const anchors = rootEl.querySelectorAll('a[href]');
+    anchors.forEach((a) => {
+        const href = a.getAttribute('href') || '';
+        if (/^\s*javascript:/i.test(href)) {
+            a.removeAttribute('href');
+            return;
+        }
+        if (/^(https?:)?\/\//i.test(href)) {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        }
+    });
+}
+
+function updateSyncSaveButtonState() {
+    const saveBtn = document.getElementById('syncSaveDocBtn');
+    if (!saveBtn) return;
+    const currentDoc = getSyncCurrentDoc();
+    saveBtn.disabled = !currentDoc;
+}
+
+async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
+    const safeId = String(docId || '').trim();
+    if (!safeId) return false;
+
+    const index = syncDocsState.findIndex((item) => item && item.id === safeId);
+    if (index < 0 || !syncDocsState[index]) return false;
+
+    const doc = syncDocsState[index];
+    const isAgent = doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID;
+    const promptText = isAgent
+        ? (currentLang === 'zh_CN'
+            ? '请输入规则文件名（.md），例如 CLAUDE.md'
+            : 'Enter rule file name (.md), e.g. CLAUDE.md')
+        : (currentLang === 'zh_CN'
+            ? '请输入文件名（可含目录，.md）'
+            : 'Enter file name (path allowed, .md)');
+    const inputName = window.prompt(promptText, String(doc.name || (isAgent ? SYNC_AGENT_DOC_NAME : 'new-note.md')));
+    if (inputName == null) return;
+    const nextName = isAgent
+        ? sanitizeSyncDocName(String(inputName || '').trim(), SYNC_AGENT_DOC_NAME)
+        : sanitizeSyncDocRelativePath(String(inputName || '').trim(), String(doc.name || 'new-note.md'));
+    if (!nextName) return;
+    if (String(doc.name || '').trim().toLowerCase() === nextName.toLowerCase()) return;
+
+    const duplicated = syncDocsState.some((item, itemIndex) => {
+        if (!item || itemIndex === index) return false;
+        return String(item.name || '').trim().toLowerCase() === nextName.toLowerCase();
+    });
+    if (duplicated) {
+        showToast(currentLang === 'zh_CN' ? '已存在同名 Markdown 文件，请更换名称' : 'A Markdown file with the same name already exists');
+        return false;
+    }
+
+    syncDocsState[index] = {
+        ...syncDocsState[index],
+        name: nextName,
+        updatedAt: Date.now(),
+        localEdited: true
+    };
+    if (focusDoc) syncCurrentDocId = syncDocsState[index].id;
+    await saveSyncDocsToStorage();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    updateSyncPathInfoText();
+    setSyncStatusText({
+        zh_CN: isAgent
+            ? `状态：规则文件已重命名为 ${nextName}`
+            : `状态：Markdown 已重命名为 ${nextName}`,
+        en: isAgent
+            ? `Status: Rule file renamed to ${nextName}`
+            : `Status: Markdown renamed to ${nextName}`
+    });
+    return true;
+}
+
+async function deleteSyncDocById(docId, { focusNeighbor = false } = {}) {
+    const safeId = String(docId || '').trim();
+    if (!safeId) return false;
+    const index = syncDocsState.findIndex((item) => item && item.id === safeId);
+    if (index < 0 || !syncDocsState[index]) return false;
+
+    const doc = syncDocsState[index];
+    if (doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID) {
+        showToast(currentLang === 'zh_CN' ? '规则文件不可删除' : 'Rule file cannot be deleted');
+        return false;
+    }
+
+    const confirmText = currentLang === 'zh_CN'
+        ? `确认删除 ${doc.name} 吗？删除后下次推送会同步删除云端对应文件。`
+        : `Delete ${doc.name}? The corresponding cloud file will be removed on next push.`;
+    if (!window.confirm(confirmText)) return false;
+
+    syncDocsState.splice(index, 1);
+    if (!syncDocsState.length) {
+        syncDocsState = normalizeSyncDocs([]);
+    }
+
+    if (focusNeighbor || syncCurrentDocId === safeId) {
+        const safeIndex = Math.max(0, Math.min(index, syncDocsState.length - 1));
+        syncCurrentDocId = syncDocsState[safeIndex]?.id || syncDocsState[0]?.id || null;
+    }
+
+    await saveSyncDocsToStorage();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    updateSyncPathInfoText();
+    setSyncStatusText({
+        zh_CN: `状态：已删除 ${doc.name}`,
+        en: `Status: Deleted ${doc.name}`
+    });
+    return true;
+}
+
+function commitSyncEditorToCurrentDoc({ markEdited = false } = {}) {
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    if (!editorEl) return false;
+    const index = getSyncCurrentDocIndex();
+    if (index < 0) return false;
+    const existing = syncDocsState[index];
+    if (!existing) return false;
+    const nextMarkdown = String(editorEl.value || '');
+    if (nextMarkdown === String(existing.markdown || '')) {
+        if (markEdited && !existing.localEdited) {
+            existing.localEdited = true;
+            existing.updatedAt = Date.now();
+            return true;
+        }
+        return false;
+    }
+    syncDocsState[index] = {
+        ...existing,
+        markdown: nextMarkdown,
+        updatedAt: Date.now(),
+        localEdited: markEdited ? true : existing.localEdited
+    };
+    return true;
+}
+
+async function saveCurrentSyncDoc() {
+    const changed = commitSyncEditorToCurrentDoc({ markEdited: true });
+    if (!changed) {
+        setSyncStatusText({
+            zh_CN: '状态：内容未变化',
+            en: 'Status: No content changes'
+        });
+        return;
+    }
+    const saved = await saveSyncDocsToStorage();
+    if (!saved) {
+        showToast(currentLang === 'zh_CN' ? '保存失败，请稍后重试' : 'Save failed, please retry');
+        return;
+    }
+    renderSyncFileList();
+    renderSyncMarkdown();
+    setSyncStatusText({
+        zh_CN: '状态：已保存本地 Markdown 文件',
+        en: 'Status: Saved local Markdown file'
+    });
+}
+
+async function loadSyncStateFromStorage() {
+    const result = await syncStorageGet([
+        SYNC_CONFIG_STORAGE_KEY,
+        SYNC_DOCS_STORAGE_KEY,
+        SYNC_REMOTE_DOC_CACHE_STORAGE_KEY
+    ]);
+
+    syncConfigState = normalizeSyncConfig(result?.[SYNC_CONFIG_STORAGE_KEY] || null);
+    syncRepoCollapsed = false;
+    syncPushPackageInfoVisible = false;
+    syncRawHighVolumeInfoVisible = false;
+    syncPullPolicyInfoVisible = false;
+    let docs = normalizeSyncDocs(result?.[SYNC_DOCS_STORAGE_KEY] || []);
+    if (!docs.length) {
+        docs = cloneSyncDefaultDocs();
+        await syncStorageSet({ [SYNC_DOCS_STORAGE_KEY]: docs });
+    }
+    syncDocsState = docs;
+    syncRemoteDocCacheState = normalizeSyncRemoteDocCache(result?.[SYNC_REMOTE_DOC_CACHE_STORAGE_KEY] || null);
+    if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
+        syncCurrentDocId = syncDocsState[0]?.id || null;
+    }
+    setSyncStatusText(getSyncI18nPair('syncStatusLoaded', '状态：已加载本地同步数据', 'Status: Loaded local sync data'));
+    if (syncConfigState.remoteProvider === SYNC_PROVIDER_LOCAL) {
+        setSyncRepoStatusText({
+            zh_CN: '当前使用本地快照模式',
+            en: 'Using local snapshot mode'
+        }, 'neutral');
+    } else {
+        setSyncRepoStatusText(getSyncText('syncRepoStatusIdle', '等待配置'), 'neutral');
+    }
+}
+
+function normalizeAdditionsRecordsForSync(raw) {
+    if (Array.isArray(raw)) {
+        return raw.map(normalizeBookmarkCacheEntry).filter(Boolean);
+    }
+    if (raw && typeof raw === 'object' && Array.isArray(raw.bookmarks)) {
+        return raw.bookmarks.map(normalizeBookmarkCacheEntry).filter(Boolean);
+    }
+    return [];
+}
+
+function normalizeBrowsingCacheRowsForSync(raw) {
+    const rows = Array.isArray(raw?.records) ? raw.records : (Array.isArray(raw) ? raw : []);
+    return rows
+        .filter((row) => Array.isArray(row) && row.length >= 2)
+        .map(([dateKey, records]) => [String(dateKey || ''), Array.isArray(records) ? records : []]);
+}
+
+function normalizeRecommendReviewsForSync(raw) {
+    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? { ...raw } : {};
+}
+
+function tokenizeSyncTitle(title) {
+    return String(title || '')
+        .toLowerCase()
+        .replace(/[\u0000-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u007f]+/g, ' ')
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 2);
+}
+
+function buildReviewsSimilarCandidates(reviewIds, bookmarkRecords, scoresCache, blockedIdSet, limitPerReview = 5, maxReviews = 200) {
+    const records = Array.isArray(bookmarkRecords) ? bookmarkRecords : [];
+    if (records.length === 0) return {};
+    const byId = new Map();
+    for (const rec of records) {
+        if (rec && rec.id) byId.set(String(rec.id), rec);
+    }
+    let maxScore = 0;
+    if (scoresCache && typeof scoresCache === 'object') {
+        for (const v of Object.values(scoresCache)) {
+            const s = Number(v?.S ?? v?.score ?? 0);
+            if (Number.isFinite(s) && s > maxScore) maxScore = s;
+        }
+    }
+    if (maxScore <= 0) maxScore = 1;
+    const blocked = blockedIdSet instanceof Set ? blockedIdSet : new Set();
+    const result = {};
+    let processed = 0;
+    for (const reviewIdRaw of reviewIds) {
+        if (processed >= maxReviews) break;
+        const reviewId = String(reviewIdRaw);
+        const base = byId.get(reviewId);
+        if (!base) continue;
+        const baseTokens = new Set(tokenizeSyncTitle(base.title));
+        const baseParent = String(base.parentId || '');
+        const baseAncestors = new Set((base.ancestorFolderIds || []).map(String));
+        const candidates = [];
+        for (const rec of records) {
+            if (!rec || !rec.id) continue;
+            const rid = String(rec.id);
+            if (rid === reviewId) continue;
+            if (blocked.has(rid)) continue;
+            const cParent = String(rec.parentId || '');
+            const cAncestors = (rec.ancestorFolderIds || []).map(String);
+            let folderScore = 0;
+            const sameFolder = !!cParent && cParent === baseParent;
+            if (sameFolder) folderScore = 1.0;
+            else if (cAncestors.some((id) => baseAncestors.has(id))) folderScore = 0.4;
+            const cTokens = tokenizeSyncTitle(rec.title);
+            let overlap = 0;
+            for (const t of cTokens) if (baseTokens.has(t)) overlap += 1;
+            const denom = baseTokens.size + cTokens.length - overlap;
+            const jaccard = denom > 0 ? overlap / denom : 0;
+            const sRaw = Number(scoresCache?.[rid]?.S ?? scoresCache?.[rid]?.score ?? 0) || 0;
+            const sNorm = sRaw / maxScore;
+            const combined = folderScore * 1.0 + jaccard * 0.6 + sNorm * 0.2;
+            if (combined <= 0) continue;
+            candidates.push({
+                id: rid,
+                title: rec.title || rec.url || '',
+                url: rec.url || '',
+                path: rec.path || '',
+                score: Number(combined.toFixed(4)),
+                signals: {
+                    sameFolder,
+                    sharedAncestor: !sameFolder && folderScore === 0.4,
+                    titleJaccard: Number(jaccard.toFixed(4)),
+                    sScoreNormalized: Number(sNorm.toFixed(4))
+                }
+            });
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        result[reviewId] = candidates.slice(0, limitPerReview);
+        processed += 1;
+    }
+    return result;
+}
+
+function normalizeRecommendBlockedForSync(raw) {
+    return normalizeBlockedState(raw);
+}
+
+function normalizeFlipHistoryForSync(raw, maxItems = 2000) {
+    const list = Array.isArray(raw) ? raw.filter((item) => item && typeof item === 'object') : [];
+    if (!Number.isFinite(maxItems) || maxItems <= 0 || list.length <= maxItems) return list;
+    return list.slice(list.length - maxItems);
+}
+
+function buildClickRankingFromRows(rows, limit = 200) {
+    const boundaries = getBrowsingClickRankingBoundaries();
+    const statsMap = new Map();
+
+    rows.forEach(([, records]) => {
+        records.forEach((record) => {
+            if (!record || typeof record !== 'object') return;
+            const url = String(record.url || '').trim();
+            if (!url) return;
+            const title = String(record.title || '').trim() || url;
+            const visitTime = Number(record.visitTime || record.dateAdded || 0);
+            if (!Number.isFinite(visitTime) || visitTime <= 0) return;
+            const increment = Math.max(1, Number(record.visitCount) || 1);
+
+            const entry = statsMap.get(url) || {
+                url,
+                title,
+                lastVisitTime: 0,
+                dayCount: 0,
+                weekCount: 0,
+                monthCount: 0,
+                yearCount: 0,
+                allCount: 0
+            };
+
+            entry.allCount += increment;
+            if (visitTime >= boundaries.dayStart && visitTime <= boundaries.now) entry.dayCount += increment;
+            if (visitTime >= boundaries.weekStart && visitTime <= boundaries.now) entry.weekCount += increment;
+            if (visitTime >= boundaries.monthStart && visitTime <= boundaries.now) entry.monthCount += increment;
+            if (visitTime >= boundaries.yearStart && visitTime <= boundaries.now) entry.yearCount += increment;
+            if (visitTime > entry.lastVisitTime) entry.lastVisitTime = visitTime;
+            if (!entry.title && title) entry.title = title;
+            statsMap.set(url, entry);
+        });
+    });
+
+    return Array.from(statsMap.values())
+        .sort((a, b) => {
+            if (b.allCount !== a.allCount) return b.allCount - a.allCount;
+            return (b.lastVisitTime || 0) - (a.lastVisitTime || 0);
+        })
+        .slice(0, Math.max(1, Number(limit) || 200));
+}
+
+function buildRelatedRecordsFromSnapshots(limitSnapshots = 3, limitItemsPerSnapshot = 120) {
+    const snapshots = [];
+    for (const [scopeKey, snapshot] of browsingRelatedSnapshotCache.entries()) {
+        if (!snapshot || !Array.isArray(snapshot.historyItemsExpanded)) continue;
+        snapshots.push({
+            scopeKey,
+            savedAt: Number(snapshot.savedAt || 0),
+            items: snapshot.historyItemsExpanded
+                .slice(0, Math.max(1, Number(limitItemsPerSnapshot) || 120))
+                .map((item) => ({
+                    url: item?.url || '',
+                    title: item?.title || '',
+                    lastVisitTime: Number(item?.lastVisitTime || 0),
+                    visitCount: Number(item?.visitCount || 0)
+                })),
+            bookmarkUrlCount: snapshot.bookmarkUrls instanceof Set ? snapshot.bookmarkUrls.size : 0,
+            bookmarkTitleCount: snapshot.bookmarkTitles instanceof Set ? snapshot.bookmarkTitles.size : 0
+        });
+    }
+
+    return snapshots
+        .sort((a, b) => b.savedAt - a.savedAt)
+        .slice(0, Math.max(1, Number(limitSnapshots) || 3));
+}
+
+async function buildTimeRankingsForSync(limit = 100) {
+    const empty = { composite: [], wakes: [], generatedAt: Date.now(), range: 'all' };
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'getTrackingRankingStatsByRange',
+            range: 'all',
+            startTime: 0,
+            endTime: Date.now()
+        });
+        if (!response || !response.success || !response.stats || typeof response.stats !== 'object') {
+            return empty;
+        }
+        const rows = [];
+        for (const stat of Object.values(response.stats)) {
+            if (!stat || typeof stat !== 'object') continue;
+            const totalMs = Math.max(0, Number(stat.totalCompositeMs ?? stat.compositeMs ?? 0) || 0);
+            const wakeCount = Math.max(0, Number(stat.wakeCount || 0) || 0);
+            if (totalMs === 0 && wakeCount === 0) continue;
+            rows.push({
+                bookmarkId: stat.bookmarkId ? String(stat.bookmarkId) : null,
+                url: String(stat.url || ''),
+                title: String(stat.title || stat.url || ''),
+                totalCompositeMs: totalMs,
+                wakeCount
+            });
+        }
+        const composite = rows
+            .slice()
+            .sort((a, b) => b.totalCompositeMs - a.totalCompositeMs || b.wakeCount - a.wakeCount)
+            .slice(0, limit);
+        const wakes = rows
+            .slice()
+            .sort((a, b) => b.wakeCount - a.wakeCount || b.totalCompositeMs - a.totalCompositeMs)
+            .slice(0, limit);
+        return {
+            composite,
+            wakes,
+            generatedAt: Date.now(),
+            range: 'all'
+        };
+    } catch (_) {
+        return empty;
+    }
+}
+
+async function buildBookmarkTreeSnapshot(localData = {}) {
+    const fromMemory = normalizeAdditionsRecordsForSync(Array.isArray(allBookmarks) ? allBookmarks : []);
+    if (fromMemory.length) {
+        return {
+            status: 'ok',
+            source: 'cache_memory',
+            itemCount: fromMemory.length,
+            fetchedAt: Date.now(),
+            records: fromMemory
+        };
+    }
+
+    const fromStorage = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
+    if (fromStorage.length) {
+        return {
+            status: 'ok',
+            source: 'cache_storage',
+            itemCount: fromStorage.length,
+            fetchedAt: Date.now(),
+            records: fromStorage
+        };
+    }
+
+    if (!browserAPI?.bookmarks?.getTree) {
+        return {
+            status: 'unavailable',
+            source: 'none',
+            itemCount: 0,
+            fetchedAt: Date.now(),
+            records: []
+        };
+    }
+
+    try {
+        const tree = await new Promise((resolve, reject) => {
+            browserAPI.bookmarks.getTree((result) => {
+                if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                    reject(browserAPI.runtime.lastError);
+                    return;
+                }
+                resolve(Array.isArray(result) ? result[0] : null);
+            });
+        });
+        const flattened = normalizeAdditionsRecordsForSync(flattenBookmarkTree(tree));
+        return {
+            status: 'ok',
+            source: 'bookmarks_api',
+            itemCount: flattened.length,
+            fetchedAt: Date.now(),
+            records: flattened
+        };
+    } catch (error) {
+        return {
+            status: 'fallback_failed',
+            source: 'bookmarks_api',
+            error: String(error?.message || error || 'unknown_error'),
+            itemCount: 0,
+            fetchedAt: Date.now(),
+            records: []
+        };
+    }
+}
+
+function buildSyncDocsPayload() {
+    return (syncDocsState || []).map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        kind: doc.kind || SYNC_DOC_KIND_INPUT,
+        markdown: doc.markdown,
+        updatedAt: doc.updatedAt,
+        localEdited: !!doc.localEdited
+    }));
+}
+
+async function collectSyncPushPayload(config) {
+    const keySet = new Set();
+    const addKeys = (...items) => items.filter(Boolean).forEach((item) => keySet.add(item));
+
+    if (config.recommendPool) {
+        addKeys(
+            'recommend_scores_cache',
+            HISTORY_CURRENT_CARDS_STORAGE_KEY,
+            'bb_recommend_pool_cursor_v1',
+            'recommendFormulaConfig',
+            'recommendSectionOrder',
+            RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY,
+            RECOMMEND_ACTIVE_MODE_STORAGE_KEY,
+            RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY
+        );
+    }
+
+    if (config.recommendEvents) {
+        addKeys(
+            'recommend_reviews',
+            RECOMMEND_POSTPONED_STORAGE_KEY,
+            RECOMMEND_POSTPONED_VERSION_STORAGE_KEY,
+            RECOMMEND_BLOCKED_STORAGE_KEY,
+            RECOMMEND_SKIPPED_STORAGE_KEY,
+            FLIPPED_BOOKMARKS_STORAGE_KEY,
+            FLIP_HISTORY_STORAGE_KEY,
+            HEATMAP_DAILY_INDEX_STORAGE_KEY
+        );
+    }
+
+    if (config.bookmarkRecords || config.rawHighVolume || config.bookmarkTreeSnapshot) {
+        addKeys('bb_cache_additions_v1');
+    }
+
+    if (config.bookmarkRecords || config.rawHighVolume) {
+        addKeys('bb_cache_browsing_history_v1');
+    }
+
+    if (config.timeTracking) {
+        addKeys('trackingStats', 'trackingDailyStatsV1');
+    }
+
+    if (config.rawHighVolume) {
+        addKeys(FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY);
+    }
+
+    const keys = Array.from(keySet);
+    let localData = {};
+    if (keys.length > 0) {
+        const localResult = await syncStorageGetStrict(keys);
+        if (!localResult.ok) {
+            throw new Error(localResult.error || 'sync_storage_get_failed');
+        }
+        localData = localResult.data || {};
+    }
+
+    const payload = {
+        schema: 'bookmark-record-recommend.ai-push.v3',
+        generatedAt: Date.now(),
+        generatedAtText: getSyncNowLabel(Date.now()),
+        packages: {},
+        docs: buildSyncDocsPayload()
+    };
+
+    let cachedTreeSnapshot = null;
+    const ensureBookmarkTreeSnapshot = async () => {
+        if (cachedTreeSnapshot) return cachedTreeSnapshot;
+        cachedTreeSnapshot = await buildBookmarkTreeSnapshot(localData);
+        return cachedTreeSnapshot;
+    };
+
+    if (config.recommendPool) {
+        const scores = localData?.recommend_scores_cache || {};
+        const scoreCount = (scores && typeof scores === 'object') ? Object.keys(scores).length : 0;
+        const activeModeRaw = localData?.[RECOMMEND_ACTIVE_MODE_STORAGE_KEY];
+        const activeMode = (typeof activeModeRaw === 'string' && presetModes[activeModeRaw])
+            ? activeModeRaw
+            : 'default';
+        const activeModeSwitchedAt = Number(localData?.[RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY] || 0) || null;
+        payload.packages.recommendPool = {
+            feature: currentLang === 'zh_CN' ? '推荐数据池' : 'Recommendation Pool',
+            summary: {
+                scoreCount,
+                currentCardCount: Array.isArray(localData?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.cards)
+                    ? localData[HISTORY_CURRENT_CARDS_STORAGE_KEY].cards.length
+                    : 0,
+                hasPoolCursor: !!localData?.bb_recommend_pool_cursor_v1,
+                activeMode
+            },
+            data: {
+                recommend_scores_cache: scores,
+                historyCurrentCards: localData?.[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null,
+                bb_recommend_pool_cursor_v1: localData?.bb_recommend_pool_cursor_v1 || null,
+                recommendFormulaConfig: localData?.recommendFormulaConfig || null,
+                recommendSectionOrder: localData?.recommendSectionOrder || null,
+                recommendRefreshSettings: localData?.[RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY] || null,
+                recommendMode: {
+                    activeMode,
+                    lastSwitchAt: activeModeSwitchedAt,
+                    modePresets: presetModes
+                }
+            }
+        };
+    }
+
+    if (config.recommendEvents) {
+        const flipHistory = normalizeFlipHistoryForSync(localData?.[FLIP_HISTORY_STORAGE_KEY], 2000);
+        const flippedBookmarks = normalizeSkippedBookmarkIds(localData?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
+        const postponed = normalizePostponedList(localData?.[RECOMMEND_POSTPONED_STORAGE_KEY] || []);
+        const skipped = normalizeSkippedBookmarkIds(localData?.[RECOMMEND_SKIPPED_STORAGE_KEY] || []);
+        const reviews = normalizeRecommendReviewsForSync(localData?.recommend_reviews);
+        const blocked = normalizeRecommendBlockedForSync(localData?.[RECOMMEND_BLOCKED_STORAGE_KEY]);
+        let reviewsSimilar = null;
+        if (config.bookmarkTreeSnapshot && Object.keys(reviews).length > 0) {
+            const tree = await ensureBookmarkTreeSnapshot();
+            const blockedIdSet = new Set((blocked?.bookmarks || []).map(String));
+            reviewsSimilar = buildReviewsSimilarCandidates(
+                Object.keys(reviews),
+                Array.isArray(tree?.records) ? tree.records : [],
+                localData?.recommend_scores_cache || {},
+                blockedIdSet
+            );
+        }
+        payload.packages.recommendEvents = {
+            feature: currentLang === 'zh_CN' ? '推荐行为事件' : 'Recommendation Events',
+            summary: {
+                reviewsCount: Object.keys(reviews).length,
+                flipHistoryCount: flipHistory.length,
+                flippedBookmarksCount: flippedBookmarks.length,
+                postponedCount: postponed.length,
+                skippedCount: skipped.length,
+                reviewsSimilarCount: reviewsSimilar ? Object.keys(reviewsSimilar).length : 0
+            },
+            data: {
+                recommend_reviews: reviews,
+                recommend_reviews_similar: reviewsSimilar,
+                recommend_postponed: postponed,
+                recommend_postponed_version_v1: localData?.[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY] || null,
+                recommend_blocked: blocked,
+                recommend_skipped_bookmarks_v1: skipped,
+                flippedBookmarks: flippedBookmarks,
+                flipHistory: flipHistory,
+                flipHistoryDailyIndexV1: localData?.[HEATMAP_DAILY_INDEX_STORAGE_KEY] || null
+            }
+        };
+    }
+
+    let additionsRecords = null;
+    const ensureAdditionsRecords = () => {
+        if (additionsRecords) return additionsRecords;
+        additionsRecords = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
+        return additionsRecords;
+    };
+
+    let browsingRows = null;
+    let browsingRecordCount = 0;
+    const ensureBrowsingRows = () => {
+        if (browsingRows) return browsingRows;
+        browsingRows = normalizeBrowsingCacheRowsForSync(localData?.bb_cache_browsing_history_v1);
+        browsingRecordCount = browsingRows.reduce((sum, row) => sum + (Array.isArray(row?.[1]) ? row[1].length : 0), 0);
+        return browsingRows;
+    };
+
+    if (config.bookmarkRecords) {
+        const additions = ensureAdditionsRecords();
+        const rows = ensureBrowsingRows();
+        const clickRankingByRows = buildClickRankingFromRows(rows, 300);
+        const clickRanking = Array.isArray(browsingClickRankingStats?.items) && browsingClickRankingStats.items.length
+            ? getBrowsingRankingItemsForRangeFromStats(browsingClickRankingStats, 'all')
+            : clickRankingByRows;
+        const relatedSnapshots = buildRelatedRecordsFromSnapshots(5, 160);
+        let relatedActiveRange = 'day';
+        try {
+            relatedActiveRange = String(localStorage.getItem('browsingRelatedActiveRange') || 'day');
+        } catch (_) { }
+        payload.packages.bookmarkRecords = {
+            feature: currentLang === 'zh_CN' ? '书签记录' : 'Bookmark Records',
+            summary: {
+                additionsCount: additions.length,
+                clickRecordCount: browsingRecordCount,
+                clickRankingCount: Array.isArray(clickRanking) ? clickRanking.length : 0,
+                relatedSnapshotCount: relatedSnapshots.length
+            },
+            data: {
+                additionsRecords: additions,
+                clickRecords: {
+                    rows
+                },
+                clickRanking: {
+                    generatedAt: Date.now(),
+                    range: 'all',
+                    items: Array.isArray(clickRanking) ? clickRanking : []
+                },
+                relatedRecords: {
+                    activeRange: relatedActiveRange,
+                    snapshots: relatedSnapshots
+                }
+            }
+        };
+    }
+
+    if (config.timeTracking) {
+        const rankings = await buildTimeRankingsForSync(100);
+        payload.packages.timeTracking = {
+            feature: currentLang === 'zh_CN' ? '时间捕捉' : 'Time Tracking',
+            summary: {
+                hasTrackingStats: !!localData?.trackingStats,
+                hasTrackingDaily: !!localData?.trackingDailyStatsV1,
+                compositeRankingCount: rankings.composite.length,
+                wakesRankingCount: rankings.wakes.length
+            },
+            data: {
+                trackingStats: localData?.trackingStats || null,
+                trackingDailyStatsV1: localData?.trackingDailyStatsV1 || null,
+                rankings
+            }
+        };
+    }
+
+    if (config.bookmarkTreeSnapshot) {
+        const treeSnapshot = await ensureBookmarkTreeSnapshot();
+        payload.packages.bookmarkTreeSnapshot = {
+            feature: currentLang === 'zh_CN' ? '书签树快照' : 'Bookmark Tree Snapshot',
+            summary: {
+                status: treeSnapshot.status,
+                source: treeSnapshot.source,
+                itemCount: Number(treeSnapshot.itemCount || 0)
+            },
+            data: treeSnapshot
+        };
+    }
+
+    if (config.rawHighVolume) {
+        ensureAdditionsRecords();
+        ensureBrowsingRows();
+        payload.packages.rawHighVolume = {
+            feature: currentLang === 'zh_CN' ? '原始记录明细' : 'Raw records',
+            summary: {
+                browsingRows: browsingRows.length,
+                browsingRecordCount,
+                flipHistoryCount: Array.isArray(localData?.[FLIP_HISTORY_STORAGE_KEY]) ? localData[FLIP_HISTORY_STORAGE_KEY].length : 0
+            },
+            data: {
+                additionsCacheRaw: localData?.bb_cache_additions_v1 || null,
+                browsingHistoryCacheRaw: localData?.bb_cache_browsing_history_v1 || null,
+                flipHistoryRaw: normalizeFlipHistoryForSync(localData?.[FLIP_HISTORY_STORAGE_KEY], 4000),
+                flipHistoryDailyIndexRaw: localData?.[HEATMAP_DAILY_INDEX_STORAGE_KEY] || null
+            }
+        };
+    }
+
+    return payload;
+}
+
+async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
+    const safeSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const nowTs = Number(safeSnapshot.updatedAt || Date.now()) || Date.now();
+    const paths = buildSyncRepoPaths(repoConfig, nowTs);
+    const branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    if (!branchReady.success) {
+        return {
+            success: false,
+            error: branchReady.error || (currentLang === 'zh_CN' ? '分支不可用' : 'Branch is unavailable')
+        };
+    }
+    const branch = String(branchReady.branch || '').trim();
+    const branchCreated = branchReady.branchCreated === true;
+    const docs = Array.isArray(safeSnapshot.docs) ? safeSnapshot.docs : [];
+    const commitPrefix = `[sync:${buildSyncDateKey(nowTs)} ${buildSyncTimeKey(nowTs)}]`;
+
+    const filesToPush = [
+        {
+            path: paths.dataLatestPath,
+            text: JSON.stringify(safeSnapshot, null, 2),
+            message: `${commitPrefix} update data/latest`
+        },
+        {
+            path: paths.dataSnapshotPath,
+            text: JSON.stringify(safeSnapshot, null, 2),
+            message: `${commitPrefix} update data snapshot`
+        }
+    ];
+
+    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const docsIndex = {
+        schema: 'bookmark-record-recommend.ai-input-docs-index.v1',
+        updatedAt: nowTs,
+        updatedAtText: getSyncNowLabel(nowTs),
+        docs: []
+    };
+    const docCacheUpdates = [];
+    docs.forEach((doc, index) => {
+        const kind = doc?.kind || SYNC_DOC_KIND_INPUT;
+        if (kind === SYNC_DOC_KIND_AGENT) {
+            const ruleFileName = sanitizeSyncDocName(doc?.name, SYNC_AGENT_DOC_NAME);
+            const ruleFilePath = joinSyncRelativePath(paths.basePath, ruleFileName);
+            filesToPush.push({
+                path: ruleFilePath,
+                text: String(doc?.markdown || ''),
+                message: `${commitPrefix} update rule file ${ruleFileName}`,
+                docCache: {
+                    kind: SYNC_DOC_KIND_AGENT,
+                    name: ruleFileName,
+                    markdown: String(doc?.markdown || '')
+                }
+            });
+            return;
+        }
+        if (kind === SYNC_DOC_KIND_RESULT) {
+            return;
+        }
+        const safeRelativePath = sanitizeSyncDocRelativePath(doc?.name, `doc-${index + 1}.md`);
+        const docPath = joinSyncRelativePath(inputDocsRoot, safeRelativePath);
+        docsIndex.docs.push({
+            name: safeRelativePath,
+            path: docPath,
+            updatedAt: Number(doc?.updatedAt || nowTs) || nowTs
+        });
+        filesToPush.push({
+            path: docPath,
+            text: String(doc?.markdown || ''),
+            message: `${commitPrefix} update input doc ${safeRelativePath}`,
+            docCache: {
+                kind: SYNC_DOC_KIND_INPUT,
+                name: safeRelativePath,
+                markdown: String(doc?.markdown || '')
+            }
+        });
+    });
+    filesToPush.push({
+        path: joinSyncRelativePath(inputDocsRoot, 'index.json'),
+        text: JSON.stringify(docsIndex, null, 2),
+        message: `${commitPrefix} update input docs index`
+    });
+
+    const expectedInputDocPaths = new Set(
+        docsIndex.docs
+            .map((entry) => normalizeSyncRelativePath(entry?.path || ''))
+            .filter(Boolean)
+    );
+    const inputListResult = await syncGitHubListFiles(repoConfig, inputDocsRoot, { branch });
+    if (!inputListResult.success) {
+        return {
+            success: false,
+            error: inputListResult.error || (currentLang === 'zh_CN' ? '读取云端 input-docs 目录失败' : 'Failed to list remote input-docs'),
+            branch
+        };
+    }
+    const remoteInputDeleteQueue = (Array.isArray(inputListResult.files) ? inputListResult.files : [])
+        .map((file) => ({
+            path: normalizeSyncRelativePath(file?.path || ''),
+            sha: String(file?.sha || '')
+        }))
+        .filter((file) => file.path && /\.md$/i.test(file.path))
+        .filter((file) => !expectedInputDocPaths.has(file.path));
+
+    const snapshotsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_DATA_SNAPSHOTS_ROOT);
+    const expectedSnapshotPath = normalizeSyncRelativePath(paths.dataSnapshotPath);
+    const snapshotListResult = await syncGitHubListFiles(repoConfig, snapshotsRoot, { branch });
+    if (!snapshotListResult.success) {
+        return {
+            success: false,
+            error: snapshotListResult.error || (currentLang === 'zh_CN' ? '读取云端快照目录失败' : 'Failed to list remote snapshots'),
+            branch
+        };
+    }
+    const remoteSnapshotDeleteQueue = (Array.isArray(snapshotListResult.files) ? snapshotListResult.files : [])
+        .map((file) => ({
+            path: normalizeSyncRelativePath(file?.path || ''),
+            sha: String(file?.sha || '')
+        }))
+        .filter((file) => file.path && /\.json$/i.test(file.path))
+        .filter((file) => file.path !== expectedSnapshotPath);
+
+    const metaState = {
+        schema: 'bookmark-record-recommend.ai-sync-state.v1',
+        provider: SYNC_PROVIDER_GITHUB,
+        branch,
+        basePath: paths.basePath,
+        pushedAt: nowTs,
+        pushedAtText: getSyncNowLabel(nowTs),
+        packageCount: Number(safeSnapshot.packageCount || 0),
+        docsCount: docs.length
+    };
+    filesToPush.push({
+        path: paths.metaStatePath,
+        text: JSON.stringify(metaState, null, 2),
+        message: `${commitPrefix} update sync state`
+    });
+
+    let pushedCount = 0;
+    for (let i = 0; i < filesToPush.length; i += 1) {
+        const file = filesToPush[i];
+        const putResult = await syncGitHubPutFile(repoConfig, { ...file, branch });
+        if (!putResult.success) {
+            return {
+                success: false,
+                error: putResult.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'),
+                branch,
+                pushedCount,
+                failedPath: file.path
+            };
+        }
+        if (file?.docCache && typeof file.docCache === 'object') {
+            docCacheUpdates.push({
+                kind: file.docCache.kind || SYNC_DOC_KIND_INPUT,
+                name: file.docCache.name || '',
+                markdown: String(file.docCache.markdown || ''),
+                remoteSha: String(putResult.sha || ''),
+                remotePath: normalizeSyncRelativePath(file.path || ''),
+                updatedAt: nowTs
+            });
+        }
+        pushedCount += 1;
+    }
+
+    let deletedCount = 0;
+    for (let i = 0; i < remoteInputDeleteQueue.length; i += 1) {
+        const file = remoteInputDeleteQueue[i];
+        const relativeDocPath = file.path.startsWith(`${inputDocsRoot}/`)
+            ? file.path.slice(inputDocsRoot.length + 1)
+            : file.path;
+        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
+            path: file.path,
+            sha: file.sha,
+            branch,
+            message: `${commitPrefix} delete input doc ${relativeDocPath}`
+        });
+        if (!deleteResult.success) {
+            return {
+                success: false,
+                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端删除失败' : 'Remote delete failed'),
+                branch,
+                pushedCount,
+                deletedCount,
+                failedPath: file.path
+            };
+        }
+        if (!deleteResult.notFound) deletedCount += 1;
+    }
+
+    for (let i = 0; i < remoteSnapshotDeleteQueue.length; i += 1) {
+        const file = remoteSnapshotDeleteQueue[i];
+        const relativeSnapshotPath = file.path.startsWith(`${snapshotsRoot}/`)
+            ? file.path.slice(snapshotsRoot.length + 1)
+            : file.path;
+        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
+            path: file.path,
+            sha: file.sha,
+            branch,
+            message: `${commitPrefix} cleanup legacy snapshot ${relativeSnapshotPath}`
+        });
+        if (!deleteResult.success) {
+            return {
+                success: false,
+                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端删除失败' : 'Remote delete failed'),
+                branch,
+                pushedCount,
+                deletedCount,
+                failedPath: file.path
+            };
+        }
+        if (!deleteResult.notFound) deletedCount += 1;
+    }
+
+    return { success: true, branch, branchCreated, pushedCount, deletedCount, paths, docCacheUpdates };
+}
+
+async function pullSyncDocsFromGitHub(repoConfig) {
+    const paths = buildSyncRepoPaths(repoConfig, Date.now());
+    const branch = await resolveSyncGitHubBranch(repoConfig);
+    const listResult = await syncGitHubListFiles(repoConfig, paths.resultsRootPath, { branch });
+    if (!listResult.success) {
+        return {
+            success: false,
+            error: listResult.error || (currentLang === 'zh_CN' ? '读取云端结果目录失败' : 'Failed to read remote results directory')
+        };
+    }
+
+    const allFiles = Array.isArray(listResult.files) ? listResult.files : [];
+    const markdownFileEntries = allFiles
+        .map((file) => ({
+            path: normalizeSyncRelativePath(file?.path || ''),
+            sha: String(file?.sha || '')
+        }))
+        .filter((file) => file.path && /\.md$/i.test(file.path))
+        .sort((a, b) => String(b.path || '').localeCompare(String(a.path || '')))
+        .slice(0, SYNC_GITHUB_PULL_MAX_FILES);
+    const markdownFiles = markdownFileEntries.map((file) => file.path);
+
+    const docs = [];
+    const remoteDocMetaByKey = Object.create(null);
+    let failedReads = 0;
+    let firstReadError = '';
+    const resultCommittedAtMap = await syncGitHubReadCommittedAtMap(
+        repoConfig,
+        markdownFiles,
+        { branch, maxWorkers: 4 }
+    );
+    const committedAtByPath = resultCommittedAtMap?.committedAtByPath && typeof resultCommittedAtMap.committedAtByPath === 'object'
+        ? resultCommittedAtMap.committedAtByPath
+        : Object.create(null);
+    if (Number(resultCommittedAtMap?.failedCount || 0) > 0 && !firstReadError && resultCommittedAtMap?.firstError) {
+        firstReadError = String(resultCommittedAtMap.firstError);
+    }
+    for (let i = 0; i < markdownFiles.length; i += 1) {
+        const remotePath = markdownFiles[i];
+        const readResult = await syncGitHubGetFile(repoConfig, remotePath, { branch });
+        if (!readResult.success) {
+            failedReads += 1;
+            if (!firstReadError && readResult.error) {
+                firstReadError = String(readResult.error);
+            }
+            continue;
+        }
+        const relativeName = remotePath.startsWith(`${paths.resultsRootPath}/`)
+            ? remotePath.slice(paths.resultsRootPath.length + 1)
+            : remotePath;
+        const remoteCommittedAt = Number(committedAtByPath[remotePath] || 0) || 0;
+        const doc = {
+            id: buildSyncDocId(relativeName || `remote-${i + 1}.md`, i),
+            name: relativeName || sanitizeSyncDocName(remotePath, `remote-${i + 1}.md`),
+            kind: SYNC_DOC_KIND_RESULT,
+            markdown: String(readResult.text || ''),
+            updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : -1,
+            localEdited: false
+        };
+        docs.push(doc);
+        const mergeKey = buildSyncDocMergeKey(doc);
+        if (mergeKey) {
+            remoteDocMetaByKey[mergeKey] = {
+                remoteSha: String(readResult.sha || ''),
+                remotePath: normalizeSyncRelativePath(remotePath),
+                updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : 0
+            };
+        }
+    }
+
+    let preferredRulePath = '';
+    let preferredRuleReadResult = null;
+    const localAgentDoc = (Array.isArray(syncDocsState) ? syncDocsState : [])
+        .find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
+    const preferredRuleName = localAgentDoc
+        ? sanitizeSyncDocName(localAgentDoc?.name, SYNC_AGENT_DOC_NAME).toLowerCase()
+        : '';
+
+    const scoreRulePath = (path = '') => {
+        const name = getSyncPathBasename(path).toLowerCase();
+        if (!name) return -100;
+        if (preferredRuleName && name === preferredRuleName) return 100;
+        if (name === 'agents.md') return 98;
+        if (name === 'claude.md') return 92;
+        if (name === 'agent.md') return 86;
+        if (/^(agents?|claude)(?:[-_].+)?\.md$/.test(name)) return 74;
+        return -20;
+    };
+
+    const pickBestRulePath = (pathsInput = []) => {
+        const uniquePaths = Array.from(new Set((Array.isArray(pathsInput) ? pathsInput : [])
+            .map((path) => normalizeSyncRelativePath(path))
+            .filter((path) => path && /\.md$/i.test(path))));
+        if (!uniquePaths.length) return '';
+        const sortedPaths = uniquePaths.sort((a, b) => {
+            const diff = scoreRulePath(b) - scoreRulePath(a);
+            if (diff !== 0) return diff;
+            return a.localeCompare(b);
+        });
+        const best = sortedPaths[0] || '';
+        return scoreRulePath(best) < 0 ? '' : best;
+    };
+
+    const rootEntriesResult = await syncGitHubListDirEntries(repoConfig, paths.basePath, { branch });
+    if (rootEntriesResult.success) {
+        const rootRulePaths = (Array.isArray(rootEntriesResult.entries) ? rootEntriesResult.entries : [])
+            .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
+            .map((entry) => normalizeSyncRelativePath(entry?.path || ''))
+            .filter((path) => path && /\.md$/i.test(path));
+        preferredRulePath = pickBestRulePath(rootRulePaths);
+    } else if (rootEntriesResult.error && !/404/.test(String(rootEntriesResult.error))) {
+        failedReads += 1;
+        if (!firstReadError) firstReadError = String(rootEntriesResult.error);
+    }
+
+    if (!preferredRulePath) {
+        const probeRuleNames = Array.from(new Set([
+            preferredRuleName,
+            'AGENTS.md',
+            'agents.md',
+            'CLAUDE.md',
+            'claude.md',
+            'AGENT.md',
+            'agent.md'
+        ].filter(Boolean)));
+        for (let i = 0; i < probeRuleNames.length; i += 1) {
+            const probePath = joinSyncRelativePath(paths.basePath, probeRuleNames[i]);
+            const probeResult = await syncGitHubGetFile(repoConfig, probePath, { branch });
+            if (probeResult.success) {
+                preferredRulePath = probePath;
+                preferredRuleReadResult = probeResult;
+                break;
+            }
+            if (probeResult.error && !/404/.test(String(probeResult.error))) {
+                failedReads += 1;
+                if (!firstReadError) firstReadError = String(probeResult.error);
+            }
+        }
+    }
+
+    if (preferredRulePath) {
+        const agentReadResult = preferredRuleReadResult || await syncGitHubGetFile(repoConfig, preferredRulePath, { branch });
+        if (agentReadResult.success) {
+            const ruleCommittedAtResult = await syncGitHubReadLatestCommitAtByPath(repoConfig, preferredRulePath, { branch });
+            const ruleCommittedAt = Number(ruleCommittedAtResult?.committedAt || 0) || 0;
+            const ruleUpdatedAt = ruleCommittedAt > 0 ? ruleCommittedAt : -1;
+            const doc = {
+                id: SYNC_AGENT_DOC_ID,
+                name: getSyncPathBasename(preferredRulePath) || SYNC_AGENT_DOC_NAME,
+                kind: SYNC_DOC_KIND_AGENT,
+                markdown: String(agentReadResult.text || ''),
+                updatedAt: ruleUpdatedAt,
+                localEdited: false
+            };
+            docs.push(doc);
+            const mergeKey = buildSyncDocMergeKey(doc);
+            if (mergeKey) {
+                remoteDocMetaByKey[mergeKey] = {
+                    remoteSha: String(agentReadResult.sha || ''),
+                    remotePath: normalizeSyncRelativePath(preferredRulePath),
+                    updatedAt: ruleCommittedAt > 0 ? ruleCommittedAt : 0
+                };
+            }
+            if (!ruleCommittedAtResult?.success && !firstReadError && ruleCommittedAtResult?.error) {
+                firstReadError = String(ruleCommittedAtResult.error);
+            }
+        } else if (agentReadResult.error && !/404/.test(String(agentReadResult.error))) {
+            failedReads += 1;
+            if (!firstReadError) firstReadError = String(agentReadResult.error);
+        }
+    }
+
+    if (!docs.length && markdownFiles.length > 0 && failedReads >= markdownFiles.length) {
+        return {
+            success: false,
+            error: firstReadError || (currentLang === 'zh_CN' ? '云端 Markdown 读取失败' : 'Failed to read remote Markdown files')
+        };
+    }
+
+    if (docs.length > 0) {
+        return {
+            success: true,
+            docs: normalizeSyncDocs(docs),
+            remoteDocMetaByKey,
+            source: 'github-results-md',
+            branch,
+            failedReads,
+            firstReadError
+        };
+    }
+
+    return {
+        success: true,
+        docs: [],
+        remoteDocMetaByKey,
+        source: 'empty',
+        branch,
+        failedReads,
+        firstReadError
+    };
+}
+
+async function pushSyncSnapshotToCloud() {
+    const config = readSyncConfigFromUI();
+    const configSaved = await saveSyncConfigToStorage();
+    if (!configSaved) {
+        setSyncStatusText({
+            zh_CN: '状态：推送失败（配置保存失败）',
+            en: 'Status: Push failed (settings save failed)'
+        });
+        showToast(currentLang === 'zh_CN' ? '推送失败：同步配置保存失败' : 'Push failed: unable to save sync settings');
+        return null;
+    }
+    const repoConfig = buildSyncRepoConfig(config);
+    const missingRepoReason = getSyncRepoMissingReason(repoConfig);
+    if (repoConfig.provider === SYNC_PROVIDER_GITHUB && missingRepoReason.code) {
+        setSyncStatusText({
+            zh_CN: `状态：推送失败（${missingRepoReason.text}）`,
+            en: `Status: Push failed (${missingRepoReason.text})`
+        });
+        setSyncRepoStatusText(missingRepoReason.text, 'error');
+        showToast(currentLang === 'zh_CN' ? `推送失败：${missingRepoReason.text}` : `Push failed: ${missingRepoReason.text}`);
+        return null;
+    }
+    const selectedPackageCount = countEnabledSyncPackages(config);
+    let payload = null;
+    try {
+        payload = await collectSyncPushPayload(config);
+    } catch (error) {
+        const errorI18n = getSyncPushPayloadErrorI18n(error);
+        setSyncStatusText(errorI18n.status);
+        showToast(currentLang === 'zh_CN' ? errorI18n.toast.zh_CN : errorI18n.toast.en);
+        console.error('[SyncView] collect payload failed:', error);
+        return null;
+    }
+    const packageCount = Object.keys(payload.packages || {}).length;
+    const sanitizedPushConfig = buildSanitizedSyncConfigSnapshot(config);
+    const snapshot = {
+        schema: 'bookmark-record-recommend.ai-cloud-snapshot.v2',
+        updatedAt: Date.now(),
+        pushConfig: sanitizedPushConfig,
+        packageCount,
+        docs: payload.docs,
+        payload
+    };
+    const saved = await syncStorageSet({ [SYNC_CLOUD_SNAPSHOT_STORAGE_KEY]: snapshot });
+    if (!saved) {
+        setSyncStatusText({
+            zh_CN: '状态：推送失败（写入快照失败）',
+            en: 'Status: Push failed (snapshot write failed)'
+        });
+        showToast(currentLang === 'zh_CN' ? '推送失败：本地存储写入失败' : 'Push failed: storage write failed');
+        return null;
+    }
+
+    const isLocalProvider = repoConfig.provider === SYNC_PROVIDER_LOCAL;
+    let localSnapshotDownloadResult = null;
+
+    if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
+        setSyncRepoStatusText({
+            zh_CN: '正在推送到 GitHub...',
+            en: 'Pushing to GitHub...'
+        }, 'neutral');
+        let remotePushResult = null;
+        try {
+            remotePushResult = await pushSyncSnapshotToGitHub(repoConfig, snapshot);
+        } catch (error) {
+            remotePushResult = { success: false, error: formatSyncGitHubError(error) };
+        }
+        if (!remotePushResult?.success) {
+            const remoteError = String(remotePushResult?.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'));
+            setSyncStatusText({
+                zh_CN: `状态：推送失败（${remoteError}）`,
+                en: `Status: Push failed (${remoteError})`
+            });
+            setSyncRepoStatusText(remoteError, 'error');
+            showToast(currentLang === 'zh_CN' ? `推送失败：${remoteError}` : `Push failed: ${remoteError}`);
+            return null;
+        }
+        const pushedCount = Number(remotePushResult.pushedCount || 0);
+        const deletedCount = Math.max(0, Number(remotePushResult.deletedCount || 0));
+        const pushedBranch = String(remotePushResult.branch || repoConfig.branch || '').trim();
+        const branchCreatedNoteZh = remotePushResult.branchCreated ? '，已自动创建分支' : '';
+        const branchCreatedNoteEn = remotePushResult.branchCreated ? ' (branch auto-created)' : '';
+        const deletedNoteZh = deletedCount > 0 ? `，删除 ${deletedCount} 个云端文件` : '';
+        const deletedNoteEn = deletedCount > 0 ? `, deleted ${deletedCount} remote files` : '';
+        setSyncRepoStatusText({
+            zh_CN: `GitHub 已推送 ${pushedCount} 个文件（${pushedBranch}）${branchCreatedNoteZh}${deletedNoteZh}`,
+            en: `GitHub pushed ${pushedCount} files (${pushedBranch})${branchCreatedNoteEn}${deletedNoteEn}`
+        }, 'success');
+        markSyncRepoConnected(config);
+        if (Array.isArray(remotePushResult.docCacheUpdates) && remotePushResult.docCacheUpdates.length > 0) {
+            remotePushResult.docCacheUpdates.forEach((item) => {
+                const mergeKey = buildSyncDocMergeKeyFromParts(item?.kind, item?.name);
+                if (!mergeKey) return;
+                syncRemoteDocCacheState[mergeKey] = {
+                    markdown: String(item?.markdown || ''),
+                    remoteSha: String(item?.remoteSha || ''),
+                    remotePath: normalizeSyncRelativePath(item?.remotePath || item?.name || ''),
+                    updatedAt: Number(item?.updatedAt || Date.now()) || Date.now()
+                };
+            });
+            await saveSyncRemoteDocCacheToStorage();
+        }
+    } else {
+        localSnapshotDownloadResult = await downloadSyncLocalExportBundle(snapshot, repoConfig);
+        const filesTotal = Math.max(0, Number(localSnapshotDownloadResult?.filesTotal || 0));
+        const downloadedCount = Math.max(0, Number(localSnapshotDownloadResult?.downloadedCount || 0));
+        const failedCount = Math.max(0, Number(localSnapshotDownloadResult?.failedCount || 0));
+        const exportMode = String(localSnapshotDownloadResult?.exportMode || '').trim();
+        const archiveName = String(localSnapshotDownloadResult?.archiveName || '').trim();
+        const archiveEntries = Math.max(0, Number(localSnapshotDownloadResult?.archiveEntries || 0));
+        setSyncRepoStatusText({
+            zh_CN: localSnapshotDownloadResult?.success
+                ? (failedCount > 0
+                    ? (exportMode === 'zip'
+                        ? `已写入本地快照（压缩包导出异常：${downloadedCount}/${filesTotal}，${failedCount} 失败）`
+                        : `已写入本地快照（导出 ${downloadedCount}/${filesTotal}，${failedCount} 失败）`)
+                    : (exportMode === 'zip'
+                        ? `已写入本地快照并导出压缩包：${archiveName || 'sync-export.zip'}（${archiveEntries} 个文件）`
+                        : `已写入本地快照并导出 ${downloadedCount} 个文件`))
+                : (exportMode === 'zip'
+                    ? '已写入本地快照（压缩包导出失败）'
+                    : '已写入本地快照（导出失败）'),
+            en: localSnapshotDownloadResult?.success
+                ? (failedCount > 0
+                    ? (exportMode === 'zip'
+                        ? `Saved local snapshot (zip export issue: ${downloadedCount}/${filesTotal}, ${failedCount} failed)`
+                        : `Saved local snapshot (exported ${downloadedCount}/${filesTotal}, ${failedCount} failed)`)
+                    : (exportMode === 'zip'
+                        ? `Saved local snapshot and exported zip: ${archiveName || 'sync-export.zip'} (${archiveEntries} files)`
+                        : `Saved local snapshot and exported ${downloadedCount} files`))
+                : (exportMode === 'zip'
+                    ? 'Saved local snapshot (zip export failed)'
+                    : 'Saved local snapshot (export failed)')
+        }, localSnapshotDownloadResult?.success && failedCount === 0 ? 'success' : 'neutral');
+        if (!localSnapshotDownloadResult?.success || failedCount > 0) {
+            console.warn('[SyncView] local snapshot export issue:', localSnapshotDownloadResult);
+        }
+    }
+
+    const pushedZh = isLocalProvider
+        ? '状态：已写入本地快照'
+        : (i18n?.syncStatusPushed?.zh_CN || '状态：已推送到云端快照');
+    const pushedEn = isLocalProvider
+        ? 'Status: Saved local snapshot'
+        : (i18n?.syncStatusPushed?.en || 'Status: Pushed to cloud snapshot');
+    if (packageCount > 0) {
+        setSyncStatusText({
+            zh_CN: `${pushedZh}（${packageCount} 包）`,
+            en: `${pushedEn} (${packageCount} packages)`
+        });
+        if (isLocalProvider) {
+            const filesTotal = Math.max(0, Number(localSnapshotDownloadResult?.filesTotal || 0));
+            const downloadedCount = Math.max(0, Number(localSnapshotDownloadResult?.downloadedCount || 0));
+            const failedCount = Math.max(0, Number(localSnapshotDownloadResult?.failedCount || 0));
+            const exportMode = String(localSnapshotDownloadResult?.exportMode || '').trim();
+            const archiveName = String(localSnapshotDownloadResult?.archiveName || '').trim();
+            const archiveEntries = Math.max(0, Number(localSnapshotDownloadResult?.archiveEntries || 0));
+            const rootFolder = String(localSnapshotDownloadResult?.rootFolder || '').trim();
+            if (localSnapshotDownloadResult?.success) {
+                if (failedCount > 0) {
+                    showToast(
+                        currentLang === 'zh_CN'
+                            ? (exportMode === 'zip'
+                                ? `本地压缩包导出异常：${downloadedCount}/${filesTotal}（${failedCount} 失败）`
+                                : `本地目录已部分导出：${downloadedCount}/${filesTotal}（${failedCount} 失败）`)
+                            : (exportMode === 'zip'
+                                ? `Zip export issue: ${downloadedCount}/${filesTotal} (${failedCount} failed)`
+                                : `Local export partial: ${downloadedCount}/${filesTotal} (${failedCount} failed)`)
+                    );
+                } else {
+                    showToast(
+                        currentLang === 'zh_CN'
+                            ? (exportMode === 'zip'
+                                ? `本地压缩包已导出：${archiveName || 'sync-export.zip'}（${archiveEntries} 个文件）`
+                                : `本地目录已导出：${rootFolder || `${downloadedCount} 个文件`}`)
+                            : (exportMode === 'zip'
+                                ? `Zip exported: ${archiveName || 'sync-export.zip'} (${archiveEntries} files)`
+                                : `Local export completed: ${rootFolder || `${downloadedCount} files`}`)
+                    );
+                }
+            } else {
+                showToast(currentLang === 'zh_CN'
+                    ? (exportMode === 'zip'
+                        ? '本地快照已保存，但压缩包导出失败（请检查下载权限）'
+                        : '本地快照已保存，但本地目录导出失败（请检查下载权限）')
+                    : (exportMode === 'zip'
+                        ? 'Local snapshot saved, but zip export failed (check download permissions)'
+                        : 'Local snapshot saved, but local export failed (check download permissions)'));
+            }
+        } else {
+            showToast(currentLang === 'zh_CN' ? '同步数据已推送到云端快照' : 'Sync data pushed to cloud snapshot');
+        }
+    } else {
+        const docsCount = Array.isArray(payload.docs) ? payload.docs.length : 0;
+        setSyncStatusText({
+            zh_CN: `${pushedZh}（仅文档，0 包）`,
+            en: `${pushedEn} (docs only, 0 packages)`
+        });
+        if (isLocalProvider) {
+            const filesTotal = Math.max(0, Number(localSnapshotDownloadResult?.filesTotal || 0));
+            const downloadedCount = Math.max(0, Number(localSnapshotDownloadResult?.downloadedCount || 0));
+            const failedCount = Math.max(0, Number(localSnapshotDownloadResult?.failedCount || 0));
+            const exportMode = String(localSnapshotDownloadResult?.exportMode || '').trim();
+            const archiveName = String(localSnapshotDownloadResult?.archiveName || '').trim();
+            const archiveEntries = Math.max(0, Number(localSnapshotDownloadResult?.archiveEntries || 0));
+            if (localSnapshotDownloadResult?.success) {
+                if (failedCount > 0) {
+                    showToast(
+                        currentLang === 'zh_CN'
+                            ? (exportMode === 'zip'
+                                ? `本地压缩包导出异常（仅文档，${downloadedCount}/${filesTotal}，${failedCount} 失败）`
+                                : `本地目录已部分导出（仅文档，${downloadedCount}/${filesTotal}，${failedCount} 失败）`)
+                            : (exportMode === 'zip'
+                                ? `Zip export issue (docs only, ${downloadedCount}/${filesTotal}, ${failedCount} failed)`
+                                : `Local export partial (docs only, ${downloadedCount}/${filesTotal}, ${failedCount} failed)`)
+                    );
+                } else {
+                    showToast(
+                        currentLang === 'zh_CN'
+                            ? (exportMode === 'zip'
+                                ? `本地压缩包已导出（仅文档）：${archiveName || 'sync-export.zip'}（${archiveEntries} 个文件）`
+                                : `本地目录已导出（仅文档，${docsCount} 个）`)
+                            : (exportMode === 'zip'
+                                ? `Zip exported (docs only): ${archiveName || 'sync-export.zip'} (${archiveEntries} files)`
+                                : `Local export completed (docs only, ${docsCount})`)
+                    );
+                }
+            } else {
+                showToast(
+                    currentLang === 'zh_CN'
+                        ? (exportMode === 'zip'
+                            ? `本地快照已保存（仅文档，${docsCount} 个），但压缩包导出失败`
+                            : `本地快照已保存（仅文档，${docsCount} 个），但导出失败`)
+                        : (exportMode === 'zip'
+                            ? `Local snapshot saved (docs only, ${docsCount}), but zip export failed`
+                            : `Local snapshot saved (docs only, ${docsCount}), but export failed`)
+                );
+            }
+        } else {
+            showToast(
+                currentLang === 'zh_CN'
+                    ? `已推送文档（未选择数据包，文档 ${docsCount} 个）`
+                    : `Docs pushed (no package selected, ${docsCount} docs)`
+            );
+        }
+    }
+    if (selectedPackageCount !== packageCount) {
+        console.warn('[SyncView] selected package count mismatch:', { selectedPackageCount, packageCount });
+    }
+    return snapshot;
+}
+
+function mergePulledDocsWithLocal(cloudDocs, options = {}) {
+    if (!Array.isArray(cloudDocs) || !cloudDocs.length) {
+        return {
+            docs: [],
+            summary: {
+                remoteWins: 0,
+                localWins: 0,
+                remoteOnly: 0,
+                localOnly: 0,
+                compared: 0,
+                remoteTimeUnknownKeptLocal: 0
+            }
+        };
+    }
+    const normalizedCloud = normalizeSyncDocs(cloudDocs);
+    const remoteDocMetaByKey = options && options.remoteDocMetaByKey && typeof options.remoteDocMetaByKey === 'object'
+        ? options.remoteDocMetaByKey
+        : {};
+    const summary = {
+        remoteWins: 0,
+        localWins: 0,
+        remoteOnly: 0,
+        localOnly: 0,
+        compared: 0,
+        remoteTimeUnknownKeptLocal: 0
+    };
+
+    const localMap = new Map();
+    (syncDocsState || []).forEach((doc) => {
+        const key = buildSyncDocMergeKey(doc);
+        if (key) localMap.set(key, doc);
+    });
+
+    const resolveDocUpdatedAt = (doc) => {
+        const ts = Number(doc?.updatedAt || 0);
+        return Number.isFinite(ts) && ts > 0 ? ts : 0;
+    };
+
+    const merged = [];
+    normalizedCloud.forEach((doc) => {
+        const key = buildSyncDocMergeKey(doc);
+        const localDoc = key ? localMap.get(key) : null;
+        if (!localDoc) {
+            const remoteOnlyDoc = { ...doc, localEdited: false };
+            if (resolveDocUpdatedAt(remoteOnlyDoc) <= 0) {
+                remoteOnlyDoc.updatedAt = Date.now();
+            }
+            merged.push(remoteOnlyDoc);
+            summary.remoteWins += 1;
+            summary.remoteOnly += 1;
+            if (key) {
+                localMap.delete(key);
+                updateSyncRemoteDocCacheEntry(doc, remoteDocMetaByKey[key] || null);
+            }
+            return;
+        }
+
+        const localUpdatedAt = resolveDocUpdatedAt(localDoc);
+        const remoteUpdatedAt = resolveDocUpdatedAt(doc);
+        const remoteTimeKnown = remoteUpdatedAt > 0;
+        const useLocal = !remoteTimeKnown || localUpdatedAt > remoteUpdatedAt;
+        const nextDoc = useLocal
+            ? { ...localDoc }
+            : {
+                ...doc,
+                id: localDoc.id || doc.id,
+                localEdited: false
+            };
+
+        merged.push(nextDoc);
+        summary.compared += 1;
+        if (useLocal) {
+            summary.localWins += 1;
+            if (!remoteTimeKnown) {
+                summary.remoteTimeUnknownKeptLocal += 1;
+            }
+        } else {
+            summary.remoteWins += 1;
+        }
+        if (key) {
+            localMap.delete(key);
+            updateSyncRemoteDocCacheEntry(doc, remoteDocMetaByKey[key] || null);
+        }
+    });
+
+    localMap.forEach((doc) => {
+        merged.push({ ...doc });
+        summary.localWins += 1;
+        summary.localOnly += 1;
+    });
+
+    return { docs: merged, summary };
+}
+
+async function pullSyncSnapshotFromCloud() {
+    const config = readSyncConfigFromUI();
+    const configSaved = await saveSyncConfigToStorage();
+    if (!configSaved) {
+        setSyncStatusText({
+            zh_CN: '状态：拉取失败（配置保存失败）',
+            en: 'Status: Pull failed (settings save failed)'
+        });
+        showToast(currentLang === 'zh_CN' ? '拉取失败：同步配置保存失败' : 'Pull failed: unable to save sync settings');
+        return false;
+    }
+    const repoConfig = buildSyncRepoConfig(config);
+    let cloudDocs = [];
+    let remoteDocMetaByKey = Object.create(null);
+    if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
+        const missingRepoReason = getSyncRepoMissingReason(repoConfig);
+        if (missingRepoReason.code) {
+            setSyncStatusText({
+                zh_CN: `状态：拉取失败（${missingRepoReason.text}）`,
+                en: `Status: Pull failed (${missingRepoReason.text})`
+            });
+            setSyncRepoStatusText(missingRepoReason.text, 'error');
+            showToast(currentLang === 'zh_CN' ? `拉取失败：${missingRepoReason.text}` : `Pull failed: ${missingRepoReason.text}`);
+            return false;
+        }
+        setSyncRepoStatusText({
+            zh_CN: '正在从 GitHub 拉取...',
+            en: 'Pulling from GitHub...'
+        }, 'neutral');
+        let remotePullResult = null;
+        try {
+            remotePullResult = await pullSyncDocsFromGitHub(repoConfig);
+        } catch (error) {
+            remotePullResult = { success: false, error: formatSyncGitHubError(error) };
+        }
+        if (!remotePullResult?.success) {
+            const remoteError = String(remotePullResult?.error || (currentLang === 'zh_CN' ? 'GitHub 拉取失败' : 'GitHub pull failed'));
+            setSyncStatusText({
+                zh_CN: `状态：拉取失败（${remoteError}）`,
+                en: `Status: Pull failed (${remoteError})`
+            });
+            setSyncRepoStatusText(remoteError, 'error');
+            showToast(currentLang === 'zh_CN' ? `拉取失败：${remoteError}` : `Pull failed: ${remoteError}`);
+            return false;
+        }
+        cloudDocs = normalizeSyncDocs(remotePullResult.docs || []);
+        remoteDocMetaByKey = remotePullResult?.remoteDocMetaByKey && typeof remotePullResult.remoteDocMetaByKey === 'object'
+            ? remotePullResult.remoteDocMetaByKey
+            : Object.create(null);
+        const failedReads = Math.max(0, Number(remotePullResult.failedReads) || 0);
+        setSyncRepoStatusText({
+            zh_CN: failedReads > 0
+                ? `GitHub 拉取完成（成功 ${cloudDocs.length}，失败 ${failedReads}）`
+                : `GitHub 拉取完成（${cloudDocs.length} 个文件）`,
+            en: failedReads > 0
+                ? `GitHub pull completed (ok ${cloudDocs.length}, failed ${failedReads})`
+                : `GitHub pull completed (${cloudDocs.length} files)`
+        }, 'success');
+        markSyncRepoConnected(config);
+        if (failedReads > 0) {
+            showToast(
+                currentLang === 'zh_CN'
+                    ? `部分文件拉取失败：${failedReads} 个`
+                    : `Partial pull failure: ${failedReads} files`
+            );
+        }
+    } else {
+        const result = await syncStorageGet([SYNC_CLOUD_SNAPSHOT_STORAGE_KEY]);
+        const snapshot = result?.[SYNC_CLOUD_SNAPSHOT_STORAGE_KEY];
+        if (!snapshot || typeof snapshot !== 'object') {
+            setSyncStatusText(getSyncI18nPair('syncStatusNoCloud', '状态：云端暂无可拉取快照', 'Status: No cloud snapshot to pull'));
+            showToast(currentLang === 'zh_CN' ? '云端暂无可拉取数据' : 'No cloud snapshot to pull');
+            return false;
+        }
+        cloudDocs = normalizeSyncDocs(snapshot?.docs || snapshot?.payload?.docs || []);
+        setSyncRepoStatusText({
+            zh_CN: '已从本地快照拉取',
+            en: 'Pulled from local snapshot'
+        }, 'success');
+    }
+
+    if (!cloudDocs.length) {
+        setSyncStatusText(getSyncI18nPair('syncStatusNoCloud', '状态：云端暂无可拉取快照', 'Status: No cloud snapshot to pull'));
+        showToast(currentLang === 'zh_CN' ? '云端快照没有 Markdown 文件' : 'Cloud snapshot has no Markdown files');
+        return false;
+    }
+
+    const mergeResult = mergePulledDocsWithLocal(cloudDocs, {
+        remoteDocMetaByKey
+    });
+    const mergedDocs = Array.isArray(mergeResult?.docs) ? mergeResult.docs : [];
+    const mergeSummary = mergeResult?.summary || {};
+    syncDocsState = normalizeSyncDocs(mergedDocs);
+    if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
+        syncCurrentDocId = syncDocsState[0]?.id || null;
+    }
+    await saveSyncDocsToStorage();
+    await saveSyncRemoteDocCacheToStorage();
+    renderSyncFileList();
+    renderSyncMarkdown();
+
+    const remoteWins = Math.max(0, Number(mergeSummary.remoteWins || 0));
+    const localWins = Math.max(0, Number(mergeSummary.localWins || 0));
+    const remoteTimeUnknownKeptLocal = Math.max(0, Number(mergeSummary.remoteTimeUnknownKeptLocal || 0));
+    const unknownHintZh = remoteTimeUnknownKeptLocal > 0
+        ? `，云端时间缺失 ${remoteTimeUnknownKeptLocal} 条已保留本地`
+        : '';
+    const unknownHintEn = remoteTimeUnknownKeptLocal > 0
+        ? `, kept local for ${remoteTimeUnknownKeptLocal} docs with missing cloud timestamp`
+        : '';
+    setSyncStatusText({
+        zh_CN: `状态：已拉取并按最新修改更新（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}`,
+        en: `Status: Pulled by latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}`
+    });
+    showToast(
+        currentLang === 'zh_CN'
+            ? `拉取完成：按最新修改取胜（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}`
+            : `Pull completed: latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}`
+    );
+    return true;
+}
+
+async function createSyncDocFromPrompt() {
+    const promptText = currentLang === 'zh_CN' ? '请输入新文件名（.md）' : 'Enter new file name (.md)';
+    const defaultName = buildSyncNewFileName(currentLang === 'zh_CN' ? 'ai-分析.md' : 'ai-analysis.md');
+    const inputName = window.prompt(promptText, defaultName);
+    if (inputName == null) return;
+    const trimmed = String(inputName).trim();
+    if (!trimmed) return;
+    const safeName = buildSyncNewFileName(trimmed);
+    const now = Date.now();
+    const newDoc = {
+        id: buildSyncDocId(safeName, syncDocsState.length),
+        name: safeName,
+        kind: SYNC_DOC_KIND_INPUT,
+        markdown: `# ${safeName.replace(/\.md$/i, '')}\n\n`,
+        updatedAt: now,
+        localEdited: true
+    };
+    const agentIndex = syncDocsState.findIndex((doc) => doc?.kind === SYNC_DOC_KIND_AGENT);
+    if (agentIndex >= 0) {
+        syncDocsState.splice(agentIndex + 1, 0, newDoc);
+    } else {
+        syncDocsState.unshift(newDoc);
+    }
+    syncCurrentDocId = newDoc.id;
+    await saveSyncDocsToStorage();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    setSyncStatusText({
+        zh_CN: '状态：已新建本地 Markdown 文件',
+        en: 'Status: Created new local Markdown file'
+    });
+}
+
+function bindSyncEditorLifecycleAutoSave() {
+    if (syncEditorLifecycleBound) return;
+    syncEditorLifecycleBound = true;
+
+    const triggerFlush = (reason, { renderList = false, quiet = true } = {}) => {
+        void flushSyncEditorAutoSave({ reason, renderList, quiet });
+    };
+
+    document.addEventListener('pointerdown', (event) => {
+        if (SYNC_REALTIME_MARKDOWN_RENDER) return;
+        if (!isSyncEditModeEnabled()) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest('#syncMarkdownEditor')) return;
+        if (target.closest('#syncMarkdownTools')) return;
+        if (target.closest('.sync-render-actions')) return;
+        void exitSyncEditModeAndPersist({
+            reason: 'outside-pointerdown',
+            renderList: true,
+            quiet: true
+        });
+    }, true);
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) return;
+        triggerFlush('visibility-hidden', { renderList: false, quiet: true });
+    });
+
+    window.addEventListener('pagehide', () => {
+        triggerFlush('pagehide', { renderList: false, quiet: true });
+    });
+
+    window.addEventListener('beforeunload', () => {
+        triggerFlush('beforeunload', { renderList: false, quiet: true });
+    });
+}
+
+function bindSyncViewEvents() {
+    if (syncViewBound) return;
+    syncViewBound = true;
+    ensureSyncPackageOptionElements();
+    bindSyncEditorLifecycleAutoSave();
+
+    const configIds = [
+        'syncProviderSelect',
+        'syncGithubTokenInput',
+        'syncGithubOwnerInput',
+        'syncGithubRepoInput',
+        'syncGithubBranchInput',
+        'syncGithubBasePathInput',
+        ...SYNC_PACKAGE_FIELDS.map((field) => field.checkboxId)
+    ];
+    configIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', async () => {
+            await persistSyncConfigFromUI({ showErrorToast: true });
+        });
+        const tagName = String(el.tagName || '').toLowerCase();
+        const inputType = String(el.type || '').toLowerCase();
+        if (tagName === 'input' && (inputType === 'text' || inputType === 'password')) {
+            el.addEventListener('input', () => {
+                readSyncConfigFromUI();
+                scheduleSyncConfigSaveFromUI(320);
+            });
+        }
+    });
+
+    const repoTestBtn = document.getElementById('syncRepoTestBtn');
+    if (repoTestBtn) {
+        repoTestBtn.addEventListener('click', async () => {
+            try {
+                readSyncConfigFromUI();
+                const saved = await saveSyncConfigToStorage();
+                if (!saved) {
+                    setSyncRepoStatusText(currentLang === 'zh_CN' ? '配置保存失败' : 'Failed to save settings', 'error');
+                    showToast(currentLang === 'zh_CN' ? '同步配置保存失败，请重试' : 'Failed to save sync settings. Please retry.');
+                    return;
+                }
+                const repoConfig = buildSyncRepoConfig(syncConfigState);
+                if (repoConfig.provider !== SYNC_PROVIDER_GITHUB) {
+                    setSyncRepoStatusText({
+                        zh_CN: '本地快照模式无需测试连接',
+                        en: 'Local snapshot mode does not require connection test'
+                    }, 'neutral');
+                    return;
+                }
+                setSyncRepoStatusText({
+                    zh_CN: '正在测试连接...',
+                    en: 'Testing connection...'
+                }, 'neutral');
+                const testResult = await testSyncGitHubConnection(repoConfig);
+                if (!testResult.success) {
+                    syncRepoCollapsed = false;
+                    updateSyncRepoCollapseButton();
+                    setSyncRepoStatusText(testResult.error || (currentLang === 'zh_CN' ? '连接失败' : 'Connection failed'), 'error');
+                    showToast(currentLang === 'zh_CN' ? '仓库连接测试失败' : 'Repository connection test failed');
+                    return;
+                }
+                const branchWillBeCreated = testResult.branchWillBeCreated === true;
+                setSyncRepoStatusText({
+                    zh_CN: branchWillBeCreated
+                        ? `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch}（首次推送将自动创建）`
+                        : `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch}`,
+                    en: branchWillBeCreated
+                        ? `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch} (will auto-create on first push)`
+                        : `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch}`
+                }, 'success');
+                markSyncRepoConnected(syncConfigState);
+                showToast(
+                    branchWillBeCreated
+                        ? (currentLang === 'zh_CN'
+                            ? '仓库连接测试成功，首次推送将自动创建分支'
+                            : 'Repository test succeeded. Branch will be auto-created on first push')
+                        : (currentLang === 'zh_CN' ? '仓库连接测试成功' : 'Repository connection test succeeded')
+                );
+            } catch (error) {
+                syncRepoCollapsed = false;
+                updateSyncRepoCollapseButton();
+                const message = formatSyncGitHubError(error);
+                setSyncRepoStatusText(message, 'error');
+                showToast(currentLang === 'zh_CN' ? '仓库连接测试失败' : 'Repository connection test failed');
+                console.error('[SyncView] repo test failed:', error);
+            }
+        });
+    }
+
+    const repoOpenHtmlBtn = document.getElementById('syncRepoOpenHtmlBtn');
+    if (repoOpenHtmlBtn) {
+        repoOpenHtmlBtn.addEventListener('click', () => {
+            try {
+                openSyncTokenGuidePage();
+            } catch (error) {
+                console.error('[SyncView] open token guide failed:', error);
+            }
+        });
+    }
+
+    const pullBtn = document.getElementById('syncPullBtn');
+    if (pullBtn) {
+        pullBtn.addEventListener('click', async () => {
+            try {
+                await pullSyncSnapshotFromCloud();
+            } catch (error) {
+                setSyncStatusText({ zh_CN: '状态：拉取失败', en: 'Status: Pull failed' });
+                showToast(currentLang === 'zh_CN' ? '拉取失败，请稍后重试' : 'Pull failed, please retry');
+                console.error('[SyncView] pull failed:', error);
+            }
+        });
+    }
+    const pullPolicyInfoBtn = document.getElementById('syncPullPolicyInfoBtn');
+    if (pullPolicyInfoBtn) {
+        pullPolicyInfoBtn.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        pullPolicyInfoBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setSyncPullPolicyInfoVisible(!syncPullPolicyInfoVisible);
+        });
+    }
+    document.addEventListener('pointerdown', (event) => {
+        if (!syncPullPolicyInfoVisible) return;
+        const wrap = document.getElementById('syncPullPolicyInfoWrap');
+        const target = event.target;
+        if (!(target instanceof Node)) {
+            setSyncPullPolicyInfoVisible(false);
+            return;
+        }
+        if (!wrap || !wrap.contains(target)) {
+            setSyncPullPolicyInfoVisible(false);
+        }
+    }, true);
+
+    const pushBtn = document.getElementById('syncPushBtn');
+    if (pushBtn) {
+        pushBtn.addEventListener('click', async () => {
+            try {
+                if (commitSyncEditorToCurrentDoc({ markEdited: false })) {
+                    await saveSyncDocsToStorage();
+                }
+                await pushSyncSnapshotToCloud();
+            } catch (error) {
+                setSyncStatusText({ zh_CN: '状态：推送失败', en: 'Status: Push failed' });
+                showToast(currentLang === 'zh_CN' ? '推送失败，请稍后重试' : 'Push failed, please retry');
+                console.error('[SyncView] push failed:', error);
+            }
+        });
+    }
+
+    const repoCollapseBtn = document.getElementById('syncRepoCollapseBtn');
+    if (repoCollapseBtn) {
+        repoCollapseBtn.addEventListener('click', () => {
+            if (!canCollapseSyncRepoCard(syncConfigState)) return;
+            syncRepoCollapsed = !syncRepoCollapsed;
+            updateSyncRepoCollapseButton();
+        });
+    }
+
+    const pushPackageInfoBtn = document.getElementById('syncPushPackageInfoBtn');
+    if (pushPackageInfoBtn) {
+        pushPackageInfoBtn.addEventListener('click', () => {
+            updateSyncPathInfoText();
+            setSyncPushPackageInfoVisible(!syncPushPackageInfoVisible);
+        });
+    }
+    const pushPackageInfoModal = document.getElementById('syncPushPackageInfoModal');
+    if (pushPackageInfoModal) {
+        pushPackageInfoModal.addEventListener('click', (event) => {
+            if (event.target === pushPackageInfoModal) {
+                setSyncPushPackageInfoVisible(false);
+            }
+        });
+    }
+    const pushPackageInfoModalClose = document.getElementById('syncPushPackageInfoModalClose');
+    if (pushPackageInfoModalClose) {
+        pushPackageInfoModalClose.addEventListener('click', () => {
+            setSyncPushPackageInfoVisible(false);
+        });
+    }
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (syncPushPackageInfoVisible) {
+            setSyncPushPackageInfoVisible(false);
+        }
+        if (syncPullPolicyInfoVisible) {
+            setSyncPullPolicyInfoVisible(false);
+        }
+    });
+    const rawHighVolumeInfoBtn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
+    if (rawHighVolumeInfoBtn) {
+        rawHighVolumeInfoBtn.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        rawHighVolumeInfoBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setSyncRawHighVolumeInfoVisible(!syncRawHighVolumeInfoVisible);
+        });
+    }
+
+    const newFileBtn = document.getElementById('syncNewFileBtn');
+    if (newFileBtn) {
+        newFileBtn.addEventListener('click', async () => {
+            try {
+                await createSyncDocFromPrompt();
+            } catch (error) {
+                console.error('[SyncView] create new file failed:', error);
+            }
+        });
+    }
+
+    const editModeBtn = document.getElementById('syncEditModeBtn');
+    if (editModeBtn) {
+        if (SYNC_REALTIME_MARKDOWN_RENDER) {
+            editModeBtn.hidden = true;
+            editModeBtn.setAttribute('aria-pressed', 'true');
+        } else {
+            editModeBtn.addEventListener('click', async () => {
+                const turningOff = isSyncEditModeEnabled();
+                if (turningOff) {
+                    await exitSyncEditModeAndPersist({
+                        reason: 'toggle-edit-off',
+                        renderList: true,
+                        quiet: false
+                    });
+                    return;
+                }
+                enterSyncEditModeFromPanel();
+            });
+        }
+    }
+
+    const saveDocBtn = document.getElementById('syncSaveDocBtn');
+    if (saveDocBtn) {
+        saveDocBtn.addEventListener('click', async () => {
+            try {
+                await saveCurrentSyncDoc();
+            } catch (error) {
+                console.error('[SyncView] save doc failed:', error);
+            }
+        });
+    }
+
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    if (editorEl) {
+        const syncCursorLineToPreview = (scrollPreview) => {
+            syncSyncMarkdownActiveLine({
+                scrollPreview: !!scrollPreview
+            });
+        };
+        editorEl.addEventListener('input', () => {
+            updateSyncSaveButtonState();
+            syncCursorLineToPreview(false);
+            scheduleSyncMarkdownPreview(80);
+            scheduleSyncEditorAutoSave(220);
+        });
+        editorEl.addEventListener('focus', () => {
+            syncCursorLineToPreview(false);
+        });
+        editorEl.addEventListener('click', () => {
+            syncCursorLineToPreview(true);
+        });
+        editorEl.addEventListener('keyup', () => {
+            syncCursorLineToPreview(true);
+        });
+        editorEl.addEventListener('mouseup', () => {
+            syncCursorLineToPreview(true);
+        });
+        editorEl.addEventListener('select', () => {
+            syncCursorLineToPreview(true);
+        });
+        editorEl.addEventListener('blur', () => {
+            scheduleSyncMarkdownPreview(0);
+            void flushSyncEditorAutoSave({
+                reason: 'editor-blur',
+                renderList: true,
+                quiet: true
+            });
+        });
+    }
+
+    const markdownTools = document.getElementById('syncMarkdownTools');
+    if (markdownTools) {
+        markdownTools.addEventListener('mousedown', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            const btn = target.closest('.sync-md-tool-btn[data-action]');
+            if (!btn) return;
+            event.preventDefault();
+        });
+        markdownTools.addEventListener('click', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            const btn = target.closest('.sync-md-tool-btn[data-action]');
+            if (!btn) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const action = btn.getAttribute('data-action') || '';
+            applySyncMarkdownToolAction(action);
+        });
+    }
+    bindSyncMarkdownGlobalTooltipEvents();
+
+    const renderPanel = document.querySelector('#syncView .sync-render-panel');
+    if (renderPanel) {
+        renderPanel.addEventListener('click', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            if (!getSyncCurrentDoc()) return;
+
+            if (SYNC_REALTIME_MARKDOWN_RENDER) {
+                if (!target.closest('#syncMarkdownRender')) return;
+                if (target.closest('a[href]')) return;
+                const editor = document.getElementById('syncMarkdownEditor');
+                if (editor && !editor.hidden) editor.focus();
+                return;
+            }
+
+            if (isSyncEditModeEnabled()) return;
+
+            if (target.closest('#syncFilesCardRenderMount')) return;
+            if (target.closest('.sync-control-expand-row')) return;
+            if (target.closest('.sync-render-actions')) return;
+            if (target.closest('.sync-md-tools')) return;
+            if (target.closest('button, input, textarea, select, label, [role="button"]')) return;
+
+            const shouldEnableByClick = Boolean(
+                target.closest('#syncMarkdownRender')
+                || target.closest('#syncMarkdownEmpty')
+                || target.closest('.sync-file-active-meta')
+                || target.closest('.sync-render-toolbar')
+            );
+            if (!shouldEnableByClick) return;
+
+            if (target.closest('a[href]')) {
+                event.preventDefault();
+            }
+            enterSyncEditModeFromPanel();
+        });
+    }
+}
+
+async function renderSyncView() {
+    ensureSyncPackageOptionElements();
+    if (!syncViewInitialized) {
+        await loadSyncStateFromStorage();
+        syncViewInitialized = true;
+    }
+    hydrateSyncControlPanelCollapsedState();
+    bindSyncViewEvents();
+    applySyncConfigToUI();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    updateSyncStatusUI();
+    bindSyncControlPanelLayout();
+    scheduleSyncControlPanelLayout(0);
+    scheduleSyncControlPanelLayout(120);
+    bindSyncFilesCardLayout();
+    scheduleSyncFilesCardLayout(0);
+    scheduleSyncFilesCardLayout(120);
 }
 
 // =============================================================================
@@ -15482,7 +21574,19 @@ async function saveFormulaConfig() {
 }
 
 function loadFormulaConfig() {
-    browserAPI.storage.local.get(['recommendFormulaConfig'], (result) => {
+    browserAPI.storage.local.get([
+        'recommendFormulaConfig',
+        RECOMMEND_ACTIVE_MODE_STORAGE_KEY
+    ], (result) => {
+        const savedMode = result[RECOMMEND_ACTIVE_MODE_STORAGE_KEY];
+        if (typeof savedMode === 'string' && presetModes[savedMode]) {
+            currentRecommendMode = savedMode;
+            try {
+                document.querySelectorAll('.preset-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === savedMode);
+                });
+            } catch (_) { }
+        }
         if (result.recommendFormulaConfig) {
             const config = result.recommendFormulaConfig;
             document.getElementById('weightFreshness').value = config.weights.freshness;
@@ -15685,7 +21789,7 @@ function setHighResFavicon(imgElement, url, preferredFavicon = null) {
 }
 
 function normalizeHistoryPageView(view, fallback = 'widgets') {
-    if (view === 'widgets' || view === 'recommend' || view === 'additions') {
+    if (view === 'widgets' || view === 'recommend' || view === 'additions' || view === 'sync') {
         return view;
     }
     return fallback;
@@ -15734,7 +21838,7 @@ function isMatchingHistoryPageUrl(rawUrl) {
         if (!parsed.pathname.endsWith('/history_html/history.html')) return false;
 
         const view = parsed.searchParams.get('view');
-        if (view && view !== 'additions' && view !== 'recommend' && view !== 'widgets') return false;
+        if (view && view !== 'additions' && view !== 'recommend' && view !== 'widgets' && view !== 'sync') return false;
 
         if (parsed.searchParams.get('sidepanel') === '1') return false;
         return true;
@@ -16635,6 +22739,13 @@ function applyPresetMode(mode) {
 
     currentRecommendMode = mode;
     const preset = presetModes[mode];
+
+    try {
+        browserAPI.storage.local.set({
+            [RECOMMEND_ACTIVE_MODE_STORAGE_KEY]: mode,
+            [RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY]: Date.now()
+        });
+    } catch (_) { }
 
     // 更新按钮状态
     document.querySelectorAll('.preset-btn').forEach(btn => {

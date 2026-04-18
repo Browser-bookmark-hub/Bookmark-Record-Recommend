@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="../font-awesome.min.css">
     <script src="history_bootstrap.js" defer></script>
     <script src="vendor/marked.min.js"></script>
+    <script src="vendor/purify.min.js"></script>
     <script src="vendor/obsidian-markdown.js"></script>
     <script src="shortcuts_helpers.js" defer></script>
     <script src="bookmark_calendar.js" defer></script>
@@ -256,6 +257,10 @@
                     <button class="nav-tab" data-view="additions">
                         <i class="fas fa-plus-circle"></i>
                         <span id="navAdditionsText">书签温故</span>
+                    </button>
+                    <button class="nav-tab" data-view="sync">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <span id="navSyncText">同步/AI分析</span>
                     </button>
                 </div>
             </nav>
@@ -1409,6 +1414,208 @@
                     </div>
                 </div>
 
+            </div>
+
+            <!-- 同步 / AI分析视图 -->
+            <div id="syncView" class="view">
+                <div class="sync-view-layout">
+                    <section class="sync-control-panel">
+                        <div class="sync-view-header">
+                            <div class="sync-view-header-row">
+                                <h2 id="syncViewTitle">同步 / AI分析</h2>
+                                <button id="syncControlPanelCollapseBtn" class="view-action-btn view-action-btn-ghost sync-control-collapse-btn" type="button" aria-expanded="true">
+                                    <i class="fas fa-angle-left"></i>
+                                    <span id="syncControlPanelCollapseBtnText">折叠</span>
+                                </button>
+                            </div>
+                            <p id="syncViewDescription">手动推送推荐/记录数据，并拉取 AI 结果 Markdown。</p>
+                        </div>
+
+                        <div class="sync-actions">
+                            <button id="syncRepoCollapseBtn" class="view-action-btn view-action-btn-ghost sync-repo-collapse-btn" type="button">
+                                <i class="fas fa-chevron-up"></i>
+                                <span id="syncRepoCollapseBtnText">折叠配置方式</span>
+                            </button>
+                            <button id="syncPushBtn" class="view-action-btn" type="button">
+                                <i class="fas fa-upload"></i>
+                                <span id="syncPushBtnText">推送当前</span>
+                            </button>
+                        </div>
+
+                        <div class="sync-settings-card sync-repo-card" id="syncRepoCard">
+                            <div class="sync-settings-title" id="syncRepoSettingsTitle">配置方式</div>
+                            <div class="sync-repo-card-body" id="syncRepoCardBody">
+                                <div class="sync-form-grid">
+                                    <label class="sync-form-row" for="syncProviderSelect">
+                                        <span class="sync-field-label" id="syncProviderLabel">同步方式</span>
+                                        <select id="syncProviderSelect" class="sync-field-input">
+                                            <option value="github" id="syncProviderGithubOption">GitHub Repo</option>
+                                            <option value="local" id="syncProviderLocalOption">本地快照（仅本机）</option>
+                                        </select>
+                                    </label>
+                                    <label class="sync-form-row" for="syncGithubOwnerInput">
+                                        <span class="sync-field-label" id="syncGithubOwnerLabel">Owner</span>
+                                        <input id="syncGithubOwnerInput" class="sync-field-input" type="text" placeholder="your-github-owner" autocomplete="off">
+                                    </label>
+                                    <label class="sync-form-row" for="syncGithubRepoInput">
+                                        <span class="sync-field-label" id="syncGithubRepoLabel">Repo</span>
+                                        <input id="syncGithubRepoInput" class="sync-field-input" type="text" placeholder="your-repo-name" autocomplete="off">
+                                    </label>
+                                    <label class="sync-form-row" for="syncGithubBranchInput">
+                                        <span class="sync-field-label" id="syncGithubBranchLabel">Branch</span>
+                                        <input id="syncGithubBranchInput" class="sync-field-input" type="text" placeholder="main" autocomplete="off">
+                                    </label>
+                                    <label class="sync-form-row" for="syncGithubBasePathInput">
+                                        <span class="sync-field-label" id="syncGithubBasePathLabel">Base Path</span>
+                                        <input id="syncGithubBasePathInput" class="sync-field-input" type="text" placeholder="bookmark-record-recommend/sync" autocomplete="off">
+                                    </label>
+                                    <label class="sync-form-row sync-form-row-wide" for="syncGithubTokenInput">
+                                        <span class="sync-field-label" id="syncGithubTokenLabel">GitHub Token</span>
+                                        <input id="syncGithubTokenInput" class="sync-field-input" type="password" placeholder="ghp_xxx / github_pat_xxx" autocomplete="off">
+                                    </label>
+                                </div>
+                                <div class="sync-repo-actions">
+                                    <div class="sync-repo-action-buttons">
+                                        <button id="syncRepoTestBtn" class="view-action-btn view-action-btn-ghost" type="button">
+                                            <i class="fas fa-plug"></i>
+                                            <span id="syncRepoTestBtnText">测试连接</span>
+                                        </button>
+                                        <button id="syncRepoOpenHtmlBtn" class="view-action-btn view-action-btn-ghost" type="button">
+                                            <i class="fas fa-external-link-alt"></i>
+                                            <span id="syncRepoOpenHtmlBtnText">配置说明</span>
+                                        </button>
+                                    </div>
+                                    <span id="syncRepoStatusText" class="sync-repo-status-text">等待配置</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sync-settings-card">
+                            <div class="sync-settings-title-row">
+                                <div class="sync-settings-title" id="syncSettingsTitle">推送数据包</div>
+                                <button id="syncPushPackageInfoBtn" class="view-action-btn view-action-btn-ghost sync-info-btn" type="button">
+                                    <i class="fas fa-info-circle"></i>
+                                    <span id="syncPushPackageInfoBtnText">说明</span>
+                                </button>
+                            </div>
+                            <label class="sync-setting-item">
+                                <input type="checkbox" id="syncPushPackageRecommend" checked>
+                                <span id="syncPushPackageRecommendText" class="sync-setting-item-text">推荐数据池（S 数据池）</span>
+                            </label>
+                            <label class="sync-setting-item">
+                                <input type="checkbox" id="syncPushPackageWidgets" checked>
+                                <span id="syncPushPackageWidgetsText" class="sync-setting-item-text">推荐行为事件</span>
+                            </label>
+                            <label class="sync-setting-item">
+                                <input type="checkbox" id="syncPushPackageRecords" checked>
+                                <span id="syncPushPackageRecordsText" class="sync-setting-item-text">书签记录综合包（含点击排行/关联记录）</span>
+                            </label>
+                            <label class="sync-setting-item">
+                                <input type="checkbox" id="syncPushPackageTracking" checked>
+                                <span id="syncPushPackageTrackingText" class="sync-setting-item-text">时间捕捉包</span>
+                            </label>
+                            <label class="sync-setting-item">
+                                <input type="checkbox" id="syncPushPackageBookmarkTreeSnapshot" checked>
+                                <span id="syncPushPackageBookmarkTreeSnapshotText" class="sync-setting-item-text">书签树快照包</span>
+                            </label>
+                            <div class="sync-setting-item-row sync-setting-item-row-with-info">
+                                <label class="sync-setting-item sync-setting-item-inline-info">
+                                    <input type="checkbox" id="syncPushPackageRawHighVolume">
+                                    <span id="syncPushPackageRawHighVolumeText" class="sync-setting-item-text">原始记录明细</span>
+                                    <button id="syncPushPackageRawHighVolumeInfoBtn" class="sync-setting-item-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">
+                                        <i class="fas fa-info-circle" aria-hidden="true"></i>
+                                    </button>
+                                </label>
+                                <div id="syncPushPackageRawHighVolumeInfoPanel" class="sync-inline-info-panel" hidden>
+                                    <div id="syncPushPackageRawHighVolumeInfoTitle" class="sync-inline-info-title">说明</div>
+                                    <div id="syncPushPackageRawHighVolumeInfoText" class="sync-inline-info-text">包含原始新增记录、浏览历史明细、翻牌历史。数据量更大、粒度更细，常规分析通常不需要，默认关闭。</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="syncFilesCardContainer" class="sync-files-card">
+                            <div class="sync-files-header">
+                                <span id="syncFilesTitle">查看</span>
+                                <div class="sync-files-header-actions">
+                                    <div id="syncPullPolicyInfoWrap" class="sync-files-info-wrap">
+                                        <button id="syncPullPolicyInfoBtn" class="sync-files-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">?</button>
+                                        <div id="syncPullPolicyInfoPanel" class="sync-files-info-popover" hidden>
+                                            <span id="syncPullPolicyInfoText">拉取策略：最新修改版本取胜，不做复杂 MERGE。</span>
+                                        </div>
+                                    </div>
+                                    <button id="syncPullBtn" class="view-action-btn" type="button">
+                                        <i class="fas fa-download"></i>
+                                        <span id="syncPullBtnText">拉取更新</span>
+                                    </button>
+                                    <button id="syncNewFileBtn" class="view-action-btn view-action-btn-ghost" type="button">
+                                        <i class="fas fa-plus"></i>
+                                        <span id="syncNewFileText">新建</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="syncFilesPathHint" class="sync-files-path-hint">顶层说明：AGENTS.md 是规则文件（位于 bookmark-record-recommend/sync/AGENTS.md），用于定义 AI 处理规则；新建 Markdown 后，这里会自动切换为拉取来源说明。</div>
+                            <div id="syncFileList" class="sync-file-list"></div>
+                        </div>
+
+                        <div class="sync-state-row">
+                            <span id="syncStatusText" class="sync-status-text">状态：未同步</span>
+                            <span id="syncLastActionTime" class="sync-last-action-time">--</span>
+                        </div>
+                    </section>
+
+                    <section class="sync-render-panel">
+                        <div id="syncFilesCardRenderMount" class="sync-files-card-render-mount"></div>
+                        <div class="sync-render-toolbar">
+                            <div class="sync-file-active-meta">
+                                <span id="syncActiveFileName">--</span>
+                                <span id="syncActiveFileTime">--</span>
+                            </div>
+                        </div>
+                        <div id="syncMarkdownTools" class="sync-md-tools" hidden>
+                            <div class="sync-md-tools-scroll">
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="undo"><i class="fas fa-undo-alt"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="redo"><i class="fas fa-redo-alt"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="copy"><i class="fas fa-copy"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-text-btn" data-action="h1">H1</button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-text-btn" data-action="h2">H2</button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-text-btn" data-action="h3">H3</button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-inline" data-action="bold"><b>B</b></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-inline" data-action="italic"><i>I</i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-inline" data-action="highlight">H</button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn sync-md-tool-inline" data-action="strike"><s>S</s></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="code"><i class="fas fa-code"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="codeblock"><i class="fas fa-file-code"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="ul"><i class="fas fa-list-ul"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="ol"><i class="fas fa-list-ol"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="task"><i class="fas fa-tasks"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="quote"><i class="fas fa-quote-left"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="link"><i class="fas fa-link"></i></button>
+                                <button type="button" class="view-action-btn view-action-btn-ghost sync-md-tool-btn" data-action="callout"><i class="fas fa-sticky-note"></i></button>
+                            </div>
+                        </div>
+                        <div id="syncMarkdownEmpty" class="sync-markdown-empty">暂无 Markdown 文件。点击“拉取”或“新建”。</div>
+                        <div id="syncMarkdownLivePane" class="sync-markdown-live-pane" hidden>
+                            <div id="syncMarkdownEditorPane" class="sync-markdown-pane sync-markdown-editor-pane">
+                                <textarea id="syncMarkdownEditor" class="sync-markdown-editor" hidden></textarea>
+                            </div>
+                            <div id="syncMarkdownRenderPane" class="sync-markdown-pane sync-markdown-render-pane">
+                                <article id="syncMarkdownRender" class="sync-markdown-render" hidden></article>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div id="syncPushPackageInfoModal" class="modal content-center">
+                <div class="modal-content sync-path-modal">
+                    <div class="modal-header compact">
+                        <h3 id="syncPushPackagePathTitle">推送到云端路径结构</h3>
+                        <button class="modal-close" id="syncPushPackageInfoModalClose" aria-label="关闭">×</button>
+                    </div>
+                    <div class="modal-body sync-path-modal-body">
+                        <pre id="syncPushPackagePathDiagram" class="sync-path-info-diagram"></pre>
+                    </div>
+                </div>
             </div>
 
             <!-- 导出配置弹窗 (书签添加记录) -->
