@@ -1001,6 +1001,22 @@
                         <div id="widgetsRecommendLastUpdated" class="recommend-last-updated-note">最近更新：--</div>
                     </div>
 
+                    <div class="time-tracking-widget widgets-widget-card" id="widgetsRankingWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-chart-bar"></i>
+                            <span id="widgetsRankingWidgetTitle">点击排行</span>
+                            <button id="widgetsRankingSubdomainToggleBtn" class="widget-header-action-btn widgets-subdomain-toggle-btn" title="切换子域名" type="button" style="display:none;">子域</button>
+                            <button id="widgetsRankingModeToggleBtn" class="widget-header-action-btn widgets-mode-toggle-btn" title="切换模式" type="button">书签</button>
+                            <button id="widgetsRankingRangeToggleBtn" class="widget-header-action-btn widgets-range-toggle-btn" title="切换范围" type="button">本周</button>
+                            <button id="widgetsRankingVisualToggleBtn" class="widget-header-action-btn widgets-visual-toggle-btn" title="切换视图" type="button">列表</button>
+                        </div>
+                        <div class="time-tracking-widget-list" id="widgetsRankingWidgetList">
+                            <div class="time-tracking-widget-empty">
+                                <span id="widgetsRankingWidgetEmptyText">暂无点击记录</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="time-tracking-widget widgets-widget-card" id="widgetsTrackingWidget">
                         <div class="time-tracking-widget-header">
                             <i class="fas fa-stopwatch"></i>
@@ -1009,22 +1025,6 @@
                         <div class="time-tracking-widget-list" id="widgetsTrackingWidgetList">
                             <div class="time-tracking-widget-empty">
                                 <span id="widgetsTrackingWidgetEmptyText">暂无追踪中的书签</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="time-tracking-widget widgets-widget-card" id="widgetsRankingWidget">
-                        <div class="time-tracking-widget-header">
-                            <i class="fas fa-chart-bar"></i>
-                            <span id="widgetsRankingWidgetTitle">点击排行</span>
-                            <button id="widgetsRankingSubdomainToggleBtn" class="widget-header-action-btn widgets-subdomain-toggle-btn" title="切换子域名" type="button" style="display:none;">子域</button>
-                            <button id="widgetsRankingModeToggleBtn" class="widget-header-action-btn widgets-mode-toggle-btn" title="切换模式" type="button">书签</button>
-                            <button id="widgetsRankingRangeToggleBtn" class="widget-header-action-btn widgets-range-toggle-btn" title="切换范围" type="button">当日</button>
-                            <button id="widgetsRankingVisualToggleBtn" class="widget-header-action-btn widgets-visual-toggle-btn" title="切换视图" type="button">列表</button>
-                        </div>
-                        <div class="time-tracking-widget-list" id="widgetsRankingWidgetList">
-                            <div class="time-tracking-widget-empty">
-                                <span id="widgetsRankingWidgetEmptyText">暂无点击记录</span>
                             </div>
                         </div>
                     </div>
@@ -1053,6 +1053,21 @@
                         <div class="time-tracking-widget-list widgets-week-summary" id="widgetsHistoryWeekWidgetList">
                             <div class="time-tracking-widget-empty">
                                 <span id="widgetsHistoryWeekWidgetEmptyText">暂无本周点击记录</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="time-tracking-widget widgets-widget-card" id="widgetsTimeRankingWidget">
+                        <div class="time-tracking-widget-header">
+                            <i class="fas fa-hourglass-half"></i>
+                            <span id="widgetsTimeRankingWidgetTitle">时间排行</span>
+                            <button id="widgetsTimeRankingTypeToggleBtn" class="widget-header-action-btn widgets-mode-toggle-btn" title="切换模式" type="button">时长</button>
+                            <button id="widgetsTimeRankingRangeToggleBtn" class="widget-header-action-btn widgets-range-toggle-btn" title="切换范围" type="button">本周</button>
+                            <button id="widgetsTimeRankingVisualToggleBtn" class="widget-header-action-btn widgets-visual-toggle-btn" title="切换图表" type="button">列表</button>
+                        </div>
+                        <div class="time-tracking-widget-list" id="widgetsTimeRankingWidgetList">
+                            <div class="time-tracking-widget-empty">
+                                <span id="widgetsTimeRankingWidgetEmptyText">暂无时间排行数据</span>
                             </div>
                         </div>
                     </div>

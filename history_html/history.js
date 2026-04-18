@@ -227,6 +227,9 @@ const WIDGETS_ADDITIONS_RANGE_KEY = 'widgetsAdditionsRange';
 const WIDGETS_HISTORY_VIEW_MODE_KEY = 'widgetsHistoryViewMode';
 const WIDGETS_HISTORY_RANGE_KEY = 'widgetsHistoryRange';
 const WIDGETS_RANKING_VISUAL_MODE_KEY = 'widgetsRankingVisualMode';
+const WIDGETS_TIME_RANKING_RANGE_KEY = 'widgetsTimeRankingRange';
+const WIDGETS_TIME_RANKING_TYPE_KEY = 'widgetsTimeRankingType';
+const WIDGETS_TIME_RANKING_VISUAL_MODE_KEY = 'widgetsTimeRankingVisualMode';
 const WIDGETS_OPEN_FULL_REFRESH_TS_KEY = 'bb_widgets_open_full_refresh_ts_v1';
 
 let additionsCacheRestored = false;
@@ -2956,6 +2959,18 @@ const i18n = {pageTitle: {
     },widgetsRankingWidgetEmpty: {
         'zh_CN': '暂无点击记录',
         'en': 'No click records'
+    },widgetsTimeRankingWidgetTitle: {
+        'zh_CN': '时间排行',
+        'en': 'Time Ranking'
+    },widgetsTimeRankingWidgetEmpty: {
+        'zh_CN': '暂无时间排行数据',
+        'en': 'No time ranking data'
+    },widgetsTimeRankingTypeComposite: {
+        'zh_CN': '时长',
+        'en': 'Time'
+    },widgetsTimeRankingTypeWakes: {
+        'zh_CN': '次数',
+        'en': 'Wakes'
     },widgetsRankingRangeToggle: {
         'zh_CN': '切换范围',
         'en': 'Switch range'
@@ -3001,12 +3016,21 @@ const i18n = {pageTitle: {
     },widgetsChartViewMonthGrid: {
         'zh_CN': '月格',
         'en': 'M-Grid'
+    },widgetsChartViewYearGrid: {
+        'zh_CN': '年格',
+        'en': 'Y-Grid'
     },widgetsChartRangeToggle: {
         'zh_CN': '切换范围',
         'en': 'Switch range'
     },widgetsChartRangeWeek: {
         'zh_CN': '本周',
         'en': 'Week'
+    },widgetsChartRangeMonth: {
+        'zh_CN': '本月',
+        'en': 'Month'
+    },widgetsChartRangeYear: {
+        'zh_CN': '当年',
+        'en': 'Year'
     },widgetsChartRangeMonth30: {
         'zh_CN': '本月',
         'en': 'Month'
@@ -3435,28 +3459,28 @@ const i18n = {pageTitle: {
         'en': 'Today'
     },trackingRangeWeek: {
         'zh_CN': '本周',
-        'en': 'This Week'
+        'en': 'Week'
     },trackingRangeMonth: {
         'zh_CN': '本月',
-        'en': 'This Month'
+        'en': 'Month'
     },trackingRangeYear: {
         'zh_CN': '当年',
-        'en': 'This Year'
+        'en': 'Year'
     },trackingRangeAll: {
         'zh_CN': '全部',
-        'en': 'All Time'
+        'en': 'All'
     },trackingNoData: {
         'zh_CN': '暂无活跃时间数据',
         'en': 'No active time data'
     },trackingNoDataRange: {
         'zh_CN': '该时间范围暂无数据（旧数据请查看“全部”）',
-        'en': 'No data in this range yet (older data is available in "All Time").'
+        'en': 'No data in this range yet (older data is available in "All").'
     },trackingRangeDataHintFrom: {
         'zh_CN': '区间统计起始于 {date}（旧数据仅计入“全部”）',
-        'en': 'Range stats start from {date} (older data is available in "All Time" only).'
+        'en': 'Range stats start from {date} (older data is available in "All" only).'
     },trackingRangeDataHintPending: {
         'zh_CN': '区间统计仅记录新版本后的数据（旧数据仅计入“全部”）',
-        'en': 'Range stats only include data after this version update (older data is in "All Time" only).'
+        'en': 'Range stats only include data after this version update (older data is in "All" only).'
     },trackingClearRangeConfirm: {
         'zh_CN': '确定要清除{range}以前的综合排行数据吗？',
         'en': 'Are you sure you want to clear ranking data older than {range}?'
@@ -3465,7 +3489,7 @@ const i18n = {pageTitle: {
         'en': 'Are you sure you want to clear current tracking sessions?'
     },trackingClearRange: {
         'zh_CN': { week: '一周', month: '一个月', year: '一年', all: '全部' },
-        'en': { week: '1 week', month: '1 month', year: '1 year', all: 'all time' }
+        'en': { week: '1 week', month: '1 month', year: '1 year', all: 'all' }
     },trackingClearedCount: {
         'zh_CN': '已清除 {count} 条记录',
         'en': 'Cleared {count} records'
@@ -4338,6 +4362,11 @@ function applyLanguage() {
     const widgetsRankingWidgetEmptyText = document.getElementById('widgetsRankingWidgetEmptyText');
     if (widgetsRankingWidgetEmptyText) widgetsRankingWidgetEmptyText.textContent = i18n.widgetsRankingWidgetEmpty[currentLang];
 
+    const widgetsTimeRankingWidgetTitle = document.getElementById('widgetsTimeRankingWidgetTitle');
+    if (widgetsTimeRankingWidgetTitle) widgetsTimeRankingWidgetTitle.textContent = i18n.widgetsTimeRankingWidgetTitle[currentLang];
+    const widgetsTimeRankingWidgetEmptyText = document.getElementById('widgetsTimeRankingWidgetEmptyText');
+    if (widgetsTimeRankingWidgetEmptyText) widgetsTimeRankingWidgetEmptyText.textContent = i18n.widgetsTimeRankingWidgetEmpty[currentLang];
+
     const widgetsAdditionsWeekWidgetTitle = document.getElementById('widgetsAdditionsWeekWidgetTitle');
     if (widgetsAdditionsWeekWidgetTitle) widgetsAdditionsWeekWidgetTitle.textContent = i18n.widgetsAdditionsWeekWidgetTitle[currentLang];
     const widgetsAdditionsWeekWidgetEmptyText = document.getElementById('widgetsAdditionsWeekWidgetEmptyText');
@@ -4388,12 +4417,15 @@ function applyLanguage() {
     updateWidgetsRankingRangeToggleLabel();
     updateWidgetsRankingModeToggleLabel();
     updateWidgetsRankingVisualToggleLabel();
+    updateWidgetsTimeRankingTypeToggleLabel();
+    updateWidgetsTimeRankingRangeToggleLabel();
+    updateWidgetsTimeRankingVisualToggleLabel();
     updateWidgetsAdditionsToggleLabel();
     updateWidgetsHistoryToggleLabel();
     updateWidgetsSmartSortToggleUI(currentView);
     updateWidgetsRelatedDepthButtonsState();
-    markWidgetsDirty(['recommend', 'ranking', 'related', 'tracking', 'additionsWeek', 'historyWeek'], { schedule: false });
-    updateWidgetsViewData({ targets: ['recommend', 'ranking', 'related', 'tracking', 'additionsWeek', 'historyWeek'] }).catch(() => { });
+    markWidgetsDirty(['recommend', 'ranking', 'timeRanking', 'related', 'tracking', 'additionsWeek', 'historyWeek'], { schedule: false });
+    updateWidgetsViewData({ targets: ['recommend', 'ranking', 'timeRanking', 'related', 'tracking', 'additionsWeek', 'historyWeek'] }).catch(() => { });
 
     const isEn = currentLang === 'en';
 
@@ -5575,17 +5607,17 @@ async function updateTimeTrackingWidget() {
 
             // Initialize User Preference Range
             if (!window.timeTrackingWidgetRankingRange) {
-                window.timeTrackingWidgetRankingRange = localStorage.getItem('timeTrackingWidgetRankingRange') || 'day';
+                window.timeTrackingWidgetRankingRange = localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
             }
             const currentRange = window.timeTrackingWidgetRankingRange;
 
             // Map range to localized text and count key
             const rangeConfig = {
                 'day': { text: currentLang === 'zh_CN' ? '当日' : 'Today', key: 'dayCount' },
-                'week': { text: currentLang === 'zh_CN' ? '当周' : 'This Week', key: 'weekCount' },
-                'month': { text: currentLang === 'zh_CN' ? '当月' : 'This Month', key: 'monthCount' },
-                'year': { text: currentLang === 'zh_CN' ? '当年' : 'This Year', key: 'yearCount' },
-                'all': { text: currentLang === 'zh_CN' ? '全部' : 'All Time', key: 'allCount' }
+                'week': { text: currentLang === 'zh_CN' ? '当周' : 'Week', key: 'weekCount' },
+                'month': { text: currentLang === 'zh_CN' ? '当月' : 'Month', key: 'monthCount' },
+                'year': { text: currentLang === 'zh_CN' ? '当年' : 'Year', key: 'yearCount' },
+                'all': { text: currentLang === 'zh_CN' ? '全部' : 'All', key: 'allCount' }
             };
             const activeConfig = rangeConfig[currentRange] || rangeConfig['day'];
 
@@ -5733,7 +5765,7 @@ function initTimeTrackingWidget() {
             const mode = widget.dataset.mode;
             if (mode === 'ranking') {
                 // Navigate to Click Ranking View
-                const range = window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day';
+                const range = window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
                 try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
                 const browsingTab = document.getElementById('additionsTabBrowsing');
                 if (browsingTab) {
@@ -7554,18 +7586,20 @@ const WIDGETS_RANKING_HYDRATION_IDLE_TIMEOUT_MS = 1200;
 const WIDGETS_OPEN_FULL_REFRESH_MIN_GAP_MS = 2 * 60 * 1000;
 const WIDGETS_REFRESH_TARGETS = [
     'recommend',
-    'tracking',
     'ranking',
+    'timeRanking',
+    'tracking',
     'additionsWeek',
     'historyWeek',
     'related'
 ];
 const WIDGETS_SMART_SORT_WIDGET_IDS = [
     'widgetsRecommendWidget',
-    'widgetsTrackingWidget',
     'widgetsRankingWidget',
+    'widgetsTrackingWidget',
     'widgetsAdditionsWeekWidget',
     'widgetsHistoryWeekWidget',
+    'widgetsTimeRankingWidget',
     'widgetsRelatedWidget'
 ];
 const widgetsSmartSortSignalById = Object.create(null);
@@ -7600,11 +7634,13 @@ let widgetsTrackingRenderSignature = '';
 let widgetsAdditionsWeekRenderSignature = '';
 let widgetsHistoryWeekRenderSignature = '';
 let widgetsRankingRenderSignature = '';
+let widgetsTimeRankingRenderSignature = '';
 let widgetsRelatedRenderSignature = '';
 let widgetsDirtyFlags = {
     recommend: true,
-    tracking: true,
     ranking: true,
+    timeRanking: true,
+    tracking: true,
     additionsWeek: true,
     historyWeek: true,
     related: true
@@ -8179,8 +8215,9 @@ function normalizeWidgetsSmartSortText(value) {
 
 function getWidgetsSortWidgetLabel(widgetId) {
     if (widgetId === 'widgetsRecommendWidget') return i18n.widgetsRecommendWidgetTitle[currentLang];
-    if (widgetId === 'widgetsTrackingWidget') return i18n.widgetsTrackingWidgetTitle[currentLang];
     if (widgetId === 'widgetsRankingWidget') return i18n.widgetsRankingWidgetTitle[currentLang];
+    if (widgetId === 'widgetsTimeRankingWidget') return i18n.widgetsTimeRankingWidgetTitle[currentLang];
+    if (widgetId === 'widgetsTrackingWidget') return i18n.widgetsTrackingWidgetTitle[currentLang];
     if (widgetId === 'widgetsAdditionsWeekWidget') return i18n.widgetsAdditionsWeekWidgetTitle[currentLang];
     if (widgetId === 'widgetsHistoryWeekWidget') return i18n.widgetsHistoryWeekWidgetTitle[currentLang];
     if (widgetId === 'widgetsRelatedWidget') return i18n.widgetsRelatedWidgetTitle[currentLang];
@@ -8249,10 +8286,43 @@ function getWidgetsSmartSortSignal(widgetId) {
             const num = Number.parseInt(normalizeWidgetsSmartSortText(row.querySelector('.item-time')?.textContent), 10);
             return sum + (Number.isFinite(num) ? num : 0);
         }, 0);
-        const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || 'day');
+        const range = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || 'week');
         return {
             signature: rows.length > 0 ? `${range}::${rowSig}` : `empty:${widgetId}:${range}`,
             hasData: rows.length > 0 && !hasEmptyNode,
+            activity,
+            dueNow: false
+        };
+    }
+
+    if (widgetId === 'widgetsTimeRankingWidget') {
+        const rows = Array.from(listEl.querySelectorAll('.time-tracking-widget-item.time-ranking-item'));
+        const hasPieShell = Boolean(listEl.querySelector('.widgets-pie-shell'));
+        const pieSegments = Array.from(listEl.querySelectorAll('.widgets-pie-segment'));
+        const pieMetaTotal = normalizeWidgetsSmartSortText(listEl.querySelector('.widgets-mini-chart-total')?.textContent);
+        const rowSig = rows.map((row) => {
+            const title = normalizeWidgetsSmartSortText(row.querySelector('.item-title')?.textContent);
+            const wakes = normalizeWidgetsSmartSortText(row.querySelector('.item-wakes')?.textContent);
+            const metric = normalizeWidgetsSmartSortText(row.querySelector('.item-time')?.textContent);
+            const metricValue = Number.parseInt(String(row.dataset.metricValue || '0'), 10);
+            return `${title}:${wakes}:${metric}:${Number.isFinite(metricValue) ? metricValue : 0}`;
+        }).join('|');
+        let activity = rows.reduce((sum, row) => {
+            const value = Number.parseInt(String(row.dataset.metricValue || '0'), 10);
+            return sum + (Number.isFinite(value) ? value : 0);
+        }, 0);
+        if (activity <= 0 && hasPieShell && !hasEmptyNode) {
+            activity = Math.max(1, pieSegments.length);
+        }
+        const range = normalizeWidgetsTimeRankingRange(readWidgetsTimeRankingRange());
+        const type = normalizeWidgetsTimeRankingType(readWidgetsTimeRankingType());
+        const pieSig = hasPieShell ? `pie:${pieSegments.length}:${pieMetaTotal}` : '';
+        const hasVisualData = (rows.length > 0 || hasPieShell) && !hasEmptyNode;
+        return {
+            signature: rows.length > 0
+                ? `${range}::${type}::${rowSig}`
+                : (hasPieShell ? `${range}::${type}::${pieSig}` : `empty:${widgetId}:${range}:${type}`),
+            hasData: hasVisualData,
             activity,
             dueNow: false
         };
@@ -8881,11 +8951,31 @@ function normalizeWidgetsMiniViewMode(mode) {
 
 function normalizeWidgetsMiniRange(range) {
     const safe = String(range || '').trim().toLowerCase();
-    if (safe === 'month30') return 'month30';
+    if (safe === 'month30' || safe === 'month') return 'month';
+    if (safe === 'year') return 'year';
     return 'week';
 }
 
 function normalizeWidgetsRankingVisualMode(mode) {
+    const safe = String(mode || '').trim().toLowerCase();
+    if (safe === 'pie') return 'pie';
+    return 'list';
+}
+
+function normalizeWidgetsTimeRankingRange(range) {
+    const safe = String(range || '').trim().toLowerCase();
+    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'week';
+}
+
+function normalizeWidgetsTimeRankingType(type) {
+    const safe = String(type || '').trim().toLowerCase();
+    return safe === 'wakes' ? 'wakes' : 'composite';
+}
+
+function normalizeWidgetsTimeRankingVisualMode(mode) {
     const safe = String(mode || '').trim().toLowerCase();
     if (safe === 'pie') return 'pie';
     return 'list';
@@ -8931,6 +9021,30 @@ function readWidgetsRankingVisualMode() {
     }
 }
 
+function readWidgetsTimeRankingRange() {
+    try {
+        return normalizeWidgetsTimeRankingRange(localStorage.getItem(WIDGETS_TIME_RANKING_RANGE_KEY) || 'all');
+    } catch (_) {
+        return 'all';
+    }
+}
+
+function readWidgetsTimeRankingType() {
+    try {
+        return normalizeWidgetsTimeRankingType(localStorage.getItem(WIDGETS_TIME_RANKING_TYPE_KEY) || 'composite');
+    } catch (_) {
+        return 'composite';
+    }
+}
+
+function readWidgetsTimeRankingVisualMode() {
+    try {
+        return normalizeWidgetsTimeRankingVisualMode(localStorage.getItem(WIDGETS_TIME_RANKING_VISUAL_MODE_KEY) || 'list');
+    } catch (_) {
+        return 'list';
+    }
+}
+
 function writeWidgetsAdditionsViewMode(mode) {
     const safe = normalizeWidgetsMiniViewMode(mode);
     try { localStorage.setItem(WIDGETS_ADDITIONS_VIEW_MODE_KEY, safe); } catch (_) { }
@@ -8961,17 +9075,41 @@ function writeWidgetsRankingVisualMode(mode) {
     return safe;
 }
 
+function writeWidgetsTimeRankingRange(range) {
+    const safe = normalizeWidgetsTimeRankingRange(range);
+    try { localStorage.setItem(WIDGETS_TIME_RANKING_RANGE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsTimeRankingType(type) {
+    const safe = normalizeWidgetsTimeRankingType(type);
+    try { localStorage.setItem(WIDGETS_TIME_RANKING_TYPE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
+function writeWidgetsTimeRankingVisualMode(mode) {
+    const safe = normalizeWidgetsTimeRankingVisualMode(mode);
+    try { localStorage.setItem(WIDGETS_TIME_RANKING_VISUAL_MODE_KEY, safe); } catch (_) { }
+    return safe;
+}
+
 function getWidgetsMiniRangeLabel(range) {
     const safe = normalizeWidgetsMiniRange(range);
-    return safe === 'month30'
-        ? i18n.widgetsChartRangeMonth30[currentLang]
-        : i18n.widgetsChartRangeWeek[currentLang];
+    const map = {
+        week: i18n.widgetsChartRangeWeek[currentLang],
+        month: (i18n.widgetsChartRangeMonth?.[currentLang] || i18n.widgetsChartRangeMonth30?.[currentLang] || (currentLang === 'zh_CN' ? '本月' : 'Month')),
+        year: (i18n.widgetsChartRangeYear?.[currentLang] || (currentLang === 'zh_CN' ? '当年' : 'Year'))
+    };
+    return map[safe] || map.week;
 }
 
 function getWidgetsMiniViewModeLabel(mode, range = 'week') {
     const safe = normalizeWidgetsMiniViewMode(mode);
     const safeRange = normalizeWidgetsMiniRange(range);
-    if (safe === 'week-grid' && safeRange === 'month30' && i18n.widgetsChartViewMonthGrid?.[currentLang]) {
+    if (safe === 'week-grid' && safeRange === 'year' && i18n.widgetsChartViewYearGrid?.[currentLang]) {
+        return i18n.widgetsChartViewYearGrid[currentLang];
+    }
+    if (safe === 'week-grid' && safeRange === 'month' && i18n.widgetsChartViewMonthGrid?.[currentLang]) {
         return i18n.widgetsChartViewMonthGrid[currentLang];
     }
     return safe === 'week-grid'
@@ -8982,6 +9120,13 @@ function getWidgetsMiniViewModeLabel(mode, range = 'week') {
 function getWidgetsEffectiveMiniViewMode(mode, range) {
     const safeMode = normalizeWidgetsMiniViewMode(mode);
     return safeMode;
+}
+
+function getNextWidgetsMiniRange(range) {
+    const ranges = ['week', 'month', 'year'];
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const currentIndex = Math.max(0, ranges.indexOf(safeRange));
+    return ranges[(currentIndex + 1) % ranges.length];
 }
 
 function getToggleToTitle(label) {
@@ -8996,7 +9141,7 @@ function updateWidgetsAdditionsToggleLabel() {
     const rangeBtn = document.getElementById('widgetsAdditionsRangeToggleBtn');
     if (rangeBtn) {
         const currentLabel = getWidgetsMiniRangeLabel(safeRange);
-        const nextRange = safeRange === 'week' ? 'month30' : 'week';
+        const nextRange = getNextWidgetsMiniRange(safeRange);
         const nextLabel = getWidgetsMiniRangeLabel(nextRange);
         rangeBtn.textContent = currentLabel;
         rangeBtn.title = getToggleToTitle(nextLabel);
@@ -9010,6 +9155,8 @@ function updateWidgetsAdditionsToggleLabel() {
         const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
         const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
         viewBtn.textContent = currentLabel;
+        viewBtn.disabled = false;
+        viewBtn.setAttribute('aria-disabled', 'false');
         viewBtn.title = getToggleToTitle(nextLabel);
         viewBtn.setAttribute('aria-label', viewBtn.title);
     }
@@ -9020,7 +9167,7 @@ function updateWidgetsHistoryToggleLabel() {
     const rangeBtn = document.getElementById('widgetsHistoryRangeToggleBtn');
     if (rangeBtn) {
         const currentLabel = getWidgetsMiniRangeLabel(safeRange);
-        const nextRange = safeRange === 'week' ? 'month30' : 'week';
+        const nextRange = getNextWidgetsMiniRange(safeRange);
         const nextLabel = getWidgetsMiniRangeLabel(nextRange);
         rangeBtn.textContent = currentLabel;
         rangeBtn.title = getToggleToTitle(nextLabel);
@@ -9034,6 +9181,8 @@ function updateWidgetsHistoryToggleLabel() {
         const nextMode = safeMode === 'line' ? 'week-grid' : 'line';
         const nextLabel = getWidgetsMiniViewModeLabel(nextMode, safeRange);
         viewBtn.textContent = currentLabel;
+        viewBtn.disabled = false;
+        viewBtn.setAttribute('aria-disabled', 'false');
         viewBtn.title = getToggleToTitle(nextLabel);
         viewBtn.setAttribute('aria-label', viewBtn.title);
     }
@@ -9058,16 +9207,95 @@ function updateWidgetsRankingVisualToggleLabel(mode) {
     btn.setAttribute('aria-label', btn.title);
 }
 
+function getWidgetsTimeRankingRangeLabel(range) {
+    const safeRange = normalizeWidgetsTimeRankingRange(range);
+    const map = {
+        today: i18n.trackingRangeToday[currentLang],
+        week: i18n.trackingRangeWeek[currentLang],
+        month: i18n.trackingRangeMonth[currentLang],
+        year: i18n.trackingRangeYear[currentLang],
+        all: currentLang === 'zh_CN' ? i18n.trackingRangeAll[currentLang] : 'All'
+    };
+    return map[safeRange] || map.week;
+}
+
+function getNextWidgetsTimeRankingRange(range) {
+    const ranges = ['today', 'week', 'month', 'year', 'all'];
+    const safeRange = normalizeWidgetsTimeRankingRange(range);
+    const currentIndex = Math.max(0, ranges.indexOf(safeRange));
+    return ranges[(currentIndex + 1) % ranges.length];
+}
+
+function getWidgetsTimeRankingTypeLabel(type) {
+    const safeType = normalizeWidgetsTimeRankingType(type);
+    return safeType === 'wakes'
+        ? i18n.widgetsTimeRankingTypeWakes[currentLang]
+        : i18n.widgetsTimeRankingTypeComposite[currentLang];
+}
+
+function getNextWidgetsTimeRankingType(type) {
+    const safeType = normalizeWidgetsTimeRankingType(type);
+    return safeType === 'wakes' ? 'composite' : 'wakes';
+}
+
+function updateWidgetsTimeRankingRangeToggleLabel(range) {
+    const btn = document.getElementById('widgetsTimeRankingRangeToggleBtn');
+    if (!btn) return;
+
+    const safeRange = normalizeWidgetsTimeRankingRange(range || readWidgetsTimeRankingRange());
+    const nextRange = getNextWidgetsTimeRankingRange(safeRange);
+    const currentLabel = getWidgetsTimeRankingRangeLabel(safeRange);
+    const nextLabel = getWidgetsTimeRankingRangeLabel(nextRange);
+
+    btn.textContent = currentLabel;
+    btn.title = getToggleToTitle(nextLabel);
+    btn.setAttribute('aria-label', btn.title);
+}
+
+function updateWidgetsTimeRankingTypeToggleLabel(type) {
+    const btn = document.getElementById('widgetsTimeRankingTypeToggleBtn');
+    if (!btn) return;
+
+    const safeType = normalizeWidgetsTimeRankingType(type || readWidgetsTimeRankingType());
+    const nextType = getNextWidgetsTimeRankingType(safeType);
+    const currentLabel = getWidgetsTimeRankingTypeLabel(safeType);
+    const nextLabel = getWidgetsTimeRankingTypeLabel(nextType);
+
+    btn.textContent = currentLabel;
+    btn.title = getToggleToTitle(nextLabel);
+    btn.setAttribute('aria-label', btn.title);
+}
+
+function updateWidgetsTimeRankingVisualToggleLabel(mode) {
+    const btn = document.getElementById('widgetsTimeRankingVisualToggleBtn');
+    if (!btn) return;
+
+    const safeMode = mode
+        ? normalizeWidgetsTimeRankingVisualMode(mode)
+        : readWidgetsTimeRankingVisualMode();
+    const currentLabel = safeMode === 'pie'
+        ? i18n.widgetsRankingVisualPie[currentLang]
+        : i18n.widgetsRankingVisualList[currentLang];
+    const nextMode = safeMode === 'pie' ? 'list' : 'pie';
+    const nextLabel = nextMode === 'pie'
+        ? i18n.widgetsRankingVisualPie[currentLang]
+        : i18n.widgetsRankingVisualList[currentLang];
+
+    btn.textContent = currentLabel;
+    btn.title = getToggleToTitle(nextLabel);
+    btn.setAttribute('aria-label', btn.title);
+}
+
 function getWidgetsRankingRangeConfig(range) {
     const safeRange = normalizeWidgetsRankingRange(range);
     const map = {
         day: { text: currentLang === 'zh_CN' ? '当日' : 'Today', key: 'dayCount' },
-        week: { text: currentLang === 'zh_CN' ? '当周' : 'This Week', key: 'weekCount' },
-        month: { text: currentLang === 'zh_CN' ? '当月' : 'This Month', key: 'monthCount' },
-        year: { text: currentLang === 'zh_CN' ? '当年' : 'This Year', key: 'yearCount' },
-        all: { text: currentLang === 'zh_CN' ? '全部' : 'All Time', key: 'allCount' }
+        week: { text: currentLang === 'zh_CN' ? '当周' : 'Week', key: 'weekCount' },
+        month: { text: currentLang === 'zh_CN' ? '当月' : 'Month', key: 'monthCount' },
+        year: { text: currentLang === 'zh_CN' ? '当年' : 'Year', key: 'yearCount' },
+        all: { text: currentLang === 'zh_CN' ? '全部' : 'All', key: 'allCount' }
     };
-    return map[safeRange] || map.day;
+    return map[safeRange] || map.week;
 }
 
 function getNextWidgetsRankingRange(range) {
@@ -9117,7 +9345,7 @@ function updateWidgetsRankingRangeToggleLabel(range) {
     if (!btn) return;
 
     const safeRange = normalizeWidgetsRankingRange(
-        range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day'
+        range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week'
     );
     const currentConfig = getWidgetsRankingRangeConfig(safeRange);
     const nextRange = getNextWidgetsRankingRange(safeRange);
@@ -9291,6 +9519,11 @@ function hasWidgetsRankingVisualRows(widgetList) {
     return Boolean(widgetList.querySelector('.ranking-item, .widgets-pie-shell'));
 }
 
+function hasWidgetsTimeRankingVisualRows(widgetList) {
+    if (!widgetList) return false;
+    return Boolean(widgetList.querySelector('.time-ranking-item, .widgets-pie-shell'));
+}
+
 function hasWidgetsWeekVisualRows(widgetList) {
     if (!widgetList) return false;
     return Boolean(widgetList.querySelector('.widgets-week-days-row, .widgets-mini-chart-wrap'));
@@ -9301,6 +9534,8 @@ function hasWidgetsAnyVisualRows() {
         document.querySelector('#widgetsTrackingWidgetList .time-tracking-widget-item')
         || document.querySelector('#widgetsRankingWidgetList .ranking-item')
         || document.querySelector('#widgetsRankingWidgetList .widgets-pie-shell')
+        || document.querySelector('#widgetsTimeRankingWidgetList .time-ranking-item')
+        || document.querySelector('#widgetsTimeRankingWidgetList .widgets-pie-shell')
         || document.querySelector('#widgetsAdditionsWeekWidgetList .widgets-week-days-row')
         || document.querySelector('#widgetsAdditionsWeekWidgetList .widgets-mini-chart-wrap')
         || document.querySelector('#widgetsHistoryWeekWidgetList .widgets-week-days-row')
@@ -9347,6 +9582,17 @@ function paintWidgetsLoadingPlaceholders(targetsLike) {
         }
     }
 
+    if (targets.includes('timeRanking')) {
+        const widgetList = document.getElementById('widgetsTimeRankingWidgetList');
+        if (widgetList && !hasWidgetsTimeRankingVisualRows(widgetList)) {
+            const nextSignature = `loading::prefill::${currentLang}`;
+            if (widgetsTimeRankingRenderSignature !== nextSignature) {
+                widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+                widgetsTimeRankingRenderSignature = nextSignature;
+            }
+        }
+    }
+
     if (targets.includes('additionsWeek')) {
         const widgetList = document.getElementById('widgetsAdditionsWeekWidgetList');
         if (widgetList && !hasWidgetsWeekVisualRows(widgetList)) {
@@ -9355,7 +9601,7 @@ function paintWidgetsLoadingPlaceholders(targetsLike) {
             const snapshotRendered = tryRenderWidgetsAdditionsSnapshot(widgetList, {
                 range: currentRange,
                 viewMode: currentViewMode,
-                emptyText: getWidgetsAdditionsEmptyText()
+                emptyText: getWidgetsAdditionsEmptyText(currentRange)
             });
             if (!snapshotRendered.rendered) {
                 const nextSignature = `loading::prefill::${currentLang}`;
@@ -9848,9 +10094,84 @@ function getWidgetsRecentDates(days = 30) {
     return dates;
 }
 
+function getWidgetsCurrentMonthDates() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    start.setHours(0, 0, 0, 0);
+
+    const dates = [];
+    for (let cursor = new Date(start); cursor.getTime() <= today.getTime(); cursor.setDate(cursor.getDate() + 1)) {
+        dates.push(new Date(cursor));
+    }
+    return dates;
+}
+
+function getWidgetsCurrentYearMonthDates() {
+    const year = new Date().getFullYear();
+    const dates = [];
+    for (let month = 0; month < 12; month += 1) {
+        const date = new Date(year, month, 1);
+        date.setHours(0, 0, 0, 0);
+        dates.push(date);
+    }
+    return dates;
+}
+
+function getWidgetsMonthKey(dateInput) {
+    const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+function createWidgetsCurrentYearMonthCountMap() {
+    const year = new Date().getFullYear();
+    const map = new Map();
+    for (let month = 1; month <= 12; month += 1) {
+        const key = `${year}-${String(month).padStart(2, '0')}`;
+        map.set(key, 0);
+    }
+    return map;
+}
+
+function addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count = 0) {
+    if (!(monthCountByKey instanceof Map)) return;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || '').trim());
+    if (!match) return;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return;
+    if (year !== new Date().getFullYear()) return;
+
+    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+    const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
+    if (!monthCountByKey.has(monthKey)) return;
+    monthCountByKey.set(monthKey, Number(monthCountByKey.get(monthKey) || 0) + safeCount);
+}
+
+function buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, range = 'year') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const dates = getWidgetsCurrentYearMonthDates();
+    return dates.map((date) => {
+        const monthKey = getWidgetsMonthKey(date);
+        const count = Number(monthCountByKey?.get(monthKey) || 0);
+        return {
+            date,
+            dateKey: getWidgetsDateKey(date),
+            monthKey,
+            xLabel: formatWidgetsChartDateLabel(date, safeRange),
+            xTooltip: formatWidgetsChartDateTooltip(date, safeRange),
+            count: Number.isFinite(count) && count > 0 ? Math.floor(count) : 0
+        };
+    });
+}
+
 function getWidgetsTrendDates(range = 'week') {
     const safeRange = normalizeWidgetsMiniRange(range);
-    if (safeRange === 'month30') return getWidgetsRecentDates(30);
+    if (safeRange === 'month') return getWidgetsCurrentMonthDates();
+    if (safeRange === 'year') return getWidgetsCurrentYearMonthDates();
     return getWidgetsWeekDates();
 }
 
@@ -9864,6 +10185,12 @@ function formatWidgetsChartDateLabel(dateInput, range = 'week') {
         }
         return date.toLocaleDateString('en-US', { weekday: 'short' });
     }
+    if (safeRange === 'year') {
+        if (currentLang === 'zh_CN') {
+            return `${date.getMonth() + 1}月`;
+        }
+        return date.toLocaleDateString('en-US', { month: 'short' });
+    }
 
     if (currentLang === 'zh_CN') {
         return `${date.getMonth() + 1}/${date.getDate()}`;
@@ -9871,9 +10198,16 @@ function formatWidgetsChartDateLabel(dateInput, range = 'week') {
     return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function formatWidgetsChartDateTooltip(dateInput) {
+function formatWidgetsChartDateTooltip(dateInput, range = 'week') {
     const date = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput);
     if (Number.isNaN(date.getTime())) return '--';
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (safeRange === 'year') {
+        if (currentLang === 'zh_CN') {
+            return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+        }
+        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    }
     if (currentLang === 'zh_CN') {
         return `${date.getMonth() + 1}月${date.getDate()}日`;
     }
@@ -9889,7 +10223,7 @@ function buildWidgetsTrendPointsFromCountMap(dates = [], countByKey = new Map(),
             date,
             dateKey,
             xLabel: formatWidgetsChartDateLabel(date, safeRange),
-            xTooltip: formatWidgetsChartDateTooltip(date),
+            xTooltip: formatWidgetsChartDateTooltip(date, safeRange),
             count: Number.isFinite(count) && count > 0 ? Math.floor(count) : 0
         };
     });
@@ -9919,6 +10253,21 @@ function readAdditionsSnapshotCountByDate(snapshot, dateKey = '') {
 function buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, range = 'week') {
     if (!snapshot || !snapshot.countByKey || typeof snapshot.countByKey !== 'object') return null;
     const safeRange = normalizeWidgetsMiniRange(range);
+    if (safeRange === 'year') {
+        const monthCountByKey = createWidgetsCurrentYearMonthCountMap();
+        Object.entries(snapshot.countByKey || {}).forEach(([dateKey, rawCount]) => {
+            addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, rawCount);
+        });
+        const points = buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, safeRange);
+        const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+        return {
+            range: safeRange,
+            points,
+            total,
+            loadedAt: Number(snapshot.ts || Date.now())
+        };
+    }
+
     const dates = getWidgetsTrendDates(safeRange);
     const points = dates.map((date) => {
         const dateKey = getWidgetsDateKey(date);
@@ -9927,7 +10276,7 @@ function buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, range = 'week')
             date,
             dateKey,
             xLabel: formatWidgetsChartDateLabel(date, safeRange),
-            xTooltip: formatWidgetsChartDateTooltip(date),
+            xTooltip: formatWidgetsChartDateTooltip(date, safeRange),
             count
         };
     });
@@ -9958,11 +10307,28 @@ function buildWidgetsWeekDailyCountsFromAdditionsSnapshot(snapshot) {
     return { dailyCounts, total };
 }
 
-function getWidgetsAdditionsEmptyText() {
-    if (i18n.widgetsAdditionsWeekWidgetEmpty && i18n.widgetsAdditionsWeekWidgetEmpty[currentLang]) {
-        return i18n.widgetsAdditionsWeekWidgetEmpty[currentLang];
+function getWidgetsAdditionsEmptyText(range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (currentLang === 'zh_CN') {
+        if (safeRange === 'month') return '暂无本月添加记录';
+        if (safeRange === 'year') return '暂无当年添加记录';
+        return '暂无本周添加记录';
     }
-    return currentLang === 'zh_CN' ? '暂无本周添加记录' : 'No additions this week';
+    if (safeRange === 'month') return 'No additions this month';
+    if (safeRange === 'year') return 'No additions this year';
+    return 'No additions this week';
+}
+
+function getWidgetsHistoryEmptyText(range = 'week') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    if (currentLang === 'zh_CN') {
+        if (safeRange === 'month') return '暂无本月点击记录';
+        if (safeRange === 'year') return '暂无当年点击记录';
+        return '暂无本周点击记录';
+    }
+    if (safeRange === 'month') return 'No clicks this month';
+    if (safeRange === 'year') return 'No clicks this year';
+    return 'No clicks this week';
 }
 
 function buildWidgetsAdditionsSnapshotRenderData(range = 'week', viewMode = 'week-grid') {
@@ -9973,7 +10339,23 @@ function buildWidgetsAdditionsSnapshotRenderData(range = 'week', viewMode = 'wee
     const safeViewMode = getWidgetsEffectiveMiniViewMode(viewMode, safeRange);
 
     if (safeViewMode === 'week-grid') {
-        if (safeRange === 'month30') {
+        if (safeRange === 'year') {
+            const trendPayload = buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, safeRange) || { range: safeRange, points: [], total: 0 };
+            const yearGridPayload = buildWidgetsMiniYearGridPayloadFromTrendPoints(trendPayload.points || [], { range: safeRange });
+            const total = Number(trendPayload?.total || 0);
+            const signature = getWidgetsYearGridSignature(yearGridPayload, safeRange, safeViewMode);
+            return {
+                snapshot,
+                range: safeRange,
+                viewMode: safeViewMode,
+                total,
+                signature,
+                trendPayload,
+                yearGridPayload
+            };
+        }
+
+        if (safeRange === 'month') {
             const trendPayload = buildWidgetsTrendPayloadFromAdditionsSnapshot(snapshot, safeRange) || { range: safeRange, points: [], total: 0 };
             const monthGridPayload = buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload.points || [], { range: safeRange });
             const total = Number(trendPayload?.total || 0);
@@ -10024,7 +10406,7 @@ function tryRenderWidgetsAdditionsSnapshot(widgetList, options = {}) {
         options.viewMode || readWidgetsAdditionsViewMode(),
         safeRange
     );
-    const emptyText = options.emptyText || getWidgetsAdditionsEmptyText();
+    const emptyText = options.emptyText || getWidgetsAdditionsEmptyText(safeRange);
 
     const payload = buildWidgetsAdditionsSnapshotRenderData(safeRange, safeViewMode);
     if (!payload) return { rendered: false, changed: false, total: 0, signature: '' };
@@ -10033,18 +10415,36 @@ function tryRenderWidgetsAdditionsSnapshot(widgetList, options = {}) {
     if (hasChanged) {
         setWidgetsWeekWidgetHeaderCount('additions', payload.total, safeRange);
         if (payload.viewMode === 'week-grid') {
-            if (payload.range === 'month30') {
+            if (payload.range === 'year') {
+                renderWidgetsMiniYearGrid(widgetList, payload.yearGridPayload || null, {
+                    range: safeRange,
+                    emptyText,
+                    onMonthClick: (monthItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(monthItem?.dateKey || monthItem?.date || '');
+                        if (!targetDateKey || Number(monthItem?.count || 0) <= 0) return;
+                        navigateToAdditionsReviewWeekFromWidgets({
+                            range: safeRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
+                    }
+                });
+            } else if (payload.range === 'month') {
                 renderWidgetsMiniMonthGrid(widgetList, payload.monthGridPayload || null, {
                     range: safeRange,
                     emptyText,
                     onDayClick: (dayItem) => {
                         const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
                         if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
-                        navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                        navigateToAdditionsReviewWeekFromWidgets({
+                            range: safeRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
                     }
                 });
             } else {
-                renderWidgetsWeekSummary(widgetList, payload.dailyCounts || [], payload.total, emptyText, 'additions');
+                renderWidgetsWeekSummary(widgetList, payload.dailyCounts || [], payload.total, emptyText, 'additions', safeRange);
             }
         } else {
             renderWidgetsMiniLineChart(widgetList, payload.trendPayload || { range: safeRange, points: [], total: 0 }, {
@@ -10053,7 +10453,11 @@ function tryRenderWidgetsAdditionsSnapshot(widgetList, options = {}) {
                 onPointClick: (point) => {
                     const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
                     if (!targetDateKey || Number(point?.count || 0) <= 0) return;
-                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                    navigateToAdditionsReviewWeekFromWidgets({
+                        range: safeRange,
+                        dateKey: targetDateKey,
+                        drillDown: true
+                    });
                 }
             });
         }
@@ -10070,6 +10474,24 @@ function tryRenderWidgetsAdditionsSnapshot(widgetList, options = {}) {
 
 function buildWidgetsTrendPayloadFromBookmarksByDate(bookmarksByDate, range = 'week') {
     const safeRange = normalizeWidgetsMiniRange(range);
+    if (safeRange === 'year') {
+        const monthCountByKey = createWidgetsCurrentYearMonthCountMap();
+        if (bookmarksByDate && typeof bookmarksByDate.forEach === 'function') {
+            bookmarksByDate.forEach((records, dateKey) => {
+                const count = Array.isArray(records) ? records.length : 0;
+                addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
+            });
+        }
+        const points = buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, safeRange);
+        const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+        return {
+            range: safeRange,
+            points,
+            total,
+            loadedAt: Date.now()
+        };
+    }
+
     const dates = getWidgetsTrendDates(safeRange);
     const dateKeys = dates.map((date) => getWidgetsDateKey(date));
     const countByKey = new Map(dateKeys.map((key) => [key, 0]));
@@ -10103,7 +10525,7 @@ function getWidgetsMiniCalendarWeekdayLabels() {
 }
 
 function buildWidgetsMiniMonthGridPayloadFromTrendPoints(points = [], options = {}) {
-    const safeRange = normalizeWidgetsMiniRange(options.range || 'month30');
+    const safeRange = normalizeWidgetsMiniRange(options.range || 'month');
     const safePoints = Array.isArray(points) ? points : [];
     const countByKey = new Map();
     let anchorDate = null;
@@ -10189,7 +10611,68 @@ function buildWidgetsMiniMonthGridPayloadFromTrendPoints(points = [], options = 
     };
 }
 
-function getWidgetsMonthGridSignature(monthPayload = null, range = 'month30', viewMode = 'week-grid') {
+function parseWidgetsMonthKey(monthKey = '') {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || '').trim());
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return null;
+    const date = new Date(year, month - 1, 1);
+    date.setHours(0, 0, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function buildWidgetsMiniYearGridPayloadFromTrendPoints(points = [], options = {}) {
+    const safeRange = normalizeWidgetsMiniRange(options.range || 'year');
+    const safePoints = Array.isArray(points) ? points : [];
+    const countByMonthKey = new Map();
+    let anchorYear = new Date().getFullYear();
+
+    safePoints.forEach((point) => {
+        const monthDate = parseWidgetsMonthKey(point?.monthKey || '')
+            || parseWidgetsDateKey(point?.dateKey || point?.date || '');
+        if (!monthDate) return;
+
+        anchorYear = monthDate.getFullYear();
+        const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+        const count = Number(point?.count || 0);
+        const safeCount = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+        countByMonthKey.set(monthKey, Number(countByMonthKey.get(monthKey) || 0) + safeCount);
+    });
+
+    const months = [];
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    for (let month = 0; month < 12; month += 1) {
+        const date = new Date(anchorYear, month, 1);
+        date.setHours(0, 0, 0, 0);
+        const monthKey = `${anchorYear}-${String(month + 1).padStart(2, '0')}`;
+        const count = Number(countByMonthKey.get(monthKey) || 0);
+        const monthLabel = currentLang === 'zh_CN'
+            ? `${month + 1}月`
+            : date.toLocaleDateString('en-US', { month: 'short' });
+        months.push({
+            month,
+            monthKey,
+            monthLabel,
+            date,
+            dateKey: getWidgetsDateKey(date),
+            count: Number.isFinite(count) && count > 0 ? Math.floor(count) : 0,
+            isCurrentMonth: date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
+        });
+    }
+
+    const total = months.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    return {
+        range: safeRange,
+        year: anchorYear,
+        yearLabel: currentLang === 'zh_CN' ? `${anchorYear}年` : String(anchorYear),
+        months,
+        total
+    };
+}
+
+function getWidgetsMonthGridSignature(monthPayload = null, range = 'month', viewMode = 'week-grid') {
     const safeRange = normalizeWidgetsMiniRange(range);
     const safeMode = normalizeWidgetsMiniViewMode(viewMode);
     if (!monthPayload || !Array.isArray(monthPayload.cells)) {
@@ -10208,6 +10691,23 @@ function getWidgetsMonthGridSignature(monthPayload = null, range = 'month30', vi
     return `range:${safeRange}::view:${safeMode}::${currentLang}::month:${monthLabel}::${cellSignature}::${total}`;
 }
 
+function getWidgetsYearGridSignature(yearPayload = null, range = 'year', viewMode = 'week-grid') {
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const safeMode = normalizeWidgetsMiniViewMode(viewMode);
+    if (!yearPayload || !Array.isArray(yearPayload.months)) {
+        return `range:${safeRange}::view:${safeMode}::${currentLang}::year-grid:empty`;
+    }
+
+    const monthsSignature = yearPayload.months.map((item) => {
+        const monthKey = String(item?.monthKey || '');
+        const count = Number(item?.count || 0);
+        return `${monthKey}:${count}`;
+    }).join(',');
+    const total = Number(yearPayload.total || 0);
+    const yearLabel = String(yearPayload.yearLabel || yearPayload.year || '');
+    return `range:${safeRange}::view:${safeMode}::${currentLang}::year:${yearLabel}::${monthsSignature}::${total}`;
+}
+
 function readWidgetsAdditionsTrendData(range = 'week') {
     const safeRange = normalizeWidgetsMiniRange(range);
     const now = Date.now();
@@ -10216,6 +10716,25 @@ function readWidgetsAdditionsTrendData(range = 'week') {
         && widgetsAdditionsTrendDataCache.range === safeRange
         && (now - Number(widgetsAdditionsTrendDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
     ) {
+        return widgetsAdditionsTrendDataCache;
+    }
+
+    if (safeRange === 'year') {
+        const monthCountByKey = createWidgetsCurrentYearMonthCountMap();
+        (Array.isArray(allBookmarks) ? allBookmarks : []).forEach((entry) => {
+            const raw = Number(entry?.dateAdded || 0);
+            if (!Number.isFinite(raw) || raw <= 0) return;
+            const dateKey = getWidgetsDateKey(raw);
+            addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, 1);
+        });
+        const points = buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, safeRange);
+        const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+        widgetsAdditionsTrendDataCache = {
+            range: safeRange,
+            points,
+            total,
+            loadedAt: now
+        };
         return widgetsAdditionsTrendDataCache;
     }
 
@@ -10241,6 +10760,45 @@ async function readWidgetsHistoryTrendData(range = 'week') {
         && widgetsHistoryTrendDataCache.range === safeRange
         && (now - Number(widgetsHistoryTrendDataCache.loadedAt || 0)) < WIDGETS_WEEK_DATA_CACHE_TTL_MS
     ) {
+        return widgetsHistoryTrendDataCache;
+    }
+
+    if (safeRange === 'year') {
+        const monthCountByKey = createWidgetsCurrentYearMonthCountMap();
+        const liveCalendar = window.browsingHistoryCalendarInstance;
+        if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.forEach === 'function') {
+            liveCalendar.bookmarksByDate.forEach((records, dateKey) => {
+                const count = Array.isArray(records) ? records.length : 0;
+                addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
+            });
+        } else {
+            const nowDate = new Date();
+            nowDate.setHours(0, 0, 0, 0);
+            const yearStartDate = new Date(nowDate.getFullYear(), 0, 1);
+            yearStartDate.setHours(0, 0, 0, 0);
+            const startKey = getWidgetsDateKey(yearStartDate);
+            const endKey = getWidgetsDateKey(nowDate);
+            try {
+                if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
+                    const cached = await readHistoryCacheRange(startKey, endKey);
+                    if (cached && Array.isArray(cached.records)) {
+                        cached.records.forEach(([dateKey, records]) => {
+                            const count = Array.isArray(records) ? records.length : 0;
+                            addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
+                        });
+                    }
+                }
+            } catch (_) { }
+        }
+
+        const points = buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, safeRange);
+        const total = points.reduce((sum, item) => sum + Number(item.count || 0), 0);
+        widgetsHistoryTrendDataCache = {
+            range: safeRange,
+            points,
+            total,
+            loadedAt: now
+        };
         return widgetsHistoryTrendDataCache;
     }
 
@@ -10317,7 +10875,7 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
     const points = Array.isArray(payload?.points) ? payload.points : [];
     const total = Number(payload?.total || 0);
     const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'week');
-    const isMonthRange = safeRange === 'month30';
+    const isDenseRange = safeRange === 'month' || safeRange === 'year';
     const emptyText = options.emptyText || (currentLang === 'zh_CN' ? '暂无记录' : 'No records');
     const onPointClick = typeof options.onPointClick === 'function' ? options.onPointClick : null;
 
@@ -10422,7 +10980,7 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
     }
 
     const lastPointIndex = Math.max(0, chartPoints.length - 1);
-    const xLabelIndexes = isMonthRange
+    const xLabelIndexes = isDenseRange
         ? new Set([0, Math.floor(lastPointIndex * 0.33), Math.floor(lastPointIndex * 0.66), lastPointIndex])
         : new Set([0, Math.floor(lastPointIndex / 2), lastPointIndex]);
     chartPoints.forEach((point, index) => {
@@ -10430,7 +10988,7 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
         circle.setAttribute('class', 'widgets-mini-chart-point');
         circle.setAttribute('cx', String(point.x));
         circle.setAttribute('cy', String(point.y));
-        if (isMonthRange) {
+        if (isDenseRange) {
             const monthRadius = Number(point.count || 0) > 0 ? 2.25 : 1.35;
             circle.setAttribute('r', String(monthRadius));
             circle.classList.add('is-month');
@@ -10513,13 +11071,28 @@ function describeWidgetsPieItem(item, total) {
     return `${safeTitle} · ${value} · ${percent}%`;
 }
 
-function fillWidgetsPieTooltip(tooltip, item, total) {
+function fillWidgetsPieTooltip(tooltip, item, total, options = {}) {
     if (!tooltip) return;
 
+    const opts = options && typeof options === 'object' ? options : {};
     const titleText = String(item?.title || '--');
     const value = Number(item?.count || 0);
     const percent = total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
     const iconUrl = item?.url ? getFaviconUrl(item.url) : '';
+    const valueLabel = typeof opts.formatValueLabel === 'function'
+        ? String(opts.formatValueLabel(value, item, total))
+        : (currentLang === 'zh_CN' ? `${value} 次` : `${value}`);
+    const percentLabel = `${percent}%`;
+    const metaLabel = typeof opts.formatMetaLabel === 'function'
+        ? String(opts.formatMetaLabel({
+            value,
+            item,
+            total,
+            percent,
+            valueLabel,
+            percentLabel
+        }))
+        : `${valueLabel} · ${percentLabel}`;
 
     tooltip.textContent = '';
 
@@ -10544,16 +11117,15 @@ function fillWidgetsPieTooltip(tooltip, item, total) {
 
     const metaRow = document.createElement('div');
     metaRow.className = 'widgets-pie-tooltip-meta';
-    metaRow.textContent = currentLang === 'zh_CN'
-        ? `${value} 次 · ${percent}%`
-        : `${value} · ${percent}%`;
+    metaRow.textContent = metaLabel;
 
     tooltip.appendChild(titleRow);
     tooltip.appendChild(metaRow);
 }
 
-function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
+function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '', options = {}) {
     if (!widgetList) return;
+    const opts = options && typeof options === 'object' ? options : {};
     const sourceItems = Array.isArray(items) ? items.filter(item => Number(item?.count || 0) > 0) : [];
     if (!sourceItems.length) {
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
@@ -10633,7 +11205,7 @@ function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
         segment.style.animationDelay = `${index * 44}ms`;
 
         const showTip = () => {
-            fillWidgetsPieTooltip(tooltip, item, total);
+            fillWidgetsPieTooltip(tooltip, item, total, opts);
             tooltip.style.left = '50%';
             tooltip.style.top = '18px';
             tooltip.classList.add('is-visible');
@@ -10717,10 +11289,14 @@ function renderWidgetsMiniPieChart(widgetList, items = [], emptyText = '') {
     meta.className = 'widgets-mini-chart-meta widgets-mini-chart-meta-pie';
     const hintText = document.createElement('span');
     hintText.className = 'widgets-mini-chart-range';
-    hintText.textContent = currentLang === 'zh_CN' ? '悬停查看占比' : 'Hover to view ratio';
+    hintText.textContent = typeof opts.hintText === 'string' && opts.hintText.trim()
+        ? opts.hintText
+        : (currentLang === 'zh_CN' ? '悬停查看占比' : 'Hover to view ratio');
     const totalText = document.createElement('span');
     totalText.className = 'widgets-mini-chart-total';
-    totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
+    totalText.textContent = typeof opts.formatTotalLabel === 'function'
+        ? String(opts.formatTotalLabel(total, topItems))
+        : (currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`);
     meta.appendChild(hintText);
     meta.appendChild(totalText);
 
@@ -10796,7 +11372,7 @@ async function readWidgetsHistoryWeekDataFromCache() {
     return widgetsHistoryWeekDataCache;
 }
 
-function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, widgetType = 'additions') {
+function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, widgetType = 'additions', range = 'week') {
     if (!widgetList) return;
 
     if (!Array.isArray(dailyCounts) || dailyCounts.length === 0 || total <= 0) {
@@ -10810,6 +11386,7 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, wid
     daysRow.className = 'widgets-week-days-row';
 
     const safeWidgetType = widgetType === 'history' ? 'history' : 'additions';
+    const safeRange = normalizeWidgetsMiniRange(range);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayTime = today.getTime();
@@ -10849,9 +11426,17 @@ function renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, wid
             const handleJump = () => {
                 if (!targetDateKey) return;
                 if (safeWidgetType === 'history') {
-                    navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                    navigateToAdditionsHistoryWeekFromWidgets({
+                        range: safeRange,
+                        dateKey: targetDateKey,
+                        drillDown: true
+                    });
                 } else {
-                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                    navigateToAdditionsReviewWeekFromWidgets({
+                        range: safeRange,
+                        dateKey: targetDateKey,
+                        drillDown: true
+                    });
                 }
             };
 
@@ -10884,7 +11469,7 @@ function renderWidgetsMiniMonthGrid(widgetList, payload, options = {}) {
 
     const emptyText = options.emptyText || (currentLang === 'zh_CN' ? '暂无记录' : 'No records');
     const onDayClick = typeof options.onDayClick === 'function' ? options.onDayClick : null;
-    const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'month30');
+    const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'month');
 
     if (!payload || !Array.isArray(payload.cells) || payload.cells.length === 0 || Number(payload.total || 0) <= 0) {
         widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
@@ -10996,6 +11581,114 @@ function renderWidgetsMiniMonthGrid(widgetList, payload, options = {}) {
     const totalText = document.createElement('span');
     totalText.className = 'widgets-mini-chart-total';
     const total = Number(payload.total || 0);
+    totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
+
+    meta.appendChild(rangeText);
+    meta.appendChild(totalText);
+    widgetList.appendChild(meta);
+}
+
+function renderWidgetsMiniYearGrid(widgetList, payload, options = {}) {
+    if (!widgetList) return;
+
+    const emptyText = options.emptyText || (currentLang === 'zh_CN' ? '暂无记录' : 'No records');
+    const onMonthClick = typeof options.onMonthClick === 'function' ? options.onMonthClick : null;
+    const safeRange = normalizeWidgetsMiniRange(options.range || payload?.range || 'year');
+    const months = Array.isArray(payload?.months) ? payload.months : [];
+    const total = Number(payload?.total || 0);
+
+    if (!months.length || total <= 0) {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        return;
+    }
+
+    widgetList.innerHTML = '';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'widgets-mini-chart-wrap widgets-mini-year-grid-wrap';
+
+    const monthsGrid = document.createElement('div');
+    monthsGrid.className = 'widgets-mini-year-grid-months';
+
+    months.forEach((monthItem) => {
+        const cell = document.createElement('div');
+        cell.className = 'widgets-mini-year-grid-month';
+
+        if (monthItem?.isCurrentMonth) {
+            cell.classList.add('is-current-month');
+        }
+
+        const count = Number(monthItem?.count || 0);
+        if (count <= 0) {
+            cell.classList.add('is-zero');
+        }
+
+        const monthLabel = document.createElement('span');
+        monthLabel.className = 'widgets-mini-year-grid-month-label';
+        monthLabel.textContent = String(monthItem?.monthLabel || '--');
+
+        const monthCount = document.createElement('span');
+        monthCount.className = 'widgets-mini-year-grid-month-count';
+        if (count > 0) {
+            monthCount.textContent = String(count);
+        } else {
+            monthCount.textContent = '';
+            monthCount.classList.add('is-zero');
+        }
+
+        const safeDateKey = normalizeWidgetsDateKey(monthItem?.dateKey || monthItem?.date || '');
+        if (safeDateKey) {
+            const parsed = parseWidgetsDateKey(safeDateKey);
+            if (parsed) {
+                cell.title = currentLang === 'zh_CN'
+                    ? `${parsed.getFullYear()}年${parsed.getMonth() + 1}月 · ${count} 条`
+                    : `${parsed.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} · ${count}`;
+            }
+        }
+
+        if (count > 0 && safeDateKey && onMonthClick) {
+            const handleJump = () => {
+                onMonthClick({
+                    ...monthItem,
+                    dateKey: safeDateKey,
+                    count
+                });
+            };
+            cell.classList.add('is-clickable');
+            cell.tabIndex = 0;
+            cell.setAttribute('role', 'button');
+            cell.addEventListener('click', (event) => {
+                event.stopPropagation();
+                handleJump();
+            });
+            cell.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                event.stopPropagation();
+                handleJump();
+            });
+        }
+
+        cell.appendChild(monthLabel);
+        cell.appendChild(monthCount);
+        monthsGrid.appendChild(cell);
+    });
+
+    wrap.appendChild(monthsGrid);
+    widgetList.appendChild(wrap);
+
+    const meta = document.createElement('div');
+    meta.className = 'widgets-mini-chart-meta widgets-mini-year-grid-meta';
+
+    const rangeText = document.createElement('span');
+    rangeText.className = 'widgets-mini-chart-range';
+    const yearLabel = String(payload?.yearLabel || payload?.year || '').trim();
+    rangeText.textContent = yearLabel
+        ? `${getWidgetsMiniRangeLabel(safeRange)} · ${yearLabel}`
+        : getWidgetsMiniRangeLabel(safeRange);
+
+    const totalText = document.createElement('span');
+    totalText.className = 'widgets-mini-chart-total';
     totalText.textContent = currentLang === 'zh_CN' ? `总计 ${total}` : `Total ${total}`;
 
     meta.appendChild(rangeText);
@@ -11148,12 +11841,19 @@ function createWidgetsJumpContext(action, options = {}) {
     };
 
     if (safeAction === 'ranking') {
-        context.range = normalizeWidgetsRankingRange(options.range || 'day');
+        context.range = normalizeWidgetsRankingRange(options.range || 'week');
+    } else if (safeAction === 'time-ranking') {
+        context.range = normalizeWidgetsTimeRankingRange(options.range || 'week');
+        context.type = normalizeWidgetsTimeRankingType(options.type || 'composite');
     } else if (safeAction === 'review-week' || safeAction === 'history-week') {
+        context.range = normalizeWidgetsMiniRange(options.range || 'week');
         const dateKey = normalizeWidgetsDateKey(options.dateKey || options.date || null);
         if (dateKey) {
             context.dateKey = dateKey;
         }
+        context.drillDown = typeof options.drillDown === 'boolean'
+            ? options.drillDown
+            : Boolean(dateKey);
     } else if (safeAction === 'related') {
         context.level = normalizeWidgetsRelatedDepth(options.level || 'level1');
         context.range = normalizeWidgetsRelatedRange(options.range || 'day');
@@ -11169,6 +11869,7 @@ function createWidgetsJumpContext(action, options = {}) {
 function isValidWidgetsJumpAction(action) {
     return action === 'tracking'
         || action === 'ranking'
+        || action === 'time-ranking'
         || action === 'review-week'
         || action === 'history-week'
         || action === 'related';
@@ -11266,46 +11967,84 @@ function deserializeWidgetsRelatedFilterFromJump(filter) {
     };
 }
 
-function focusBookmarkCalendarDate(targetDateKey) {
-    const calendar = window.bookmarkCalendarInstance;
-    const targetDate = parseWidgetsDateKey(targetDateKey);
-    if (!calendar || !targetDate) return false;
+function getWidgetsJumpTargetDate(options = {}) {
+    const targetDate = parseWidgetsDateKey(options?.dateKey || options?.date || '');
+    if (targetDate) return targetDate;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+}
 
-    const weekStart = getWidgetsWeekStartByDate(targetDate);
+function focusBookmarkCalendarByRange(range = 'week', options = {}) {
+    const calendar = window.bookmarkCalendarInstance;
+    if (!calendar) return false;
+
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const drillDown = Boolean(options?.drillDown);
+    const targetDate = getWidgetsJumpTargetDate(options);
+    const weekStart = getWidgetsWeekStartByDate(targetDate) || getWidgetsCurrentWeekStart();
+
     if (calendar.selectMode && typeof calendar.exitLocateMode === 'function') {
         calendar.exitLocateMode();
     }
 
+    calendar.currentYear = targetDate.getFullYear();
+    calendar.currentMonth = targetDate.getMonth();
     calendar.currentDay = new Date(targetDate);
-    if (weekStart) {
-        calendar.currentWeekStart = new Date(weekStart);
+    calendar.currentWeekStart = new Date(weekStart);
+
+    if (safeRange === 'year') {
+        calendar.viewLevel = drillDown ? 'month' : 'year';
+    } else if (safeRange === 'month') {
+        calendar.viewLevel = drillDown ? 'day' : 'month';
+    } else {
+        calendar.viewLevel = drillDown ? 'day' : 'week';
     }
-    calendar.viewLevel = 'day';
+
     if (typeof calendar.render === 'function') {
         calendar.render();
     }
     return true;
 }
 
-function focusBrowsingCalendarDate(targetDateKey) {
+function focusBrowsingCalendarByRange(range = 'week', options = {}) {
     const calendar = window.browsingHistoryCalendarInstance;
-    const targetDate = parseWidgetsDateKey(targetDateKey);
-    if (!calendar || !targetDate) return false;
+    if (!calendar) return false;
 
-    const weekStart = getWidgetsWeekStartByDate(targetDate);
+    const safeRange = normalizeWidgetsMiniRange(range);
+    const drillDown = Boolean(options?.drillDown);
+    const targetDate = getWidgetsJumpTargetDate(options);
+    const weekStart = getWidgetsWeekStartByDate(targetDate) || getWidgetsCurrentWeekStart();
+
     if (calendar.selectMode && typeof calendar.exitLocateMode === 'function') {
         calendar.exitLocateMode();
     }
 
+    calendar.currentYear = targetDate.getFullYear();
+    calendar.currentMonth = targetDate.getMonth();
     calendar.currentDay = new Date(targetDate);
-    if (weekStart) {
-        calendar.currentWeekStart = new Date(weekStart);
+    calendar.currentWeekStart = new Date(weekStart);
+
+    if (safeRange === 'year') {
+        calendar.viewLevel = drillDown ? 'month' : 'year';
+    } else if (safeRange === 'month') {
+        calendar.viewLevel = drillDown ? 'day' : 'month';
+    } else {
+        calendar.viewLevel = drillDown ? 'day' : 'week';
     }
-    calendar.viewLevel = 'day';
+
     if (typeof calendar.render === 'function') {
         calendar.render();
     }
     return true;
+}
+
+function focusBookmarkCalendarDate(targetDateKey) {
+    return focusBookmarkCalendarByRange('week', { dateKey: targetDateKey, drillDown: true });
+}
+
+function focusBrowsingCalendarDate(targetDateKey) {
+    return focusBrowsingCalendarByRange('week', { dateKey: targetDateKey, drillDown: true });
 }
 
 function applyWidgetsJumpContext(context) {
@@ -11322,13 +12061,28 @@ function applyWidgetsJumpContext(context) {
         return true;
     }
 
+    if (action === 'time-ranking') {
+        navigateToAdditionsTrackingRankingFromWidgets({ range: context.range, type: context.type });
+        return true;
+    }
+
     if (action === 'review-week') {
-        navigateToAdditionsReviewWeekFromWidgets({ dateKey: context.dateKey || '' });
+        const drillDown = typeof context.drillDown === 'boolean' ? context.drillDown : Boolean(context.dateKey);
+        navigateToAdditionsReviewWeekFromWidgets({
+            range: context.range || readWidgetsAdditionsRange(),
+            dateKey: context.dateKey || '',
+            drillDown
+        });
         return true;
     }
 
     if (action === 'history-week') {
-        navigateToAdditionsHistoryWeekFromWidgets({ dateKey: context.dateKey || '' });
+        const drillDown = typeof context.drillDown === 'boolean' ? context.drillDown : Boolean(context.dateKey);
+        navigateToAdditionsHistoryWeekFromWidgets({
+            range: context.range || readWidgetsHistoryRange(),
+            dateKey: context.dateKey || '',
+            drillDown
+        });
         return true;
     }
 
@@ -11401,9 +12155,39 @@ function navigateToAdditionsTrackingFromWidgets() {
     }, jumpContext);
 }
 
+function navigateToAdditionsTrackingRankingFromWidgets(options = {}) {
+    const range = normalizeWidgetsTimeRankingRange(options.range || readWidgetsTimeRankingRange());
+    const rankingType = normalizeWidgetsTimeRankingType(options.type || readWidgetsTimeRankingType());
+    try {
+        localStorage.setItem('additionsActiveTab', 'tracking');
+    } catch (_) { }
+
+    const jumpContext = createWidgetsJumpContext('time-ranking', { range, type: rankingType });
+
+    navigateToAdditionsFromWidgetsWithJumpFallback(() => {
+        switchView('additions');
+        setTimeout(() => {
+            const trackingTab = document.getElementById('additionsTabTracking');
+            if (trackingTab) trackingTab.click();
+
+            setTimeout(() => {
+                const rangeSelect = document.getElementById('trackingRankingRange');
+                if (rangeSelect) rangeSelect.value = range;
+
+                const rankingTypeSelect = document.getElementById('trackingRankingType');
+                if (rankingTypeSelect) rankingTypeSelect.value = rankingType;
+
+                if (typeof loadActiveTimeRanking === 'function') {
+                    loadActiveTimeRanking();
+                }
+            }, 100);
+        }, 100);
+    }, jumpContext);
+}
+
 function navigateToAdditionsRankingFromWidgets(options = {}) {
     const range = normalizeWidgetsRankingRange(
-        options.range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day'
+        options.range || window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week'
     );
     try {
         localStorage.setItem('browsingRankingActiveRange', range);
@@ -11428,12 +12212,20 @@ function navigateToAdditionsRankingFromWidgets(options = {}) {
 }
 
 function navigateToAdditionsReviewWeekFromWidgets(options = {}) {
+    const safeRange = normalizeWidgetsMiniRange(options.range || readWidgetsAdditionsRange());
     const targetDateKey = normalizeWidgetsDateKey(options.dateKey || options.date || '');
+    const drillDown = typeof options.drillDown === 'boolean'
+        ? options.drillDown
+        : Boolean(targetDateKey);
     try {
         localStorage.setItem('additionsActiveTab', 'review');
     } catch (_) { }
 
-    const jumpContext = createWidgetsJumpContext('review-week', { dateKey: targetDateKey });
+    const jumpContext = createWidgetsJumpContext('review-week', {
+        range: safeRange,
+        dateKey: targetDateKey,
+        drillDown
+    });
 
     navigateToAdditionsFromWidgetsWithJumpFallback(() => {
         switchView('additions');
@@ -11447,11 +12239,11 @@ function navigateToAdditionsReviewWeekFromWidgets(options = {}) {
                         initBookmarkCalendar();
                     }
                     await waitForBookmarkCalendarForWidgets();
-                    if (!focusBookmarkCalendarDate(targetDateKey)) {
-                        focusBookmarkCalendarCurrentWeek();
+                    if (!focusBookmarkCalendarByRange(safeRange, { dateKey: targetDateKey, drillDown })) {
+                        focusBookmarkCalendarByRange(safeRange, { drillDown: false });
                     }
                 } catch (e) {
-                    console.warn('[Widgets] 跳转书签添加记录周视图失败:', e);
+                    console.warn('[Widgets] 跳转书签添加记录视图失败:', e);
                 }
             }, 80);
         }, 100);
@@ -11459,13 +12251,21 @@ function navigateToAdditionsReviewWeekFromWidgets(options = {}) {
 }
 
 function navigateToAdditionsHistoryWeekFromWidgets(options = {}) {
+    const safeRange = normalizeWidgetsMiniRange(options.range || readWidgetsHistoryRange());
     const targetDateKey = normalizeWidgetsDateKey(options.dateKey || options.date || '');
+    const drillDown = typeof options.drillDown === 'boolean'
+        ? options.drillDown
+        : Boolean(targetDateKey);
     try {
         localStorage.setItem('additionsActiveTab', 'browsing');
         localStorage.setItem('browsingActiveSubTab', 'history');
     } catch (_) { }
 
-    const jumpContext = createWidgetsJumpContext('history-week', { dateKey: targetDateKey });
+    const jumpContext = createWidgetsJumpContext('history-week', {
+        range: safeRange,
+        dateKey: targetDateKey,
+        drillDown
+    });
 
     navigateToAdditionsFromWidgetsWithJumpFallback(() => {
         switchView('additions');
@@ -11484,11 +12284,11 @@ function navigateToAdditionsHistoryWeekFromWidgets(options = {}) {
                             initBrowsingHistoryCalendar();
                         }
                         await waitForBrowsingCalendarForWidgets();
-                        if (!focusBrowsingCalendarDate(targetDateKey)) {
-                            focusBrowsingCalendarCurrentWeek();
+                        if (!focusBrowsingCalendarByRange(safeRange, { dateKey: targetDateKey, drillDown })) {
+                            focusBrowsingCalendarByRange(safeRange, { drillDown: false });
                         }
                     } catch (e) {
-                        console.warn('[Widgets] 跳转点击记录周视图失败:', e);
+                        console.warn('[Widgets] 跳转点击记录视图失败:', e);
                     }
                 }, 80);
             }, 60);
@@ -12444,7 +13244,7 @@ async function updateWidgetsRankingWidget(options = {}) {
     }
 
     if (!window.timeTrackingWidgetRankingRange) {
-        window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+        window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(localStorage.getItem('timeTrackingWidgetRankingRange') || 'week');
     } else {
         window.timeTrackingWidgetRankingRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange);
     }
@@ -12590,15 +13390,349 @@ async function updateWidgetsRankingWidget(options = {}) {
     }
 }
 
+async function updateWidgetsTimeRankingWidget() {
+    const widgetList = document.getElementById('widgetsTimeRankingWidgetList');
+    if (!widgetList) return false;
+    const loadingText = getWidgetsLoadingText();
+
+    const emptyText = (i18n.widgetsTimeRankingWidgetEmpty && i18n.widgetsTimeRankingWidgetEmpty[currentLang])
+        ? i18n.widgetsTimeRankingWidgetEmpty[currentLang]
+        : (currentLang === 'zh_CN' ? '暂无时间排行数据' : 'No time ranking data');
+
+    if (!widgetsTimeRankingRenderSignature && !hasWidgetsTimeRankingVisualRows(widgetList)) {
+        const nextSignature = `loading::cold::${currentLang}`;
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${loadingText}</span></div>`;
+        widgetsTimeRankingRenderSignature = nextSignature;
+    }
+
+    const rankingType = readWidgetsTimeRankingType();
+    const range = readWidgetsTimeRankingRange();
+    const visualMode = readWidgetsTimeRankingVisualMode();
+    updateWidgetsTimeRankingTypeToggleLabel(rankingType);
+    updateWidgetsTimeRankingRangeToggleLabel(range);
+    updateWidgetsTimeRankingVisualToggleLabel(visualMode);
+
+    try {
+        const { startTime, endTime } = getTrackingRankingRangeBounds(range);
+        const [statsResponse, activeSessionsResponse] = await Promise.all([
+            browserAPI.runtime.sendMessage({
+                action: 'getTrackingRankingStatsByRange',
+                range,
+                startTime,
+                endTime
+            }),
+            browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' })
+        ]);
+
+        const titleStats = new Map();
+        const upsertStat = (key, base = {}) => {
+            if (titleStats.has(key)) {
+                const stat = titleStats.get(key);
+                if (!stat.bookmarkId && base.bookmarkId) stat.bookmarkId = base.bookmarkId;
+                if (!stat.url && base.url) stat.url = base.url;
+                if (base.title && (!stat.title || stat.title === stat.url || stat.title === key)) {
+                    stat.title = base.title;
+                }
+                return stat;
+            }
+
+            const init = {
+                bookmarkId: base.bookmarkId || null,
+                url: base.url || '',
+                title: base.title || base.url || key,
+                totalCompositeMs: 0,
+                wakeCount: 0,
+                sessionCount: 0,
+                lastUpdate: 0
+            };
+            titleStats.set(key, init);
+            return init;
+        };
+
+        const savedStats = (statsResponse?.success && statsResponse?.stats && typeof statsResponse.stats === 'object')
+            ? statsResponse.stats
+            : {};
+        for (const rawStat of Object.values(savedStats)) {
+            if (!rawStat || typeof rawStat !== 'object') continue;
+            const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId) : '';
+            const key = getTrackingRankingAggregateKey({
+                bookmarkId,
+                url: rawStat?.url || '',
+                title: rawStat?.title || ''
+            });
+            if (!key) continue;
+
+            const stat = upsertStat(key, {
+                bookmarkId: bookmarkId || null,
+                url: rawStat.url || '',
+                title: rawStat.title || rawStat.url || key
+            });
+            stat.totalCompositeMs += Math.max(
+                0,
+                Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0
+            );
+            stat.wakeCount += Math.max(
+                0,
+                Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0
+            );
+            stat.sessionCount += Math.max(0, Number(rawStat.sessionCount || 0) || 0);
+            stat.lastUpdate = Math.max(
+                stat.lastUpdate,
+                Number(rawStat.lastUpdate || 0) || 0
+            );
+        }
+
+        const activeSessions = (activeSessionsResponse?.success && Array.isArray(activeSessionsResponse.sessions))
+            ? activeSessionsResponse.sessions
+            : [];
+        if (activeSessions.length > 0) {
+            const groupedByKey = new Map();
+            for (const session of activeSessions) {
+                const bookmarkId = session?.bookmarkId != null ? String(session.bookmarkId) : '';
+                const key = getTrackingRankingAggregateKey({
+                    bookmarkId,
+                    url: session?.url || '',
+                    title: session?.title || ''
+                });
+                if (!key) continue;
+                if (!groupedByKey.has(key)) {
+                    groupedByKey.set(key, {
+                        bookmarkId: bookmarkId || null,
+                        url: session.url || '',
+                        title: session.title || session.url || key,
+                        unsavedCompositeMs: 0,
+                        unsavedWakeCount: 0
+                    });
+                }
+
+                const unsavedCompositeRaw = Number(session.unsavedCompositeMs);
+                const unsavedWakeRaw = Number(session.unsavedWakeCount);
+                const unsavedCompositeMs = (Number.isFinite(unsavedCompositeRaw) && unsavedCompositeRaw >= 0)
+                    ? unsavedCompositeRaw
+                    : getTrackingSessionCompositeMs(session);
+                const unsavedWakeCount = (Number.isFinite(unsavedWakeRaw) && unsavedWakeRaw >= 0)
+                    ? unsavedWakeRaw
+                    : getTrackingSessionWakeCount(session);
+
+                if (unsavedCompositeMs <= 0 && unsavedWakeCount <= 0) continue;
+
+                const overlapInfo = getTrackingSessionOverlapInfo({
+                    startTime: session.startTime || session.originalStartTime || endTime,
+                    endTime
+                }, startTime, endTime);
+                if (overlapInfo.ratio <= 0) continue;
+
+                const scaledUnsavedComposite = unsavedCompositeMs * overlapInfo.ratio;
+                const boundedUnsavedComposite = overlapInfo.overlapMs > 0
+                    ? Math.min(scaledUnsavedComposite, overlapInfo.overlapMs)
+                    : scaledUnsavedComposite;
+
+                const group = groupedByKey.get(key);
+                group.unsavedCompositeMs += Math.max(0, boundedUnsavedComposite);
+                group.unsavedWakeCount += Math.max(0, unsavedWakeCount * overlapInfo.ratio);
+            }
+
+            for (const [key, group] of groupedByKey) {
+                if (group.unsavedCompositeMs <= 0 && group.unsavedWakeCount <= 0) continue;
+                const stat = upsertStat(key, {
+                    bookmarkId: group.bookmarkId || null,
+                    url: group.url,
+                    title: group.title
+                });
+                stat.totalCompositeMs += group.unsavedCompositeMs;
+                stat.wakeCount += group.unsavedWakeCount;
+                stat.sessionCount += 1;
+                stat.lastUpdate = Math.max(stat.lastUpdate, endTime);
+            }
+        }
+
+        if (startTime > 0 && endTime > startTime) {
+            const maxCompositePerItem = endTime - startTime;
+            for (const stat of titleStats.values()) {
+                stat.totalCompositeMs = Math.min(stat.totalCompositeMs, maxCompositePerItem);
+            }
+        }
+
+        if (titleStats.size === 0) {
+            const nextSignature = `empty::${currentLang}::${range}::${rankingType}::${visualMode}`;
+            if (widgetsTimeRankingRenderSignature === nextSignature) return false;
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            widgetsTimeRankingRenderSignature = nextSignature;
+            return true;
+        }
+
+        const blockedSets = await getTrackingBlockedSets();
+        const cache = await getTrackingBookmarkCache();
+        const items = Array.from(titleStats.values());
+        const blockedFlags = await Promise.all(
+            items.map(item => isTrackingItemBlocked(item, blockedSets, cache))
+        );
+        const sorted = items
+            .filter((_, index) => !blockedFlags[index])
+            .sort((a, b) => {
+                if (rankingType === 'wakes') {
+                    return b.wakeCount - a.wakeCount;
+                }
+                return b.totalCompositeMs - a.totalCompositeMs;
+            })
+            .slice(0, 8);
+
+        if (sorted.length === 0) {
+            const nextSignature = `empty-filtered::${currentLang}::${range}::${rankingType}::${visualMode}`;
+            if (widgetsTimeRankingRenderSignature === nextSignature) return false;
+            widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+            widgetsTimeRankingRenderSignature = nextSignature;
+            return true;
+        }
+
+        const topItems = sorted.slice(0, 8);
+        const nextSignature = `range:${range}::type:${rankingType}::visual:${visualMode}::lang:${currentLang}::${topItems.map((item) => {
+            const metric = rankingType === 'wakes'
+                ? Math.max(0, Math.round(Number(item.wakeCount) || 0))
+                : Math.max(0, Math.round(Number(item.totalCompositeMs) || 0));
+            const wakes = Math.max(0, Math.round(Number(item.wakeCount) || 0));
+            const compositeMs = Math.max(0, Math.round(Number(item.totalCompositeMs) || 0));
+            return [
+                item.url || '',
+                item.title || '',
+                metric,
+                wakes,
+                compositeMs
+            ].join('~');
+        }).join('|')}::len:${topItems.length}`;
+        if (widgetsTimeRankingRenderSignature === nextSignature) return false;
+
+        widgetList.innerHTML = '';
+        const wakeThresholds = {
+            today: 15,
+            week: 50,
+            month: 100,
+            year: 500,
+            all: 1000
+        };
+        const wakeThreshold = wakeThresholds[range] || 15;
+        if (visualMode === 'pie') {
+            const pieItems = topItems.map((item) => {
+                const wakeCount = Math.max(0, Math.round(Number(item.wakeCount) || 0));
+                const compositeMs = Math.max(0, Math.round(Number(item.totalCompositeMs) || 0));
+                const metricValue = rankingType === 'wakes' ? wakeCount : compositeMs;
+                return {
+                    title: item.title || item.url || '--',
+                    url: item.url || '',
+                    count: metricValue
+                };
+            });
+            renderWidgetsMiniPieChart(widgetList, pieItems, emptyText, {
+                hintText: currentLang === 'zh_CN' ? '悬停查看占比' : 'Hover to view ratio',
+                formatValueLabel: (value) => {
+                    const safe = Math.max(0, Math.round(Number(value) || 0));
+                    if (rankingType === 'wakes') {
+                        return currentLang === 'zh_CN' ? `${safe} 次` : `${safe}x`;
+                    }
+                    return formatActiveTime(safe);
+                },
+                formatTotalLabel: (total) => {
+                    const safe = Math.max(0, Math.round(Number(total) || 0));
+                    if (rankingType === 'wakes') {
+                        return currentLang === 'zh_CN' ? `总计 ${safe} 次` : `Total ${safe}x`;
+                    }
+                    const totalTime = formatActiveTime(safe);
+                    return currentLang === 'zh_CN' ? `总计 ${totalTime}` : `Total ${totalTime}`;
+                }
+            });
+        } else {
+            topItems.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'time-tracking-widget-item ranking-item time-ranking-item';
+                row.tabIndex = 0;
+                row.setAttribute('role', 'button');
+
+                const rankNum = document.createElement('span');
+                rankNum.className = 'item-rank';
+                rankNum.textContent = `${index + 1}`;
+
+                const title = document.createElement('span');
+                title.className = 'item-title';
+                title.textContent = item.title || item.url || '--';
+                title.title = item.title || item.url || '--';
+
+                let metricValue = 0;
+                const wakeCount = Math.max(0, Math.round(Number(item.wakeCount) || 0));
+                const compositeMs = Math.max(0, Math.round(Number(item.totalCompositeMs) || 0));
+                const compositeText = formatActiveTime(compositeMs);
+                const wakeText = `${wakeCount}${currentLang === 'zh_CN' ? '次' : 'x'}`;
+
+                let wakeHighlight = '';
+                let timeHighlight = '';
+                if (rankingType === 'wakes') {
+                    metricValue = wakeCount;
+                    wakeHighlight = 'wakes-highlight ranking-primary';
+                    timeHighlight = `time-level-${getTimeGradientLevel(compositeMs, range)}`;
+                } else {
+                    metricValue = compositeMs;
+                    wakeHighlight = wakeCount >= wakeThreshold ? 'wakes-highlight' : '';
+                    timeHighlight = `time-level-${getTimeGradientLevel(compositeMs, range)} ranking-primary`;
+                }
+                row.dataset.metricValue = String(metricValue);
+
+                const metricsWrap = document.createElement('span');
+                metricsWrap.className = 'time-ranking-metrics';
+
+                const wakesEl = document.createElement('span');
+                wakesEl.className = `item-wakes ${wakeHighlight}`.trim();
+                wakesEl.textContent = wakeText;
+
+                const timeEl = document.createElement('span');
+                timeEl.className = `item-time ${timeHighlight}`.trim();
+                timeEl.textContent = compositeText;
+
+                metricsWrap.appendChild(wakesEl);
+                metricsWrap.appendChild(timeEl);
+
+                row.appendChild(rankNum);
+                row.appendChild(title);
+                row.appendChild(metricsWrap);
+
+                row.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    if (item.url) {
+                        openBookmarkFromWidgets(item.url, item.title || '');
+                    }
+                });
+                row.addEventListener('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (item.url) {
+                        openBookmarkFromWidgets(item.url, item.title || '');
+                    }
+                });
+
+                widgetList.appendChild(row);
+            });
+        }
+
+        widgetsTimeRankingRenderSignature = nextSignature;
+        return true;
+    } catch (error) {
+        console.warn('[Widgets] 更新时间排行小组件失败:', error);
+        const nextSignature = `error::${currentLang}::${range}::${rankingType}::${visualMode}`;
+        if (widgetsTimeRankingRenderSignature === nextSignature) return false;
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+        widgetsTimeRankingRenderSignature = nextSignature;
+        return true;
+    }
+}
+
 async function updateWidgetsAdditionsWeekWidget() {
     const widgetList = document.getElementById('widgetsAdditionsWeekWidgetList');
     if (!widgetList) return false;
     const loadingText = getWidgetsLoadingText();
 
-    const emptyText = getWidgetsAdditionsEmptyText();
     const currentRange = readWidgetsAdditionsRange();
+    const emptyText = getWidgetsAdditionsEmptyText(currentRange);
     const currentViewMode = getWidgetsEffectiveMiniViewMode(readWidgetsAdditionsViewMode(), currentRange);
-    const useMonthGrid = currentViewMode === 'week-grid' && currentRange === 'month30';
+    const useMiniGrid = currentViewMode === 'week-grid' && (currentRange === 'month' || currentRange === 'year');
     updateWidgetsAdditionsToggleLabel();
 
     try {
@@ -12644,7 +13778,7 @@ async function updateWidgetsAdditionsWeekWidget() {
         const additionsCalendar = window.bookmarkCalendarInstance?.bookmarksByDate || null;
 
         if (currentViewMode === 'week-grid') {
-            if (useMonthGrid) {
+            if (useMiniGrid) {
                 if (Array.isArray(allBookmarks) && allBookmarks.length > 0) {
                     trendPayload = readWidgetsAdditionsTrendData(currentRange);
                     total = Number(trendPayload?.total || 0);
@@ -12689,11 +13823,16 @@ async function updateWidgetsAdditionsWeekWidget() {
             return true;
         }
 
-        const monthGridPayload = useMonthGrid
+        const monthGridPayload = useMiniGrid && currentRange === 'month'
             ? buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
             : null;
-        const nextSignature = useMonthGrid
-            ? getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode)
+        const yearGridPayload = useMiniGrid && currentRange === 'year'
+            ? buildWidgetsMiniYearGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
+            : null;
+        const nextSignature = useMiniGrid
+            ? (currentRange === 'year'
+                ? getWidgetsYearGridSignature(yearGridPayload, currentRange, currentViewMode)
+                : getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode))
             : (currentViewMode === 'week-grid'
                 ? `range:${currentRange}::view:${currentViewMode}::${currentLang}::${dailyCounts.map((item) => Number(item?.count || 0)).join(',')}::${Number(total) || 0}`
                 : `range:${currentRange}::view:${currentViewMode}::${currentLang}::${(trendPayload?.points || []).map((item) => `${item?.dateKey || ''}:${Number(item?.count || 0)}`).join(',')}::${Number(total) || 0}`);
@@ -12701,18 +13840,36 @@ async function updateWidgetsAdditionsWeekWidget() {
 
         setWidgetsWeekWidgetHeaderCount('additions', total, currentRange);
         if (currentViewMode === 'week-grid') {
-            if (useMonthGrid) {
+            if (currentRange === 'year') {
+                renderWidgetsMiniYearGrid(widgetList, yearGridPayload, {
+                    range: currentRange,
+                    emptyText,
+                    onMonthClick: (monthItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(monthItem?.dateKey || monthItem?.date || '');
+                        if (!targetDateKey || Number(monthItem?.count || 0) <= 0) return;
+                        navigateToAdditionsReviewWeekFromWidgets({
+                            range: currentRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
+                    }
+                });
+            } else if (currentRange === 'month') {
                 renderWidgetsMiniMonthGrid(widgetList, monthGridPayload, {
                     range: currentRange,
                     emptyText,
                     onDayClick: (dayItem) => {
                         const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
                         if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
-                        navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                        navigateToAdditionsReviewWeekFromWidgets({
+                            range: currentRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
                     }
                 });
             } else {
-                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'additions');
+                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'additions', currentRange);
             }
         } else {
             renderWidgetsMiniLineChart(widgetList, trendPayload || buildWidgetsTrendPayloadFromBookmarksByDate(null, currentRange), {
@@ -12721,7 +13878,11 @@ async function updateWidgetsAdditionsWeekWidget() {
                 onPointClick: (point) => {
                     const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
                     if (!targetDateKey || Number(point?.count || 0) <= 0) return;
-                    navigateToAdditionsReviewWeekFromWidgets({ dateKey: targetDateKey });
+                    navigateToAdditionsReviewWeekFromWidgets({
+                        range: currentRange,
+                        dateKey: targetDateKey,
+                        drillDown: true
+                    });
                 }
             });
         }
@@ -12744,12 +13905,10 @@ async function updateWidgetsHistoryWeekWidget() {
     if (!widgetList) return false;
     const loadingText = getWidgetsLoadingText();
 
-    const emptyText = (i18n.widgetsHistoryWeekWidgetEmpty && i18n.widgetsHistoryWeekWidgetEmpty[currentLang])
-        ? i18n.widgetsHistoryWeekWidgetEmpty[currentLang]
-        : (currentLang === 'zh_CN' ? '暂无本周点击记录' : 'No clicks this week');
     const currentRange = readWidgetsHistoryRange();
+    const emptyText = getWidgetsHistoryEmptyText(currentRange);
     const currentViewMode = getWidgetsEffectiveMiniViewMode(readWidgetsHistoryViewMode(), currentRange);
-    const useMonthGrid = currentViewMode === 'week-grid' && currentRange === 'month30';
+    const useMiniGrid = currentViewMode === 'week-grid' && (currentRange === 'month' || currentRange === 'year');
     updateWidgetsHistoryToggleLabel();
 
     if (!widgetsHistoryWeekRenderSignature && !hasWidgetsWeekVisualRows(widgetList)) {
@@ -12764,7 +13923,7 @@ async function updateWidgetsHistoryWeekWidget() {
         let trendPayload = null;
 
         if (currentViewMode === 'week-grid') {
-            if (useMonthGrid) {
+            if (useMiniGrid) {
                 trendPayload = await readWidgetsHistoryTrendData(currentRange);
                 total = Number(trendPayload?.total || 0);
             } else if (window.browsingHistoryCalendarInstance?.bookmarksByDate) {
@@ -12797,11 +13956,16 @@ async function updateWidgetsHistoryWeekWidget() {
             return true;
         }
 
-        const monthGridPayload = useMonthGrid
+        const monthGridPayload = useMiniGrid && currentRange === 'month'
             ? buildWidgetsMiniMonthGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
             : null;
-        const nextSignature = useMonthGrid
-            ? getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode)
+        const yearGridPayload = useMiniGrid && currentRange === 'year'
+            ? buildWidgetsMiniYearGridPayloadFromTrendPoints(trendPayload?.points || [], { range: currentRange })
+            : null;
+        const nextSignature = useMiniGrid
+            ? (currentRange === 'year'
+                ? getWidgetsYearGridSignature(yearGridPayload, currentRange, currentViewMode)
+                : getWidgetsMonthGridSignature(monthGridPayload, currentRange, currentViewMode))
             : (currentViewMode === 'week-grid'
                 ? `range:${currentRange}::view:${currentViewMode}::${currentLang}::${dailyCounts.map((item) => Number(item?.count || 0)).join(',')}::${Number(total) || 0}`
                 : `range:${currentRange}::view:${currentViewMode}::${currentLang}::${(trendPayload?.points || []).map((item) => `${item?.dateKey || ''}:${Number(item?.count || 0)}`).join(',')}::${Number(total) || 0}`);
@@ -12809,18 +13973,36 @@ async function updateWidgetsHistoryWeekWidget() {
 
         setWidgetsWeekWidgetHeaderCount('history', total, currentRange);
         if (currentViewMode === 'week-grid') {
-            if (useMonthGrid) {
+            if (currentRange === 'year') {
+                renderWidgetsMiniYearGrid(widgetList, yearGridPayload, {
+                    range: currentRange,
+                    emptyText,
+                    onMonthClick: (monthItem) => {
+                        const targetDateKey = normalizeWidgetsDateKey(monthItem?.dateKey || monthItem?.date || '');
+                        if (!targetDateKey || Number(monthItem?.count || 0) <= 0) return;
+                        navigateToAdditionsHistoryWeekFromWidgets({
+                            range: currentRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
+                    }
+                });
+            } else if (currentRange === 'month') {
                 renderWidgetsMiniMonthGrid(widgetList, monthGridPayload, {
                     range: currentRange,
                     emptyText,
                     onDayClick: (dayItem) => {
                         const targetDateKey = normalizeWidgetsDateKey(dayItem?.dateKey || dayItem?.date || '');
                         if (!targetDateKey || Number(dayItem?.count || 0) <= 0) return;
-                        navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                        navigateToAdditionsHistoryWeekFromWidgets({
+                            range: currentRange,
+                            dateKey: targetDateKey,
+                            drillDown: true
+                        });
                     }
                 });
             } else {
-                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'history');
+                renderWidgetsWeekSummary(widgetList, dailyCounts, total, emptyText, 'history', currentRange);
             }
         } else {
             renderWidgetsMiniLineChart(widgetList, trendPayload || buildWidgetsTrendPayloadFromBookmarksByDate(null, currentRange), {
@@ -12829,7 +14011,11 @@ async function updateWidgetsHistoryWeekWidget() {
                 onPointClick: (point) => {
                     const targetDateKey = normalizeWidgetsDateKey(point?.dateKey || point?.date || '');
                     if (!targetDateKey || Number(point?.count || 0) <= 0) return;
-                    navigateToAdditionsHistoryWeekFromWidgets({ dateKey: targetDateKey });
+                    navigateToAdditionsHistoryWeekFromWidgets({
+                        range: currentRange,
+                        dateKey: targetDateKey,
+                        drillDown: true
+                    });
                 }
             });
         }
@@ -13105,6 +14291,12 @@ async function updateWidgetsViewData(options = {}) {
                 promise: updateWidgetsRankingWidget({ bypassVisualGate })
             });
         }
+        if (targets.includes('timeRanking')) {
+            tasks.push({
+                target: 'timeRanking',
+                promise: updateWidgetsTimeRankingWidget()
+            });
+        }
         if (targets.includes('additionsWeek')) {
             tasks.push({
                 target: 'additionsWeek',
@@ -13212,9 +14404,9 @@ function scheduleWidgetsTrendWarmup() {
         clearWidgetsTrendWarmupSchedule();
         if (currentView !== 'widgets') return null;
         try {
-            readWidgetsAdditionsTrendData('month30');
+            readWidgetsAdditionsTrendData('month');
         } catch (_) { }
-        readWidgetsHistoryTrendData('month30').catch(() => { });
+        readWidgetsHistoryTrendData('month').catch(() => { });
         return null;
     };
 
@@ -13333,17 +14525,17 @@ function startWidgetsViewRefresh() {
     widgetsLoadingGuardUntil = Date.now() + WIDGETS_LOADING_GUARD_WINDOW_MS;
     widgetsBootstrapRefreshUntil = Date.now() + WIDGETS_BOOTSTRAP_REFRESH_WINDOW_MS;
 
-    const fastTargets = ['recommend', 'ranking', 'additionsWeek', 'historyWeek', 'tracking', 'related'];
+    const fastTargets = ['recommend', 'ranking', 'timeRanking', 'additionsWeek', 'historyWeek', 'tracking', 'related'];
     const hasVisualRows = hasWidgetsAnyVisualRows();
     const shouldRunFullRefresh = shouldRunWidgetsFullRefreshOnOpen(hasVisualRows);
-    const initialTargets = shouldRunFullRefresh ? fastTargets : ['tracking'];
+    const initialTargets = shouldRunFullRefresh ? fastTargets : ['tracking', 'timeRanking'];
 
     if (shouldRunFullRefresh) {
         markWidgetsFullRefreshOnOpenNow();
     }
     markWidgetsDirty(initialTargets, { schedule: false });
     if (!hasVisualRows) {
-        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'additionsWeek', 'historyWeek', 'related']);
+        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'timeRanking', 'additionsWeek', 'historyWeek', 'related']);
     }
 
     requestAnimationFrame(() => {
@@ -13449,7 +14641,7 @@ function stopWidgetsViewRefresh() {
 
 function cycleWidgetsRankingRange() {
     const ranges = ['day', 'week', 'month', 'year', 'all'];
-    const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'day');
+    const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week');
     const currentIndex = Math.max(0, ranges.indexOf(currentRange));
     const nextRange = ranges[(currentIndex + 1) % ranges.length];
 
@@ -13463,9 +14655,45 @@ function cycleWidgetsRankingRange() {
     });
 }
 
+function cycleWidgetsTimeRankingRange() {
+    const currentRange = readWidgetsTimeRankingRange();
+    const nextRange = getNextWidgetsTimeRankingRange(currentRange);
+    writeWidgetsTimeRankingRange(nextRange);
+    updateWidgetsTimeRankingRangeToggleLabel(nextRange);
+
+    markWidgetsDirty('timeRanking', { schedule: false });
+    updateWidgetsViewData({ targets: ['timeRanking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换时间排行范围失败:', error);
+    });
+}
+
+function cycleWidgetsTimeRankingType() {
+    const currentType = readWidgetsTimeRankingType();
+    const nextType = getNextWidgetsTimeRankingType(currentType);
+    writeWidgetsTimeRankingType(nextType);
+    updateWidgetsTimeRankingTypeToggleLabel(nextType);
+
+    markWidgetsDirty('timeRanking', { schedule: false });
+    updateWidgetsViewData({ targets: ['timeRanking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换时间排行模式失败:', error);
+    });
+}
+
+function cycleWidgetsTimeRankingVisualMode() {
+    const currentMode = readWidgetsTimeRankingVisualMode();
+    const nextMode = currentMode === 'pie' ? 'list' : 'pie';
+    writeWidgetsTimeRankingVisualMode(nextMode);
+    updateWidgetsTimeRankingVisualToggleLabel(nextMode);
+
+    markWidgetsDirty('timeRanking', { schedule: false });
+    updateWidgetsViewData({ targets: ['timeRanking'], bypassVisualGate: true, allowDuringInteraction: true }).catch((error) => {
+        console.warn('[Widgets] 切换时间排行图表失败:', error);
+    });
+}
+
 function cycleWidgetsAdditionsRange() {
     const currentRange = readWidgetsAdditionsRange();
-    const nextRange = currentRange === 'week' ? 'month30' : 'week';
+    const nextRange = getNextWidgetsMiniRange(currentRange);
     writeWidgetsAdditionsRange(nextRange);
     updateWidgetsAdditionsToggleLabel();
     markWidgetsDirty('additionsWeek', { schedule: false });
@@ -13484,7 +14712,7 @@ function cycleWidgetsAdditionsViewMode() {
 
 function cycleWidgetsHistoryRange() {
     const currentRange = readWidgetsHistoryRange();
-    const nextRange = currentRange === 'week' ? 'month30' : 'week';
+    const nextRange = getNextWidgetsMiniRange(currentRange);
     writeWidgetsHistoryRange(nextRange);
     updateWidgetsHistoryToggleLabel();
     markWidgetsDirty('historyWeek', { schedule: false });
@@ -13549,12 +14777,16 @@ function initWidgetsView() {
 
     const trackingWidget = document.getElementById('widgetsTrackingWidget');
     const rankingWidget = document.getElementById('widgetsRankingWidget');
+    const timeRankingWidget = document.getElementById('widgetsTimeRankingWidget');
     const additionsWeekWidget = document.getElementById('widgetsAdditionsWeekWidget');
     const historyWeekWidget = document.getElementById('widgetsHistoryWeekWidget');
     const rankingSubdomainBtn = document.getElementById('widgetsRankingSubdomainToggleBtn');
     const rankingModeBtn = document.getElementById('widgetsRankingModeToggleBtn');
     const rankingRangeBtn = document.getElementById('widgetsRankingRangeToggleBtn');
     const rankingVisualBtn = document.getElementById('widgetsRankingVisualToggleBtn');
+    const timeRankingTypeBtn = document.getElementById('widgetsTimeRankingTypeToggleBtn');
+    const timeRankingRangeBtn = document.getElementById('widgetsTimeRankingRangeToggleBtn');
+    const timeRankingVisualBtn = document.getElementById('widgetsTimeRankingVisualToggleBtn');
     const additionsRangeBtn = document.getElementById('widgetsAdditionsRangeToggleBtn');
     const additionsViewBtn = document.getElementById('widgetsAdditionsViewToggleBtn');
     const historyRangeBtn = document.getElementById('widgetsHistoryRangeToggleBtn');
@@ -13570,7 +14802,7 @@ function initWidgetsView() {
     const widgetsOpenStabilizingCheckbox = document.getElementById('widgetsOpenStabilizingCheckbox');
     const widgetsSortList = document.getElementById('widgetsSortList');
 
-    if (!trackingWidget && !rankingWidget && !additionsWeekWidget && !historyWeekWidget) {
+    if (!trackingWidget && !rankingWidget && !timeRankingWidget && !additionsWeekWidget && !historyWeekWidget) {
         return;
     }
 
@@ -13667,11 +14899,25 @@ function initWidgetsView() {
         });
     }
 
+    if (timeRankingWidget) {
+        timeRankingWidget.addEventListener('click', (e) => {
+            const target = e.target instanceof Element ? e.target : null;
+            if (target && (target.closest('#widgetsTimeRankingTypeToggleBtn') || target.closest('#widgetsTimeRankingRangeToggleBtn') || target.closest('#widgetsTimeRankingVisualToggleBtn') || target.closest('.time-tracking-widget-item') || target.closest('.widgets-pie-shell') || target.closest('a'))) return;
+            navigateToAdditionsTrackingRankingFromWidgets({
+                range: readWidgetsTimeRankingRange(),
+                type: readWidgetsTimeRankingType()
+            });
+        });
+    }
+
     if (additionsWeekWidget) {
         additionsWeekWidget.addEventListener('click', (e) => {
             const target = e.target instanceof Element ? e.target : null;
             if (target && (target.closest('button') || target.closest('a'))) return;
-            navigateToAdditionsReviewWeekFromWidgets();
+            navigateToAdditionsReviewWeekFromWidgets({
+                range: readWidgetsAdditionsRange(),
+                drillDown: false
+            });
         });
     }
 
@@ -13679,7 +14925,10 @@ function initWidgetsView() {
         historyWeekWidget.addEventListener('click', (e) => {
             const target = e.target instanceof Element ? e.target : null;
             if (target && (target.closest('button') || target.closest('a'))) return;
-            navigateToAdditionsHistoryWeekFromWidgets();
+            navigateToAdditionsHistoryWeekFromWidgets({
+                range: readWidgetsHistoryRange(),
+                drillDown: false
+            });
         });
     }
 
@@ -13708,6 +14957,27 @@ function initWidgetsView() {
         rankingVisualBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             cycleWidgetsRankingVisualMode();
+        });
+    }
+
+    if (timeRankingTypeBtn) {
+        timeRankingTypeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsTimeRankingType();
+        });
+    }
+
+    if (timeRankingRangeBtn) {
+        timeRankingRangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsTimeRankingRange();
+        });
+    }
+
+    if (timeRankingVisualBtn) {
+        timeRankingVisualBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleWidgetsTimeRankingVisualMode();
         });
     }
 
@@ -13884,6 +15154,9 @@ function initWidgetsView() {
     updateWidgetsRankingRangeToggleLabel();
     updateWidgetsRankingModeToggleLabel();
     updateWidgetsRankingVisualToggleLabel();
+    updateWidgetsTimeRankingTypeToggleLabel();
+    updateWidgetsTimeRankingRangeToggleLabel();
+    updateWidgetsTimeRankingVisualToggleLabel();
     updateWidgetsAdditionsToggleLabel();
     updateWidgetsHistoryToggleLabel();
     updateWidgetsSmartSortToggleUI(currentView);
@@ -13899,7 +15172,7 @@ function renderWidgetsView() {
     const hasVisualRows = hasWidgetsAnyVisualRows();
     if (!hasVisualRows) {
         widgetsLoadingGuardUntil = Date.now() + WIDGETS_LOADING_GUARD_WINDOW_MS;
-        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'additionsWeek', 'historyWeek', 'related']);
+        paintWidgetsLoadingPlaceholders(['tracking', 'ranking', 'timeRanking', 'additionsWeek', 'historyWeek', 'related']);
     }
 
     startWidgetsViewRefresh();
@@ -26375,6 +27648,7 @@ function setupRealtimeMessageListener() {
 
         if (message.action === 'trackingDataUpdated') {
             markWidgetsDirty('tracking', { delayMs: 80 });
+            markWidgetsDirty('timeRanking', { delayMs: 420 });
             // T值数据更新，增量更新缓存
             if (message.url || message.title) {
                 // 增量更新缓存（不清除整个缓存，只更新变化的条目）

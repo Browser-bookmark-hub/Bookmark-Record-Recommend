@@ -2700,7 +2700,8 @@ html.layout-resizing *::after {
 
 /* 两个周统计卡片：首个按钮贴右，形成稳定的右上角按钮区块 */
 #widgetsAdditionsRangeToggleBtn,
-#widgetsHistoryRangeToggleBtn {
+#widgetsHistoryRangeToggleBtn,
+#widgetsTimeRankingTypeToggleBtn {
     margin-left: auto;
 }
 
@@ -2729,12 +2730,14 @@ html.layout-resizing *::after {
     outline-offset: 2px;
 }
 
-#widgetsRankingWidget .time-tracking-widget-header {
+#widgetsRankingWidget .time-tracking-widget-header,
+#widgetsTimeRankingWidget .time-tracking-widget-header {
     align-items: center !important;
     min-height: 22px;
 }
 
-#widgetsRankingWidget .time-tracking-widget-header>i {
+#widgetsRankingWidget .time-tracking-widget-header>i,
+#widgetsTimeRankingWidget .time-tracking-widget-header>i {
     transform: none;
     align-self: center;
     display: inline-flex;
@@ -2744,7 +2747,8 @@ html.layout-resizing *::after {
     line-height: 20px;
 }
 
-#widgetsRankingWidgetTitle {
+#widgetsRankingWidgetTitle,
+#widgetsTimeRankingWidgetTitle {
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
@@ -2753,7 +2757,8 @@ html.layout-resizing *::after {
     min-height: 20px;
 }
 
-#widgetsRankingWidget .widget-header-action-btn {
+#widgetsRankingWidget .widget-header-action-btn,
+#widgetsTimeRankingWidget .widget-header-action-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2769,7 +2774,10 @@ html.layout-resizing *::after {
 #widgetsRankingWidget .widgets-subdomain-toggle-btn,
 #widgetsRankingWidget .widgets-mode-toggle-btn,
 #widgetsRankingWidget .widgets-range-toggle-btn,
-#widgetsRankingWidget .widgets-visual-toggle-btn {
+#widgetsRankingWidget .widgets-visual-toggle-btn,
+#widgetsTimeRankingWidget .widgets-mode-toggle-btn,
+#widgetsTimeRankingWidget .widgets-range-toggle-btn,
+#widgetsTimeRankingWidget .widgets-visual-toggle-btn {
     line-height: 20px;
 }
 
@@ -2842,6 +2850,84 @@ html.layout-resizing *::after {
 .time-tracking-widget-item.ranking-item .item-time {
     margin-left: auto;
     padding-left: 8px;
+}
+
+.time-tracking-widget-item.time-ranking-item {
+    position: relative;
+    gap: 4px;
+    padding-right: 94px;
+}
+
+.time-tracking-widget-item.time-ranking-item .time-ranking-metrics {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    width: 82px;
+    min-width: 82px;
+    height: 16px;
+    display: grid;
+    grid-template-columns: 40px 40px;
+    column-gap: 2px;
+    align-items: center;
+    padding: 0 1px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 42%, transparent);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    opacity: 0.94;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0);
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.time-tracking-widget-item.time-ranking-item:hover .time-ranking-metrics,
+.time-tracking-widget-item.time-ranking-item:focus-within .time-ranking-metrics {
+    opacity: 0.94;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0);
+    background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 24%, var(--border-color));
+}
+
+.time-tracking-widget-item.time-ranking-item:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 34%, transparent);
+}
+
+.time-tracking-widget-item.time-ranking-item .item-title {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+.time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-wakes,
+.time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-time {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    font-size: 11px;
+    line-height: 1.2;
+    flex-shrink: 0;
+}
+
+.time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-wakes {
+    color: var(--text-tertiary);
+    min-width: 0;
+    text-align: center;
+    transform: translateX(4px);
+}
+
+.time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-time {
+    margin-left: 0;
+    padding-left: 0;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    text-align: center;
 }
 
 .time-tracking-widget-item .item-rank {
@@ -3364,6 +3450,11 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabili
     padding: 6px 8px 2px;
 }
 
+/* 时间排行右侧轨道与“点击记录”一致（同右边距） */
+#widgetsTimeRankingWidget {
+    padding-right: 8px;
+}
+
 #widgetsAdditionsWeekWidget .time-tracking-widget-header,
 #widgetsHistoryWeekWidget .time-tracking-widget-header {
     margin-bottom: 3px;
@@ -3388,6 +3479,12 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabili
 #widgetsAdditionsWeekWidget .widgets-mini-month-grid-wrap,
 #widgetsHistoryWeekWidget .widgets-mini-month-grid-wrap {
     min-height: 128px;
+    padding: 7px 8px 6px;
+}
+
+#widgetsAdditionsWeekWidget .widgets-mini-year-grid-wrap,
+#widgetsHistoryWeekWidget .widgets-mini-year-grid-wrap {
+    min-height: 118px;
     padding: 7px 8px 6px;
 }
 
@@ -3568,6 +3665,62 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabili
 }
 
 .widgets-mini-month-grid-day-count.is-zero {
+    color: var(--text-tertiary);
+    font-weight: 500;
+}
+
+.widgets-mini-year-grid-months {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.widgets-mini-year-grid-month {
+    min-height: 30px;
+    border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--bg-tertiary) 80%, transparent);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 3px 1px;
+    transition: border-color 0.14s ease, transform 0.14s ease, background 0.14s ease;
+}
+
+.widgets-mini-year-grid-month.is-zero {
+    opacity: 0.72;
+}
+
+.widgets-mini-year-grid-month.is-current-month {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 62%, transparent);
+}
+
+.widgets-mini-year-grid-month.is-clickable {
+    cursor: pointer;
+}
+
+.widgets-mini-year-grid-month.is-clickable:hover {
+    border-color: var(--accent-primary);
+    transform: translateY(-1px);
+}
+
+.widgets-mini-year-grid-month-label {
+    font-size: 10px;
+    line-height: 1;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.widgets-mini-year-grid-month-count {
+    font-size: 10px;
+    line-height: 1;
+    color: var(--accent-primary);
+    font-weight: 700;
+}
+
+.widgets-mini-year-grid-month-count.is-zero {
     color: var(--text-tertiary);
     font-weight: 500;
 }
@@ -3943,9 +4096,9 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
 }
 
 .widgets-related-level2-row {
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: clamp(10px, 2.6vw, 22px);
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    column-gap: clamp(6px, 1.8vw, 12px);
     row-gap: 8px;
     margin-top: 6px;
 }
@@ -4010,10 +4163,11 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
 }
 
 #widgetsRelatedWidget .widgets-related-secondary-item {
-    min-width: clamp(92px, 28%, 150px);
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 8px;
+    padding-right: 8px;
     justify-content: center;
 }
 
@@ -4112,6 +4266,10 @@ html.side-panel-mode #widgetsHistoryWeekWidget {
     padding: 4px 6px 1px;
 }
 
+html.side-panel-mode #widgetsTimeRankingWidget {
+    padding-right: 6px;
+}
+
 html.side-panel-mode #widgetsAdditionsWeekWidget .time-tracking-widget-list,
 html.side-panel-mode #widgetsHistoryWeekWidget .time-tracking-widget-list {
     min-height: 0;
@@ -4131,6 +4289,12 @@ html.side-panel-mode #widgetsHistoryWeekWidget .widgets-week-days-row {
 html.side-panel-mode #widgetsAdditionsWeekWidget .widgets-mini-month-grid-wrap,
 html.side-panel-mode #widgetsHistoryWeekWidget .widgets-mini-month-grid-wrap {
     min-height: 114px;
+    padding: 6px 6px 5px;
+}
+
+html.side-panel-mode #widgetsAdditionsWeekWidget .widgets-mini-year-grid-wrap,
+html.side-panel-mode #widgetsHistoryWeekWidget .widgets-mini-year-grid-wrap {
+    min-height: 106px;
     padding: 6px 6px 5px;
 }
 
@@ -4157,6 +4321,23 @@ html.side-panel-mode .widgets-mini-month-grid-day-number {
 }
 
 html.side-panel-mode .widgets-mini-month-grid-day-count {
+    font-size: 8px;
+}
+
+html.side-panel-mode .widgets-mini-year-grid-months {
+    gap: 4px;
+}
+
+html.side-panel-mode .widgets-mini-year-grid-month {
+    min-height: 26px;
+    border-radius: 6px;
+}
+
+html.side-panel-mode .widgets-mini-year-grid-month-label {
+    font-size: 9px;
+}
+
+html.side-panel-mode .widgets-mini-year-grid-month-count {
     font-size: 8px;
 }
 
@@ -4208,7 +4389,7 @@ html.side-panel-mode .widgets-related-level1-row {
 }
 
 html.side-panel-mode .widgets-related-level2-row {
-    column-gap: clamp(6px, 1.8vw, 12px);
+    column-gap: 4px;
     row-gap: 4px;
     margin-top: 3px;
 }
@@ -4230,9 +4411,10 @@ html.side-panel-mode #widgetsRelatedWidget .widgets-related-folder-item {
 }
 
 html.side-panel-mode #widgetsRelatedWidget .widgets-related-secondary-item {
-    min-width: clamp(72px, 34%, 118px);
-    padding-left: 11px;
-    padding-right: 11px;
+    width: 100%;
+    min-width: 0;
+    padding-left: 6px;
+    padding-right: 6px;
 }
 
 html.side-panel-mode .widgets-related-level1-row .widgets-related-primary-item {
