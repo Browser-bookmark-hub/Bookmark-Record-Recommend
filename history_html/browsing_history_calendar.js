@@ -2,8 +2,8 @@
 // 默认月视图，每个视图下方显示书签列表
 
 // Unified Export Folder Paths - 统一的导出文件夹路径（根据语言动态选择）
-const getBrowsingExportRootFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签记录 & 推荐' : 'Bookmark Records & Recommendations';
-const getBrowsingExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '点击记录' : 'Click History';
+const getBrowsingExportRootFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签记录与推荐' : 'Bookmark Record and Recommend';
+const getBrowsingExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签点击记录' : 'Bookmark Click Records';
 
 // 翻译辅助函数
 function getI18nDict() {
@@ -5798,7 +5798,7 @@ class BrowsingHistoryCalendar {
         // 创建tooltip（使用与其他按钮相同的样式）
         const tooltip = document.createElement('span');
         tooltip.className = 'btn-tooltip';
-        tooltip.textContent = currentLang === 'zh_CN' ? '导出记录' : 'Export Records';
+        tooltip.textContent = currentLang === 'zh_CN' ? '导出书签点击记录' : 'Export Bookmark Click Records';
         btn.appendChild(tooltip);
 
         // 点击打开导出弹窗，并记录当前范围信息
@@ -6284,20 +6284,20 @@ class BrowsingHistoryCalendar {
         let prefixEn = '';
         switch (mode) {
             case 'records':
-                prefix = '现记录';
-                prefixEn = 'Records Only';
+                prefix = '书签点击记录';
+                prefixEn = 'bookmark_click_records';
                 break;
             case 'context':
-                prefix = '现记录+上下文';
-                prefixEn = 'Context Export';
+                prefix = '书签点击记录_上下文';
+                prefixEn = 'bookmark_click_context';
                 break;
             case 'collection':
-                prefix = '集合导出';
-                prefixEn = 'Collection Export';
+                prefix = '书签点击记录_集合';
+                prefixEn = 'bookmark_click_collection';
                 break;
             default:
-                prefix = '现记录';
-                prefixEn = 'Records Only';
+                prefix = '书签点击记录';
+                prefixEn = 'bookmark_click_records';
         }
 
         // 根据当前语言选择前缀

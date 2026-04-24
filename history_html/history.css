@@ -3789,6 +3789,16 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
     background: var(--accent-light);
 }
 
+.sync-file-item-virtual {
+    border-style: dashed;
+    color: var(--text-tertiary);
+    background: color-mix(in srgb, var(--bg-elevated) 86%, var(--bg-secondary) 14%);
+}
+
+.sync-file-item-virtual:hover {
+    color: var(--text-secondary);
+}
+
 .sync-file-kind {
     font-size: 10px;
     padding: 1px 5px;

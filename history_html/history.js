@@ -92,7 +92,6 @@ let syncMarkdownGlobalTooltipBound = false;
 let syncMarkdownGlobalTooltipActiveBtn = null;
 let syncRepoCollapsed = false;
 let syncPushPackageInfoVisible = false;
-let syncRawHighVolumeInfoVisible = false;
 let syncPullPolicyInfoVisible = false;
 let syncControlPanelCollapsed = false;
 let syncControlPanelCollapseBound = false;
@@ -116,14 +115,13 @@ const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2
 const SYNC_REALTIME_MARKDOWN_RENDER = true;
 const SYNC_PROVIDER_GITHUB = 'github';
 const SYNC_PROVIDER_LOCAL = 'local';
-const SYNC_GITHUB_DEFAULT_BASE_PATH = 'bookmark-record-recommend/sync';
-const SYNC_GITHUB_LEGACY_BASE_PATH = 'sync/bookmark-record-recommend';
+const SYNC_GITHUB_DEFAULT_BASE_PATH = 'bookmark_record_and_recommend_sync';
 const SYNC_GITHUB_RESULTS_SUBDIR = 'ai/results';
 const SYNC_GITHUB_INPUT_DOCS_SUBDIR = 'ai/input-docs';
 const SYNC_GITHUB_DATA_SNAPSHOTS_ROOT = 'data/snapshots';
 const SYNC_AGENT_DOC_ID = '__agent_rules__';
+const SYNC_DEFAULT_RULE_PREVIEW_ID = '__default_rule_preview__';
 const SYNC_AGENT_DOC_NAME = 'AGENTS.md';
-const SYNC_RULE_DOC_NAME_ALIASES = Object.freeze(['agents.md', 'agent.md', 'claude.md']);
 const SYNC_DOC_KIND_AGENT = 'agent';
 const SYNC_DOC_KIND_INPUT = 'input';
 const SYNC_DOC_KIND_RESULT = 'result';
@@ -163,7 +161,7 @@ const SYNC_AGENT_FORMAT_GUIDE_EN = `## 8. Result Markdown Format (Must Follow Lo
   \`> [!note] Title\`
   \`> Content\`
 - Do not use \`[[wikilink]]\` syntax.`;
-const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark-Record-Recommend AI 规则
+const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend AI 规则
 
 ## 1. 身份与目标
 我是你的书签助理。目标：
@@ -172,37 +170,47 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark-Record-Recommend AI �
 - 打开任意书签时，能还原它的上下文
 
 ## 2. 可读输入（路径白名单 + Git）
-- data/latest.json                  # 6 个数据桶的当前快照
-- data/snapshots/current.json       # 覆盖快照（每次推送覆盖，历史以 Git commits 为准）
-- <rules-file>.md            # 本文件（根目录，可改名，如 CLAUDE.md）
-- ai/input-docs/...          # 用户本地草稿
-- GitHub Commits API         # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
-- GitHub Compare API         # /repos/{owner}/{repo}/compare/{base}...{head}
-- GitHub Commit API          # /repos/{owner}/{repo}/commits/{sha}
+- data/manifest.json                # AI 入口索引：pushId、文件列表、hash、读取顺序
+- data/packages/bookmark-record.json
+- data/packages/bookmark-recommend.json
+- data/raw-native/bookmarks-tree.json
+- data/raw-native/history-visits.jsonl
+- AGENTS.md                         # 本文件（同步根目录固定规则文件）
+- ai/input-docs/...                 # 用户本地草稿
+- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
+- GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
 
-## 3. Git 优先流程（先看差异，再读快照）
-1. 先读取 basePath 下最近 commits（建议最近 20 条），按时间排序。
-2. 对最新 commit 与上一个 commit 执行 compare，提取 changed files、additions/deletions、patch 摘要。
-3. 优先分析变更路径：\`data/latest.json\`、\`ai/input-docs/*.md\`、\`ai/results/**/*.md\`。
-4. 输出结论时，必须标注引用的 commit SHA（短 SHA）与对应路径。
-5. 当 Git API 不可用时，退回 \`data/latest.json\` + \`data/snapshots/current.json\` 继续分析。
+## 3. Git 优先流程（按 pushId 聚合 commits）
+1. 先读取 \`data/manifest.json\`，记录 \`pushId\` 与 \`readOrder\`。
+2. 读取 basePath 下最近 commits（建议最近 30 条），按 commit message 中的 \`[sync:<pushId>]\` 聚合同一次用户推送。
+3. 对同一 pushId 的 commit group：compare base = 最早 commit 的 parent，head = 最晚 commit。
+4. 从 compare 结果判断哪些业务文件变化；需要正文时再按 manifest.readOrder 读取。
+5. 输出结论时，必须标注引用的 pushId、短 commit SHA 与对应路径。
 
-## 4. 必写输出（路径白名单）
+## 4. 数据口径与边界
+- \`bookmark-record.data.clickRecords\` 不是完整浏览器历史；它是从 Chrome History API 或缓存中筛选出的“能匹配当前书签”的访问记录。匹配方式、上限与截断状态看 \`bookmark-record.data.clickRecords.meta\` 和 manifest。
+- \`data/raw-native/history-visits.jsonl\` 也是书签相关访问事实源，不要当作用户完整浏览历史。
+- 时间捕捉只使用 \`bookmark-record.data.timeTracking.rankings\` 里已导出的当前时间排行；正在捕捉的活跃会话不会进入推送包，不要假设它存在，也不要从原始 tracking 明细重算一套排行。
+- 推荐分数缓存状态看 \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`：包括 \`recommendScoresTime\`、\`staleMeta\`、\`ensureResult\`、\`templateScoreCount\`、\`templateScoreRatio\`。template 分是临时可用分，解释优先级时要标注不确定性。
+- \`recommend_reviews_similar\` 可能为 null；必须查看 \`recommend_reviews_similar_meta\` 的 \`available/source/skippedReason\`，不要把“未生成相似候选”解释成“没有相似书签”。
+
+## 5. 必写输出（路径白名单）
 - ai/results/latest.md                       # 覆盖写
 - ai/results/daily/<YYYY-MM-DD>.md           # 日报
 - ai/results/weekly/<YYYY-Www>.md            # 周报
 - ai/results/monthly/<YYYY-MM>.md            # 月报
 - ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # 追加写（可选）
 
-## 5. 重要性权重（对"重要"的定义）
+## 6. 重要性权重（对"重要"的定义）
 1. **待复习**（recommend_reviews / recommend_postponed）= 最高优先级。
    这是用户提前标注过的"我喜欢这类内容"的强信号；
-   payload 里 recommend_reviews_similar 已按文件夹 + 标题相似度给出 Top 5 候选，请优先引用。
-2. 高频点击 + 长时间捕捉（timeTracking.rankings.composite）= 次高。
-3. 近 7 天新加但未打开（bookmarkRecords.additionsRecords vs clickRecords）= 需要提醒。
-4. 屏蔽（recommend_blocked.bookmarks/folders/domains）= 永远排除。
+   如果 recommend_reviews_similar_meta.available=true，recommend_reviews_similar 已按文件夹 + 标题相似度给出候选，请优先引用；否则说明 skippedReason。
+2. 高频点击 + 当前时间排行（bookmark-record.data.timeTracking.rankings.composite）= 次高。
+3. 近 7 天新加但未打开（bookmark-record.data.additionsRecords vs clickRecords）= 需要提醒。
+4. 屏蔽（bookmark-recommend.data.recommendEvents.recommend_blocked）= 永远排除。
 
-## 6. 输出模板
+## 7. 输出模板
 ### latest.md
 \`\`\`md
 # 现在该看什么
@@ -213,19 +221,19 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark-Record-Recommend AI �
 \`\`\`
 
 ### daily / weekly / monthly
-见本计划书 §5。
+按本文件第 6 节的重要性权重输出。
 
-## 7. 风格与禁忌
+## 8. 风格与禁忌
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
 - 引用书签时给出：\`(bookmarkId)\` + 标题 + 所在文件夹路径。
-- 参考 recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
+- 参考 bookmark-recommend.data.recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
   不同模式的"重要"定义会略有偏移。
 - 不泄露 Token / Owner / Repo 等同步配置字段。
 
 ${SYNC_AGENT_FORMAT_GUIDE_ZH}
 `;
 const SYNC_AGENT_DOC_TEMPLATE_ZH = SYNC_AGENT_DOC_TEMPLATE;
-const SYNC_AGENT_DOC_TEMPLATE_EN = `# AGENTS.md — Bookmark-Record-Recommend AI Rules
+const SYNC_AGENT_DOC_TEMPLATE_EN = `# AGENTS.md — Bookmark Record and Recommend AI Rules
 
 ## 1. Role & Goal
 You are the bookmark assistant. Goals:
@@ -234,35 +242,46 @@ You are the bookmark assistant. Goals:
 - Recover context for any selected bookmark
 
 ## 2. Readable Inputs (Path Allowlist + Git)
-- data/latest.json                  # current snapshot of 6 data buckets
-- data/snapshots/current.json       # overwrite snapshot (history tracked by Git commits)
-- <rules-file>.md           # this file at repo root (rename allowed, e.g. CLAUDE.md)
-- ai/input-docs/...         # local user drafts
-- GitHub Commits API        # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
-- GitHub Compare API        # /repos/{owner}/{repo}/compare/{base}...{head}
-- GitHub Commit API         # /repos/{owner}/{repo}/commits/{sha}
+- data/manifest.json                # AI entry index: pushId, files, hashes, read order
+- data/packages/bookmark-record.json
+- data/packages/bookmark-recommend.json
+- data/raw-native/bookmarks-tree.json
+- data/raw-native/history-visits.jsonl
+- AGENTS.md                         # this required rule file at the sync root
+- ai/input-docs/...                 # local user drafts
+- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
+- GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
 
-## 3. Git-First Workflow (Diff before Snapshot)
-1. Read recent commits under \`basePath\` first (recommend latest 20).
-2. Compare \`HEAD\` vs previous commit and extract changed paths, additions/deletions, and patch summary.
-3. Prioritize changed files: \`data/latest.json\`, \`ai/input-docs/*.md\`, and \`ai/results/**/*.md\`.
-4. Always cite short commit SHA and file paths in conclusions.
-5. If Git APIs are unavailable, fall back to \`data/latest.json\` + \`data/snapshots/current.json\`.
+## 3. Git-First Workflow (group commits by pushId)
+1. Read \`data/manifest.json\` first and capture \`pushId\` plus \`readOrder\`.
+2. Read recent commits under \`basePath\` (recommend latest 30) and group commits that share \`[sync:<pushId>]\` in the message.
+3. For one pushId group: compare base = earliest commit parent, head = latest commit.
+4. Use compare to identify changed business files; read package bodies only when needed, in manifest.readOrder.
+5. Always cite pushId, short commit SHA, and file paths in conclusions.
 
-## 4. Required Outputs (Path Allowlist)
+## 4. Data Semantics and Limits
+- \`bookmark-record.data.clickRecords\` is not full browser history. It is the subset of Chrome History API/cache records that can be matched back to current bookmarks. Check \`bookmark-record.data.clickRecords.meta\` and manifest for match methods, limits, and truncation.
+- \`data/raw-native/history-visits.jsonl\` is also bookmark-related visit facts, not the user's complete browsing history.
+- For time tracking, use only the exported current ranking at \`bookmark-record.data.timeTracking.rankings\`. Active in-progress capture sessions are intentionally not pushed; do not assume they exist, and do not recompute a separate ranking from raw tracking details.
+- For recommendation score freshness, read \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`: \`recommendScoresTime\`, \`staleMeta\`, \`ensureResult\`, \`templateScoreCount\`, and \`templateScoreRatio\`. Template scores are temporary usable scores; mark uncertainty when interpreting priority.
+- \`recommend_reviews_similar\` may be null. Always inspect \`recommend_reviews_similar_meta.available/source/skippedReason\`; do not treat missing similar candidates as proof that no similar bookmarks exist.
+
+## 5. Required Outputs (Path Allowlist)
 - ai/results/latest.md                       # overwrite
 - ai/results/daily/<YYYY-MM-DD>.md           # daily report
 - ai/results/weekly/<YYYY-Www>.md            # weekly report
 - ai/results/monthly/<YYYY-MM>.md            # monthly report
 - ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # append-only run log (optional)
 
-## 5. Importance Weights
+## 6. Importance Weights
 1. Review queue (recommend_reviews / recommend_postponed) = highest priority
-2. High clicks + strong time-tracking signals = second priority
+   If recommend_reviews_similar_meta.available=true, cite recommend_reviews_similar; otherwise explain skippedReason.
+2. High clicks + exported current time-ranking signals = second priority
 3. Newly added but unopened in last 7 days = reminder candidates
 4. Blocked bookmarks/folders/domains = always excluded
 
-## 6. Output Structure
+## 7. Output Structure
 ### latest.md
 \`\`\`md
 # What to Read Now
@@ -273,9 +292,9 @@ You are the bookmark assistant. Goals:
 \`\`\`
 
 ### daily / weekly / monthly
-Follow the same importance strategy in section 5.
+Follow the same importance strategy in section 6.
 
-## 7. Style & Safety
+## 8. Style & Safety
 - Output Markdown only
 - Include (bookmarkId), title, and folder path when citing bookmarks
 - Respect recommend mode (default / archaeology / consolidate / wander / priority)
@@ -290,11 +309,16 @@ function getDefaultSyncAgentDocTemplate(lang = currentLang) {
         : SYNC_AGENT_DOC_TEMPLATE_ZH;
 }
 
-const SYNC_GITHUB_DATA_LATEST_PATH = 'data/latest.json';
-const SYNC_GITHUB_DATA_SNAPSHOT_PATH = `${SYNC_GITHUB_DATA_SNAPSHOTS_ROOT}/current.json`;
+const SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH = 'data/latest.json';
+const SYNC_GITHUB_DATA_MANIFEST_PATH = 'data/manifest.json';
+const SYNC_GITHUB_PACKAGE_BOOKMARK_RECORD_PATH = 'data/packages/bookmark-record.json';
+const SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH = 'data/packages/bookmark-recommend.json';
+const SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH = 'data/raw-native/bookmarks-tree.json';
+const SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH = 'data/raw-native/history-visits.jsonl';
 const SYNC_GITHUB_META_STATE_PATH = 'meta/sync_state.json';
 const SYNC_GITHUB_PULL_MAX_FILES = 60;
 const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
+const SYNC_HISTORY_VISITS_EXPORT_LIMIT = 50000;
 
 const SYNC_DEFAULT_CONFIG = Object.freeze({
     remoteProvider: SYNC_PROVIDER_GITHUB,
@@ -303,62 +327,36 @@ const SYNC_DEFAULT_CONFIG = Object.freeze({
     githubRepoName: '',
     githubRepoBranch: 'main',
     githubRepoBasePath: SYNC_GITHUB_DEFAULT_BASE_PATH,
-    recommendPool: true,
-    recommendEvents: true,
-    bookmarkRecords: true,
-    timeTracking: true,
-    bookmarkTreeSnapshot: true,
-    rawHighVolume: false
+    bookmarkRecommend: true,
+    bookmarkRecord: true,
+    rawNative: true
 });
 syncConfigState = { ...SYNC_DEFAULT_CONFIG };
 
 const SYNC_PACKAGE_FIELDS = Object.freeze([
     {
-        key: 'recommendPool',
+        key: 'bookmarkRecommend',
         checkboxId: 'syncPushPackageRecommend',
         textId: 'syncPushPackageRecommendText',
-        i18nKey: 'syncPushPackageRecommendPoolText',
+        i18nKey: 'syncPushPackageBookmarkRecommendText',
         defaultEnabled: true
     },
     {
-        key: 'recommendEvents',
-        checkboxId: 'syncPushPackageWidgets',
-        textId: 'syncPushPackageWidgetsText',
-        i18nKey: 'syncPushPackageRecommendEventsText',
-        defaultEnabled: true
-    },
-    {
-        key: 'bookmarkRecords',
+        key: 'bookmarkRecord',
         checkboxId: 'syncPushPackageRecords',
         textId: 'syncPushPackageRecordsText',
-        i18nKey: 'syncPushPackageBookmarkRecordsText',
+        i18nKey: 'syncPushPackageBookmarkRecordText',
         defaultEnabled: true
     },
     {
-        key: 'timeTracking',
-        checkboxId: 'syncPushPackageTracking',
-        textId: 'syncPushPackageTrackingText',
-        i18nKey: 'syncPushPackageTimeTrackingText',
-        defaultEnabled: true
-    },
-    {
-        key: 'bookmarkTreeSnapshot',
+        key: 'rawNative',
         checkboxId: 'syncPushPackageBookmarkTreeSnapshot',
         textId: 'syncPushPackageBookmarkTreeSnapshotText',
-        i18nKey: 'syncPushPackageBookmarkTreeSnapshotText',
+        i18nKey: 'syncPushPackageRawNativeText',
         defaultEnabled: true
-    },
-    {
-        key: 'rawHighVolume',
-        checkboxId: 'syncPushPackageRawHighVolume',
-        textId: 'syncPushPackageRawHighVolumeText',
-        i18nKey: 'syncPushPackageRawHighVolumeText',
-        defaultEnabled: false
     }
 ]);
-const SYNC_DYNAMIC_PACKAGE_FIELDS = Object.freeze(
-    SYNC_PACKAGE_FIELDS.filter((field) => field.key === 'bookmarkTreeSnapshot' || field.key === 'rawHighVolume')
-);
+const SYNC_DYNAMIC_PACKAGE_FIELDS = Object.freeze([]);
 
 const SYNC_DEFAULT_DOCS = Object.freeze([]);
 
@@ -3293,39 +3291,21 @@ const i18n = {pageTitle: {
     },syncPushPackagePathTitle: {
         'zh_CN': '推送到云端路径结构',
         'en': 'Cloud Path Layout'
-    },syncPushPackageRecommendPoolText: {
-        'zh_CN': '推荐数据池（S 值与候选池）',
-        'en': 'Recommendation pool (S-score and candidate pool)'
-    },syncPushPackageRecommendEventsText: {
-        'zh_CN': '推荐行为事件（复习/翻卡/跳过/屏蔽）',
-        'en': 'Recommendation events (review/flip/skip/block)'
-    },syncPushPackageBookmarkRecordsText: {
-        'zh_CN': '书签记录（新增/点击/点击排行/关联记录）',
-        'en': 'Bookmark records (additions/clicks/ranking/related)'
-    },syncPushPackageTimeTrackingText: {
-        'zh_CN': '时间捕捉（按天/周/月统计）',
-        'en': 'Time tracking (daily/weekly/monthly stats)'
-    },syncPushPackageBookmarkTreeSnapshotText: {
-        'zh_CN': '书签树快照（结构与元信息）',
-        'en': 'Bookmark tree snapshot (structure + metadata)'
-    },syncPushPackageRawHighVolumeText: {
-        'zh_CN': '原始记录明细',
-        'en': 'Raw records'
-    },syncPushPackageRawHighVolumeInfoBtnLabel: {
-        'zh_CN': '说明',
-        'en': 'Info'
-    },syncPushPackageRawHighVolumeInfoTitle: {
-        'zh_CN': '原始记录明细说明',
-        'en': 'Raw Records Info'
-    },syncPushPackageRawHighVolumeInfoText: {
-        'zh_CN': '包含原始新增记录、原始浏览历史、翻牌历史。该包体量更大且包含更多访问细节，默认关闭以减少推送体量并降低隐私暴露面，仅在需要深度回溯时再勾选。',
-        'en': 'Includes raw additions, raw browsing history, and flip history. This package is larger and carries finer visit details, so it stays off by default to reduce push size and privacy exposure; enable it only for deep backtracking.'
+    },syncPushPackageBookmarkRecommendText: {
+        'zh_CN': '书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）',
+        'en': 'Bookmark recommendation bundle (S-score/candidates/review/block/skip/flip)'
+    },syncPushPackageBookmarkRecordText: {
+        'zh_CN': '书签记录包（新增/点击/排行/关联/时间排行）',
+        'en': 'Bookmark record bundle (additions/clicks/ranking/related/time ranking)'
+    },syncPushPackageRawNativeText: {
+        'zh_CN': '原生真相源包（书签树/浏览历史事实源）',
+        'en': 'Raw-native source bundle (bookmark tree/history facts)'
     },syncPushPackageRecommendText: {
-        'zh_CN': '推荐数据池（S 值与候选池）',
-        'en': 'Recommendation pool (S-score and candidate pool)'
+        'zh_CN': '书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）',
+        'en': 'Bookmark recommendation bundle (S-score/candidates/review/block/skip/flip)'
     },syncPushPackageRecordsText: {
-        'zh_CN': '书签记录（新增/点击/点击排行/关联记录）',
-        'en': 'Bookmark records (additions/clicks/ranking/related)'
+        'zh_CN': '书签记录包（新增/点击/排行/关联/时间排行）',
+        'en': 'Bookmark record bundle (additions/clicks/ranking/related/time ranking)'
     },syncPushPackageWidgetsText: {
         'zh_CN': '推荐行为事件（复习/翻卡/跳过/屏蔽）',
         'en': 'Recommendation events (review/flip/skip/block)'
@@ -4237,11 +4217,11 @@ const i18n = {pageTitle: {
         'en': 'In 1 week'
     }
 ,exportTooltip: {
-        'zh_CN': '导出记录',
-        'en': 'Export Records'
+        'zh_CN': '导出书签添加记录',
+        'en': 'Export Bookmark Addition Records'
     },exportModalTitle: {
-        'zh_CN': '导出书签记录',
-        'en': 'Export Bookmarks'
+        'zh_CN': '导出书签添加记录',
+        'en': 'Export Bookmark Addition Records'
     },exportScopeCurrent: {
         'zh_CN': '当前视图: ',
         'en': 'Current View: '
@@ -4258,8 +4238,8 @@ const i18n = {pageTitle: {
         'zh_CN': '当前范围内没有可导出的书签',
         'en': 'No bookmarks to export in current scope'
     },exportRootTitle: {
-        'zh_CN': '书签导出',
-        'en': 'Bookmark Export'
+        'zh_CN': '书签记录与推荐',
+        'en': 'Bookmark Record and Recommend'
     },calendarSelectMode: {
         'zh_CN': '勾选',
         'en': 'Select'
@@ -4267,11 +4247,11 @@ const i18n = {pageTitle: {
         'zh_CN': '定位至今天',
         'en': 'Locate Today'
     },browsingExportTooltip: {
-        'zh_CN': '导出记录',
-        'en': 'Export Records'
+        'zh_CN': '导出书签点击记录',
+        'en': 'Export Bookmark Click Records'
     },browsingExportModalTitle: {
-        'zh_CN': '导出点击记录',
-        'en': 'Export Click History'
+        'zh_CN': '导出书签点击记录',
+        'en': 'Export Bookmark Click Records'
     }
 };
 window.i18n = i18n; // 暴露给其他模块使用
@@ -4844,30 +4824,11 @@ function applyLanguage() {
     ensureSyncPackageOptionElements();
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const textEl = document.getElementById(field.textId);
-        const i18nPayload = i18n[field.i18nKey] || i18n.syncPushPackageRecommendPoolText;
+        const i18nPayload = i18n[field.i18nKey] || i18n.syncPushPackageBookmarkRecommendText;
         if (textEl && i18nPayload?.[currentLang]) {
             textEl.textContent = i18nPayload[currentLang];
         }
     });
-    const rawInfoBtn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
-    if (rawInfoBtn) {
-        const rawInfoBtnLabel = getSyncText('syncPushPackageRawHighVolumeInfoBtnLabel', currentLang === 'zh_CN' ? '说明' : 'Info');
-        rawInfoBtn.title = rawInfoBtnLabel;
-        rawInfoBtn.setAttribute('aria-label', rawInfoBtnLabel);
-    }
-    const rawInfoTitle = document.getElementById('syncPushPackageRawHighVolumeInfoTitle');
-    if (rawInfoTitle) {
-        rawInfoTitle.textContent = getSyncText('syncPushPackageRawHighVolumeInfoTitle', currentLang === 'zh_CN' ? '原始记录明细说明' : 'Raw Records Info');
-    }
-    const rawInfoText = document.getElementById('syncPushPackageRawHighVolumeInfoText');
-    if (rawInfoText) {
-        rawInfoText.textContent = getSyncText(
-            'syncPushPackageRawHighVolumeInfoText',
-            currentLang === 'zh_CN'
-                ? '包含原始新增记录、原始浏览历史、翻牌历史。该包体量更大且包含更多访问细节，默认关闭以减少推送体量并降低隐私暴露面，仅在需要深度回溯时再勾选。'
-                : 'Includes raw additions, raw browsing history, and flip history. This package is larger and carries finer visit details, so it stays off by default to reduce push size and privacy exposure; enable it only for deep backtracking.'
-        );
-    }
     const syncPullPolicyInfoBtn = document.getElementById('syncPullPolicyInfoBtn');
     if (syncPullPolicyInfoBtn) {
         const label = getSyncText('syncPullPolicyInfoBtnLabel', currentLang === 'zh_CN' ? '说明' : 'Info');
@@ -4902,7 +4863,6 @@ function applyLanguage() {
     renderSyncFileList();
     renderSyncMarkdown();
     setSyncPushPackageInfoVisible(syncPushPackageInfoVisible);
-    setSyncRawHighVolumeInfoVisible(syncRawHighVolumeInfoVisible);
     setSyncPullPolicyInfoVisible(syncPullPolicyInfoVisible);
     updateSyncRepoCollapseButton();
     updateSyncStatusUI();
@@ -8140,7 +8100,7 @@ function getSyncNowLabel(timestamp = Date.now()) {
 function cloneSyncDefaultDocs() {
     return SYNC_DEFAULT_DOCS.map((doc) => ({
         id: String(doc.id || doc.name || `doc-${Date.now()}`),
-        name: String(doc.name || doc.id || 'agent.md'),
+        name: String(doc.name || doc.id || SYNC_AGENT_DOC_NAME),
         markdown: String(doc.markdown || ''),
         updatedAt: Number(doc.updatedAt || Date.now()),
         localEdited: Boolean(doc.localEdited)
@@ -8173,9 +8133,7 @@ function getSyncPathBasename(path = '') {
 }
 
 function getCurrentSyncAgentDocName(docsInput = syncDocsState) {
-    const docs = Array.isArray(docsInput) ? docsInput : [];
-    const agentDoc = docs.find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
-    return sanitizeSyncDocName(agentDoc?.name, SYNC_AGENT_DOC_NAME);
+    return SYNC_AGENT_DOC_NAME;
 }
 
 function buildSyncDateKey(timestamp = Date.now()) {
@@ -8197,13 +8155,13 @@ function buildSyncTimeKey(timestamp = Date.now()) {
 function buildSyncLocalSnapshotFileName(timestamp = Date.now()) {
     const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
     const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark-record-recommend-sync-snapshot-${dateKey}-${timeKey}.json`;
+    return `bookmark_record_and_recommend_sync_${dateKey}_${timeKey}.json`;
 }
 
 function buildSyncLocalExportArchiveName(timestamp = Date.now()) {
     const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
     const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark-record-recommend-sync-snapshot-${dateKey}-${timeKey}.zip`;
+    return `bookmark_record_and_recommend_sync_${dateKey}_${timeKey}.zip`;
 }
 
 async function downloadSyncLocalSnapshot(snapshotInput) {
@@ -8648,98 +8606,29 @@ async function downloadSyncBlobAsFile(blobInput, filenameInput, options = {}) {
     }
 }
 
-function buildSyncLocalExportBundle(repoConfigInput, snapshotInput) {
-    const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
-    const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
-    const nowTs = Number(snapshot?.updatedAt || Date.now()) || Date.now();
-    const paths = buildSyncRepoPaths(repoConfig, nowTs);
-    const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
-
-    const files = [
-        {
-            path: paths.dataLatestPath,
-            text: JSON.stringify(snapshot, null, 2)
-        },
-        {
-            path: paths.dataSnapshotPath,
-            text: JSON.stringify(snapshot, null, 2)
-        }
-    ];
-
-    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
-    const docsIndex = {
-        schema: 'bookmark-record-recommend.ai-input-docs-index.v1',
-        updatedAt: nowTs,
-        updatedAtText: getSyncNowLabel(nowTs),
-        docs: []
-    };
-
-    docs.forEach((doc, index) => {
-        const kind = doc?.kind || SYNC_DOC_KIND_INPUT;
-        if (kind === SYNC_DOC_KIND_AGENT) {
-            const ruleFileName = sanitizeSyncDocName(doc?.name, SYNC_AGENT_DOC_NAME);
-            const ruleFilePath = joinSyncRelativePath(paths.basePath, ruleFileName);
-            files.push({
-                path: ruleFilePath,
-                text: String(doc?.markdown || '')
-            });
-            return;
-        }
-        if (kind === SYNC_DOC_KIND_RESULT) {
-            return;
-        }
-        const safeRelativePath = sanitizeSyncDocRelativePath(doc?.name, `doc-${index + 1}.md`);
-        const docPath = joinSyncRelativePath(inputDocsRoot, safeRelativePath);
-        docsIndex.docs.push({
-            name: safeRelativePath,
-            path: docPath,
-            updatedAt: Number(doc?.updatedAt || nowTs) || nowTs
-        });
-        files.push({
-            path: docPath,
-            text: String(doc?.markdown || '')
-        });
-    });
-
-    files.push({
-        path: joinSyncRelativePath(inputDocsRoot, 'index.json'),
-        text: JSON.stringify(docsIndex, null, 2)
-    });
-
-    const metaState = {
-        schema: 'bookmark-record-recommend.ai-sync-state.v1',
+async function buildSyncLocalExportBundle(repoConfigInput, snapshotInput) {
+    const exportBundle = await buildSyncExportFiles(snapshotInput, repoConfigInput || syncConfigState, {
         provider: SYNC_PROVIDER_LOCAL,
-        branch: String(repoConfig.branch || '').trim() || 'main',
-        basePath: paths.basePath,
-        pushedAt: nowTs,
-        pushedAtText: getSyncNowLabel(nowTs),
-        packageCount: Number(snapshot?.packageCount || 0),
-        docsCount: docs.length
-    };
-    files.push({
-        path: paths.metaStatePath,
-        text: JSON.stringify(metaState, null, 2)
+        branch: buildSyncRepoConfig(repoConfigInput || syncConfigState).branch || 'main',
+        writeMode: 'local-zip-export'
     });
-
-    const dedupedMap = new Map();
-    files.forEach((entry) => {
-        const normalizedPath = normalizeSyncRelativePath(entry?.path || '');
-        if (!normalizedPath) return;
-        dedupedMap.set(normalizedPath, {
-            path: normalizedPath,
+    const files = (Array.isArray(exportBundle.files) ? exportBundle.files : [])
+        .map((entry) => ({
+            path: normalizeSyncRelativePath(entry?.path || ''),
             text: String(entry?.text || '')
-        });
-    });
-
+        }))
+        .filter((entry) => entry.path);
     return {
-        timestamp: nowTs,
-        rootFolder: '',
-        files: Array.from(dedupedMap.values())
+        timestamp: exportBundle.timestamp || Date.now(),
+        pushId: exportBundle.pushId || '',
+        snapshotId: exportBundle.snapshotId || '',
+        rootFolder: exportBundle.rootFolder || '',
+        files
     };
 }
 
 async function downloadSyncLocalExportBundle(snapshotInput, repoConfigInput = syncConfigState) {
-    const bundle = buildSyncLocalExportBundle(repoConfigInput, snapshotInput);
+    const bundle = await buildSyncLocalExportBundle(repoConfigInput, snapshotInput);
     const files = Array.isArray(bundle.files) ? bundle.files : [];
     if (!files.length) {
         return {
@@ -8820,14 +8709,18 @@ function sanitizeSyncDocRelativePath(name = '', fallback = 'ai-result.md') {
 }
 
 function buildSyncRepoConfig(configInput = syncConfigState) {
+    const raw = configInput && typeof configInput === 'object' ? configInput : {};
     const config = normalizeSyncConfig(configInput || null);
+    const rawProvider = String(raw.provider || '').trim().toLowerCase();
+    const rawBranch = String(raw.branch || '').trim();
+    const rawBasePath = normalizeSyncRelativePath(raw.basePath || '');
     return {
-        provider: String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
-        token: String(config.githubRepoToken || '').trim(),
-        owner: String(config.githubRepoOwner || '').trim(),
-        repo: String(config.githubRepoName || '').trim(),
-        branch: String(config.githubRepoBranch || 'main').trim() || 'main',
-        basePath: normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
+        provider: rawProvider || String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        token: String(raw.token || config.githubRepoToken || '').trim(),
+        owner: String(raw.owner || config.githubRepoOwner || '').trim(),
+        repo: String(raw.repo || config.githubRepoName || '').trim(),
+        branch: rawBranch || String(config.githubRepoBranch || 'main').trim() || 'main',
+        basePath: rawBasePath || normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
             || SYNC_GITHUB_DEFAULT_BASE_PATH
     };
 }
@@ -8837,8 +8730,12 @@ function buildSyncRepoPaths(repoConfig, timestamp = Date.now()) {
     return {
         basePath,
         resultsRootPath: joinSyncRelativePath(basePath, SYNC_GITHUB_RESULTS_SUBDIR),
-        dataLatestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_LATEST_PATH),
-        dataSnapshotPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_SNAPSHOT_PATH),
+        obsoleteDataLatestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH),
+        dataManifestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_MANIFEST_PATH),
+        packageBookmarkRecordPath: joinSyncRelativePath(basePath, SYNC_GITHUB_PACKAGE_BOOKMARK_RECORD_PATH),
+        packageBookmarkRecommendPath: joinSyncRelativePath(basePath, SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH),
+        rawNativeBookmarksTreePath: joinSyncRelativePath(basePath, SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH),
+        rawNativeHistoryVisitsPath: joinSyncRelativePath(basePath, SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH),
         metaStatePath: joinSyncRelativePath(basePath, SYNC_GITHUB_META_STATE_PATH)
     };
 }
@@ -8851,30 +8748,36 @@ function getSyncResultsRootPath(configInput = syncConfigState) {
 function buildSyncCloudPathDiagram(configInput = syncConfigState) {
     const repoConfig = buildSyncRepoConfig(configInput);
     const basePath = normalizeSyncRelativePath(repoConfig.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
-    const ruleFileName = getCurrentSyncAgentDocName(syncDocsState);
+    const ruleFileName = SYNC_AGENT_DOC_NAME;
     const isZh = currentLang === 'zh_CN';
 
     const rows = isZh
         ? [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI分析规则文档：限定可读路径、结果格式、分析流程与引用要求。' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI 分析规则文档：固定写入同步根目录，限定可读路径、结果格式、manifest 与 pushId 聚合流程。' },
+            { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI 入口索引：列出本次 pushId、正文文件、hash、读取顺序；不包含正文或本地变化摘要。' },
+            { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: '书签记录包：新增、点击、点击排行、关联记录、当前时间排行与时间屏蔽状态。' },
+            { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: '书签推荐包：S 分数池、候选池、推荐模式、复习、屏蔽、跳过、翻卡事件。' },
+            { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: '书签树/准原生事实源：Phase A 标注 source 与 flattened-records 格式。' },
+            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: '浏览历史事实源：JSONL 明细，manifest 标注 limit 与 truncated。' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: '“查看”区输入文档索引：记录任务 Markdown 的文件名与更新时间。' },
             { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: '输入任务文档：你在“查看”里维护的问题、上下文、约束与补充说明。' },
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI 输出结果文档：latest/daily/weekly/monthly/runs 等分析结果。' },
-            { branch: '|--', path: 'data/latest.json', op: '[PUSH]', desc: '本次勾选数据包总快照：推荐数据池、推荐行为、书签记录（新增日历/点击明细/点击排行/关联记录）、时间捕捉、书签树快照；勾选“原始记录明细”时还会包含原始新增记录与原始浏览历史。' },
-            { branch: '|--', path: 'data/snapshots/current.json', op: '[PUSH]', desc: '覆盖快照：每次推送覆盖写入；历史回溯依赖 Git commit 时间线与 compare。' },
             { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: '同步目录提交时间线：查看最近改动文件与变更频率。' },
-            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '两次提交差异摘要：查看新增/修改/删除文件与改动规模。' },
+            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。' },
             { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' }
         ]
         : [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Sync/AI rule document: defines readable paths, output format, analysis flow, and citation rules.' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document at the sync root: manifest, pushId grouping, output format, and citation rules.' },
+            { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI entry index: pushId, package files, hashes, read order; no package body or local delta summary.' },
+            { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: 'Bookmark record bundle: additions, clicks, rankings, related records, current time rankings and blocked state.' },
+            { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: 'Bookmark recommendation bundle: S-scores, candidates, mode, review/block/skip/flip events.' },
+            { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: 'Bookmark-tree fact source: Phase A marks source and flattened-records format.' },
+            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: 'History fact source: JSONL rows; manifest records limit and truncated.' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: 'Input-doc index in the View panel: file names and update timestamps.' },
             { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: 'Input task docs: prompts, context, constraints, and notes you maintain in View.' },
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI result docs: latest/daily/weekly/monthly/runs outputs.' },
-            { branch: '|--', path: 'data/latest.json', op: '[PUSH]', desc: 'Snapshot of selected packages: recommendation pool, recommendation events, bookmark records (additions calendar/click rows/click ranking/related records), time tracking, bookmark-tree snapshot; plus raw additions and raw browsing history when Raw Records is enabled.' },
-            { branch: '|--', path: 'data/snapshots/current.json', op: '[PUSH]', desc: 'Overwrite snapshot on each push; historical backtracking should use Git commits and compare.' },
             { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: 'Commit timeline for the sync directory and change frequency.' },
-            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary between two commits (added/updated/deleted files).' },
+            { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary after grouping commits by pushId; no local delta summary is generated.' },
             { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' }
         ];
 
@@ -8890,7 +8793,7 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
 function updateSyncPathInfoText() {
     const config = buildSyncRepoConfig(syncConfigState);
     const basePath = normalizeSyncRelativePath(config.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
-    const ruleFileName = getCurrentSyncAgentDocName(syncDocsState);
+    const ruleFileName = SYNC_AGENT_DOC_NAME;
     const ruleExamplePath = `${basePath}/${ruleFileName}`;
     const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
     const hasUserCreatedDoc = docs.some((doc) => doc && doc.kind === SYNC_DOC_KIND_INPUT);
@@ -8906,8 +8809,8 @@ function updateSyncPathInfoText() {
                 : 'Note: items support edit/delete; deleted items are removed from cloud on next push.';
         } else {
             filesHint.textContent = currentLang === 'zh_CN'
-                ? `顶层说明：${ruleFileName} 是规则文件（位于 ${ruleExamplePath}），用于定义 AI 处理规则（含 Git commit/diff 优先读取）；新建 Markdown 后，这里会自动切换为拉取来源说明。`
-                : `Top-level note: ${ruleFileName} is the rule file at ${ruleExamplePath}. It defines AI rules with a Git commit/diff-first workflow. After creating Markdown files, this hint switches to pull-source info.`;
+                ? `顶层说明：${ruleFileName} 会固定写入 ${ruleExamplePath}。AI 入口为 ${basePath}/data/manifest.json，变化分析来自 GitHub commits/compare。`
+                : `Top-level note: ${ruleFileName} is always written to ${ruleExamplePath}. AI entry is ${basePath}/data/manifest.json and change analysis comes from GitHub commits/compare.`;
         }
     }
     const pathTitle = document.getElementById('syncPushPackagePathTitle');
@@ -8928,14 +8831,6 @@ function setSyncPushPackageInfoVisible(visible) {
     }
     const btn = document.getElementById('syncPushPackageInfoBtn');
     if (btn) btn.setAttribute('aria-expanded', syncPushPackageInfoVisible ? 'true' : 'false');
-}
-
-function setSyncRawHighVolumeInfoVisible(visible) {
-    syncRawHighVolumeInfoVisible = !!visible;
-    const panel = document.getElementById('syncPushPackageRawHighVolumeInfoPanel');
-    if (panel) panel.hidden = !syncRawHighVolumeInfoVisible;
-    const btn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
-    if (btn) btn.setAttribute('aria-expanded', syncRawHighVolumeInfoVisible ? 'true' : 'false');
 }
 
 function setSyncPullPolicyInfoVisible(visible) {
@@ -9864,20 +9759,11 @@ function normalizeSyncConfig(raw) {
         return String(src[primaryKey] == null ? '' : src[primaryKey]).trim();
     };
 
-    const legacyRecommend = src.pushRecommend !== false;
-    const legacyRecords = src.pushRecords !== false;
-    const legacyWidgets = src.pushWidgets !== false;
-    const legacyTracking = src.pushTracking !== false;
     const providerRaw = readString('remoteProvider', SYNC_PROVIDER_GITHUB).toLowerCase();
     const remoteProvider = providerRaw === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
     const githubRepoBranch = readString('githubRepoBranch', 'main');
-    let githubRepoBasePath = normalizeSyncRelativePath(readString('githubRepoBasePath', SYNC_GITHUB_DEFAULT_BASE_PATH));
-    if (githubRepoBasePath === SYNC_GITHUB_LEGACY_BASE_PATH) {
-        githubRepoBasePath = SYNC_GITHUB_DEFAULT_BASE_PATH;
-    }
+    const githubRepoBasePath = normalizeSyncRelativePath(readString('githubRepoBasePath', SYNC_GITHUB_DEFAULT_BASE_PATH));
 
-    // Legacy v0 grouped recommendation pool + recommendation events under pushRecommend.
-    // Legacy v0 exposed tracking data through both pushTracking and pushWidgets.
     return {
         remoteProvider,
         githubRepoToken: readString('githubRepoToken', ''),
@@ -9885,12 +9771,18 @@ function normalizeSyncConfig(raw) {
         githubRepoName: readString('githubRepoName', ''),
         githubRepoBranch: githubRepoBranch || 'main',
         githubRepoBasePath: githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH,
-        recommendPool: readBoolean('recommendPool', legacyRecommend),
-        recommendEvents: readBoolean('recommendEvents', legacyRecommend),
-        bookmarkRecords: readBoolean('bookmarkRecords', legacyRecords),
-        timeTracking: readBoolean('timeTracking', (legacyTracking || legacyWidgets)),
-        bookmarkTreeSnapshot: readBoolean('bookmarkTreeSnapshot', true),
-        rawHighVolume: readBoolean('rawHighVolume', false)
+        bookmarkRecommend: readBoolean('bookmarkRecommend', true),
+        bookmarkRecord: readBoolean('bookmarkRecord', true),
+        rawNative: readBoolean('rawNative', true)
+    };
+}
+
+function getSyncPackageSelection(configInput = syncConfigState) {
+    const config = normalizeSyncConfig(configInput || null);
+    return {
+        bookmarkRecord: config.bookmarkRecord !== false,
+        bookmarkRecommend: config.bookmarkRecommend !== false,
+        rawNative: config.rawNative !== false
     };
 }
 
@@ -9910,12 +9802,9 @@ function buildSanitizedSyncConfigSnapshot(configInput) {
         githubRepoTokenConfigured: hasToken,
         githubRepoOwnerConfigured: hasOwner,
         githubRepoNameConfigured: hasRepo,
-        recommendPool: config.recommendPool !== false,
-        recommendEvents: config.recommendEvents !== false,
-        bookmarkRecords: config.bookmarkRecords !== false,
-        timeTracking: config.timeTracking !== false,
-        bookmarkTreeSnapshot: config.bookmarkTreeSnapshot !== false,
-        rawHighVolume: config.rawHighVolume === true
+        bookmarkRecord: config.bookmarkRecord !== false,
+        bookmarkRecommend: config.bookmarkRecommend !== false,
+        rawNative: config.rawNative !== false
     };
 }
 
@@ -9988,7 +9877,7 @@ function buildSyncDocId(name = '', index = 0) {
 
 function isSyncRuleDocName(name = '') {
     const normalized = sanitizeSyncDocName(String(name || '').trim(), SYNC_AGENT_DOC_NAME).toLowerCase();
-    return SYNC_RULE_DOC_NAME_ALIASES.includes(normalized);
+    return normalized === SYNC_AGENT_DOC_NAME.toLowerCase();
 }
 
 function normalizeSyncDocKind(kind = '') {
@@ -10058,7 +9947,7 @@ function normalizeSyncDocs(rawDocs) {
         const kind = isAgent
             ? SYNC_DOC_KIND_AGENT
             : (kindRaw === SYNC_DOC_KIND_RESULT ? SYNC_DOC_KIND_RESULT : SYNC_DOC_KIND_INPUT);
-        const normalizedName = isAgent ? sanitizeSyncDocName(name, SYNC_AGENT_DOC_NAME) : name;
+        const normalizedName = isAgent ? SYNC_AGENT_DOC_NAME : name;
         let id = isAgent ? SYNC_AGENT_DOC_ID : String(item.id || buildSyncDocId(name, index));
         if (!id) id = buildSyncDocId(name, index);
         let suffix = 1;
@@ -10078,16 +9967,7 @@ function normalizeSyncDocs(rawDocs) {
             localEdited: Boolean(item.localEdited)
         });
     });
-    if (!hasAgent) {
-        normalized.unshift({
-            id: SYNC_AGENT_DOC_ID,
-            name: SYNC_AGENT_DOC_NAME,
-            kind: SYNC_DOC_KIND_AGENT,
-            markdown: getDefaultSyncAgentDocTemplate(currentLang),
-            updatedAt: Date.now(),
-            localEdited: false
-        });
-    } else {
+    if (hasAgent) {
         const agentIdx = normalized.findIndex((doc) => doc.id === SYNC_AGENT_DOC_ID);
         if (agentIdx > 0) {
             const [agentDoc] = normalized.splice(agentIdx, 1);
@@ -10285,7 +10165,8 @@ function updateSyncRepoFormState() {
 
 function countEnabledSyncPackages(config) {
     if (!config || typeof config !== 'object') return 0;
-    return SYNC_PACKAGE_FIELDS.reduce((count, field) => count + (config[field.key] ? 1 : 0), 0);
+    const selection = getSyncPackageSelection(config);
+    return SYNC_PACKAGE_FIELDS.reduce((count, field) => count + (selection[field.key] ? 1 : 0), 0);
 }
 
 function getSyncPushPayloadErrorI18n(error) {
@@ -10299,6 +10180,18 @@ function getSyncPushPayloadErrorI18n(error) {
             toast: {
                 zh_CN: '推送失败：读取同步数据失败',
                 en: 'Push failed: unable to read sync data'
+            }
+        };
+    }
+    if (code === 'storage_set_failed' || code === 'sync_storage_set_failed') {
+        return {
+            status: {
+                zh_CN: '状态：推送失败（写入同步数据失败）',
+                en: 'Status: Push failed (failed to write sync data)'
+            },
+            toast: {
+                zh_CN: '推送失败：写入同步数据失败',
+                en: 'Push failed: unable to write sync data'
             }
         };
     }
@@ -10329,10 +10222,11 @@ function applySyncConfigToUI() {
     if (basePathInput) basePathInput.value = String(syncConfigState.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH);
     const tokenInput = document.getElementById('syncGithubTokenInput');
     if (tokenInput) tokenInput.value = String(syncConfigState.githubRepoToken || '');
+    const selection = getSyncPackageSelection(syncConfigState);
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const checkbox = getSyncPackageCheckboxByKey(field.key);
         if (!checkbox) return;
-        checkbox.checked = !!syncConfigState[field.key];
+        checkbox.checked = selection[field.key] !== false;
     });
     updateSyncRepoFormState();
     updateSyncPathInfoText();
@@ -10351,11 +10245,8 @@ function readSyncConfigFromUI() {
     };
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const checkbox = getSyncPackageCheckboxByKey(field.key);
-        if (checkbox) {
-            next[field.key] = checkbox.checked !== false;
-        } else {
-            next[field.key] = field.defaultEnabled !== false;
-        }
+        const checked = checkbox ? checkbox.checked !== false : field.defaultEnabled !== false;
+        next[field.key] = checked;
     });
     syncConfigState = normalizeSyncConfig(next);
     updateSyncRepoFormState();
@@ -10526,6 +10417,42 @@ function buildSyncNewFileName(base = 'new-note.md') {
     return `${baseNoExt}-${i}.md`;
 }
 
+function getSyncRuleDoc() {
+    return (Array.isArray(syncDocsState) ? syncDocsState : [])
+        .find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID) || null;
+}
+
+async function createSyncRuleDoc({ focusDoc = true } = {}) {
+    if (getSyncRuleDoc()) {
+        if (focusDoc) {
+            syncCurrentDocId = getSyncRuleDoc().id;
+            renderSyncFileList();
+            renderSyncMarkdown();
+        }
+        return true;
+    }
+    const now = Date.now();
+    const doc = {
+        id: SYNC_AGENT_DOC_ID,
+        name: SYNC_AGENT_DOC_NAME,
+        kind: SYNC_DOC_KIND_AGENT,
+        markdown: getDefaultSyncAgentDocTemplate(currentLang),
+        updatedAt: now,
+        localEdited: true
+    };
+    syncDocsState.unshift(doc);
+    if (focusDoc) syncCurrentDocId = doc.id;
+    const saved = await saveSyncDocsToStorage();
+    renderSyncFileList();
+    renderSyncMarkdown();
+    updateSyncPathInfoText();
+    setSyncStatusText({
+        zh_CN: '状态：已创建规则文件 AGENTS.md',
+        en: 'Status: Created rule file AGENTS.md'
+    });
+    return !!saved;
+}
+
 function getSyncDocGroupKey(doc) {
     if (!doc) return 'other';
     if (doc.kind === SYNC_DOC_KIND_AGENT) return 'agent';
@@ -10585,13 +10512,11 @@ function renderSyncFileList() {
     const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
     const topLevelPullSource = `${getSyncResultsRootPath(syncConfigState)}/**/*.md`;
     updateSyncPathInfoText();
-    if (!docs.length) {
-        listEl.innerHTML = '';
-        return;
-    }
+    const hasRuleDoc = !!getSyncRuleDoc();
 
-    if (!syncCurrentDocId || !docs.some((doc) => doc.id === syncCurrentDocId)) {
-        syncCurrentDocId = docs[0].id;
+    const isPreviewSelected = syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID && !hasRuleDoc;
+    if (!isPreviewSelected && (!syncCurrentDocId || !docs.some((doc) => doc.id === syncCurrentDocId))) {
+        syncCurrentDocId = docs[0]?.id || null;
     }
 
     const groupOrder = ['agent', 'root', 'daily', 'weekly', 'monthly', 'runs', 'other'];
@@ -10603,6 +10528,57 @@ function renderSyncFileList() {
     });
 
     listEl.innerHTML = '';
+    if (!hasRuleDoc) {
+        const preview = document.createElement('div');
+        const previewActive = syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID || !docs.length;
+        preview.className = `sync-file-item sync-file-item-agent sync-file-item-virtual${previewActive ? ' active' : ''}`;
+
+        const main = document.createElement('button');
+        main.type = 'button';
+        main.className = 'sync-file-main';
+        const previewName = currentLang === 'zh_CN' ? '默认 AGENTS.md' : 'Default AGENTS.md';
+        const previewMeta = currentLang === 'zh_CN' ? '未手动编辑；推送时会写入同步根目录' : 'Not manually edited; pushed to the sync root';
+        main.innerHTML = `
+            <span class="sync-file-name">
+                <i class="fas fa-gavel"></i>
+                <span class="sync-file-name-text">${escapeHtml(previewName)}</span>
+                <span class="sync-file-kind">${escapeHtml(currentLang === 'zh_CN' ? '默认' : 'Default')}</span>
+            </span>
+            <span class="sync-file-meta">${escapeHtml(previewMeta)}</span>
+        `;
+        main.addEventListener('click', () => {
+            syncCurrentDocId = SYNC_DEFAULT_RULE_PREVIEW_ID;
+            renderSyncFileList();
+            renderSyncMarkdown();
+        });
+
+        const createLabel = currentLang === 'zh_CN' ? '编辑规则文件' : 'Edit rule file';
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn';
+        createBtn.setAttribute('aria-label', createLabel);
+        createBtn.title = createLabel;
+        createBtn.innerHTML = '<i class="fas fa-plus"></i>';
+        createBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                await createSyncRuleDoc({ focusDoc: true });
+            } catch (error) {
+                console.error('[SyncView] create rule file failed:', error);
+            }
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'sync-file-item-actions';
+        actions.appendChild(createBtn);
+        preview.appendChild(main);
+        preview.appendChild(actions);
+        listEl.appendChild(preview);
+    }
+    if (!docs.length) {
+        return;
+    }
     groupOrder.forEach((groupKey) => {
         const list = groups.get(groupKey);
         if (!list || !list.length) return;
@@ -11501,7 +11477,19 @@ function renderSyncMarkdown() {
     updateSyncSaveButtonTooltip();
     refreshSyncMarkdownToolLabels();
 
-    const doc = getSyncCurrentDoc();
+    let doc = getSyncCurrentDoc();
+    const usingDefaultRulePreview = !doc && !getSyncRuleDoc()
+        && (!Array.isArray(syncDocsState) || !syncDocsState.length || syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID);
+    if (usingDefaultRulePreview) {
+        doc = {
+            id: SYNC_DEFAULT_RULE_PREVIEW_ID,
+            name: SYNC_AGENT_DOC_NAME,
+            kind: SYNC_DOC_KIND_AGENT,
+            markdown: getDefaultSyncAgentDocTemplate(currentLang),
+            updatedAt: 0,
+            localEdited: false
+        };
+    }
     if (!doc) {
         emptyEl.hidden = false;
         livePaneEl.hidden = true;
@@ -11519,7 +11507,9 @@ function renderSyncMarkdown() {
     }
 
     fileNameEl.textContent = doc.name || '--';
-    fileTimeEl.textContent = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
+    fileTimeEl.textContent = usingDefaultRulePreview
+        ? (currentLang === 'zh_CN' ? '推送时写入同步根目录' : 'Pushed to the sync root')
+        : (doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--');
     emptyEl.hidden = true;
     livePaneEl.hidden = false;
     if (editorPaneEl) editorPaneEl.hidden = false;
@@ -11537,6 +11527,7 @@ function renderSyncMarkdown() {
         editorEl.scrollTop = 0;
         renderEl.scrollTop = 0;
     }
+    editorEl.readOnly = usingDefaultRulePreview;
     renderSyncMarkdownPreview(editorEl.value || markdown);
     syncSyncMarkdownActiveLine({ scrollPreview: false });
     updateSyncSaveButtonState();
@@ -11592,18 +11583,29 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
 
     const doc = syncDocsState[index];
     const isAgent = doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID;
-    const promptText = isAgent
-        ? (currentLang === 'zh_CN'
-            ? '请输入规则文件名（.md），例如 CLAUDE.md'
-            : 'Enter rule file name (.md), e.g. CLAUDE.md')
-        : (currentLang === 'zh_CN'
-            ? '请输入文件名（可含目录，.md）'
-            : 'Enter file name (path allowed, .md)');
-    const inputName = window.prompt(promptText, String(doc.name || (isAgent ? SYNC_AGENT_DOC_NAME : 'new-note.md')));
+    if (isAgent) {
+        if (String(doc.name || '').trim() !== SYNC_AGENT_DOC_NAME) {
+            syncDocsState[index] = {
+                ...syncDocsState[index],
+                name: SYNC_AGENT_DOC_NAME,
+                updatedAt: Date.now(),
+                localEdited: true
+            };
+            if (focusDoc) syncCurrentDocId = syncDocsState[index].id;
+            await saveSyncDocsToStorage();
+            renderSyncFileList();
+            renderSyncMarkdown();
+            updateSyncPathInfoText();
+        }
+        showToast(currentLang === 'zh_CN' ? '规则文件固定为 AGENTS.md' : 'The rule file is fixed as AGENTS.md');
+        return false;
+    }
+    const promptText = currentLang === 'zh_CN'
+        ? '请输入文件名（可含目录，.md）'
+        : 'Enter file name (path allowed, .md)';
+    const inputName = window.prompt(promptText, String(doc.name || 'new-note.md'));
     if (inputName == null) return;
-    const nextName = isAgent
-        ? sanitizeSyncDocName(String(inputName || '').trim(), SYNC_AGENT_DOC_NAME)
-        : sanitizeSyncDocRelativePath(String(inputName || '').trim(), String(doc.name || 'new-note.md'));
+    const nextName = sanitizeSyncDocRelativePath(String(inputName || '').trim(), String(doc.name || 'new-note.md'));
     if (!nextName) return;
     if (String(doc.name || '').trim().toLowerCase() === nextName.toLowerCase()) return;
 
@@ -11628,12 +11630,8 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
     renderSyncMarkdown();
     updateSyncPathInfoText();
     setSyncStatusText({
-        zh_CN: isAgent
-            ? `状态：规则文件已重命名为 ${nextName}`
-            : `状态：Markdown 已重命名为 ${nextName}`,
-        en: isAgent
-            ? `Status: Rule file renamed to ${nextName}`
-            : `Status: Markdown renamed to ${nextName}`
+        zh_CN: `状态：Markdown 已重命名为 ${nextName}`,
+        en: `Status: Markdown renamed to ${nextName}`
     });
     return true;
 }
@@ -11645,20 +11643,18 @@ async function deleteSyncDocById(docId, { focusNeighbor = false } = {}) {
     if (index < 0 || !syncDocsState[index]) return false;
 
     const doc = syncDocsState[index];
-    if (doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID) {
-        showToast(currentLang === 'zh_CN' ? '规则文件不可删除' : 'Rule file cannot be deleted');
-        return false;
-    }
+    const isAgent = doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID;
 
-    const confirmText = currentLang === 'zh_CN'
-        ? `确认删除 ${doc.name} 吗？删除后下次推送会同步删除云端对应文件。`
-        : `Delete ${doc.name}? The corresponding cloud file will be removed on next push.`;
+    const confirmText = isAgent
+        ? (currentLang === 'zh_CN'
+            ? `确认删除 ${doc.name} 的自定义内容吗？删除后下次推送会用默认 AGENTS.md 写入同步根目录。`
+            : `Delete the custom ${doc.name} content? The next push will write the default AGENTS.md to the sync root.`)
+        : (currentLang === 'zh_CN'
+            ? `确认删除 ${doc.name} 吗？删除后下次推送会同步删除云端对应文件。`
+            : `Delete ${doc.name}? The corresponding cloud file will be removed on next push.`);
     if (!window.confirm(confirmText)) return false;
 
     syncDocsState.splice(index, 1);
-    if (!syncDocsState.length) {
-        syncDocsState = normalizeSyncDocs([]);
-    }
 
     if (focusNeighbor || syncCurrentDocId === safeId) {
         const safeIndex = Math.max(0, Math.min(index, syncDocsState.length - 1));
@@ -11723,6 +11719,46 @@ async function saveCurrentSyncDoc() {
     });
 }
 
+async function flushCurrentSyncDocBeforeTransfer(reason = 'sync-transfer') {
+    try {
+        await flushSyncEditorAutoSave({
+            reason,
+            renderList: true,
+            quiet: true
+        });
+    } catch (error) {
+        console.warn('[SyncView] pre-transfer editor flush failed:', reason, error);
+    }
+}
+
+function markSyncDocsCleanAfterPush(docCacheUpdates = []) {
+    if (!Array.isArray(docCacheUpdates) || !docCacheUpdates.length || !Array.isArray(syncDocsState)) {
+        return false;
+    }
+    const updateByKey = new Map();
+    docCacheUpdates.forEach((item) => {
+        const key = buildSyncDocMergeKeyFromParts(item?.kind, item?.name);
+        if (key) updateByKey.set(key, item);
+    });
+    if (!updateByKey.size) return false;
+
+    let changed = false;
+    syncDocsState = syncDocsState.map((doc) => {
+        const key = buildSyncDocMergeKey(doc);
+        const update = key ? updateByKey.get(key) : null;
+        if (!update) return doc;
+        changed = true;
+        return {
+            ...doc,
+            name: doc.kind === SYNC_DOC_KIND_AGENT ? SYNC_AGENT_DOC_NAME : doc.name,
+            markdown: String(update.markdown || doc.markdown || ''),
+            updatedAt: Number(update.updatedAt || Date.now()) || Date.now(),
+            localEdited: false
+        };
+    });
+    return changed;
+}
+
 async function loadSyncStateFromStorage() {
     const result = await syncStorageGet([
         SYNC_CONFIG_STORAGE_KEY,
@@ -11733,12 +11769,13 @@ async function loadSyncStateFromStorage() {
     syncConfigState = normalizeSyncConfig(result?.[SYNC_CONFIG_STORAGE_KEY] || null);
     syncRepoCollapsed = false;
     syncPushPackageInfoVisible = false;
-    syncRawHighVolumeInfoVisible = false;
     syncPullPolicyInfoVisible = false;
     let docs = normalizeSyncDocs(result?.[SYNC_DOCS_STORAGE_KEY] || []);
     if (!docs.length) {
         docs = cloneSyncDefaultDocs();
-        await syncStorageSet({ [SYNC_DOCS_STORAGE_KEY]: docs });
+        if (docs.length) {
+            await syncStorageSet({ [SYNC_DOCS_STORAGE_KEY]: docs });
+        }
     }
     syncDocsState = docs;
     syncRemoteDocCacheState = normalizeSyncRemoteDocCache(result?.[SYNC_REMOTE_DOC_CACHE_STORAGE_KEY] || null);
@@ -11771,6 +11808,547 @@ function normalizeBrowsingCacheRowsForSync(raw) {
     return rows
         .filter((row) => Array.isArray(row) && row.length >= 2)
         .map(([dateKey, records]) => [String(dateKey || ''), Array.isArray(records) ? records : []]);
+}
+
+function buildSyncBrowsingCacheRowsFromCalendarMap(bookmarksByDate) {
+    if (!bookmarksByDate || typeof bookmarksByDate.entries !== 'function') return [];
+    const rows = [];
+    for (const [dateKey, records] of bookmarksByDate.entries()) {
+        const safeDateKey = String(dateKey || '').trim();
+        if (!safeDateKey) continue;
+        const normalizedRecords = (Array.isArray(records) ? records : [])
+            .filter((record) => record && typeof record === 'object')
+            .map((record) => {
+                const url = String(record.url || '').trim();
+                if (!url) return null;
+                const rawVisitTime = record.visitTime ?? record.dateAdded;
+                const visitTime = Number(rawVisitTime instanceof Date ? rawVisitTime.getTime() : rawVisitTime || 0);
+                if (!Number.isFinite(visitTime) || visitTime <= 0) return null;
+                const rawDateAdded = record.dateAdded instanceof Date
+                    ? record.dateAdded.getTime()
+                    : Number(record.dateAdded || visitTime);
+                const title = String(record.title || '').trim() || url;
+                return {
+                    id: String(record.id || `${url}-${visitTime}`),
+                    title,
+                    url,
+                    dateAdded: Number.isFinite(rawDateAdded) && rawDateAdded > 0 ? rawDateAdded : visitTime,
+                    visitTime,
+                    visitCount: Math.max(1, Number(record.visitCount || 1) || 1),
+                    typedCount: Math.max(0, Number(record.typedCount || 0) || 0),
+                    folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
+                    transition: String(record.transition || ''),
+                    referringVisitId: record.referringVisitId ?? null,
+                    aggregated: !!record.aggregated
+                };
+            })
+            .filter(Boolean);
+        if (!normalizedRecords.length) continue;
+        rows.push([safeDateKey, normalizedRecords]);
+    }
+    return rows.sort((a, b) => String(a?.[0] || '').localeCompare(String(b?.[0] || '')));
+}
+
+function getSyncHistoryDateKey(timestamp) {
+    const date = new Date(Number(timestamp) || Date.now());
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getSyncHistoryUrlDomain(url) {
+    if (!url) return '';
+    try {
+        return String(new URL(url).hostname || '').toLowerCase().replace(/^www\./, '');
+    } catch (_) {
+        return '';
+    }
+}
+
+function splitSyncBookmarkPath(path = '') {
+    return String(path || '')
+        .split('/')
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
+function buildSyncHistoryBookmarkRefs(records = []) {
+    const urlMap = new Map();
+    const titleDomainMap = new Map();
+
+    (Array.isArray(records) ? records : []).forEach((record) => {
+        if (!record || typeof record !== 'object') return;
+        const url = String(record.url || '').trim();
+        if (!url) return;
+        if (!urlMap.has(url)) urlMap.set(url, record);
+
+        const title = String(record.title || '').trim();
+        const domain = getSyncHistoryUrlDomain(url);
+        if (!title || !domain) return;
+        if (!titleDomainMap.has(title)) titleDomainMap.set(title, new Map());
+        const domainMap = titleDomainMap.get(title);
+        if (!domainMap.has(domain)) domainMap.set(domain, record);
+    });
+
+    return { urlMap, titleDomainMap };
+}
+
+function findSyncHistoryBookmarkMatch(item, refs) {
+    const url = String(item?.url || '').trim();
+    if (!url || !refs) return null;
+    const exact = refs.urlMap instanceof Map ? refs.urlMap.get(url) : null;
+    if (exact) return { bookmark: exact, matchType: 'exact_url' };
+
+    const title = String(item?.title || '').trim();
+    const domain = getSyncHistoryUrlDomain(url);
+    const byDomain = title && domain && refs.titleDomainMap instanceof Map
+        ? refs.titleDomainMap.get(title)
+        : null;
+    const titleDomain = byDomain instanceof Map ? byDomain.get(domain) : null;
+    if (titleDomain) return { bookmark: titleDomain, matchType: 'title_domain' };
+    return null;
+}
+
+function buildSyncHistoryVisitRecord(item, visitTime, match, options = {}, recordsLength = 0) {
+    const bookmark = match?.bookmark && typeof match.bookmark === 'object' ? match.bookmark : {};
+    const url = String(item?.url || '').trim();
+    const title = String(item?.title || '').trim() || String(bookmark.title || '').trim() || url;
+    const safeVisitTime = Number(visitTime || item?.lastVisitTime || 0);
+    const bookmarkId = bookmark.id != null ? String(bookmark.id) : null;
+    return {
+        id: String(options.id || `${bookmarkId || item?.id || url}-${safeVisitTime}-${recordsLength}`),
+        bookmarkId,
+        title,
+        url,
+        dateAdded: safeVisitTime,
+        visitTime: safeVisitTime,
+        visitCount: Math.max(1, Number(options.count || 1) || 1),
+        typedCount: Math.max(0, Number(item?.typedCount || 0) || 0),
+        folderPath: splitSyncBookmarkPath(bookmark.path || ''),
+        transition: String(options.transition || ''),
+        referringVisitId: options.referringVisitId || null,
+        aggregated: !!options.aggregated,
+        matchType: String(match?.matchType || '')
+    };
+}
+
+async function fetchSyncBookmarkTreeFromApi(localData = {}, options = {}) {
+    if (!browserAPI?.bookmarks?.getTree || typeof flattenBookmarkTree !== 'function') return null;
+    try {
+        const tree = await new Promise((resolve, reject) => {
+            browserAPI.bookmarks.getTree((result) => {
+                if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                    reject(browserAPI.runtime.lastError);
+                    return;
+                }
+                resolve(Array.isArray(result) ? result[0] : null);
+            });
+        });
+        const records = normalizeAdditionsRecordsForSync(flattenBookmarkTree(tree));
+        const now = Date.now();
+        if (options.persistCache !== false) {
+            localData.bb_cache_additions_v1 = { timestamp: now, bookmarks: records };
+            try {
+                allBookmarks = records;
+                cachedBookmarkTree = tree || cachedBookmarkTree;
+                additionsCacheRestored = true;
+                if (typeof rebuildBookmarkUrlSet === 'function') rebuildBookmarkUrlSet();
+                if (typeof markAdditionsTreeRefreshTime === 'function') markAdditionsTreeRefreshTime();
+                if (typeof persistAdditionsCache === 'function') await persistAdditionsCache();
+                if (typeof persistAdditionsWidgetsSnapshot === 'function') persistAdditionsWidgetsSnapshot(records);
+            } catch (_) { }
+        }
+        return {
+            status: 'ok',
+            source: 'bookmarks_api',
+            format: 'chrome-bookmarks-tree+flattened-records',
+            itemCount: records.length,
+            fetchedAt: now,
+            tree: tree || null,
+            records
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+async function loadSyncHistoryBookmarkRecords(localData = {}) {
+    const fromApi = await fetchSyncBookmarkTreeFromApi(localData, { persistCache: true });
+    if (fromApi && Array.isArray(fromApi.records)) {
+        return {
+            records: fromApi.records,
+            source: fromApi.source || 'bookmarks_api',
+            authoritative: true
+        };
+    }
+
+    const fromStorage = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
+    if (fromStorage.length) {
+        return {
+            records: fromStorage,
+            source: 'cache_storage',
+            authoritative: false
+        };
+    }
+
+    const fromMemory = normalizeAdditionsRecordsForSync(Array.isArray(allBookmarks) ? allBookmarks : []);
+    if (fromMemory.length) {
+        return {
+            records: fromMemory,
+            source: 'cache_memory',
+            authoritative: false
+        };
+    }
+
+    return {
+        records: [],
+        source: 'empty',
+        authoritative: false
+    };
+}
+
+async function persistSyncBrowsingRowsToCache(localData = {}, rows = [], timestamp = Date.now()) {
+    const cachePayload = {
+        lastSyncTime: Number(timestamp || Date.now()) || Date.now(),
+        records: Array.isArray(rows) ? rows : []
+    };
+    localData.bb_cache_browsing_history_v1 = cachePayload;
+    try {
+        if (typeof resetBrowsingRankingDerivedCache === 'function') resetBrowsingRankingDerivedCache();
+        if (typeof markBrowsingRelatedSnapshotStale === 'function') markBrowsingRelatedSnapshotStale('sync-history-cache-refresh');
+    } catch (_) { }
+    if (typeof writeHistoryCacheValue === 'function') {
+        try {
+            if (typeof removeHistoryCacheValue === 'function') {
+                await removeHistoryCacheValue('bb_cache_browsing_history_v1');
+            }
+            await writeHistoryCacheValue('bb_cache_browsing_history_v1', cachePayload);
+            if (typeof refreshBrowsingHistoryFromCache === 'function') {
+                await refreshBrowsingHistoryFromCache({ silent: true });
+            } else if (typeof document !== 'undefined') {
+                document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
+            }
+        } catch (_) { }
+    }
+    return cachePayload;
+}
+
+async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
+    if (!browserAPI?.history?.search) {
+        return { ok: false, rows: [], source: 'chrome_history_unavailable' };
+    }
+
+    const now = Date.now();
+    const bookmarkRecordResult = await loadSyncHistoryBookmarkRecords(localData);
+    const bookmarkRecords = Array.isArray(bookmarkRecordResult?.records) ? bookmarkRecordResult.records : [];
+    const refs = buildSyncHistoryBookmarkRefs(bookmarkRecords);
+    if (!(refs.urlMap instanceof Map) || refs.urlMap.size === 0) {
+        if (bookmarkRecordResult?.authoritative) {
+            const rows = [];
+            await persistSyncBrowsingRowsToCache(localData, rows, now);
+            return {
+                ok: true,
+                rows,
+                source: `${bookmarkRecordResult.source || 'bookmarks_api'}_empty`,
+                fetchedAt: now,
+                meta: {
+                    scope: 'bookmark_matched_history',
+                    source: `${bookmarkRecordResult.source || 'bookmarks_api'}_empty`,
+                    matchMethods: ['exact_url', 'title_domain'],
+                    bookmarkReferenceSource: bookmarkRecordResult.source || 'bookmarks_api',
+                    bookmarkReferenceCount: bookmarkRecords.length,
+                    chromeHistorySearchItemCount: 0,
+                    matchedUrlCount: 0,
+                    truncated: false
+                }
+            };
+        }
+        return { ok: false, rows: [], source: 'bookmark_refs_unavailable' };
+    }
+
+    const pageSize = (typeof BROWSING_HISTORY_SEARCH_PAGE_SIZE === 'number' && BROWSING_HISTORY_SEARCH_PAGE_SIZE > 0)
+        ? BROWSING_HISTORY_SEARCH_PAGE_SIZE
+        : 5000;
+    const maxItems = (typeof BROWSING_HISTORY_SEARCH_MAX_ITEMS === 'number' && BROWSING_HISTORY_SEARCH_MAX_ITEMS > 0)
+        ? BROWSING_HISTORY_SEARCH_MAX_ITEMS
+        : 50000;
+    const maxVisitsPerUrl = (typeof BROWSING_HISTORY_MAX_VISITS_PER_URL === 'number' && BROWSING_HISTORY_MAX_VISITS_PER_URL > 0)
+        ? BROWSING_HISTORY_MAX_VISITS_PER_URL
+        : 400;
+    const lookbackDays = (typeof BROWSING_HISTORY_LOOKBACK_DAYS === 'number' && BROWSING_HISTORY_LOOKBACK_DAYS > 0)
+        ? BROWSING_HISTORY_LOOKBACK_DAYS
+        : 0;
+    const cutoffTime = lookbackDays ? now - lookbackDays * 24 * 60 * 60 * 1000 : 0;
+    const effectiveStartTime = cutoffTime || 0;
+
+    let historySearchError = '';
+    let historyItemsTruncated = false;
+    const fetchHistoryBatch = (startTime, endTime) => new Promise((resolve) => {
+        let settled = false;
+        const finish = (results, error = '') => {
+            if (settled) return;
+            settled = true;
+            if (error && !historySearchError) historySearchError = String(error);
+            resolve(Array.isArray(results) ? results : []);
+        };
+        try {
+            const maybePromise = browserAPI.history.search({
+                text: '',
+                startTime,
+                endTime,
+                maxResults: pageSize
+            }, (results) => {
+                const err = browserAPI?.runtime?.lastError;
+                if (err) {
+                    finish([], err.message || 'history_search_failed');
+                    return;
+                }
+                finish(results);
+            });
+            if (maybePromise && typeof maybePromise.then === 'function') {
+                maybePromise
+                    .then((results) => finish(results))
+                    .catch((error) => finish([], error?.message || 'history_search_failed'));
+            }
+        } catch (error) {
+            finish([], error?.message || 'history_search_failed');
+        }
+    });
+
+    const historyItems = [];
+    let pageEnd = now;
+    while (pageEnd >= effectiveStartTime) {
+        const batch = await fetchHistoryBatch(effectiveStartTime, pageEnd);
+        if (historySearchError) break;
+        if (!batch.length) break;
+        historyItems.push(...batch);
+        if (historyItems.length >= maxItems) {
+            historyItems.length = maxItems;
+            historyItemsTruncated = true;
+            break;
+        }
+        if (batch.length < pageSize) break;
+
+        let oldest = pageEnd;
+        for (const item of batch) {
+            const t = Number(item?.lastVisitTime || pageEnd);
+            if (t < oldest) oldest = t;
+        }
+        if (!oldest || oldest <= effectiveStartTime) break;
+        pageEnd = oldest - 1;
+    }
+
+    if (historySearchError) {
+        return {
+            ok: false,
+            rows: [],
+            source: 'chrome_history_error',
+            error: historySearchError
+        };
+    }
+
+    const relevantItems = [];
+    const seenUrls = new Set();
+    for (const item of historyItems) {
+        const url = String(item?.url || '').trim();
+        if (!url || seenUrls.has(url)) continue;
+        const match = findSyncHistoryBookmarkMatch(item, refs);
+        if (!match) continue;
+        relevantItems.push({ item, match });
+        seenUrls.add(url);
+    }
+
+    const rowsByDate = new Map();
+    const visitKeySet = new Set();
+    const addRecord = (item, visitTime, match, options = {}) => {
+        const safeVisitTime = Number(visitTime || 0);
+        if (!Number.isFinite(safeVisitTime) || safeVisitTime <= 0) return false;
+        if (cutoffTime && safeVisitTime < cutoffTime) return false;
+        if (safeVisitTime > now + 60 * 1000) return false;
+        const url = String(item?.url || '').trim();
+        if (!url) return false;
+        const visitKey = `${url}|${safeVisitTime}`;
+        if (visitKeySet.has(visitKey)) return false;
+        visitKeySet.add(visitKey);
+        const dateKey = getSyncHistoryDateKey(safeVisitTime);
+        if (!rowsByDate.has(dateKey)) rowsByDate.set(dateKey, []);
+        const records = rowsByDate.get(dateKey);
+        records.push(buildSyncHistoryVisitRecord(item, safeVisitTime, match, options, records.length));
+        return true;
+    };
+
+    const hasVisitDetails = typeof browserAPI.history.getVisits === 'function';
+    const getVisitsAsync = (url) => new Promise((resolve) => {
+        try {
+            const maybePromise = browserAPI.history.getVisits({ url }, (visits) => {
+                resolve(Array.isArray(visits) ? visits : []);
+            });
+            if (maybePromise && typeof maybePromise.then === 'function') {
+                maybePromise.then((visits) => resolve(Array.isArray(visits) ? visits : [])).catch(() => resolve([]));
+            }
+        } catch (_) {
+            resolve([]);
+        }
+    });
+
+    if (!hasVisitDetails) {
+        relevantItems.forEach(({ item, match }) => {
+            const fallbackTime = Number(item?.lastVisitTime || 0);
+            if (!fallbackTime) return;
+            addRecord(item, fallbackTime, match, {
+                count: Math.max(1, Number(item?.visitCount || 1) || 1),
+                aggregated: true,
+                id: item?.id || item?.url
+            });
+        });
+    } else {
+        const concurrency = Math.max(1, Math.min(8, relevantItems.length));
+        let cursor = 0;
+        const processNext = async () => {
+            while (cursor < relevantItems.length) {
+                const currentIndex = cursor;
+                cursor += 1;
+                const { item, match } = relevantItems[currentIndex] || {};
+                const url = String(item?.url || '').trim();
+                if (!url) continue;
+
+                const visits = await getVisitsAsync(url);
+                let inserted = 0;
+                if (Array.isArray(visits) && visits.length) {
+                    for (const visit of visits) {
+                        const visitTime = Number(visit?.visitTime || 0);
+                        if (!visitTime) continue;
+                        if (addRecord(item, visitTime, match, {
+                            id: `${match?.bookmark?.id || item?.id || url}-${visit?.visitId || visitTime}-${inserted}`,
+                            transition: visit?.transition || '',
+                            referringVisitId: visit?.referringVisitId || null,
+                            count: 1
+                        })) {
+                            inserted += 1;
+                        }
+                        if (inserted >= maxVisitsPerUrl) break;
+                    }
+                }
+
+                if (inserted === 0 && item?.lastVisitTime) {
+                    addRecord(item, item.lastVisitTime, match, {
+                        count: Math.max(1, Number(item?.visitCount || 1) || 1),
+                        aggregated: true,
+                        id: item?.id || item?.url
+                    });
+                }
+
+                if (cursor % 100 === 0) {
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: concurrency }, () => processNext()));
+    }
+
+    const rows = Array.from(rowsByDate.entries())
+        .map(([dateKey, records]) => [
+            dateKey,
+            (Array.isArray(records) ? records : []).sort((a, b) => Number(a.visitTime || 0) - Number(b.visitTime || 0))
+        ])
+        .sort((a, b) => String(a?.[0] || '').localeCompare(String(b?.[0] || '')));
+
+    await persistSyncBrowsingRowsToCache(localData, rows, now);
+
+    return {
+        ok: true,
+        rows,
+        source: hasVisitDetails ? 'chrome.history.search+getVisits' : 'chrome.history.search',
+        fetchedAt: now,
+        meta: {
+            scope: 'bookmark_matched_history',
+            source: hasVisitDetails ? 'chrome.history.search+getVisits' : 'chrome.history.search',
+            matchMethods: ['exact_url', 'title_domain'],
+            bookmarkReferenceSource: bookmarkRecordResult?.source || 'unknown',
+            bookmarkReferenceCount: bookmarkRecords.length,
+            chromeHistorySearchItemCount: historyItems.length,
+            matchedUrlCount: relevantItems.length,
+            historyItemLimit: maxItems,
+            searchPageSize: pageSize,
+            maxVisitsPerUrl,
+            lookbackDays,
+            truncated: historyItemsTruncated
+        }
+    };
+}
+
+async function resolveSyncBrowsingCacheRows(localData = {}, options = {}) {
+    if (options.preferLive !== false) {
+        const fromHistoryApi = await resolveSyncBrowsingRowsFromHistoryApi(localData);
+        if (fromHistoryApi?.ok) {
+            return fromHistoryApi;
+        }
+    }
+
+    const fromStorage = normalizeBrowsingCacheRowsForSync(localData?.bb_cache_browsing_history_v1);
+    if (fromStorage.length > 0) {
+        return {
+            rows: fromStorage,
+            source: 'storage_local',
+            meta: {
+                scope: 'bookmark_matched_history',
+                source: 'storage_local',
+                matchMethods: ['exact_url', 'title_domain'],
+                fromCache: true
+            }
+        };
+    }
+
+    if (typeof readHistoryCacheValue === 'function') {
+        try {
+            const historyCache = await readHistoryCacheValue('bb_cache_browsing_history_v1');
+            const fromHistoryCache = normalizeBrowsingCacheRowsForSync(historyCache);
+            if (fromHistoryCache.length > 0) {
+                localData.bb_cache_browsing_history_v1 = historyCache && typeof historyCache === 'object'
+                    ? historyCache
+                    : { lastSyncTime: Date.now(), records: fromHistoryCache };
+                return {
+                    rows: fromHistoryCache,
+                    source: 'history_cache',
+                    meta: {
+                        scope: 'bookmark_matched_history',
+                        source: 'history_cache',
+                        matchMethods: ['exact_url', 'title_domain'],
+                        fromCache: true
+                    }
+                };
+            }
+        } catch (_) { }
+    }
+
+    const calendar = await waitForBrowsingHistoryCalendar({
+        timeout: 1600,
+        pollMs: 120
+    });
+    const fromCalendar = buildSyncBrowsingCacheRowsFromCalendarMap(calendar?.bookmarksByDate);
+    if (fromCalendar.length > 0) {
+        localData.bb_cache_browsing_history_v1 = {
+            lastSyncTime: Date.now(),
+            records: fromCalendar
+        };
+        return {
+            rows: fromCalendar,
+            source: 'calendar_runtime',
+            meta: {
+                scope: 'bookmark_matched_history',
+                source: 'calendar_runtime',
+                matchMethods: ['exact_url', 'title_domain'],
+                fromCache: true
+            }
+        };
+    }
+
+    return {
+        rows: [],
+        source: 'empty',
+        meta: {
+            scope: 'bookmark_matched_history',
+            source: 'empty'
+        }
+    };
 }
 
 function normalizeRecommendReviewsForSync(raw) {
@@ -11908,6 +12486,28 @@ function buildClickRankingFromRows(rows, limit = 200) {
         .slice(0, Math.max(1, Number(limit) || 200));
 }
 
+async function buildClickRankingForSync(rows, limit = 200) {
+    const safeLimit = Math.max(1, Number(limit) || 200);
+    try {
+        const stats = await ensureBrowsingClickRankingStats();
+        if (stats && !stats.error && Array.isArray(stats.items)) {
+            return getBrowsingRankingItemsForRangeFromStats(stats, 'all')
+                .slice(0, safeLimit)
+                .map((item) => ({
+                    url: String(item?.url || ''),
+                    title: String(item?.title || item?.url || ''),
+                    lastVisitTime: Number(item?.lastVisitTime || 0) || 0,
+                    dayCount: Number(item?.dayCount || 0) || 0,
+                    weekCount: Number(item?.weekCount || 0) || 0,
+                    monthCount: Number(item?.monthCount || 0) || 0,
+                    yearCount: Number(item?.yearCount || 0) || 0,
+                    allCount: Number(item?.allCount || 0) || 0
+                }));
+        }
+    } catch (_) { }
+    return buildClickRankingFromRows(rows, safeLimit);
+}
+
 function buildRelatedRecordsFromSnapshots(limitSnapshots = 3, limitItemsPerSnapshot = 120) {
     const snapshots = [];
     for (const [scopeKey, snapshot] of browsingRelatedSnapshotCache.entries()) {
@@ -11933,9 +12533,140 @@ function buildRelatedRecordsFromSnapshots(limitSnapshots = 3, limitItemsPerSnaps
         .slice(0, Math.max(1, Number(limitSnapshots) || 3));
 }
 
+function buildBookmarkReferenceSetsFromAdditionsRecords(records = []) {
+    const bookmarkUrls = new Set();
+    const bookmarkTitles = new Set();
+    (Array.isArray(records) ? records : []).forEach((item) => {
+        const url = String(item?.url || '').trim();
+        if (url) bookmarkUrls.add(url);
+        const title = String(item?.title || '').trim();
+        if (title) bookmarkTitles.add(title);
+    });
+    return { bookmarkUrls, bookmarkTitles };
+}
+
+function extractSyncHistoryItemsFromRows(rows = []) {
+    const items = [];
+    (Array.isArray(rows) ? rows : []).forEach(([, records]) => {
+        (Array.isArray(records) ? records : []).forEach((record) => {
+            if (!record || typeof record !== 'object') return;
+            const url = String(record.url || '').trim();
+            if (!url) return;
+            const title = String(record.title || '').trim() || url;
+            const visitTime = Number(record.visitTime || record.dateAdded || 0);
+            if (!Number.isFinite(visitTime) || visitTime <= 0) return;
+            const visitCount = Math.max(1, Number(record.visitCount) || 1);
+            items.push({
+                url,
+                title,
+                lastVisitTime: visitTime,
+                visitCount
+            });
+        });
+    });
+    return items;
+}
+
+function buildRelatedRecordsFromRows(rows, additionsRecords, options = {}) {
+    const limitSnapshots = Math.max(1, Number(options.limitSnapshots || 5) || 5);
+    const limitItemsPerSnapshot = Math.max(1, Number(options.limitItemsPerSnapshot || 160) || 160);
+    const now = Date.now();
+    const ranges = ['day', 'week', 'month', 'year', 'all'];
+    const historyItems = extractSyncHistoryItemsFromRows(rows);
+    if (!historyItems.length) return [];
+    const { bookmarkUrls, bookmarkTitles } = buildBookmarkReferenceSetsFromAdditionsRecords(additionsRecords);
+    const snapshots = [];
+
+    ranges.forEach((range) => {
+        const startTime = range === 'all' ? 0 : getTimeRangeStart(range);
+        const filtered = historyItems
+            .filter((item) => {
+                const ts = Number(item.lastVisitTime || 0);
+                if (!Number.isFinite(ts) || ts <= 0) return false;
+                return ts >= startTime && ts <= now;
+            })
+            .sort((a, b) => (b.lastVisitTime || 0) - (a.lastVisitTime || 0))
+            .slice(0, limitItemsPerSnapshot)
+            .map((item) => ({
+                url: item.url,
+                title: item.title,
+                lastVisitTime: Number(item.lastVisitTime || 0),
+                visitCount: Number(item.visitCount || 0) || 1
+            }));
+        if (!filtered.length) return;
+        snapshots.push({
+            scopeKey: `derived:preset:${range}`,
+            savedAt: now,
+            items: filtered,
+            bookmarkUrlCount: bookmarkUrls.size,
+            bookmarkTitleCount: bookmarkTitles.size
+        });
+    });
+
+    return snapshots
+        .sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0))
+        .slice(0, limitSnapshots);
+}
+
+function normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerSnapshot = 160) {
+    const payload = getBrowsingRelatedSnapshotPayload(snapshot);
+    if (!payload) return null;
+    const safeLimit = Math.max(1, Number(limitItemsPerSnapshot) || 160);
+    const items = payload.historyItemsExpanded
+        .slice(0, safeLimit)
+        .map((item) => ({
+            url: item?.url || '',
+            title: item?.title || '',
+            lastVisitTime: Number(item?.lastVisitTime || 0),
+            visitCount: Math.max(1, Number(item?.visitCount || 1) || 1),
+            transition: String(item?.transition || ''),
+            visitId: item?._visitId || null
+        }));
+    if (!items.length) return null;
+    return {
+        scopeKey: `derived:preset:${normalizeBrowsingRelatedRange(range)}`,
+        savedAt: Number(snapshot?.savedAt || Date.now()) || Date.now(),
+        items,
+        bookmarkUrlCount: payload.bookmarkUrls instanceof Set ? payload.bookmarkUrls.size : 0,
+        bookmarkTitleCount: payload.bookmarkTitles instanceof Set ? payload.bookmarkTitles.size : 0
+    };
+}
+
+async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) {
+    const limitSnapshots = Math.max(1, Number(options.limitSnapshots || 5) || 5);
+    const limitItemsPerSnapshot = Math.max(1, Number(options.limitItemsPerSnapshot || 160) || 160);
+    const ranges = ['day', 'week', 'month', 'year', 'all'];
+    const snapshots = [];
+
+    for (const range of ranges) {
+        try {
+            const snapshot = await buildBrowsingRelatedSnapshotForRange(range, {
+                ignoreCustomBounds: true,
+                calendarTimeout: 3500,
+                calendarPollMs: 100
+            });
+            const normalized = normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerSnapshot);
+            if (normalized) snapshots.push(normalized);
+            if (snapshots.length >= limitSnapshots) break;
+        } catch (_) { }
+    }
+
+    if (snapshots.length) {
+        return snapshots
+            .sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0))
+            .slice(0, limitSnapshots);
+    }
+
+    return buildRelatedRecordsFromRows(rows, additionsRecords, {
+        limitSnapshots,
+        limitItemsPerSnapshot
+    });
+}
+
 async function buildTimeRankingsForSync(limit = 100) {
     const empty = { composite: [], wakes: [], generatedAt: Date.now(), range: 'all' };
     try {
+        // Export persisted ranking summaries only. In-progress active sessions are intentionally not part of sync.
         const response = await browserAPI.runtime.sendMessage({
             action: 'getTrackingRankingStatsByRange',
             range: 'all',
@@ -11979,15 +12710,9 @@ async function buildTimeRankingsForSync(limit = 100) {
 }
 
 async function buildBookmarkTreeSnapshot(localData = {}) {
-    const fromMemory = normalizeAdditionsRecordsForSync(Array.isArray(allBookmarks) ? allBookmarks : []);
-    if (fromMemory.length) {
-        return {
-            status: 'ok',
-            source: 'cache_memory',
-            itemCount: fromMemory.length,
-            fetchedAt: Date.now(),
-            records: fromMemory
-        };
+    const fromApi = await fetchSyncBookmarkTreeFromApi(localData, { persistCache: true });
+    if (fromApi && Array.isArray(fromApi.records)) {
+        return fromApi;
     }
 
     const fromStorage = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
@@ -11995,9 +12720,22 @@ async function buildBookmarkTreeSnapshot(localData = {}) {
         return {
             status: 'ok',
             source: 'cache_storage',
+            format: 'flattened-records',
             itemCount: fromStorage.length,
             fetchedAt: Date.now(),
             records: fromStorage
+        };
+    }
+
+    const fromMemory = normalizeAdditionsRecordsForSync(Array.isArray(allBookmarks) ? allBookmarks : []);
+    if (fromMemory.length) {
+        return {
+            status: 'ok',
+            source: 'cache_memory',
+            format: 'flattened-records',
+            itemCount: fromMemory.length,
+            fetchedAt: Date.now(),
+            records: fromMemory
         };
     }
 
@@ -12005,40 +12743,21 @@ async function buildBookmarkTreeSnapshot(localData = {}) {
         return {
             status: 'unavailable',
             source: 'none',
+            format: 'flattened-records',
             itemCount: 0,
             fetchedAt: Date.now(),
             records: []
         };
     }
 
-    try {
-        const tree = await new Promise((resolve, reject) => {
-            browserAPI.bookmarks.getTree((result) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                    reject(browserAPI.runtime.lastError);
-                    return;
-                }
-                resolve(Array.isArray(result) ? result[0] : null);
-            });
-        });
-        const flattened = normalizeAdditionsRecordsForSync(flattenBookmarkTree(tree));
-        return {
-            status: 'ok',
-            source: 'bookmarks_api',
-            itemCount: flattened.length,
-            fetchedAt: Date.now(),
-            records: flattened
-        };
-    } catch (error) {
-        return {
-            status: 'fallback_failed',
-            source: 'bookmarks_api',
-            error: String(error?.message || error || 'unknown_error'),
-            itemCount: 0,
-            fetchedAt: Date.now(),
-            records: []
-        };
-    }
+    return {
+        status: 'fallback_failed',
+        source: 'bookmarks_api',
+        format: 'flattened-records',
+        itemCount: 0,
+        fetchedAt: Date.now(),
+        records: []
+    };
 }
 
 function buildSyncDocsPayload() {
@@ -12053,12 +12772,35 @@ function buildSyncDocsPayload() {
 }
 
 async function collectSyncPushPayload(config) {
+    const selection = getSyncPackageSelection(config || syncConfigState);
+    config = {
+        recommendPool: selection.bookmarkRecommend,
+        recommendEvents: selection.bookmarkRecommend,
+        bookmarkRecords: selection.bookmarkRecord,
+        timeTracking: selection.bookmarkRecord,
+        bookmarkTreeSnapshot: selection.rawNative
+    };
+    let recommendScoresReadyResult = null;
+    if (config?.recommendPool) {
+        try {
+            recommendScoresReadyResult = await ensureRecommendScoresReadyForView('sync-push-before-collect');
+        } catch (error) {
+            recommendScoresReadyResult = {
+                success: false,
+                ready: false,
+                error: error?.message || String(error)
+            };
+            console.warn('[SyncView] 推荐分数推送前刷新失败，继续使用当前缓存:', error);
+        }
+    }
     const keySet = new Set();
     const addKeys = (...items) => items.filter(Boolean).forEach((item) => keySet.add(item));
 
     if (config.recommendPool) {
         addKeys(
             'recommend_scores_cache',
+            'recommend_scores_time',
+            'recommendScoresStaleMeta',
             HISTORY_CURRENT_CARDS_STORAGE_KEY,
             'bb_recommend_pool_cursor_v1',
             'recommendFormulaConfig',
@@ -12082,20 +12824,16 @@ async function collectSyncPushPayload(config) {
         );
     }
 
-    if (config.bookmarkRecords || config.rawHighVolume || config.bookmarkTreeSnapshot) {
+    if (config.bookmarkRecords || config.bookmarkTreeSnapshot) {
         addKeys('bb_cache_additions_v1');
     }
 
-    if (config.bookmarkRecords || config.rawHighVolume) {
+    if (config.bookmarkRecords || config.bookmarkTreeSnapshot) {
         addKeys('bb_cache_browsing_history_v1');
     }
 
     if (config.timeTracking) {
-        addKeys('trackingStats', 'trackingDailyStatsV1');
-    }
-
-    if (config.rawHighVolume) {
-        addKeys(FLIP_HISTORY_STORAGE_KEY, HEATMAP_DAILY_INDEX_STORAGE_KEY);
+        addKeys('timetracking_blocked');
     }
 
     const keys = Array.from(keySet);
@@ -12109,7 +12847,7 @@ async function collectSyncPushPayload(config) {
     }
 
     const payload = {
-        schema: 'bookmark-record-recommend.ai-push.v3',
+        schema: 'bookmark_record_and_recommend.ai-push.v3',
         generatedAt: Date.now(),
         generatedAtText: getSyncNowLabel(Date.now()),
         packages: {},
@@ -12126,6 +12864,8 @@ async function collectSyncPushPayload(config) {
     if (config.recommendPool) {
         const scores = localData?.recommend_scores_cache || {};
         const scoreCount = (scores && typeof scores === 'object') ? Object.keys(scores).length : 0;
+        const currentCards = localData?.[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null;
+        const scoreCacheMeta = buildSyncRecommendScoreCacheMeta(scores, localData, recommendScoresReadyResult);
         const activeModeRaw = localData?.[RECOMMEND_ACTIVE_MODE_STORAGE_KEY];
         const activeMode = (typeof activeModeRaw === 'string' && presetModes[activeModeRaw])
             ? activeModeRaw
@@ -12135,15 +12875,19 @@ async function collectSyncPushPayload(config) {
             feature: currentLang === 'zh_CN' ? '推荐数据池' : 'Recommendation Pool',
             summary: {
                 scoreCount,
-                currentCardCount: Array.isArray(localData?.[HISTORY_CURRENT_CARDS_STORAGE_KEY]?.cards)
-                    ? localData[HISTORY_CURRENT_CARDS_STORAGE_KEY].cards.length
-                    : 0,
+                currentCardCount: countSyncRecommendCurrentCards(currentCards),
                 hasPoolCursor: !!localData?.bb_recommend_pool_cursor_v1,
-                activeMode
+                activeMode,
+                recommendScoresTime: scoreCacheMeta.recommendScoresTime,
+                scoresReadyMode: scoreCacheMeta.ensureResult?.mode || '',
+                scoresReady: scoreCacheMeta.ensureResult?.ready === true,
+                templateScoreCount: scoreCacheMeta.templateScoreCount,
+                templateScoreRatio: scoreCacheMeta.templateScoreRatio
             },
             data: {
                 recommend_scores_cache: scores,
-                historyCurrentCards: localData?.[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null,
+                scoreCacheMeta,
+                historyCurrentCards: currentCards,
                 bb_recommend_pool_cursor_v1: localData?.bb_recommend_pool_cursor_v1 || null,
                 recommendFormulaConfig: localData?.recommendFormulaConfig || null,
                 recommendSectionOrder: localData?.recommendSectionOrder || null,
@@ -12165,15 +12909,39 @@ async function collectSyncPushPayload(config) {
         const reviews = normalizeRecommendReviewsForSync(localData?.recommend_reviews);
         const blocked = normalizeRecommendBlockedForSync(localData?.[RECOMMEND_BLOCKED_STORAGE_KEY]);
         let reviewsSimilar = null;
-        if (config.bookmarkTreeSnapshot && Object.keys(reviews).length > 0) {
+        let reviewsSimilarMeta = {
+            available: false,
+            source: 'not_requested',
+            skippedReason: '',
+            reviewCount: Object.keys(reviews).length,
+            treeRecordCount: 0,
+            generatedReviewCount: 0
+        };
+        if (Object.keys(reviews).length === 0) {
+            reviewsSimilarMeta.skippedReason = 'no_reviews';
+        } else if (!config.bookmarkTreeSnapshot) {
+            reviewsSimilarMeta.skippedReason = 'raw_native_not_selected';
+        } else {
             const tree = await ensureBookmarkTreeSnapshot();
+            const treeRecords = Array.isArray(tree?.records) ? tree.records : [];
+            reviewsSimilarMeta = {
+                ...reviewsSimilarMeta,
+                source: tree?.source || 'unknown',
+                treeRecordCount: treeRecords.length
+            };
             const blockedIdSet = new Set((blocked?.bookmarks || []).map(String));
-            reviewsSimilar = buildReviewsSimilarCandidates(
-                Object.keys(reviews),
-                Array.isArray(tree?.records) ? tree.records : [],
-                localData?.recommend_scores_cache || {},
-                blockedIdSet
-            );
+            if (treeRecords.length > 0) {
+                reviewsSimilar = buildReviewsSimilarCandidates(
+                    Object.keys(reviews),
+                    treeRecords,
+                    localData?.recommend_scores_cache || {},
+                    blockedIdSet
+                );
+                reviewsSimilarMeta.available = true;
+                reviewsSimilarMeta.generatedReviewCount = Object.keys(reviewsSimilar || {}).length;
+            } else {
+                reviewsSimilarMeta.skippedReason = 'bookmark_tree_empty';
+            }
         }
         payload.packages.recommendEvents = {
             feature: currentLang === 'zh_CN' ? '推荐行为事件' : 'Recommendation Events',
@@ -12183,11 +12951,13 @@ async function collectSyncPushPayload(config) {
                 flippedBookmarksCount: flippedBookmarks.length,
                 postponedCount: postponed.length,
                 skippedCount: skipped.length,
+                reviewsSimilarAvailable: reviewsSimilarMeta.available === true,
                 reviewsSimilarCount: reviewsSimilar ? Object.keys(reviewsSimilar).length : 0
             },
             data: {
                 recommend_reviews: reviews,
                 recommend_reviews_similar: reviewsSimilar,
+                recommend_reviews_similar_meta: reviewsSimilarMeta,
                 recommend_postponed: postponed,
                 recommend_postponed_version_v1: localData?.[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY] || null,
                 recommend_blocked: blocked,
@@ -12206,23 +12976,29 @@ async function collectSyncPushPayload(config) {
         return additionsRecords;
     };
 
-    let browsingRows = null;
+    let browsingRows = [];
+    let browsingRowsReady = false;
     let browsingRecordCount = 0;
-    const ensureBrowsingRows = () => {
-        if (browsingRows) return browsingRows;
-        browsingRows = normalizeBrowsingCacheRowsForSync(localData?.bb_cache_browsing_history_v1);
+    let browsingRowsSource = 'empty';
+    let browsingRowsMeta = { scope: 'bookmark_matched_history', source: 'empty' };
+    const ensureBrowsingRows = async () => {
+        if (browsingRowsReady) return browsingRows;
+        const resolvedRows = await resolveSyncBrowsingCacheRows(localData);
+        browsingRows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
+        browsingRowsSource = String(resolvedRows?.source || 'empty');
+        browsingRowsMeta = resolvedRows?.meta && typeof resolvedRows.meta === 'object'
+            ? resolvedRows.meta
+            : { scope: 'bookmark_matched_history', source: browsingRowsSource };
         browsingRecordCount = browsingRows.reduce((sum, row) => sum + (Array.isArray(row?.[1]) ? row[1].length : 0), 0);
+        browsingRowsReady = true;
         return browsingRows;
     };
 
     if (config.bookmarkRecords) {
+        const rows = await ensureBrowsingRows();
         const additions = ensureAdditionsRecords();
-        const rows = ensureBrowsingRows();
-        const clickRankingByRows = buildClickRankingFromRows(rows, 300);
-        const clickRanking = Array.isArray(browsingClickRankingStats?.items) && browsingClickRankingStats.items.length
-            ? getBrowsingRankingItemsForRangeFromStats(browsingClickRankingStats, 'all')
-            : clickRankingByRows;
-        const relatedSnapshots = buildRelatedRecordsFromSnapshots(5, 160);
+        const clickRanking = await buildClickRankingForSync(rows, 300);
+        const relatedSnapshots = await buildRelatedRecordsForSync(rows, additions, { limitSnapshots: 5, limitItemsPerSnapshot: 160 });
         let relatedActiveRange = 'day';
         try {
             relatedActiveRange = String(localStorage.getItem('browsingRelatedActiveRange') || 'day');
@@ -12238,6 +13014,10 @@ async function collectSyncPushPayload(config) {
             data: {
                 additionsRecords: additions,
                 clickRecords: {
+                    source: browsingRowsSource,
+                    meta: browsingRowsMeta,
+                    recordCount: browsingRecordCount,
+                    generatedAt: Date.now(),
                     rows
                 },
                 clickRanking: {
@@ -12255,17 +13035,23 @@ async function collectSyncPushPayload(config) {
 
     if (config.timeTracking) {
         const rankings = await buildTimeRankingsForSync(100);
+        const trackingBlocked = normalizeBlockedState(localData?.timetracking_blocked);
+        const trackingBlockedCount = ['bookmarks', 'folders', 'domains']
+            .reduce((sum, key) => sum + (Array.isArray(trackingBlocked[key]) ? trackingBlocked[key].length : 0), 0);
         payload.packages.timeTracking = {
             feature: currentLang === 'zh_CN' ? '时间捕捉' : 'Time Tracking',
             summary: {
-                hasTrackingStats: !!localData?.trackingStats,
-                hasTrackingDaily: !!localData?.trackingDailyStatsV1,
+                hasTimeRanking: rankings.composite.length > 0 || rankings.wakes.length > 0,
+                rankingRange: rankings.range,
                 compositeRankingCount: rankings.composite.length,
-                wakesRankingCount: rankings.wakes.length
+                wakesRankingCount: rankings.wakes.length,
+                trackingBlockedCount,
+                trackingBlockedBookmarksCount: trackingBlocked.bookmarks.length,
+                trackingBlockedFoldersCount: trackingBlocked.folders.length,
+                trackingBlockedDomainsCount: trackingBlocked.domains.length
             },
             data: {
-                trackingStats: localData?.trackingStats || null,
-                trackingDailyStatsV1: localData?.trackingDailyStatsV1 || null,
+                trackingBlocked,
                 rankings
             }
         };
@@ -12273,32 +13059,25 @@ async function collectSyncPushPayload(config) {
 
     if (config.bookmarkTreeSnapshot) {
         const treeSnapshot = await ensureBookmarkTreeSnapshot();
+        await ensureBrowsingRows();
         payload.packages.bookmarkTreeSnapshot = {
             feature: currentLang === 'zh_CN' ? '书签树快照' : 'Bookmark Tree Snapshot',
             summary: {
                 status: treeSnapshot.status,
                 source: treeSnapshot.source,
-                itemCount: Number(treeSnapshot.itemCount || 0)
+                itemCount: Number(treeSnapshot.itemCount || 0),
+                historyVisitCount: browsingRecordCount
             },
             data: treeSnapshot
         };
-    }
-
-    if (config.rawHighVolume) {
-        ensureAdditionsRecords();
-        ensureBrowsingRows();
-        payload.packages.rawHighVolume = {
-            feature: currentLang === 'zh_CN' ? '原始记录明细' : 'Raw records',
-            summary: {
-                browsingRows: browsingRows.length,
-                browsingRecordCount,
-                flipHistoryCount: Array.isArray(localData?.[FLIP_HISTORY_STORAGE_KEY]) ? localData[FLIP_HISTORY_STORAGE_KEY].length : 0
-            },
-            data: {
-                additionsCacheRaw: localData?.bb_cache_additions_v1 || null,
-                browsingHistoryCacheRaw: localData?.bb_cache_browsing_history_v1 || null,
-                flipHistoryRaw: normalizeFlipHistoryForSync(localData?.[FLIP_HISTORY_STORAGE_KEY], 4000),
-                flipHistoryDailyIndexRaw: localData?.[HEATMAP_DAILY_INDEX_STORAGE_KEY] || null
+        payload.rawNative = {
+            schema: 'bookmark_record_and_recommend.raw-native-source.v1',
+            generatedAt: Date.now(),
+            historyVisits: {
+                source: browsingRowsSource,
+                meta: browsingRowsMeta,
+                rows: browsingRows,
+                recordCount: browsingRecordCount
             }
         };
     }
@@ -12306,58 +13085,831 @@ async function collectSyncPushPayload(config) {
     return payload;
 }
 
-async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
-    const safeSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
-    const nowTs = Number(safeSnapshot.updatedAt || Date.now()) || Date.now();
-    const paths = buildSyncRepoPaths(repoConfig, nowTs);
-    const branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
-    if (!branchReady.success) {
-        return {
-            success: false,
-            error: branchReady.error || (currentLang === 'zh_CN' ? '分支不可用' : 'Branch is unavailable')
-        };
-    }
-    const branch = String(branchReady.branch || '').trim();
-    const branchCreated = branchReady.branchCreated === true;
-    const docs = Array.isArray(safeSnapshot.docs) ? safeSnapshot.docs : [];
-    const commitPrefix = `[sync:${buildSyncDateKey(nowTs)} ${buildSyncTimeKey(nowTs)}]`;
-
-    const filesToPush = [
-        {
-            path: paths.dataLatestPath,
-            text: JSON.stringify(safeSnapshot, null, 2),
-            message: `${commitPrefix} update data/latest`
-        },
-        {
-            path: paths.dataSnapshotPath,
-            text: JSON.stringify(safeSnapshot, null, 2),
-            message: `${commitPrefix} update data snapshot`
+async function computeSyncTextSha256Hex(text = '') {
+    try {
+        if (typeof TextEncoder !== 'function') return '';
+        const bytes = new TextEncoder().encode(String(text == null ? '' : text));
+        if (!globalThis.crypto || !globalThis.crypto.subtle || typeof globalThis.crypto.subtle.digest !== 'function') {
+            return '';
         }
-    ];
+        const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest))
+            .map((value) => value.toString(16).padStart(2, '0'))
+            .join('');
+    } catch (_) {
+        return '';
+    }
+}
 
+function buildSyncPushId(timestamp = Date.now()) {
+    return `${buildSyncDateKey(timestamp)}_${buildSyncTimeKey(timestamp)}`;
+}
+
+function buildSyncSnapshotId(timestamp = Date.now(), pushId = '') {
+    const iso = new Date(Number(timestamp) || Date.now()).toISOString()
+        .replace(/\.\d{3}Z$/, 'Z')
+        .replace(/[:.]/g, '-');
+    const suffix = String(pushId || '').split('_').pop() || buildSyncTimeKey(timestamp);
+    return `${iso}_${suffix}`;
+}
+
+function stripSyncBasePath(path = '', basePath = '') {
+    const normalizedPath = normalizeSyncRelativePath(path);
+    const normalizedBase = normalizeSyncRelativePath(basePath);
+    if (!normalizedBase || !normalizedPath.startsWith(`${normalizedBase}/`)) return normalizedPath;
+    return normalizedPath.slice(normalizedBase.length + 1);
+}
+
+function normalizeSyncSignalText(value = '') {
+    return String(value || '').trim().toLowerCase();
+}
+
+function addSyncCount(counts, key, amount = 1) {
+    if (!(counts instanceof Map)) return;
+    const safeKey = String(key || '').trim();
+    if (!safeKey) return;
+    const increment = Math.max(1, Number(amount || 1) || 1);
+    counts.set(safeKey, (Number(counts.get(safeKey) || 0) || 0) + increment);
+}
+
+function listTopSyncCounts(counts, limit = 30) {
+    if (!(counts instanceof Map) || counts.size === 0) return [];
+    const safeLimit = Math.max(1, Number(limit || 30) || 30);
+    return Array.from(counts.entries())
+        .map(([name, count]) => ({ name, count: Number(count || 0) || 0 }))
+        .filter((item) => item.name && item.count > 0)
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+        .slice(0, safeLimit);
+}
+
+function getSyncFolderPathText(value = '') {
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+            .join('/');
+    }
+    return String(value || '').trim();
+}
+
+function buildSyncBookmarkSignalItem(item = {}) {
+    return {
+        id: item.id == null ? null : String(item.id),
+        title: String(item.title || item.url || ''),
+        url: String(item.url || ''),
+        path: String(item.path || getSyncFolderPathText(item.folderPath) || ''),
+        dateAdded: Number(item.dateAdded || item.addedAt || 0) || null
+    };
+}
+
+function buildBookmarkRecordSignals(bookmarkData = {}, timestamp = Date.now()) {
+    const additions = Array.isArray(bookmarkData.additionsRecords) ? bookmarkData.additionsRecords : [];
+    const clickRows = Array.isArray(bookmarkData?.clickRecords?.rows) ? bookmarkData.clickRecords.rows : [];
+    const clickedUrls = new Set();
+    const clickedTitles = new Set();
+    const activeDateKeys = new Set();
+    const recentClicks = [];
+    const clickedDomainCounts = new Map();
+    const clickedFolderCounts = new Map();
+    const addedFolderCounts = new Map();
+    let firstVisitAt = 0;
+    let lastVisitAt = 0;
+    let clickRecordCount = 0;
+
+    additions.forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        addSyncCount(addedFolderCounts, item.path || getSyncFolderPathText(item.folderPath));
+    });
+
+    clickRows.forEach((row) => {
+        if (!Array.isArray(row)) return;
+        const dateKey = String(row[0] || '');
+        const records = Array.isArray(row[1]) ? row[1] : [];
+        if (dateKey && records.length) activeDateKeys.add(dateKey);
+        records.forEach((record) => {
+            if (!record || typeof record !== 'object') return;
+            clickRecordCount += 1;
+            const urlKey = normalizeSyncSignalText(record.url);
+            const titleKey = normalizeSyncSignalText(record.title);
+            if (urlKey) clickedUrls.add(urlKey);
+            if (titleKey) clickedTitles.add(titleKey);
+            addSyncCount(clickedDomainCounts, getSyncHistoryUrlDomain(record.url), Math.max(1, Number(record.visitCount || 1) || 1));
+            addSyncCount(clickedFolderCounts, getSyncFolderPathText(record.folderPath || record.path), Math.max(1, Number(record.visitCount || 1) || 1));
+            const rawVisitTime = Number(record.visitTime || record.lastVisitTime || record.dateAdded || 0);
+            const fallbackVisitTime = dateKey ? Date.parse(dateKey) : 0;
+            const visitTime = Number.isFinite(rawVisitTime) && rawVisitTime > 0
+                ? rawVisitTime
+                : (Number.isFinite(fallbackVisitTime) ? fallbackVisitTime : 0);
+            if (visitTime > 0) {
+                firstVisitAt = firstVisitAt > 0 ? Math.min(firstVisitAt, visitTime) : visitTime;
+                lastVisitAt = Math.max(lastVisitAt, visitTime);
+                recentClicks.push({
+                    id: record.id == null ? null : String(record.id),
+                    bookmarkId: record.bookmarkId == null ? null : String(record.bookmarkId),
+                    title: String(record.title || record.url || ''),
+                    url: String(record.url || ''),
+                    visitTime,
+                    dateKey,
+                    visitCount: Math.max(1, Number(record.visitCount || 1) || 1),
+                    folderPath: getSyncFolderPathText(record.folderPath || record.path)
+                });
+            }
+        });
+    });
+
+    const nowTs = Number(timestamp || Date.now()) || Date.now();
+    const rangeDays = 7;
+    const recentCutoff = nowTs - rangeDays * 24 * 60 * 60 * 1000;
+    const unopenedAll = additions
+        .filter((item) => item && typeof item === 'object')
+        .filter((item) => {
+            const addedAt = Number(item.dateAdded || item.addedAt || 0) || 0;
+            if (addedAt <= 0 || addedAt > nowTs + 60 * 1000) return false;
+            const urlKey = normalizeSyncSignalText(item.url);
+            const titleKey = normalizeSyncSignalText(item.title);
+            if (urlKey && clickedUrls.has(urlKey)) return false;
+            if (!urlKey && titleKey && clickedTitles.has(titleKey)) return false;
+            return true;
+        })
+        .sort((a, b) => (Number(b.dateAdded || 0) || 0) - (Number(a.dateAdded || 0) || 0));
+    const recentUnopenedAll = unopenedAll.filter((item) => (Number(item.dateAdded || item.addedAt || 0) || 0) >= recentCutoff);
+    const recentClickItems = recentClicks
+        .sort((a, b) => (Number(b.visitTime || 0) || 0) - (Number(a.visitTime || 0) || 0))
+        .slice(0, 120);
+
+    return {
+        generatedAt: nowTs,
+        activityRange: {
+            firstVisitAt: firstVisitAt || null,
+            lastVisitAt: lastVisitAt || null,
+            activeDateCount: activeDateKeys.size,
+            clickRecordCount
+        },
+        recentClicks: {
+            totalCount: clickRecordCount,
+            items: recentClickItems
+        },
+        unopenedAdditions: {
+            totalCount: unopenedAll.length,
+            items: unopenedAll.slice(0, 120).map(buildSyncBookmarkSignalItem)
+        },
+        recentUnopenedAdditions: {
+            rangeDays,
+            totalCount: recentUnopenedAll.length,
+            items: recentUnopenedAll.slice(0, 80).map(buildSyncBookmarkSignalItem)
+        },
+        topClickedDomains: listTopSyncCounts(clickedDomainCounts, 40),
+        topClickedFolders: listTopSyncCounts(clickedFolderCounts, 40),
+        topAddedFolders: listTopSyncCounts(addedFolderCounts, 40)
+    };
+}
+
+function getSyncRecommendScoreValue(item = {}) {
+    const raw = item?.S ?? item?.score ?? item?.priority ?? 0;
+    const score = Number(raw);
+    return Number.isFinite(score) ? score : 0;
+}
+
+function buildSyncRecommendScoreItem(id, item = {}) {
+    const safeId = String(id == null ? item?.id || item?.bookmarkId || '' : id).trim();
+    return {
+        id: safeId || null,
+        title: String(item?.title || item?.name || item?.url || ''),
+        url: String(item?.url || ''),
+        path: String(item?.path || getSyncFolderPathText(item?.folderPath) || ''),
+        parentId: item?.parentId == null ? null : String(item.parentId),
+        dateAdded: Number(item?.dateAdded || 0) || null,
+        score: getSyncRecommendScoreValue(item)
+    };
+}
+
+function buildSyncRecommendScoreLeaders(scoresCache = {}, limit = 80) {
+    const safeLimit = Math.max(1, Number(limit || 80) || 80);
+    const entries = (scoresCache && typeof scoresCache === 'object' && !Array.isArray(scoresCache))
+        ? Object.entries(scoresCache)
+        : [];
+    return entries
+        .map(([id, item]) => buildSyncRecommendScoreItem(id, item))
+        .filter((item) => item.id || item.url || item.title)
+        .sort((a, b) => (Number(b.score || 0) || 0) - (Number(a.score || 0) || 0))
+        .slice(0, safeLimit);
+}
+
+function normalizeSyncRecommendCardItem(item = {}, scoresCache = {}) {
+    const id = String(item?.id || item?.bookmarkId || '').trim();
+    const scoreItem = id && scoresCache && typeof scoresCache === 'object' ? scoresCache[id] : null;
+    const merged = {
+        ...(scoreItem && typeof scoreItem === 'object' ? scoreItem : {}),
+        ...(item && typeof item === 'object' ? item : {})
+    };
+    const score = getSyncRecommendScoreValue({
+        S: merged.S,
+        score: merged.score,
+        priority: merged.priority
+    });
+    return {
+        id: id || (merged.id == null ? null : String(merged.id)),
+        title: String(merged.title || merged.name || merged.url || ''),
+        url: String(merged.url || ''),
+        path: String(merged.path || getSyncFolderPathText(merged.folderPath) || ''),
+        priority: Number(merged.priority || 0) || 0,
+        score,
+        dateAdded: Number(merged.dateAdded || 0) || null,
+        forceDue: !!merged.forceDue,
+        forceDueAt: Number(merged.forceDueAt || 0) || null,
+        forceDueMovedAt: Number(merged.forceDueMovedAt || 0) || null
+    };
+}
+
+function getSyncRecommendCurrentCardItems(currentCards = null, scoresCache = {}, limit = 80) {
+    const safeLimit = Math.max(1, Number(limit || 80) || 80);
+    const raw = currentCards && typeof currentCards === 'object' ? currentCards : {};
+    const items = [];
+    if (Array.isArray(raw.cardData)) items.push(...raw.cardData);
+    if (Array.isArray(raw.cards)) items.push(...raw.cards);
+    if (Array.isArray(raw.cardIds)) {
+        raw.cardIds.forEach((id) => {
+            const safeId = String(id || '').trim();
+            if (!safeId) return;
+            items.push({ id: safeId });
+        });
+    }
+    const seen = new Set();
+    const normalized = [];
+    items.forEach((item) => {
+        const normalizedItem = normalizeSyncRecommendCardItem(item, scoresCache);
+        const dedupeKey = normalizedItem.id || normalizedItem.url || normalizedItem.title;
+        if (!dedupeKey || seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        normalized.push(normalizedItem);
+    });
+    return normalized.slice(0, safeLimit);
+}
+
+function countSyncRecommendCurrentCards(currentCards = null) {
+    return getSyncRecommendCurrentCardItems(currentCards, {}, 10000).length;
+}
+
+function sanitizeSyncRecommendScoresReadyResult(result = null) {
+    if (!result || typeof result !== 'object') return null;
+    const mode = String(result.mode || '').trim();
+    const reason = String(result.reason || result.error || '').trim();
+    const cacheHealth = result.cacheHealth && typeof result.cacheHealth === 'object'
+        ? { ...result.cacheHealth }
+        : null;
+    return {
+        success: result.success !== false,
+        ready: result.ready === true,
+        mode,
+        reason,
+        repairing: result.repairing === true,
+        cacheCount: Math.max(0, Number(result.cacheCount || 0) || 0),
+        bookmarkCount: Math.max(0, Number(result.bookmarkCount || 0) || 0),
+        cacheHealth
+    };
+}
+
+function sanitizeSyncRecommendStaleMeta(meta = null) {
+    if (!meta || typeof meta !== 'object') return null;
+    const staleAt = Math.max(0, Number(meta.staleAt || 0) || 0);
+    return {
+        staleAt,
+        staleAtText: staleAt ? getSyncNowLabel(staleAt) : '',
+        reason: String(meta.reason || ''),
+        cacheHealth: meta.cacheHealth && typeof meta.cacheHealth === 'object'
+            ? { ...meta.cacheHealth }
+            : null
+    };
+}
+
+function buildSyncRecommendScoreCacheMeta(scoresCache = {}, localData = {}, ensureResult = null) {
+    const entries = scoresCache && typeof scoresCache === 'object' && !Array.isArray(scoresCache)
+        ? Object.entries(scoresCache)
+        : [];
+    let validScoreCount = 0;
+    let invalidScoreCount = 0;
+    let templateScoreCount = 0;
+    let metadataReadyCount = 0;
+
+    entries.forEach(([, item]) => {
+        if (!item || typeof item !== 'object') {
+            invalidScoreCount += 1;
+            return;
+        }
+        if (Number.isFinite(Number(item.S))) {
+            validScoreCount += 1;
+        } else {
+            invalidScoreCount += 1;
+        }
+        if (item._template === true) templateScoreCount += 1;
+        if (String(item.url || item.title || '').trim()) metadataReadyCount += 1;
+    });
+
+    const scoreCount = entries.length;
+    const recommendScoresTime = Math.max(0, Number(localData?.recommend_scores_time || 0) || 0);
+    return {
+        scoreCount,
+        validScoreCount,
+        invalidScoreCount,
+        metadataReadyCount,
+        metadataReadyRatio: scoreCount ? Number((metadataReadyCount / scoreCount).toFixed(4)) : 0,
+        templateScoreCount,
+        templateScoreRatio: scoreCount ? Number((templateScoreCount / scoreCount).toFixed(4)) : 0,
+        recommendScoresTime,
+        recommendScoresTimeText: recommendScoresTime ? getSyncNowLabel(recommendScoresTime) : '',
+        staleMeta: sanitizeSyncRecommendStaleMeta(localData?.recommendScoresStaleMeta || null),
+        ensureResult: sanitizeSyncRecommendScoresReadyResult(ensureResult)
+    };
+}
+
+function extractSyncRecommendIds(values = []) {
+    return Array.from(new Set((Array.isArray(values) ? values : [])
+        .map((item) => {
+            if (item && typeof item === 'object') {
+                return String(item.id || item.bookmarkId || item.key || '').trim();
+            }
+            return String(item || '').trim();
+        })
+        .filter(Boolean)));
+}
+
+function buildSyncRecommendTargets(ids = [], scoresCache = {}, limit = 80) {
+    const safeLimit = Math.max(1, Number(limit || 80) || 80);
+    return (Array.isArray(ids) ? ids : [])
+        .slice(0, safeLimit)
+        .map((id) => buildSyncRecommendScoreItem(id, scoresCache?.[id] || { id }))
+        .filter((item) => item.id || item.url || item.title);
+}
+
+function buildSyncRecentFlipEvents(flipHistory = [], limit = 80) {
+    const safeLimit = Math.max(1, Number(limit || 80) || 80);
+    return (Array.isArray(flipHistory) ? flipHistory : [])
+        .slice(-safeLimit)
+        .reverse()
+        .map((item) => {
+            if (!item || typeof item !== 'object') {
+                return { id: String(item || ''), action: '', at: null };
+            }
+            return {
+                id: item.id == null ? (item.bookmarkId == null ? null : String(item.bookmarkId)) : String(item.id),
+                title: String(item.title || item.name || ''),
+                url: String(item.url || ''),
+                action: String(item.action || item.type || ''),
+                at: Number(item.at || item.time || item.timestamp || item.flippedAt || 0) || null
+            };
+        });
+}
+
+function buildBookmarkRecommendSignals(poolData = {}, eventData = {}, timestamp = Date.now()) {
+    const scoresCache = poolData?.recommend_scores_cache && typeof poolData.recommend_scores_cache === 'object'
+        ? poolData.recommend_scores_cache
+        : {};
+    const allCurrentCards = getSyncRecommendCurrentCardItems(poolData?.historyCurrentCards, scoresCache, 10000);
+    const currentCards = allCurrentCards.slice(0, 80);
+    const reviews = eventData?.recommend_reviews && typeof eventData.recommend_reviews === 'object'
+        ? eventData.recommend_reviews
+        : {};
+    const reviewIds = Object.keys(reviews);
+    const postponedIds = extractSyncRecommendIds(eventData?.recommend_postponed || []);
+    const skippedIds = extractSyncRecommendIds(eventData?.recommend_skipped_bookmarks_v1 || []);
+    const flippedIds = extractSyncRecommendIds(eventData?.flippedBookmarks || []);
+    const blocked = eventData?.recommend_blocked && typeof eventData.recommend_blocked === 'object'
+        ? eventData.recommend_blocked
+        : {};
+
+    return {
+        generatedAt: Number(timestamp || Date.now()) || Date.now(),
+        scoreLeaders: {
+            totalCount: Object.keys(scoresCache).length,
+            items: buildSyncRecommendScoreLeaders(scoresCache, 80)
+        },
+        currentCards: {
+            totalCount: allCurrentCards.length,
+            forceDueCount: allCurrentCards.filter((item) => item.forceDue).length,
+            items: currentCards
+        },
+        reviewTargets: {
+            totalCount: reviewIds.length,
+            items: buildSyncRecommendTargets(reviewIds, scoresCache, 80)
+        },
+        postponedTargets: {
+            totalCount: postponedIds.length,
+            items: buildSyncRecommendTargets(postponedIds, scoresCache, 80)
+        },
+        skippedTargets: {
+            totalCount: skippedIds.length,
+            items: buildSyncRecommendTargets(skippedIds, scoresCache, 80)
+        },
+        flippedTargets: {
+            totalCount: flippedIds.length,
+            items: buildSyncRecommendTargets(flippedIds, scoresCache, 80)
+        },
+        blockedSummary: {
+            bookmarksCount: Array.isArray(blocked.bookmarks) ? blocked.bookmarks.length : 0,
+            foldersCount: Array.isArray(blocked.folders) ? blocked.folders.length : 0,
+            domainsCount: Array.isArray(blocked.domains) ? blocked.domains.length : 0
+        },
+        recentFlipEvents: {
+            totalCount: Array.isArray(eventData?.flipHistory) ? eventData.flipHistory.length : 0,
+            items: buildSyncRecentFlipEvents(eventData?.flipHistory || [], 80)
+        }
+    };
+}
+
+function buildBookmarkRecordExportPackage(snapshot, pushId) {
+    const payload = snapshot?.payload && typeof snapshot.payload === 'object' ? snapshot.payload : {};
+    const packages = payload.packages && typeof payload.packages === 'object' ? payload.packages : {};
+    const bookmarkRecords = packages.bookmarkRecords && typeof packages.bookmarkRecords === 'object'
+        ? packages.bookmarkRecords
+        : {};
+    const timeTracking = packages.timeTracking && typeof packages.timeTracking === 'object'
+        ? packages.timeTracking
+        : {};
+    const bookmarkData = bookmarkRecords.data && typeof bookmarkRecords.data === 'object'
+        ? bookmarkRecords.data
+        : {};
+    const timeData = timeTracking.data && typeof timeTracking.data === 'object'
+        ? timeTracking.data
+        : {};
+    const bookmarkSummary = bookmarkRecords.summary && typeof bookmarkRecords.summary === 'object'
+        ? bookmarkRecords.summary
+        : {};
+    const timeSummary = timeTracking.summary && typeof timeTracking.summary === 'object'
+        ? timeTracking.summary
+        : {};
+    const signals = buildBookmarkRecordSignals(bookmarkData, Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now());
+    return {
+        schema: 'bookmark_record_and_recommend.bookmark-record.v1',
+        pushId,
+        generatedAt: Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now(),
+        generatedAtText: String(payload.generatedAtText || getSyncNowLabel(snapshot?.updatedAt || Date.now())),
+        summary: {
+            additionsCount: Number(bookmarkSummary.additionsCount || 0) || 0,
+            clickRecordCount: Number(bookmarkSummary.clickRecordCount || 0) || 0,
+            clickRankingCount: Number(bookmarkSummary.clickRankingCount || 0) || 0,
+            relatedSnapshotCount: Number(bookmarkSummary.relatedSnapshotCount || 0) || 0,
+            activeClickDateCount: Number(signals.activityRange.activeDateCount || 0) || 0,
+            recentClickItemCount: Array.isArray(signals.recentClicks.items) ? signals.recentClicks.items.length : 0,
+            unopenedAdditionsCount: Number(signals.unopenedAdditions.totalCount || 0) || 0,
+            recentUnopenedAdditionsCount: Number(signals.recentUnopenedAdditions.totalCount || 0) || 0,
+            topClickedDomainCount: Array.isArray(signals.topClickedDomains) ? signals.topClickedDomains.length : 0,
+            topClickedFolderCount: Array.isArray(signals.topClickedFolders) ? signals.topClickedFolders.length : 0,
+            topAddedFolderCount: Array.isArray(signals.topAddedFolders) ? signals.topAddedFolders.length : 0,
+            hasTimeRanking: !!timeSummary.hasTimeRanking,
+            rankingRange: String(timeSummary.rankingRange || 'all'),
+            trackingBlockedCount: Number(timeSummary.trackingBlockedCount || 0) || 0,
+            trackingBlockedBookmarksCount: Number(timeSummary.trackingBlockedBookmarksCount || 0) || 0,
+            trackingBlockedFoldersCount: Number(timeSummary.trackingBlockedFoldersCount || 0) || 0,
+            trackingBlockedDomainsCount: Number(timeSummary.trackingBlockedDomainsCount || 0) || 0,
+            compositeRankingCount: Number(timeSummary.compositeRankingCount || 0) || 0,
+            wakesRankingCount: Number(timeSummary.wakesRankingCount || 0) || 0
+        },
+        data: {
+            additionsRecords: Array.isArray(bookmarkData.additionsRecords) ? bookmarkData.additionsRecords : [],
+            clickRecords: bookmarkData.clickRecords && typeof bookmarkData.clickRecords === 'object'
+                ? bookmarkData.clickRecords
+                : { rows: [] },
+            clickRanking: bookmarkData.clickRanking && typeof bookmarkData.clickRanking === 'object'
+                ? bookmarkData.clickRanking
+                : {},
+            relatedRecords: bookmarkData.relatedRecords && typeof bookmarkData.relatedRecords === 'object'
+                ? bookmarkData.relatedRecords
+                : {},
+            signals,
+            timeTracking: {
+                trackingBlocked: timeData.trackingBlocked || normalizeBlockedState(null),
+                rankings: timeData.rankings || { composite: [], wakes: [], generatedAt: Date.now(), range: 'all' }
+            }
+        },
+        sourcePackages: ['bookmarkRecords', 'timeTracking']
+    };
+}
+
+function buildBookmarkRecommendExportPackage(snapshot, pushId) {
+    const payload = snapshot?.payload && typeof snapshot.payload === 'object' ? snapshot.payload : {};
+    const packages = payload.packages && typeof payload.packages === 'object' ? payload.packages : {};
+    const recommendPool = packages.recommendPool && typeof packages.recommendPool === 'object'
+        ? packages.recommendPool
+        : {};
+    const recommendEvents = packages.recommendEvents && typeof packages.recommendEvents === 'object'
+        ? packages.recommendEvents
+        : {};
+    const poolSummary = recommendPool.summary && typeof recommendPool.summary === 'object'
+        ? recommendPool.summary
+        : {};
+    const eventsSummary = recommendEvents.summary && typeof recommendEvents.summary === 'object'
+        ? recommendEvents.summary
+        : {};
+    const poolData = recommendPool.data && typeof recommendPool.data === 'object' ? recommendPool.data : {};
+    const eventData = recommendEvents.data && typeof recommendEvents.data === 'object'
+        ? recommendEvents.data
+        : {};
+    const scoreCacheMeta = poolData.scoreCacheMeta && typeof poolData.scoreCacheMeta === 'object'
+        ? poolData.scoreCacheMeta
+        : {};
+    const recommendMode = poolData.recommendMode && typeof poolData.recommendMode === 'object'
+        ? poolData.recommendMode
+        : {};
+    const blocked = eventData.recommend_blocked && typeof eventData.recommend_blocked === 'object'
+        ? eventData.recommend_blocked
+        : {};
+    const blockedCount = ['bookmarks', 'folders', 'domains']
+        .reduce((sum, key) => sum + (Array.isArray(blocked[key]) ? blocked[key].length : 0), 0);
+    const generatedAt = Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now();
+    const signals = buildBookmarkRecommendSignals(poolData, eventData, generatedAt);
+    const currentCardCount = Math.max(
+        Number(poolSummary.currentCardCount || 0) || 0,
+        Number(signals.currentCards.totalCount || 0) || 0
+    );
+    return {
+        schema: 'bookmark_record_and_recommend.bookmark-recommend.v1',
+        pushId,
+        generatedAt,
+        generatedAtText: String(payload.generatedAtText || getSyncNowLabel(snapshot?.updatedAt || Date.now())),
+        summary: {
+            scoreCount: Number(poolSummary.scoreCount || 0) || 0,
+            currentCardCount,
+            hasPoolCursor: !!poolSummary.hasPoolCursor,
+            activeMode: String(poolSummary.activeMode || 'default'),
+            modeLastSwitchAt: Number(recommendMode.lastSwitchAt || 0) || null,
+            recommendScoresTime: Number(poolSummary.recommendScoresTime || scoreCacheMeta.recommendScoresTime || 0) || null,
+            scoresReady: poolSummary.scoresReady === true,
+            scoresReadyMode: String(poolSummary.scoresReadyMode || scoreCacheMeta?.ensureResult?.mode || ''),
+            templateScoreCount: Number(poolSummary.templateScoreCount || scoreCacheMeta.templateScoreCount || 0) || 0,
+            templateScoreRatio: Number(poolSummary.templateScoreRatio || scoreCacheMeta.templateScoreRatio || 0) || 0,
+            scoreLeaderCount: Array.isArray(signals.scoreLeaders.items) ? signals.scoreLeaders.items.length : 0,
+            forceDueCurrentCardCount: Number(signals.currentCards.forceDueCount || 0) || 0,
+            reviewsCount: Number(eventsSummary.reviewsCount || 0) || 0,
+            reviewsSimilarAvailable: eventsSummary.reviewsSimilarAvailable === true,
+            reviewsSimilarCount: Number(eventsSummary.reviewsSimilarCount || 0) || 0,
+            reviewTargetCount: Number(signals.reviewTargets.totalCount || 0) || 0,
+            blockedCount,
+            postponedCount: Number(eventsSummary.postponedCount || 0) || 0,
+            skippedCount: Number(eventsSummary.skippedCount || 0) || 0,
+            flippedBookmarksCount: Number(eventsSummary.flippedBookmarksCount || 0) || 0,
+            flipHistoryCount: Number(eventsSummary.flipHistoryCount || 0) || 0
+        },
+        data: {
+            recommendPool: poolData,
+            recommendEvents: eventData,
+            signals
+        },
+        sourcePackages: ['recommendPool', 'recommendEvents']
+    };
+}
+
+function buildBookmarksTreeExportPackage(snapshot, pushId) {
+    const payload = snapshot?.payload && typeof snapshot.payload === 'object' ? snapshot.payload : {};
+    const treePackage = payload?.packages?.bookmarkTreeSnapshot && typeof payload.packages.bookmarkTreeSnapshot === 'object'
+        ? payload.packages.bookmarkTreeSnapshot
+        : {};
+    const treeData = treePackage.data && typeof treePackage.data === 'object'
+        ? treePackage.data
+        : {};
+    const rawSource = String(treeData.source || treePackage?.summary?.source || '').trim();
+    const source = rawSource === 'none' || !rawSource ? 'unavailable' : rawSource;
+    const records = Array.isArray(treeData.records) ? treeData.records : [];
+    const hasNativeTree = treeData.tree && typeof treeData.tree === 'object';
+    const format = String(treeData.format || (hasNativeTree ? 'chrome-bookmarks-tree+flattened-records' : 'flattened-records'));
+    return {
+        schema: 'bookmark_record_and_recommend.bookmarks-tree.v1',
+        pushId,
+        generatedAt: Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now(),
+        status: String(treeData.status || treePackage?.summary?.status || (records.length ? 'ok' : 'unavailable')),
+        source,
+        format,
+        itemCount: Number(treeData.itemCount || treePackage?.summary?.itemCount || records.length || 0) || 0,
+        fetchedAt: Number(treeData.fetchedAt || payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now(),
+        data: treeData && Object.keys(treeData).length ? treeData : {
+            status: 'unavailable',
+            source,
+            itemCount: 0,
+            records: []
+        }
+    };
+}
+
+function normalizeSyncHistoryVisitRecord(record = {}, dateKey = '', source = '') {
+    if (!record || typeof record !== 'object') return null;
+    const url = String(record.url || '').trim();
+    if (!url) return null;
+    const rawVisitTime = record.visitTime ?? record.lastVisitTime ?? record.dateAdded;
+    let visitTime = Number(rawVisitTime || 0);
+    if ((!Number.isFinite(visitTime) || visitTime <= 0) && dateKey) {
+        const parsed = Date.parse(dateKey);
+        if (Number.isFinite(parsed)) visitTime = parsed;
+    }
+    return {
+        url,
+        title: String(record.title || url),
+        visitTime: Number.isFinite(visitTime) && visitTime > 0 ? visitTime : null,
+        visitCount: Math.max(1, Number(record.visitCount || 1) || 1),
+        typedCount: Math.max(0, Number(record.typedCount || 0) || 0),
+        bookmarkId: record.bookmarkId || record.id ? String(record.bookmarkId || record.id) : null,
+        folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
+        matchType: String(record.matchType || ''),
+        source: source || 'sync-browsing-cache'
+    };
+}
+
+function buildHistoryVisitsJsonlExport(snapshot, limit = SYNC_HISTORY_VISITS_EXPORT_LIMIT) {
+    const safeLimit = Math.max(1, Number(limit) || SYNC_HISTORY_VISITS_EXPORT_LIMIT);
+    const payload = snapshot?.payload && typeof snapshot.payload === 'object' ? snapshot.payload : {};
+    const rawNative = payload.rawNative && typeof payload.rawNative === 'object' ? payload.rawNative : {};
+    const rawHistory = rawNative.historyVisits && typeof rawNative.historyVisits === 'object'
+        ? rawNative.historyVisits
+        : {};
+    const bookmarkRows = payload?.packages?.bookmarkRecords?.data?.clickRecords?.rows;
+    const rows = Array.isArray(rawHistory.rows)
+        ? rawHistory.rows
+        : (Array.isArray(bookmarkRows) ? bookmarkRows : []);
+    const source = String(rawHistory.source || 'sync-browsing-cache');
+    const lines = [];
+    let totalRecords = 0;
+    rows.forEach((row) => {
+        if (!Array.isArray(row)) return;
+        const dateKey = String(row[0] || '');
+        const records = Array.isArray(row[1]) ? row[1] : [];
+        records.forEach((record) => {
+            const normalized = normalizeSyncHistoryVisitRecord(record, dateKey, source);
+            if (!normalized) return;
+            totalRecords += 1;
+            if (lines.length < safeLimit) {
+                lines.push(JSON.stringify(normalized));
+            }
+        });
+    });
+    return {
+        text: lines.length ? `${lines.join('\n')}\n` : '',
+        records: lines.length,
+        totalRecords,
+        limit: safeLimit,
+        truncated: totalRecords > lines.length,
+        source
+    };
+}
+
+function isSyncRuleRemotePath(path = '', basePath = '') {
+    const normalizedPath = normalizeSyncRelativePath(path);
+    const normalizedBase = normalizeSyncRelativePath(basePath);
+    if (!normalizedPath || !normalizedBase || !normalizedPath.startsWith(`${normalizedBase}/`)) return false;
+    const relative = normalizedPath.slice(normalizedBase.length + 1);
+    if (!relative || relative.includes('/')) return false;
+    const name = getSyncPathBasename(relative).toLowerCase();
+    return isSyncRuleDocName(name);
+}
+
+async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigState, options = {}) {
+    const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
+    const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
+    const nowTs = Number(snapshot?.updatedAt || Date.now()) || Date.now();
+    const paths = buildSyncRepoPaths(repoConfig, nowTs);
+    const pushId = String(snapshot.pushId || buildSyncPushId(nowTs));
+    const snapshotId = String(snapshot.snapshotId || buildSyncSnapshotId(nowTs, pushId));
+    const commitPrefix = `[sync:${pushId}]`;
+    const packageSelection = getSyncPackageSelection(snapshot.pushConfig || syncConfigState);
+    const files = [];
+    const manifestFileEntries = [];
+    const readOrder = [];
+    const expectedInputDocPaths = new Set();
+    const expectedRulePaths = new Set();
+
+    const addFile = (entry) => {
+        const normalizedPath = normalizeSyncRelativePath(entry?.path || '');
+        if (!normalizedPath) return null;
+        const file = {
+            path: normalizedPath,
+            text: String(entry?.text == null ? '' : entry.text),
+            message: String(entry?.message || `${commitPrefix} update ${stripSyncBasePath(normalizedPath, paths.basePath)}`)
+        };
+        if (entry?.docCache) file.docCache = entry.docCache;
+        files.push(file);
+        return file;
+    };
+
+    const addManifestFileEntry = async (role, path, schema, text, extra = {}) => {
+        const relativePath = stripSyncBasePath(path, paths.basePath);
+        const sha256 = await computeSyncTextSha256Hex(text);
+        manifestFileEntries.push({
+            role,
+            path: relativePath,
+            schema,
+            sha256,
+            ...extra
+        });
+        readOrder.push(relativePath);
+    };
+
+    if (packageSelection.bookmarkRecord) {
+        const recordPackage = buildBookmarkRecordExportPackage(snapshot, pushId);
+        const text = JSON.stringify(recordPackage, null, 2);
+        addFile({
+            path: paths.packageBookmarkRecordPath,
+            text,
+            message: `${commitPrefix} update data/packages/bookmark-record`
+        });
+        await addManifestFileEntry(
+            'bookmark-record',
+            paths.packageBookmarkRecordPath,
+            recordPackage.schema,
+            text,
+            {
+                records: Number(recordPackage.summary.additionsCount || 0)
+                    + Number(recordPackage.summary.clickRecordCount || 0)
+            }
+        );
+    }
+
+    if (packageSelection.bookmarkRecommend) {
+        const recommendPackage = buildBookmarkRecommendExportPackage(snapshot, pushId);
+        const text = JSON.stringify(recommendPackage, null, 2);
+        addFile({
+            path: paths.packageBookmarkRecommendPath,
+            text,
+            message: `${commitPrefix} update data/packages/bookmark-recommend`
+        });
+        await addManifestFileEntry(
+            'bookmark-recommend',
+            paths.packageBookmarkRecommendPath,
+            recommendPackage.schema,
+            text,
+            {
+                records: Number(recommendPackage.summary.scoreCount || 0)
+                    + Number(recommendPackage.summary.flipHistoryCount || 0)
+            }
+        );
+    }
+
+    if (packageSelection.rawNative) {
+        const treePackage = buildBookmarksTreeExportPackage(snapshot, pushId);
+        const treeText = JSON.stringify(treePackage, null, 2);
+        addFile({
+            path: paths.rawNativeBookmarksTreePath,
+            text: treeText,
+            message: `${commitPrefix} update data/raw-native/bookmarks-tree`
+        });
+        await addManifestFileEntry(
+            'raw-native-bookmarks',
+            paths.rawNativeBookmarksTreePath,
+            treePackage.schema,
+            treeText,
+            {
+                records: Number(treePackage.itemCount || 0),
+                source: treePackage.source,
+                format: treePackage.format
+            }
+        );
+
+        const historyExport = buildHistoryVisitsJsonlExport(snapshot, SYNC_HISTORY_VISITS_EXPORT_LIMIT);
+        addFile({
+            path: paths.rawNativeHistoryVisitsPath,
+            text: historyExport.text,
+            message: `${commitPrefix} update data/raw-native/history-visits`
+        });
+        await addManifestFileEntry(
+            'raw-native-history',
+            paths.rawNativeHistoryVisitsPath,
+            'bookmark_record_and_recommend.history-visits-jsonl.v1',
+            historyExport.text,
+            {
+                records: historyExport.records,
+                totalRecords: historyExport.totalRecords,
+                truncated: historyExport.truncated,
+                limit: historyExport.limit,
+                source: historyExport.source
+            }
+        );
+    }
+
+    const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
     const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const localAgentDoc = docs.find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
+    const agentMarkdown = String(localAgentDoc?.markdown || localAgentDoc?.content || '').trim()
+        ? String(localAgentDoc.markdown || localAgentDoc.content || '')
+        : getDefaultSyncAgentDocTemplate(currentLang);
+    const agentRuleFilePath = joinSyncRelativePath(paths.basePath, SYNC_AGENT_DOC_NAME);
+    expectedRulePaths.add(normalizeSyncRelativePath(agentRuleFilePath));
+    addFile({
+        path: agentRuleFilePath,
+        text: agentMarkdown,
+        message: `${commitPrefix} update rule file ${SYNC_AGENT_DOC_NAME}`,
+        docCache: {
+            kind: SYNC_DOC_KIND_AGENT,
+            name: SYNC_AGENT_DOC_NAME,
+            markdown: agentMarkdown
+        }
+    });
+
     const docsIndex = {
-        schema: 'bookmark-record-recommend.ai-input-docs-index.v1',
+        schema: 'bookmark_record_and_recommend.ai-input-docs-index.v1',
+        pushId,
         updatedAt: nowTs,
         updatedAtText: getSyncNowLabel(nowTs),
         docs: []
     };
-    const docCacheUpdates = [];
     docs.forEach((doc, index) => {
         const kind = doc?.kind || SYNC_DOC_KIND_INPUT;
         if (kind === SYNC_DOC_KIND_AGENT) {
-            const ruleFileName = sanitizeSyncDocName(doc?.name, SYNC_AGENT_DOC_NAME);
-            const ruleFilePath = joinSyncRelativePath(paths.basePath, ruleFileName);
-            filesToPush.push({
-                path: ruleFilePath,
-                text: String(doc?.markdown || ''),
-                message: `${commitPrefix} update rule file ${ruleFileName}`,
-                docCache: {
-                    kind: SYNC_DOC_KIND_AGENT,
-                    name: ruleFileName,
-                    markdown: String(doc?.markdown || '')
-                }
-            });
             return;
         }
         if (kind === SYNC_DOC_KIND_RESULT) {
@@ -12365,12 +13917,13 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
         }
         const safeRelativePath = sanitizeSyncDocRelativePath(doc?.name, `doc-${index + 1}.md`);
         const docPath = joinSyncRelativePath(inputDocsRoot, safeRelativePath);
+        expectedInputDocPaths.add(normalizeSyncRelativePath(docPath));
         docsIndex.docs.push({
             name: safeRelativePath,
             path: docPath,
             updatedAt: Number(doc?.updatedAt || nowTs) || nowTs
         });
-        filesToPush.push({
+        addFile({
             path: docPath,
             text: String(doc?.markdown || ''),
             message: `${commitPrefix} update input doc ${safeRelativePath}`,
@@ -12381,16 +13934,109 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
             }
         });
     });
-    filesToPush.push({
+
+    addFile({
         path: joinSyncRelativePath(inputDocsRoot, 'index.json'),
         text: JSON.stringify(docsIndex, null, 2),
         message: `${commitPrefix} update input docs index`
     });
 
-    const expectedInputDocPaths = new Set(
-        docsIndex.docs
-            .map((entry) => normalizeSyncRelativePath(entry?.path || ''))
-            .filter(Boolean)
+    const metaState = {
+        schema: 'bookmark_record_and_recommend.ai-sync-state.v1',
+        provider: String(options.provider || repoConfig.provider || SYNC_PROVIDER_GITHUB),
+        branch: String(options.branch || repoConfig.branch || '').trim() || 'main',
+        basePath: paths.basePath,
+        pushId,
+        snapshotId,
+        pushedAt: nowTs,
+        pushedAtText: getSyncNowLabel(nowTs),
+        packageCount: countEnabledSyncPackages(snapshot.pushConfig || syncConfigState),
+        docsCount: docs.length,
+        exportedFileCount: files.length + 2
+    };
+    addFile({
+        path: paths.metaStatePath,
+        text: JSON.stringify(metaState, null, 2),
+        message: `${commitPrefix} update sync state`
+    });
+
+    const manifest = {
+        schema: 'bookmark_record_and_recommend.sync-manifest.v1',
+        pushId,
+        snapshotId,
+        generatedAt: nowTs,
+        generatedAtText: getSyncNowLabel(nowTs),
+        basePath: paths.basePath,
+        writeMode: String(options.writeMode || 'github-contents-api-multi-commit'),
+        packageSelection,
+        files: manifestFileEntries,
+        readOrder
+    };
+    addFile({
+        path: paths.dataManifestPath,
+        text: JSON.stringify(manifest, null, 2),
+        message: `${commitPrefix} update data/manifest`
+    });
+
+    const dedupedMap = new Map();
+    files.forEach((entry) => {
+        const normalizedPath = normalizeSyncRelativePath(entry?.path || '');
+        if (!normalizedPath) return;
+        dedupedMap.set(normalizedPath, {
+            ...entry,
+            path: normalizedPath,
+            text: String(entry?.text || '')
+        });
+    });
+
+    return {
+        timestamp: nowTs,
+        pushId,
+        snapshotId,
+        paths,
+        files: Array.from(dedupedMap.values()),
+        docsIndex,
+        expectedInputDocPaths,
+        expectedRulePaths,
+        manifest,
+        rootFolder: paths.basePath
+    };
+}
+
+async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
+    const safeSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const nowTs = Number(safeSnapshot.updatedAt || Date.now()) || Date.now();
+    let paths = buildSyncRepoPaths(repoConfig, nowTs);
+    const branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    if (!branchReady.success) {
+        return {
+            success: false,
+            error: branchReady.error || (currentLang === 'zh_CN' ? '分支不可用' : 'Branch is unavailable')
+        };
+    }
+    const branch = String(branchReady.branch || '').trim();
+    const branchCreated = branchReady.branchCreated === true;
+    const exportBundle = await buildSyncExportFiles(safeSnapshot, repoConfig, {
+        provider: SYNC_PROVIDER_GITHUB,
+        branch,
+        writeMode: 'github-contents-api-multi-commit'
+    });
+    paths = exportBundle.paths || paths;
+    const filesToPush = Array.isArray(exportBundle.files) ? exportBundle.files : [];
+    const commitPrefix = `[sync:${exportBundle.pushId || buildSyncPushId(nowTs)}]`;
+    const docCacheUpdates = [];
+    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const expectedInputDocPaths = exportBundle.expectedInputDocPaths instanceof Set
+        ? exportBundle.expectedInputDocPaths
+        : new Set();
+    const expectedRulePaths = exportBundle.expectedRulePaths instanceof Set
+        ? exportBundle.expectedRulePaths
+        : new Set();
+    const packagesRoot = joinSyncRelativePath(paths.basePath, 'data/packages');
+    const expectedPackagePaths = new Set(
+        filesToPush
+            .map((file) => normalizeSyncRelativePath(file?.path || ''))
+            .filter((path) => path && path.startsWith(`${packagesRoot}/`))
     );
     const inputListResult = await syncGitHubListFiles(repoConfig, inputDocsRoot, { branch });
     if (!inputListResult.success) {
@@ -12408,8 +14054,57 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
         .filter((file) => file.path && /\.md$/i.test(file.path))
         .filter((file) => !expectedInputDocPaths.has(file.path));
 
+    const rootEntriesResult = await syncGitHubListDirEntries(repoConfig, paths.basePath, { branch });
+    if (!rootEntriesResult.success) {
+        return {
+            success: false,
+            error: rootEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端同步根目录失败' : 'Failed to list remote sync root'),
+            branch
+        };
+    }
+    const remoteRuleDeleteQueue = (Array.isArray(rootEntriesResult.entries) ? rootEntriesResult.entries : [])
+        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
+        .map((entry) => ({
+            path: normalizeSyncRelativePath(entry?.path || ''),
+            sha: String(entry?.sha || '')
+        }))
+        .filter((file) => isSyncRuleRemotePath(file.path, paths.basePath))
+        .filter((file) => !expectedRulePaths.has(file.path));
+
+    const dataRoot = joinSyncRelativePath(paths.basePath, 'data');
+    const dataEntriesResult = await syncGitHubListDirEntries(repoConfig, dataRoot, { branch });
+    if (!dataEntriesResult.success) {
+        return {
+            success: false,
+            error: dataEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端 data 目录失败' : 'Failed to list remote data directory'),
+            branch
+        };
+    }
+    const obsoleteDataDeleteQueue = (Array.isArray(dataEntriesResult.entries) ? dataEntriesResult.entries : [])
+        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
+        .map((entry) => ({
+            path: normalizeSyncRelativePath(entry?.path || ''),
+            sha: String(entry?.sha || '')
+        }))
+        .filter((file) => file.path === normalizeSyncRelativePath(paths.obsoleteDataLatestPath));
+
+    const packageEntriesResult = await syncGitHubListDirEntries(repoConfig, packagesRoot, { branch });
+    if (!packageEntriesResult.success) {
+        return {
+            success: false,
+            error: packageEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端 packages 目录失败' : 'Failed to list remote packages directory'),
+            branch
+        };
+    }
+    const obsoletePackageDeleteQueue = (Array.isArray(packageEntriesResult.entries) ? packageEntriesResult.entries : [])
+        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
+        .map((entry) => ({
+            path: normalizeSyncRelativePath(entry?.path || ''),
+            sha: String(entry?.sha || '')
+        }))
+        .filter((file) => file.path && !expectedPackagePaths.has(file.path));
+
     const snapshotsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_DATA_SNAPSHOTS_ROOT);
-    const expectedSnapshotPath = normalizeSyncRelativePath(paths.dataSnapshotPath);
     const snapshotListResult = await syncGitHubListFiles(repoConfig, snapshotsRoot, { branch });
     if (!snapshotListResult.success) {
         return {
@@ -12423,51 +14118,9 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
             path: normalizeSyncRelativePath(file?.path || ''),
             sha: String(file?.sha || '')
         }))
-        .filter((file) => file.path && /\.json$/i.test(file.path))
-        .filter((file) => file.path !== expectedSnapshotPath);
-
-    const metaState = {
-        schema: 'bookmark-record-recommend.ai-sync-state.v1',
-        provider: SYNC_PROVIDER_GITHUB,
-        branch,
-        basePath: paths.basePath,
-        pushedAt: nowTs,
-        pushedAtText: getSyncNowLabel(nowTs),
-        packageCount: Number(safeSnapshot.packageCount || 0),
-        docsCount: docs.length
-    };
-    filesToPush.push({
-        path: paths.metaStatePath,
-        text: JSON.stringify(metaState, null, 2),
-        message: `${commitPrefix} update sync state`
-    });
+        .filter((file) => file.path && /\.json$/i.test(file.path));
 
     let pushedCount = 0;
-    for (let i = 0; i < filesToPush.length; i += 1) {
-        const file = filesToPush[i];
-        const putResult = await syncGitHubPutFile(repoConfig, { ...file, branch });
-        if (!putResult.success) {
-            return {
-                success: false,
-                error: putResult.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'),
-                branch,
-                pushedCount,
-                failedPath: file.path
-            };
-        }
-        if (file?.docCache && typeof file.docCache === 'object') {
-            docCacheUpdates.push({
-                kind: file.docCache.kind || SYNC_DOC_KIND_INPUT,
-                name: file.docCache.name || '',
-                markdown: String(file.docCache.markdown || ''),
-                remoteSha: String(putResult.sha || ''),
-                remotePath: normalizeSyncRelativePath(file.path || ''),
-                updatedAt: nowTs
-            });
-        }
-        pushedCount += 1;
-    }
-
     let deletedCount = 0;
     for (let i = 0; i < remoteInputDeleteQueue.length; i += 1) {
         const file = remoteInputDeleteQueue[i];
@@ -12493,6 +14146,73 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
         if (!deleteResult.notFound) deletedCount += 1;
     }
 
+    for (let i = 0; i < remoteRuleDeleteQueue.length; i += 1) {
+        const file = remoteRuleDeleteQueue[i];
+        const ruleName = getSyncPathBasename(file.path);
+        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
+            path: file.path,
+            sha: file.sha,
+            branch,
+            message: `${commitPrefix} delete rule file ${ruleName || 'AGENTS.md'}`
+        });
+        if (!deleteResult.success) {
+            return {
+                success: false,
+                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端规则文件删除失败' : 'Remote rule delete failed'),
+                branch,
+                pushedCount,
+                deletedCount,
+                failedPath: file.path
+            };
+        }
+        if (!deleteResult.notFound) deletedCount += 1;
+    }
+
+    for (let i = 0; i < obsoleteDataDeleteQueue.length; i += 1) {
+        const file = obsoleteDataDeleteQueue[i];
+        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
+            path: file.path,
+            sha: file.sha,
+            branch,
+            message: `${commitPrefix} delete obsolete data/latest.json`
+        });
+        if (!deleteResult.success) {
+            return {
+                success: false,
+                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端旧数据入口删除失败' : 'Remote obsolete data delete failed'),
+                branch,
+                pushedCount,
+                deletedCount,
+                failedPath: file.path
+            };
+        }
+        if (!deleteResult.notFound) deletedCount += 1;
+    }
+
+    for (let i = 0; i < obsoletePackageDeleteQueue.length; i += 1) {
+        const file = obsoletePackageDeleteQueue[i];
+        const relativePackagePath = file.path.startsWith(`${packagesRoot}/`)
+            ? file.path.slice(packagesRoot.length + 1)
+            : file.path;
+        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
+            path: file.path,
+            sha: file.sha,
+            branch,
+            message: `${commitPrefix} delete obsolete package ${relativePackagePath}`
+        });
+        if (!deleteResult.success) {
+            return {
+                success: false,
+                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端旧数据包删除失败' : 'Remote obsolete package delete failed'),
+                branch,
+                pushedCount,
+                deletedCount,
+                failedPath: file.path
+            };
+        }
+        if (!deleteResult.notFound) deletedCount += 1;
+    }
+
     for (let i = 0; i < remoteSnapshotDeleteQueue.length; i += 1) {
         const file = remoteSnapshotDeleteQueue[i];
         const relativeSnapshotPath = file.path.startsWith(`${snapshotsRoot}/`)
@@ -12502,7 +14222,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
             path: file.path,
             sha: file.sha,
             branch,
-            message: `${commitPrefix} cleanup legacy snapshot ${relativeSnapshotPath}`
+            message: `${commitPrefix} delete obsolete snapshot ${relativeSnapshotPath}`
         });
         if (!deleteResult.success) {
             return {
@@ -12515,6 +14235,31 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
             };
         }
         if (!deleteResult.notFound) deletedCount += 1;
+    }
+
+    for (let i = 0; i < filesToPush.length; i += 1) {
+        const file = filesToPush[i];
+        const putResult = await syncGitHubPutFile(repoConfig, { ...file, branch });
+        if (!putResult.success) {
+            return {
+                success: false,
+                error: putResult.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'),
+                branch,
+                pushedCount,
+                failedPath: file.path
+            };
+        }
+        if (file?.docCache && typeof file.docCache === 'object') {
+            docCacheUpdates.push({
+                kind: file.docCache.kind || SYNC_DOC_KIND_INPUT,
+                name: file.docCache.name || '',
+                markdown: String(file.docCache.markdown || ''),
+                remoteSha: String(putResult.sha || ''),
+                remotePath: normalizeSyncRelativePath(file.path || ''),
+                updatedAt: nowTs
+            });
+        }
+        pushedCount += 1;
     }
 
     return { success: true, branch, branchCreated, pushedCount, deletedCount, paths, docCacheUpdates };
@@ -12590,74 +14335,15 @@ async function pullSyncDocsFromGitHub(repoConfig) {
         }
     }
 
-    let preferredRulePath = '';
-    let preferredRuleReadResult = null;
-    const localAgentDoc = (Array.isArray(syncDocsState) ? syncDocsState : [])
-        .find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
-    const preferredRuleName = localAgentDoc
-        ? sanitizeSyncDocName(localAgentDoc?.name, SYNC_AGENT_DOC_NAME).toLowerCase()
-        : '';
-
-    const scoreRulePath = (path = '') => {
-        const name = getSyncPathBasename(path).toLowerCase();
-        if (!name) return -100;
-        if (preferredRuleName && name === preferredRuleName) return 100;
-        if (name === 'agents.md') return 98;
-        if (name === 'claude.md') return 92;
-        if (name === 'agent.md') return 86;
-        if (/^(agents?|claude)(?:[-_].+)?\.md$/.test(name)) return 74;
-        return -20;
-    };
-
-    const pickBestRulePath = (pathsInput = []) => {
-        const uniquePaths = Array.from(new Set((Array.isArray(pathsInput) ? pathsInput : [])
-            .map((path) => normalizeSyncRelativePath(path))
-            .filter((path) => path && /\.md$/i.test(path))));
-        if (!uniquePaths.length) return '';
-        const sortedPaths = uniquePaths.sort((a, b) => {
-            const diff = scoreRulePath(b) - scoreRulePath(a);
-            if (diff !== 0) return diff;
-            return a.localeCompare(b);
-        });
-        const best = sortedPaths[0] || '';
-        return scoreRulePath(best) < 0 ? '' : best;
-    };
-
-    const rootEntriesResult = await syncGitHubListDirEntries(repoConfig, paths.basePath, { branch });
-    if (rootEntriesResult.success) {
-        const rootRulePaths = (Array.isArray(rootEntriesResult.entries) ? rootEntriesResult.entries : [])
-            .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
-            .map((entry) => normalizeSyncRelativePath(entry?.path || ''))
-            .filter((path) => path && /\.md$/i.test(path));
-        preferredRulePath = pickBestRulePath(rootRulePaths);
-    } else if (rootEntriesResult.error && !/404/.test(String(rootEntriesResult.error))) {
-        failedReads += 1;
-        if (!firstReadError) firstReadError = String(rootEntriesResult.error);
-    }
-
-    if (!preferredRulePath) {
-        const probeRuleNames = Array.from(new Set([
-            preferredRuleName,
-            'AGENTS.md',
-            'agents.md',
-            'CLAUDE.md',
-            'claude.md',
-            'AGENT.md',
-            'agent.md'
-        ].filter(Boolean)));
-        for (let i = 0; i < probeRuleNames.length; i += 1) {
-            const probePath = joinSyncRelativePath(paths.basePath, probeRuleNames[i]);
-            const probeResult = await syncGitHubGetFile(repoConfig, probePath, { branch });
-            if (probeResult.success) {
-                preferredRulePath = probePath;
-                preferredRuleReadResult = probeResult;
-                break;
-            }
-            if (probeResult.error && !/404/.test(String(probeResult.error))) {
-                failedReads += 1;
-                if (!firstReadError) firstReadError = String(probeResult.error);
-            }
+    let preferredRulePath = joinSyncRelativePath(paths.basePath, SYNC_AGENT_DOC_NAME);
+    let preferredRuleReadResult = await syncGitHubGetFile(repoConfig, preferredRulePath, { branch });
+    if (!preferredRuleReadResult.success) {
+        if (preferredRuleReadResult.error && !/404/.test(String(preferredRuleReadResult.error))) {
+            failedReads += 1;
+            if (!firstReadError) firstReadError = String(preferredRuleReadResult.error);
         }
+        preferredRulePath = '';
+        preferredRuleReadResult = null;
     }
 
     if (preferredRulePath) {
@@ -12744,6 +14430,7 @@ async function pushSyncSnapshotToCloud() {
         showToast(currentLang === 'zh_CN' ? `推送失败：${missingRepoReason.text}` : `Push failed: ${missingRepoReason.text}`);
         return null;
     }
+    await flushCurrentSyncDocBeforeTransfer('push-before-collect');
     const selectedPackageCount = countEnabledSyncPackages(config);
     let payload = null;
     try {
@@ -12755,13 +14442,15 @@ async function pushSyncSnapshotToCloud() {
         console.error('[SyncView] collect payload failed:', error);
         return null;
     }
-    const packageCount = Object.keys(payload.packages || {}).length;
+    const payloadPackageCount = Object.keys(payload.packages || {}).length;
+    const packageCount = countEnabledSyncPackages(config);
     const sanitizedPushConfig = buildSanitizedSyncConfigSnapshot(config);
     const snapshot = {
-        schema: 'bookmark-record-recommend.ai-cloud-snapshot.v2',
+        schema: 'bookmark_record_and_recommend.ai-cloud-snapshot.v2',
         updatedAt: Date.now(),
         pushConfig: sanitizedPushConfig,
         packageCount,
+        payloadPackageCount,
         docs: payload.docs,
         payload
     };
@@ -12811,8 +14500,11 @@ async function pushSyncSnapshotToCloud() {
             en: `GitHub pushed ${pushedCount} files (${pushedBranch})${branchCreatedNoteEn}${deletedNoteEn}`
         }, 'success');
         markSyncRepoConnected(config);
-        if (Array.isArray(remotePushResult.docCacheUpdates) && remotePushResult.docCacheUpdates.length > 0) {
-            remotePushResult.docCacheUpdates.forEach((item) => {
+        const pushedDocCacheUpdates = Array.isArray(remotePushResult.docCacheUpdates)
+            ? remotePushResult.docCacheUpdates
+            : [];
+        if (pushedDocCacheUpdates.length > 0) {
+            pushedDocCacheUpdates.forEach((item) => {
                 const mergeKey = buildSyncDocMergeKeyFromParts(item?.kind, item?.name);
                 if (!mergeKey) return;
                 syncRemoteDocCacheState[mergeKey] = {
@@ -12822,6 +14514,11 @@ async function pushSyncSnapshotToCloud() {
                     updatedAt: Number(item?.updatedAt || Date.now()) || Date.now()
                 };
             });
+            if (markSyncDocsCleanAfterPush(pushedDocCacheUpdates)) {
+                renderSyncFileList();
+                renderSyncMarkdown();
+                await saveSyncDocsToStorage();
+            }
             await saveSyncRemoteDocCacheToStorage();
         }
     } else {
@@ -12858,6 +14555,20 @@ async function pushSyncSnapshotToCloud() {
         }, localSnapshotDownloadResult?.success && failedCount === 0 ? 'success' : 'neutral');
         if (!localSnapshotDownloadResult?.success || failedCount > 0) {
             console.warn('[SyncView] local snapshot export issue:', localSnapshotDownloadResult);
+        } else {
+            const localDocCacheUpdates = (Array.isArray(payload.docs) ? payload.docs : [])
+                .filter((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.kind === SYNC_DOC_KIND_INPUT)
+                .map((doc) => ({
+                    kind: doc.kind || SYNC_DOC_KIND_INPUT,
+                    name: doc.kind === SYNC_DOC_KIND_AGENT ? SYNC_AGENT_DOC_NAME : doc.name,
+                    markdown: String(doc.markdown || ''),
+                    updatedAt: Number(snapshot.updatedAt || Date.now()) || Date.now()
+                }));
+            if (markSyncDocsCleanAfterPush(localDocCacheUpdates)) {
+                renderSyncFileList();
+                renderSyncMarkdown();
+                await saveSyncDocsToStorage();
+            }
         }
     }
 
@@ -13079,6 +14790,7 @@ async function pullSyncSnapshotFromCloud() {
         showToast(currentLang === 'zh_CN' ? '拉取失败：同步配置保存失败' : 'Pull failed: unable to save sync settings');
         return false;
     }
+    await flushCurrentSyncDocBeforeTransfer('pull-before-merge');
     const repoConfig = buildSyncRepoConfig(config);
     let cloudDocs = [];
     let remoteDocMetaByKey = Object.create(null);
@@ -13453,19 +15165,6 @@ function bindSyncViewEvents() {
             setSyncPullPolicyInfoVisible(false);
         }
     });
-    const rawHighVolumeInfoBtn = document.getElementById('syncPushPackageRawHighVolumeInfoBtn');
-    if (rawHighVolumeInfoBtn) {
-        rawHighVolumeInfoBtn.addEventListener('pointerdown', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-        });
-        rawHighVolumeInfoBtn.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setSyncRawHighVolumeInfoVisible(!syncRawHighVolumeInfoVisible);
-        });
-    }
-
     const newFileBtn = document.getElementById('syncNewFileBtn');
     if (newFileBtn) {
         newFileBtn.addEventListener('click', async () => {
@@ -34348,6 +36047,137 @@ async function getBrowsingRelatedHistoryData(range = 'day') {
     }
 }
 
+function getBrowsingRelatedQueryBoundsForBuild(range, options = {}) {
+    const safeRange = normalizeBrowsingRelatedRange(range);
+    if (!options.ignoreCustomBounds) {
+        return getBrowsingRelatedQueryBounds(safeRange);
+    }
+    return {
+        startTime: safeRange === 'all' ? 0 : getTimeRangeStart(safeRange),
+        endTime: Date.now()
+    };
+}
+
+async function getBrowsingRelatedBookmarkSetsFromCalendar(calendar) {
+    let bookmarkUrls = null;
+    let bookmarkTitles = null;
+
+    if (calendar && calendar.dbManager) {
+        const bookmarkDB = calendar.dbManager.getBookmarksDB();
+        if (bookmarkDB) {
+            bookmarkUrls = bookmarkDB.getAllUrls();
+            bookmarkTitles = bookmarkDB.getAllTitles();
+        }
+    }
+
+    if (!bookmarkUrls || !bookmarkTitles) {
+        if (calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
+            bookmarkUrls = new Set();
+            bookmarkTitles = new Set();
+            for (const records of calendar.bookmarksByDate.values()) {
+                if (!Array.isArray(records)) continue;
+                records.forEach(record => {
+                    if (record.url) bookmarkUrls.add(record.url);
+                    if (record.title && record.title.trim()) bookmarkTitles.add(record.title.trim());
+                });
+            }
+        }
+    }
+
+    if (!bookmarkUrls || !bookmarkTitles) {
+        const result = await getBookmarkUrlsAndTitles();
+        bookmarkUrls = result.urls;
+        bookmarkTitles = result.titles;
+    }
+
+    return {
+        bookmarkUrls: bookmarkUrls instanceof Set ? bookmarkUrls : new Set(),
+        bookmarkTitles: bookmarkTitles instanceof Set ? bookmarkTitles : new Set()
+    };
+}
+
+async function buildBrowsingRelatedSnapshotForRange(range = 'day', options = {}) {
+    const safeRange = normalizeBrowsingRelatedRange(range);
+    const api = (typeof chrome !== 'undefined') ? chrome : browser;
+    if (!api || !api.history || !api.history.search) {
+        throw new Error('History API not available');
+    }
+
+    if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+        initBrowsingHistoryCalendar();
+    }
+
+    const calendar = options.calendar || await waitForBrowsingHistoryCalendar({
+        timeout: Number(options.calendarTimeout || 10000) || 10000,
+        pollMs: Number(options.calendarPollMs || 200) || 200
+    });
+    if (!isBrowsingHistoryCalendarReady(calendar) && options.silent !== true) {
+        console.warn('[BrowsingRelated] 等待日历数据超时');
+    }
+
+    const queryBounds = getBrowsingRelatedQueryBoundsForBuild(safeRange, options);
+    const startTime = queryBounds.startTime;
+    const endTime = queryBounds.endTime;
+
+    const historyItems = await new Promise((resolve, reject) => {
+        api.history.search({
+            text: '',
+            startTime,
+            endTime,
+            maxResults: 0
+        }, (results) => {
+            if (api.runtime && api.runtime.lastError) {
+                reject(api.runtime.lastError);
+            } else {
+                resolve(results || []);
+            }
+        });
+    });
+
+    const getVisitsAsync = (url) => new Promise((resolve) => {
+        if (!api.history.getVisits) {
+            resolve([]);
+            return;
+        }
+        api.history.getVisits({ url }, (visits) => {
+            if (api.runtime && api.runtime.lastError) {
+                resolve([]);
+            } else {
+                resolve(visits || []);
+            }
+        });
+    });
+
+    const expandedItems = [];
+    const visitPromises = historyItems.map(async (item) => {
+        const visits = await getVisitsAsync(item.url);
+        const filteredVisits = visits.filter(v =>
+            v.visitTime >= startTime && v.visitTime <= endTime
+        );
+
+        if (filteredVisits.length > 0) {
+            return filteredVisits.map(visit => ({
+                ...item,
+                lastVisitTime: visit.visitTime,
+                transition: visit.transition || '',
+                _visitId: visit.visitId
+            }));
+        }
+        return [item];
+    });
+
+    const allVisitArrays = await Promise.all(visitPromises);
+    allVisitArrays.forEach(arr => expandedItems.push(...arr));
+
+    const { bookmarkUrls, bookmarkTitles } = await getBrowsingRelatedBookmarkSetsFromCalendar(calendar);
+    return {
+        historyItemsExpanded: expandedItems.slice(),
+        bookmarkUrls,
+        bookmarkTitles,
+        savedAt: Date.now()
+    };
+}
+
 // 加载书签关联记录（显示所有浏览记录，标识出书签）
 // 复用「点击记录」的书签集合进行标识，实现数据一致性
 async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
@@ -34385,8 +36215,9 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
                 setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('reuse'));
                 if (loadSeq !== browsingRelatedLoadSeq) return;
                 await renderBrowsingRelatedSnapshot(listContainer, staleSnapshot, safeRange);
+                return;
             }
-            return;
+            // 没有可复用快照时，继续执行后续真实计算，避免界面长期停留在“读取中”状态。
         }
 
         listContainer.innerHTML = `
@@ -34396,47 +36227,8 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
             </div>
         `;
 
-        const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
-        if (!browserAPI || !browserAPI.history || !browserAPI.history.search) {
-            throw new Error('History API not available');
-        }
-
-        // 确保「点击记录」日历已初始化
-        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-
-            initBrowsingHistoryCalendar();
-        }
-
-        const calendar = await waitForBrowsingHistoryCalendar({
-            timeout: 10000,
-            pollMs: 200
-        });
-        if (!isBrowsingHistoryCalendarReady(calendar)) {
-            console.warn('[BrowsingRelated] 等待日历数据超时');
-        }
-
-        // 获取时间范围（Phase 4.7: 支持自定义日期范围覆盖）
-        const queryBounds = getBrowsingRelatedQueryBounds(safeRange);
-        const startTime = queryBounds.startTime;
-        const endTime = queryBounds.endTime;
-
-        // 搜索所有历史记录（不限制数量）
-        const historyItems = await new Promise((resolve, reject) => {
-            browserAPI.history.search({
-                text: '',
-                startTime: startTime,
-                endTime: endTime,
-                maxResults: 0  // 0表示不限制数量
-            }, (results) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                    reject(browserAPI.runtime.lastError);
-                } else {
-                    resolve(results || []);
-                }
-            });
-        });
-
-        if (historyItems.length === 0) {
+        const relatedSnapshot = await buildBrowsingRelatedSnapshotForRange(safeRange);
+        if (!relatedSnapshot.historyItemsExpanded.length) {
             const emptyTitle = isZh ? '该时间范围内没有历史记录' : 'No history in this time range';
             listContainer.innerHTML = `
                 <div class="empty-state">
@@ -34447,108 +36239,11 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
             return;
         }
 
-        // ✨ 使用 getVisits 获取每个URL的详细访问记录，展开为每次访问一条
-        const expandedItems = [];
-        const getVisitsAsync = (url) => new Promise((resolve) => {
-            if (!browserAPI.history.getVisits) {
-                resolve([]);
-                return;
-            }
-            browserAPI.history.getVisits({ url }, (visits) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                    resolve([]);
-                } else {
-                    resolve(visits || []);
-                }
-            });
-        });
+        setBrowsingRelatedSnapshot(snapshotKey, relatedSnapshot);
 
-        // 并发获取所有URL的访问详情
-        const visitPromises = historyItems.map(async (item) => {
-            const visits = await getVisitsAsync(item.url);
-            // 过滤在时间范围内的访问
-            const filteredVisits = visits.filter(v =>
-                v.visitTime >= startTime && v.visitTime <= endTime
-            );
-
-            if (filteredVisits.length > 0) {
-                // 每次访问创建一条记录
-                return filteredVisits.map(visit => ({
-                    ...item,
-                    lastVisitTime: visit.visitTime,
-                    transition: visit.transition || '',
-                    _visitId: visit.visitId
-                }));
-            } else {
-                // 如果没有详细访问记录，使用汇总记录
-                return [item];
-            }
-        });
-
-        const allVisitArrays = await Promise.all(visitPromises);
-        allVisitArrays.forEach(arr => expandedItems.push(...arr));
-
-        if (expandedItems.length === 0) {
-            const emptyTitle = isZh ? '该时间范围内没有历史记录' : 'No history in this time range';
-            listContainer.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><i class="fas fa-history"></i></div>
-                    <div class="empty-state-title">${emptyTitle}</div>
-                </div>
-            `;
-            return;
-        }
-
-        // 用展开后的记录替换原来的
-        const baseHistoryItemsExpanded = expandedItems.slice();
-
-        // ✨ 获取书签URL和标题集合（用于标识哪些是书签）
-        // 优先从「点击记录」日历获取，保持数据一致性
-        let bookmarkUrls, bookmarkTitles;
-
-        // 优先使用 DatabaseManager 获取书签信息（最准确）
-        if (calendar && calendar.dbManager) {
-
-            const bookmarkDB = calendar.dbManager.getBookmarksDB();
-            if (bookmarkDB) {
-                bookmarkUrls = bookmarkDB.getAllUrls();
-                bookmarkTitles = bookmarkDB.getAllTitles();
-
-            } else {
-                // 回退到日历数据
-                bookmarkUrls = new Set();
-                bookmarkTitles = new Set();
-            }
-        } else if (calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
-
-            // 从日历实例中提取书签URL和标题集合
-            bookmarkUrls = new Set();
-            bookmarkTitles = new Set();
-            for (const records of calendar.bookmarksByDate.values()) {
-                if (!Array.isArray(records)) continue;
-                records.forEach(record => {
-                    if (record.url) bookmarkUrls.add(record.url);
-                    if (record.title && record.title.trim()) bookmarkTitles.add(record.title.trim());
-                });
-            }
-
-        } else {
-
-            // 降级方案：直接获取书签库
-            const result = await getBookmarkUrlsAndTitles();
-            bookmarkUrls = result.urls;
-            bookmarkTitles = result.titles;
-
-        }
-
-        setBrowsingRelatedSnapshot(snapshotKey, {
-            historyItemsExpanded: baseHistoryItemsExpanded.slice(),
-            bookmarkUrls,
-            bookmarkTitles,
-            savedAt: Date.now()
-        });
-
-        const historyItemsExpanded = baseHistoryItemsExpanded.slice();
+        const historyItemsExpanded = relatedSnapshot.historyItemsExpanded.slice();
+        const bookmarkUrls = relatedSnapshot.bookmarkUrls;
+        const bookmarkTitles = relatedSnapshot.bookmarkTitles;
         // 按当前排序方式排序（使用展开后的记录）
         if (browsingRelatedSortAsc) {
             // 正序：旧到新

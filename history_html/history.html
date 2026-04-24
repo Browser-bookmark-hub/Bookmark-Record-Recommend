@@ -1467,7 +1467,7 @@
                                     </label>
                                     <label class="sync-form-row" for="syncGithubBasePathInput">
                                         <span class="sync-field-label" id="syncGithubBasePathLabel">Base Path</span>
-                                        <input id="syncGithubBasePathInput" class="sync-field-input" type="text" placeholder="bookmark-record-recommend/sync" autocomplete="off">
+                                        <input id="syncGithubBasePathInput" class="sync-field-input" type="text" placeholder="bookmark_record_and_recommend_sync" autocomplete="off">
                                     </label>
                                     <label class="sync-form-row sync-form-row-wide" for="syncGithubTokenInput">
                                         <span class="sync-field-label" id="syncGithubTokenLabel">GitHub Token</span>
@@ -1500,37 +1500,16 @@
                             </div>
                             <label class="sync-setting-item">
                                 <input type="checkbox" id="syncPushPackageRecommend" checked>
-                                <span id="syncPushPackageRecommendText" class="sync-setting-item-text">推荐数据池（S 数据池）</span>
-                            </label>
-                            <label class="sync-setting-item">
-                                <input type="checkbox" id="syncPushPackageWidgets" checked>
-                                <span id="syncPushPackageWidgetsText" class="sync-setting-item-text">推荐行为事件</span>
+                                <span id="syncPushPackageRecommendText" class="sync-setting-item-text">书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）</span>
                             </label>
                             <label class="sync-setting-item">
                                 <input type="checkbox" id="syncPushPackageRecords" checked>
-                                <span id="syncPushPackageRecordsText" class="sync-setting-item-text">书签记录综合包（含点击排行/关联记录）</span>
-                            </label>
-                            <label class="sync-setting-item">
-                                <input type="checkbox" id="syncPushPackageTracking" checked>
-                                <span id="syncPushPackageTrackingText" class="sync-setting-item-text">时间捕捉包</span>
+                                <span id="syncPushPackageRecordsText" class="sync-setting-item-text">书签记录包（新增/点击/排行/关联/时间排行）</span>
                             </label>
                             <label class="sync-setting-item">
                                 <input type="checkbox" id="syncPushPackageBookmarkTreeSnapshot" checked>
-                                <span id="syncPushPackageBookmarkTreeSnapshotText" class="sync-setting-item-text">书签树快照包</span>
+                                <span id="syncPushPackageBookmarkTreeSnapshotText" class="sync-setting-item-text">原生真相源包（书签树/浏览历史事实源）</span>
                             </label>
-                            <div class="sync-setting-item-row sync-setting-item-row-with-info">
-                                <label class="sync-setting-item sync-setting-item-inline-info">
-                                    <input type="checkbox" id="syncPushPackageRawHighVolume">
-                                    <span id="syncPushPackageRawHighVolumeText" class="sync-setting-item-text">原始记录明细</span>
-                                    <button id="syncPushPackageRawHighVolumeInfoBtn" class="sync-setting-item-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">
-                                        <i class="fas fa-info-circle" aria-hidden="true"></i>
-                                    </button>
-                                </label>
-                                <div id="syncPushPackageRawHighVolumeInfoPanel" class="sync-inline-info-panel" hidden>
-                                    <div id="syncPushPackageRawHighVolumeInfoTitle" class="sync-inline-info-title">说明</div>
-                                    <div id="syncPushPackageRawHighVolumeInfoText" class="sync-inline-info-text">包含原始新增记录、浏览历史明细、翻牌历史。数据量更大、粒度更细，常规分析通常不需要，默认关闭。</div>
-                                </div>
-                            </div>
                         </div>
 
                         <div id="syncFilesCardContainer" class="sync-files-card">
@@ -1553,7 +1532,7 @@
                                     </button>
                                 </div>
                             </div>
-                            <div id="syncFilesPathHint" class="sync-files-path-hint">顶层说明：AGENTS.md 是规则文件（位于 bookmark-record-recommend/sync/AGENTS.md），用于定义 AI 处理规则；新建 Markdown 后，这里会自动切换为拉取来源说明。</div>
+                            <div id="syncFilesPathHint" class="sync-files-path-hint">顶层说明：AGENTS.md 是规则文件（位于 bookmark_record_and_recommend_sync/AGENTS.md），用于定义 AI 处理规则；新建 Markdown 后，这里会自动切换为拉取来源说明。</div>
                             <div id="syncFileList" class="sync-file-list"></div>
                         </div>
 
@@ -1622,7 +1601,7 @@
             <div id="exportModal" class="modal">
                 <div class="modal-content" style="max-width: 500px;">
                     <div class="modal-header">
-                        <h3 id="exportModalTitle">导出书签记录</h3>
+                        <h3 id="exportModalTitle">导出书签添加记录</h3>
                         <button class="modal-close" id="closeExportModal">
                             <i class="fas fa-times"></i>
                         </button>
@@ -1639,17 +1618,17 @@
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="exportMode" value="records" checked>
-                                    <span>仅导出添加记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                    <span>仅导出书签添加记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="exportMode" value="context">
-                                    <span>现记录关联导出 <small style="color: var(--text-tertiary);">(包含同文件夹下的其他书签)</small></span>
+                                    <span>导出书签添加记录及上下文 <small style="color: var(--text-tertiary);">(包含同文件夹下的其他书签)</small></span>
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="exportMode" value="collection">
-                                    <span>集合导出到日期文件夹 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
+                                    <span>按日期集合导出书签添加记录 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
                                 </label>
                             </div>
                         </div>
@@ -1689,7 +1668,7 @@
             <div id="browsingExportModal" class="modal">
                 <div class="modal-content" style="max-width: 500px;">
                     <div class="modal-header">
-                        <h3 id="browsingExportModalTitle">导出点击记录</h3>
+                        <h3 id="browsingExportModalTitle">导出书签点击记录</h3>
                         <button class="modal-close" id="closeBrowsingExportModal">
                             <i class="fas fa-times"></i>
                         </button>
@@ -1706,12 +1685,12 @@
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="browsingExportMode" value="records" checked>
-                                    <span>仅导出点击记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                    <span>仅导出书签点击记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="browsingExportMode" value="collection">
-                                    <span>集合导出到日期文件夹 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
+                                    <span>按日期集合导出书签点击记录 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
                                 </label>
                             </div>
                         </div>
