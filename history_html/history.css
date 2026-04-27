@@ -3391,12 +3391,16 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
 }
 
 .sync-repo-status-text {
+    display: block;
     font-size: 12px;
     color: var(--text-tertiary);
-    text-align: right;
-    flex: 1;
+    line-height: 1.25;
+    text-align: left;
     min-width: 0;
-    overflow-wrap: anywhere;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .sync-repo-status-text.sync-repo-status-neutral {
@@ -3409,6 +3413,10 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
 
 .sync-repo-status-text.sync-repo-status-error {
     color: color-mix(in srgb, #cc3d3d 86%, var(--text-secondary) 14%);
+}
+
+.sync-repo-status-text:empty {
+    display: none;
 }
 
 .sync-setting-item {
@@ -3532,6 +3540,9 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
 
 .sync-actions .sync-repo-collapse-btn {
     min-width: 0;
+    justify-content: flex-start;
+    text-align: left;
+    white-space: normal;
 }
 
 .sync-actions .view-action-btn i {
@@ -3539,10 +3550,55 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
     flex: 0 0 auto;
 }
 
+.sync-repo-collapse-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.sync-repo-collapse-title {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .sync-actions .sync-repo-collapse-btn:disabled {
     opacity: 0.58;
     cursor: not-allowed;
     pointer-events: none;
+}
+
+.sync-actions .view-action-btn:disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    opacity: 0.72;
+    transform: none;
+}
+
+.sync-actions .view-action-btn.sync-action-btn-loading {
+    opacity: 0.9;
+}
+
+.sync-actions .view-action-btn.sync-action-btn-success {
+    background: var(--success);
+    color: #ffffff;
+    border-color: var(--success);
+    animation: pulse-green 1s;
+}
+
+.sync-actions .view-action-btn.sync-action-btn-error {
+    background: var(--error);
+    color: #ffffff;
+    border-color: var(--error);
+}
+
+.sync-actions .view-action-btn.sync-action-btn-success i {
+    color: #ffffff;
+    animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .sync-state-row {
@@ -4508,9 +4564,8 @@ html.side-panel-mode .sync-view-layout.sync-left-collapsed {
         order: 2;
     }
 
-    .sync-repo-status-text {
-        flex-basis: 100%;
-        text-align: left;
+    .sync-actions .sync-repo-collapse-btn {
+        min-height: 42px;
     }
 
     .sync-markdown-live-pane {

@@ -104,6 +104,7 @@ let syncFilesCardOriginalParent = null;
 let syncFilesCardOriginalNextSibling = null;
 let syncFilesCardLayoutObserver = null;
 let syncRemoteDocCacheState = {};
+let syncActivityState = null;
 
 const isSidePanelMode = detectSidePanelModeFromLocation();
 const LAST_ACTIVE_VIEW_STORAGE_KEY = getLastActiveViewStorageKey(isSidePanelMode);
@@ -111,6 +112,7 @@ const SYNC_CONFIG_STORAGE_KEY = 'aiSyncConfig_v1';
 const SYNC_DOCS_STORAGE_KEY = 'aiSyncDocuments_v1';
 const SYNC_CLOUD_SNAPSHOT_STORAGE_KEY = 'aiSyncCloudSnapshot_v1';
 const SYNC_REMOTE_DOC_CACHE_STORAGE_KEY = 'aiSyncRemoteDocCache_v1';
+const SYNC_ACTIVITY_STORAGE_KEY = 'aiSyncActivity_v1';
 const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2';
 const SYNC_REALTIME_MARKDOWN_RENDER = true;
 const SYNC_PROVIDER_GITHUB = 'github';
@@ -180,6 +182,7 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
 - GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
 - GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
+- Web Search                        # 用于补充同类别推荐、背景核验和外部资料来源
 
 ## 3. Git 优先流程（按 pushId 聚合 commits）
 1. 先读取 \`data/manifest.json\`，记录 \`pushId\` 与 \`readOrder\`。
@@ -210,7 +213,19 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 3. 近 7 天新加但未打开（bookmark-record.data.additionsRecords vs clickRecords）= 需要提醒。
 4. 屏蔽（bookmark-recommend.data.recommendEvents.recommend_blocked）= 永远排除。
 
-## 7. 输出模板
+## 7. 外部搜索补充推荐
+- 同类别推荐可以来自本地上下文（书签树、文件夹、标题、当前页面、用户草稿），也可以来自网络搜索；如果本地上下文不足，主动搜索同主题网页、论坛、项目文档、相关工具或替代方案。
+- 搜索提示词优先使用书签标题、URL 域名、文件夹路径、页面关键词和用户问题；可加入“相关网页 / 论坛讨论 / 替代方案 / 教程 / review”等词，不要只搜泛泛类别。
+- 学术、论文、法律、医学、金融等高风险或专业主题，优先使用论文数据库、官方文档、法规/机构网站、专业指南等权威来源；论坛或社区讨论只能作为辅助线索。
+- 输出时区分“本地同步数据推断”和“网络搜索补充”，给出来源或简短依据；不要把搜索结果写成用户已收藏、已点击或已复习的事实。
+
+## 8. Subagents 高级权限
+- Subagents 是高成本并行能力，默认不要启用；只有用户明确要求、任务特别多、用户语气明显表示很急/很重要，或单个回答需要并行检查多类数据源时才考虑。
+- 使用前确认当前环境允许该能力；如果系统或工具要求明确授权，先取得用户明确要求或授权。
+- 每个 subagent 只负责清晰、独立的小任务，例如分别检查推荐包、记录包、raw-native、Git diff、外部资料；不要让多个 subagents 重复做同一件事。
+- 合并结果时必须由主流程统一判断、去重和校验；输出中必要时说明哪些结论来自 subagent，哪些来自主流程直接核验。
+
+## 9. 输出模板
 ### latest.md
 \`\`\`md
 # 现在该看什么
@@ -221,9 +236,9 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 \`\`\`
 
 ### daily / weekly / monthly
-按本文件第 6 节的重要性权重输出。
+按本文件第 6-8 节的重要性权重、外部搜索规则和高级权限边界输出。
 
-## 8. 风格与禁忌
+## 10. 风格与禁忌
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
 - 引用书签时给出：\`(bookmarkId)\` + 标题 + 所在文件夹路径。
 - 参考 bookmark-recommend.data.recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
@@ -252,6 +267,7 @@ You are the bookmark assistant. Goals:
 - GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
 - GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
 - GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
+- Web Search                        # supplement related recommendations, context checks, and external sources
 
 ## 3. Git-First Workflow (group commits by pushId)
 1. Read \`data/manifest.json\` first and capture \`pushId\` plus \`readOrder\`.
@@ -281,7 +297,19 @@ You are the bookmark assistant. Goals:
 3. Newly added but unopened in last 7 days = reminder candidates
 4. Blocked bookmarks/folders/domains = always excluded
 
-## 7. Output Structure
+## 7. Web Search for Related Recommendations
+- Same-category recommendations may come from local context (bookmark tree, folders, titles, current page, user drafts) and from web search. If local context is thin, search for related pages, forum discussions, project docs, comparable tools, or alternatives.
+- Build search queries from bookmark titles, URL domains, folder paths, page keywords, and the user's question; add terms like related pages, forum discussion, alternatives, tutorial, or review instead of searching only broad categories.
+- For academic, paper, legal, medical, financial, or other high-stakes topics, prioritize authoritative sources such as paper databases, official docs, regulations, institutional sites, and professional guidelines. Treat forums or community discussions as secondary signals.
+- In outputs, separate local sync-data inferences from web-sourced suggestions, and include the source or brief rationale. Do not present web search results as bookmarks the user has saved, clicked, or reviewed.
+
+## 8. Subagents Elevated Permission
+- Subagents are a higher-cost parallel capability. Do not use them by default; consider them only when the user explicitly asks, the task is large, the user's wording clearly signals urgency or high importance, or one answer needs parallel checks across multiple data sources.
+- Confirm that the current environment permits this capability. If the system or tool requires explicit authorization, obtain the user's explicit request or authorization first.
+- Each subagent should own a clear, independent task, such as checking the recommendation package, record package, raw-native files, Git diff, or external sources. Do not assign several subagents to repeat the same work.
+- The main flow must merge, deduplicate, and verify subagent results. When useful, state which conclusions came from subagents and which were directly verified by the main flow.
+
+## 9. Output Structure
 ### latest.md
 \`\`\`md
 # What to Read Now
@@ -292,9 +320,9 @@ You are the bookmark assistant. Goals:
 \`\`\`
 
 ### daily / weekly / monthly
-Follow the same importance strategy in section 6.
+Follow the same importance strategy, web-search rules, and elevated-permission boundaries in sections 6-8.
 
-## 8. Style & Safety
+## 10. Style & Safety
 - Output Markdown only
 - Include (bookmarkId), title, and folder path when citing bookmarks
 - Respect recommend mode (default / archaeology / consolidate / wander / priority)
@@ -3321,9 +3349,27 @@ const i18n = {pageTitle: {
     },syncPullBtnText: {
         'zh_CN': '拉取更新',
         'en': 'Pull Updates'
+    },syncPullBtnLoadingText: {
+        'zh_CN': '拉取中...',
+        'en': 'Pulling...'
+    },syncPullBtnSuccessText: {
+        'zh_CN': '拉取完成',
+        'en': 'Pulled'
+    },syncPullBtnErrorText: {
+        'zh_CN': '拉取失败',
+        'en': 'Pull Failed'
     },syncPushBtnText: {
         'zh_CN': '推送当前',
         'en': 'Push'
+    },syncPushBtnLoadingText: {
+        'zh_CN': '推送中...',
+        'en': 'Pushing...'
+    },syncPushBtnSuccessText: {
+        'zh_CN': '推送完成',
+        'en': 'Pushed'
+    },syncPushBtnErrorText: {
+        'zh_CN': '推送失败',
+        'en': 'Push Failed'
     },syncRepoCollapseBtnCollapseText: {
         'zh_CN': '折叠配置方式',
         'en': 'Collapse Config'
@@ -4811,6 +4857,7 @@ function applyLanguage() {
         syncRepoStatusText.textContent = i18n.syncRepoStatusIdle[currentLang];
     }
     updateSyncRepoFormState();
+    applySyncRepoActivityStatusToUI({ force: true });
     const syncSettingsTitle = document.getElementById('syncSettingsTitle');
     if (syncSettingsTitle) syncSettingsTitle.textContent = i18n.syncSettingsTitle[currentLang];
     const syncPushPackageInfoBtnText = document.getElementById('syncPushPackageInfoBtnText');
@@ -8097,6 +8144,226 @@ function getSyncNowLabel(timestamp = Date.now()) {
     }
 }
 
+function getSyncPerfNow() {
+    try {
+        if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+            return performance.now();
+        }
+    } catch (_) { }
+    return Date.now();
+}
+
+function createSyncTimingLogger(label) {
+    const startedAt = getSyncPerfNow();
+    let lastAt = startedAt;
+    const stages = [];
+    const mark = (stage, extra = {}) => {
+        const now = getSyncPerfNow();
+        stages.push({
+            stage,
+            ms: Math.round(now - lastAt),
+            totalMs: Math.round(now - startedAt),
+            ...extra
+        });
+        lastAt = now;
+    };
+    const done = (extra = {}) => {
+        const totalMs = Math.round(getSyncPerfNow() - startedAt);
+        try {
+            console.info('[SyncPushTiming]', {
+                label,
+                totalMs,
+                stages,
+                ...extra
+            });
+        } catch (_) { }
+        return { totalMs, stages };
+    };
+    return { mark, done };
+}
+
+function normalizeSyncActivityState(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const readNumber = (key) => {
+        const value = Number(src[key] || 0);
+        return Number.isFinite(value) && value > 0 ? value : 0;
+    };
+    const readString = (key) => String(src[key] == null ? '' : src[key]).trim();
+    return {
+        lastConfiguredAt: readNumber('lastConfiguredAt'),
+        lastConfiguredProvider: readString('lastConfiguredProvider'),
+        lastConfiguredOwner: readString('lastConfiguredOwner'),
+        lastConfiguredRepo: readString('lastConfiguredRepo'),
+        lastConfiguredBranch: readString('lastConfiguredBranch'),
+        lastPushAt: readNumber('lastPushAt'),
+        lastPushProvider: readString('lastPushProvider'),
+        lastPushBranch: readString('lastPushBranch'),
+        lastPushFileCount: Math.max(0, Number(src.lastPushFileCount || 0) || 0),
+        lastPushPackageCount: Math.max(0, Number(src.lastPushPackageCount || 0) || 0),
+        lastPushDocCount: Math.max(0, Number(src.lastPushDocCount || 0) || 0),
+        lastPullAt: readNumber('lastPullAt'),
+        lastPullProvider: readString('lastPullProvider'),
+        lastPullBranch: readString('lastPullBranch'),
+        lastPullDocCount: Math.max(0, Number(src.lastPullDocCount || 0) || 0)
+    };
+}
+
+function getSyncProviderStatusLabel(provider, lang = currentLang) {
+    const normalized = String(provider || '').trim().toLowerCase();
+    if (normalized === SYNC_PROVIDER_LOCAL) {
+        return lang === 'zh_CN' ? '本地快照' : 'Local snapshot';
+    }
+    return 'GitHub';
+}
+
+function joinSyncStatusParts(parts) {
+    return parts.map((part) => String(part || '').trim()).filter(Boolean).join(' · ');
+}
+
+function buildSyncRepoStatusDetailParts(repoConfig, activity, prefix, lang = currentLang) {
+    const provider = String(activity?.[`${prefix}Provider`] || repoConfig?.provider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
+    const branch = String(activity?.[`${prefix}Branch`] || repoConfig?.branch || '').trim();
+    const parts = [getSyncProviderStatusLabel(provider, lang)];
+    if (provider === SYNC_PROVIDER_GITHUB && branch) {
+        parts.push(branch);
+    }
+    return parts;
+}
+
+function buildSyncRepoConfiguredName(repoConfig, activity, lang = currentLang) {
+    const owner = String(activity?.lastConfiguredOwner || repoConfig?.owner || '').trim();
+    const repo = String(activity?.lastConfiguredRepo || repoConfig?.repo || '').trim();
+    const branch = String(activity?.lastConfiguredBranch || repoConfig?.branch || '').trim();
+    if (repoConfig?.provider === SYNC_PROVIDER_LOCAL) {
+        return getSyncProviderStatusLabel(SYNC_PROVIDER_LOCAL, lang);
+    }
+    const fullName = owner && repo ? `${owner}/${repo}` : (repo || owner);
+    return joinSyncStatusParts([fullName, branch ? `@ ${branch}` : '']);
+}
+
+function buildSyncRepoActivityStatus(configInput = syncConfigState, activityInput = syncActivityState) {
+    const activity = normalizeSyncActivityState(activityInput || null);
+    const repoConfig = buildSyncRepoConfig(configInput || syncConfigState);
+    const missingReason = getSyncRepoMissingReason(repoConfig);
+    if (repoConfig.provider === SYNC_PROVIDER_GITHUB && missingReason.code) {
+        return {
+            localized: getSyncI18nPair('syncRepoStatusIdle', '等待配置', 'Waiting for configuration'),
+            type: 'neutral'
+        };
+    }
+
+    const pushAt = activity.lastPushAt;
+    const pullAt = activity.lastPullAt;
+    const configuredAt = activity.lastConfiguredAt;
+    if (pushAt > 0 && pushAt >= pullAt && pushAt >= configuredAt) {
+        const zhParts = buildSyncRepoStatusDetailParts(repoConfig, activity, 'lastPush', 'zh_CN');
+        const enParts = buildSyncRepoStatusDetailParts(repoConfig, activity, 'lastPush', 'en');
+        if (activity.lastPushFileCount > 0) {
+            zhParts.push(`${activity.lastPushFileCount} 个文件`);
+            enParts.push(`${activity.lastPushFileCount} files`);
+        } else if (activity.lastPushPackageCount > 0) {
+            zhParts.push(`${activity.lastPushPackageCount} 包`);
+            enParts.push(`${activity.lastPushPackageCount} packages`);
+        }
+        return {
+            localized: {
+                zh_CN: `上次推送：${getSyncNowLabel(pushAt)}${zhParts.length ? ` · ${joinSyncStatusParts(zhParts)}` : ''}`,
+                en: `Last push: ${getSyncNowLabel(pushAt)}${enParts.length ? ` · ${joinSyncStatusParts(enParts)}` : ''}`
+            },
+            type: 'success'
+        };
+    }
+
+    if (pullAt > 0 && pullAt >= configuredAt) {
+        const zhParts = buildSyncRepoStatusDetailParts(repoConfig, activity, 'lastPull', 'zh_CN');
+        const enParts = buildSyncRepoStatusDetailParts(repoConfig, activity, 'lastPull', 'en');
+        if (activity.lastPullDocCount > 0) {
+            zhParts.push(`${activity.lastPullDocCount} 个文档`);
+            enParts.push(`${activity.lastPullDocCount} docs`);
+        }
+        return {
+            localized: {
+                zh_CN: `上次拉取：${getSyncNowLabel(pullAt)}${zhParts.length ? ` · ${joinSyncStatusParts(zhParts)}` : ''}`,
+                en: `Last pull: ${getSyncNowLabel(pullAt)}${enParts.length ? ` · ${joinSyncStatusParts(enParts)}` : ''}`
+            },
+            type: 'success'
+        };
+    }
+
+    if (configuredAt > 0) {
+        const zhConfig = buildSyncRepoConfiguredName(repoConfig, activity, 'zh_CN');
+        const enConfig = buildSyncRepoConfiguredName(repoConfig, activity, 'en');
+        return {
+            localized: {
+                zh_CN: `上次配置：${getSyncNowLabel(configuredAt)}${zhConfig ? ` · ${zhConfig}` : ''}`,
+                en: `Last config: ${getSyncNowLabel(configuredAt)}${enConfig ? ` · ${enConfig}` : ''}`
+            },
+            type: 'neutral'
+        };
+    }
+
+    if (repoConfig.provider === SYNC_PROVIDER_LOCAL) {
+        return {
+            localized: {
+                zh_CN: '当前使用本地快照模式',
+                en: 'Using local snapshot mode'
+            },
+            type: 'neutral'
+        };
+    }
+
+    const configuredNameZh = buildSyncRepoConfiguredName(repoConfig, activity, 'zh_CN');
+    const configuredNameEn = buildSyncRepoConfiguredName(repoConfig, activity, 'en');
+    return {
+        localized: {
+            zh_CN: configuredNameZh ? `已配置：${configuredNameZh}` : '已配置',
+            en: configuredNameEn ? `Configured: ${configuredNameEn}` : 'Configured'
+        },
+        type: 'neutral'
+    };
+}
+
+function buildSyncActivityWithConfigSaved(activityInput, configInput, timestamp = Date.now()) {
+    const next = normalizeSyncActivityState(activityInput || null);
+    const repoConfig = buildSyncRepoConfig(configInput || syncConfigState);
+    next.lastConfiguredAt = Number(timestamp || Date.now()) || Date.now();
+    next.lastConfiguredProvider = repoConfig.provider;
+    next.lastConfiguredOwner = repoConfig.owner;
+    next.lastConfiguredRepo = repoConfig.repo;
+    next.lastConfiguredBranch = repoConfig.branch;
+    return next;
+}
+
+function applySyncRepoActivityStatusToUI({ force = false } = {}) {
+    void force;
+    const status = buildSyncRepoActivityStatus(syncConfigState, syncActivityState);
+    setSyncRepoStatusText(status.localized, status.type);
+    return status;
+}
+
+async function recordSyncTransferActivity(action, meta = {}) {
+    const next = normalizeSyncActivityState(syncActivityState || null);
+    const timestamp = Number(meta.at || Date.now()) || Date.now();
+    const provider = String(meta.provider || syncConfigState?.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
+    const branch = String(meta.branch || syncConfigState?.githubRepoBranch || 'main').trim() || 'main';
+    if (action === 'pull') {
+        next.lastPullAt = timestamp;
+        next.lastPullProvider = provider;
+        next.lastPullBranch = branch;
+        next.lastPullDocCount = Math.max(0, Number(meta.docCount || 0) || 0);
+    } else {
+        next.lastPushAt = timestamp;
+        next.lastPushProvider = provider;
+        next.lastPushBranch = branch;
+        next.lastPushFileCount = Math.max(0, Number(meta.fileCount || 0) || 0);
+        next.lastPushPackageCount = Math.max(0, Number(meta.packageCount || 0) || 0);
+        next.lastPushDocCount = Math.max(0, Number(meta.docCount || 0) || 0);
+    }
+    syncActivityState = next;
+    applySyncRepoActivityStatusToUI({ force: true });
+    await syncStorageSet({ [SYNC_ACTIVITY_STORAGE_KEY]: syncActivityState });
+}
+
 function cloneSyncDefaultDocs() {
     return SYNC_DEFAULT_DOCS.map((doc) => ({
         id: String(doc.id || doc.name || `doc-${Date.now()}`),
@@ -9060,7 +9327,6 @@ function updateSyncRepoCollapseButton() {
         ? (currentLang === 'zh_CN' ? '展开配置方式' : 'Expand Config')
         : (currentLang === 'zh_CN' ? '折叠配置方式' : 'Collapse Config');
     const label = getSyncText(labelKey, fallback);
-    if (text) text.textContent = label;
 
     if (icon) {
         icon.className = collapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
@@ -9068,8 +9334,56 @@ function updateSyncRepoCollapseButton() {
     if (btn) {
         btn.disabled = !canCollapse;
         btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.title = label;
+        btn.dataset.syncRepoCollapseLabel = label;
     }
+    if (text) text.textContent = label;
+    updateSyncRepoCollapseCopy(label);
+}
+
+function updateSyncRepoCollapseButtonTitle(labelOverride = '') {
+    const btn = document.getElementById('syncRepoCollapseBtn');
+    if (!btn) return;
+    const label = String(labelOverride || document.getElementById('syncRepoCollapseBtnText')?.textContent || '').trim();
+    const status = String(document.getElementById('syncRepoStatusText')?.textContent || '').trim();
+    btn.title = status ? `${label} · ${status}` : label;
+}
+
+function isSyncRepoConfiguredForCollapseStatus(configInput = syncConfigState) {
+    const repoConfig = buildSyncRepoConfig(configInput || syncConfigState);
+    if (repoConfig.provider !== SYNC_PROVIDER_GITHUB) return true;
+    return !!(repoConfig.token && repoConfig.owner && repoConfig.repo);
+}
+
+function isSyncRepoIdleStatusText(text) {
+    return /等待配置|waiting for configuration/i.test(String(text || '').trim());
+}
+
+function updateSyncRepoCollapseCopy(labelOverride = '') {
+    const btn = document.getElementById('syncRepoCollapseBtn');
+    const titleEl = document.getElementById('syncRepoCollapseBtnText');
+    const statusEl = document.getElementById('syncRepoStatusText');
+    const baseLabel = String(
+        labelOverride
+        || btn?.dataset?.syncRepoCollapseLabel
+        || titleEl?.textContent
+        || ''
+    ).trim();
+    const statusText = String(
+        statusEl?.dataset?.syncRepoStatusText
+        || statusEl?.textContent
+        || ''
+    ).trim();
+    const shouldPromoteStatus = isSyncRepoConfiguredForCollapseStatus()
+        && statusText
+        && !isSyncRepoIdleStatusText(statusText);
+
+    if (titleEl) {
+        titleEl.textContent = shouldPromoteStatus ? statusText : baseLabel;
+    }
+    if (statusEl) {
+        statusEl.textContent = shouldPromoteStatus ? '' : statusText;
+    }
+    updateSyncRepoCollapseButtonTitle();
 }
 
 function markSyncRepoConnected(configInput = syncConfigState) {
@@ -9245,6 +9559,38 @@ async function syncGitHubRequestJson(url, options = {}) {
     return result.json;
 }
 
+async function syncGitHubRequestGraphQL(repoConfig, query, variables = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    try {
+        const json = await syncGitHubRequestJson(
+            'https://api.github.com/graphql',
+            {
+                method: 'POST',
+                token: config.token,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: String(query || ''),
+                    variables: variables && typeof variables === 'object' ? variables : {}
+                })
+            }
+        );
+        const errors = Array.isArray(json?.errors) ? json.errors : [];
+        if (errors.length > 0) {
+            const message = errors
+                .map((item) => String(item?.message || '').trim())
+                .filter(Boolean)
+                .join('; ');
+            throw new Error(message || (currentLang === 'zh_CN' ? 'GitHub GraphQL 请求失败' : 'GitHub GraphQL request failed'));
+        }
+        return {
+            success: true,
+            data: json?.data || null
+        };
+    } catch (error) {
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
 async function getSyncGitHubRepoInfo(repoConfig) {
     const config = repoConfig || buildSyncRepoConfig(syncConfigState);
     return await syncGitHubRequestJson(
@@ -9354,9 +9700,13 @@ async function createSyncGitHubBranchFromBase(repoConfig, targetBranch, baseBran
 
 async function ensureSyncGitHubBranch(repoConfig, { createIfMissing = false, repoInfo = null } = {}) {
     const config = repoConfig || buildSyncRepoConfig(syncConfigState);
-    const info = repoInfo || await getSyncGitHubRepoInfo(config);
-    const defaultBranch = String(info?.default_branch || '').trim();
-    const resolvedBranch = await resolveSyncGitHubBranch(config, { repoInfo: info });
+    let info = repoInfo || null;
+    const configuredBranch = String(config?.branch || '').trim();
+    if (!configuredBranch && !info) {
+        info = await getSyncGitHubRepoInfo(config);
+    }
+    let defaultBranch = String(info?.default_branch || '').trim();
+    const resolvedBranch = configuredBranch || await resolveSyncGitHubBranch(config, { repoInfo: info });
     const branchRef = await syncGitHubGetBranchRef(config, resolvedBranch);
     if (branchRef.success) {
         return {
@@ -9364,6 +9714,8 @@ async function ensureSyncGitHubBranch(repoConfig, { createIfMissing = false, rep
             branch: resolvedBranch,
             defaultBranch,
             fullName: String(info?.full_name || `${config.owner}/${config.repo}`),
+            sha: String(branchRef.sha || ''),
+            ref: String(branchRef.ref || ''),
             branchWillBeCreated: false,
             branchCreated: false
         };
@@ -9383,6 +9735,14 @@ async function ensureSyncGitHubBranch(repoConfig, { createIfMissing = false, rep
             branchWillBeCreated: true,
             branchCreated: false
         };
+    }
+    if (!info) {
+        try {
+            info = await getSyncGitHubRepoInfo(config);
+            defaultBranch = String(info?.default_branch || '').trim();
+        } catch (error) {
+            return { success: false, error: formatSyncGitHubError(error) };
+        }
     }
     const sourceBranch = defaultBranch || resolvedBranch;
     if (!sourceBranch) {
@@ -9420,6 +9780,7 @@ async function ensureSyncGitHubBranch(repoConfig, { createIfMissing = false, rep
         branch: resolvedBranch,
         defaultBranch,
         fullName: String(info?.full_name || `${config.owner}/${config.repo}`),
+        sha: String(createResult.alreadyExists ? '' : (createResult.baseSha || sourceRef.sha || '')),
         branchWillBeCreated: false,
         branchCreated: !createResult.alreadyExists
     };
@@ -9535,112 +9896,206 @@ async function syncGitHubListDirEntries(repoConfig, rootPath, { branch = '' } = 
     return { success: true, entries };
 }
 
-async function syncGitHubPutFile(repoConfig, { path, text, message = '', branch = '' } = {}) {
+async function syncGitHubGetCommit(repoConfig, commitSha) {
     const config = repoConfig || buildSyncRepoConfig(syncConfigState);
-    const safePath = normalizeSyncRelativePath(path);
-    if (!safePath) {
-        return { success: false, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    const safeSha = String(commitSha || '').trim();
+    if (!safeSha) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少 commit SHA' : 'Missing commit SHA' };
     }
-    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
-    const encodedPath = encodeSyncGitHubPath(safePath);
-    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encodedPath}`;
-
-    let existingSha = '';
     try {
-        const existing = await syncGitHubRequestJson(
-            `${url}?ref=${encodeURIComponent(resolvedBranch)}`,
+        const json = await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/commits/${encodeURIComponent(safeSha)}`,
             { token: config.token }
         );
-        if (existing && typeof existing === 'object' && existing.type === 'file' && existing.sha) {
-            existingSha = String(existing.sha);
+        const treeSha = String(json?.tree?.sha || '').trim();
+        if (!treeSha) {
+            return { success: false, error: currentLang === 'zh_CN' ? 'commit 缺少 tree SHA' : 'Commit missing tree SHA' };
         }
-    } catch (error) {
-        if (Number(error?.status) !== 404) {
-            return { success: false, error: formatSyncGitHubError(error) };
-        }
-    }
-
-    const payload = {
-        message: String(message || '').trim() || `Bookmark Sync: ${safePath}`,
-        content: syncTextToBase64(String(text == null ? '' : text)),
-        branch: resolvedBranch
-    };
-    if (existingSha) payload.sha = existingSha;
-
-    try {
-        const json = await syncGitHubRequestJson(url, {
-            method: 'PUT',
-            token: config.token,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
         return {
             success: true,
-            path: String(json?.content?.path || safePath),
-            sha: String(json?.content?.sha || ''),
-            commitSha: String(json?.commit?.sha || '')
+            sha: String(json?.sha || safeSha),
+            treeSha
         };
     } catch (error) {
         return { success: false, error: formatSyncGitHubError(error) };
     }
 }
 
-async function syncGitHubDeleteFile(repoConfig, { path, sha = '', message = '', branch = '' } = {}) {
+async function syncGitHubCreateTree(repoConfig, { baseTreeSha = '', entries = [] } = {}) {
     const config = repoConfig || buildSyncRepoConfig(syncConfigState);
-    const safePath = normalizeSyncRelativePath(path);
-    if (!safePath) {
-        return { success: false, error: currentLang === 'zh_CN' ? '缺少文件路径' : 'Missing file path' };
+    const treeEntries = Array.isArray(entries) ? entries : [];
+    if (!String(baseTreeSha || '').trim()) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少基础 tree SHA' : 'Missing base tree SHA' };
     }
-    const resolvedBranch = branch || await resolveSyncGitHubBranch(config);
-    const encodedPath = encodeSyncGitHubPath(safePath);
-    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${encodedPath}`;
-
-    let existingSha = String(sha || '').trim();
-    if (!existingSha) {
-        try {
-            const existing = await syncGitHubRequestJson(
-                `${url}?ref=${encodeURIComponent(resolvedBranch)}`,
-                { token: config.token }
-            );
-            if (!existing || typeof existing !== 'object' || existing.type !== 'file' || !existing.sha) {
-                return {
-                    success: false,
-                    error: currentLang === 'zh_CN' ? '目标路径不是文件，无法删除' : 'Target path is not a file'
-                };
-            }
-            existingSha = String(existing.sha);
-        } catch (error) {
-            if (Number(error?.status) === 404) {
-                return { success: true, path: safePath, notFound: true };
-            }
-            return { success: false, error: formatSyncGitHubError(error) };
-        }
+    if (!treeEntries.length) {
+        return { success: false, error: currentLang === 'zh_CN' ? '缺少推送文件' : 'Missing tree entries' };
     }
-
-    const payload = {
-        message: String(message || '').trim() || `Bookmark Sync: delete ${safePath}`,
-        sha: existingSha,
-        branch: resolvedBranch
-    };
-
     try {
-        const json = await syncGitHubRequestJson(url, {
-            method: 'DELETE',
-            token: config.token,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const json = await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/trees`,
+            {
+                method: 'POST',
+                token: config.token,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    base_tree: String(baseTreeSha || '').trim(),
+                    tree: treeEntries
+                })
+            }
+        );
+        const sha = String(json?.sha || '').trim();
+        if (!sha) {
+            return { success: false, error: currentLang === 'zh_CN' ? '创建 tree 失败：缺少 SHA' : 'Failed to create tree: missing SHA' };
+        }
         return {
             success: true,
-            path: safePath,
-            commitSha: String(json?.commit?.sha || '')
+            sha,
+            entries: Array.isArray(json?.tree) ? json.tree : []
         };
     } catch (error) {
-        if (Number(error?.status) === 404) {
-            return { success: true, path: safePath, notFound: true };
-        }
         return { success: false, error: formatSyncGitHubError(error) };
     }
+}
+
+async function syncGitHubCreateCommit(repoConfig, { message = '', treeSha = '', parentSha = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safeTreeSha = String(treeSha || '').trim();
+    const safeParentSha = String(parentSha || '').trim();
+    if (!safeTreeSha || !safeParentSha) {
+        return { success: false, error: currentLang === 'zh_CN' ? '创建 commit 参数不完整' : 'Missing commit inputs' };
+    }
+    try {
+        const json = await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/commits`,
+            {
+                method: 'POST',
+                token: config.token,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: String(message || '').trim() || 'Bookmark Sync',
+                    tree: safeTreeSha,
+                    parents: [safeParentSha]
+                })
+            }
+        );
+        const sha = String(json?.sha || '').trim();
+        if (!sha) {
+            return { success: false, error: currentLang === 'zh_CN' ? '创建 commit 失败：缺少 SHA' : 'Failed to create commit: missing SHA' };
+        }
+        return { success: true, sha };
+    } catch (error) {
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubUpdateBranchRef(repoConfig, { branch = '', commitSha = '' } = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safeBranch = String(branch || '').trim();
+    const safeCommitSha = String(commitSha || '').trim();
+    if (!safeBranch || !safeCommitSha) {
+        return { success: false, error: currentLang === 'zh_CN' ? '更新分支参数不完整' : 'Missing branch update inputs' };
+    }
+    try {
+        const json = await syncGitHubRequestJson(
+            `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/git/refs/heads/${encodeURIComponent(safeBranch)}`,
+            {
+                method: 'PATCH',
+                token: config.token,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sha: safeCommitSha,
+                    force: false
+                })
+            }
+        );
+        return {
+            success: true,
+            ref: String(json?.ref || ''),
+            sha: String(json?.object?.sha || safeCommitSha)
+        };
+    } catch (error) {
+        return { success: false, error: formatSyncGitHubError(error) };
+    }
+}
+
+async function syncGitHubCreateCommitOnBranch(repoConfig, {
+    branch = '',
+    expectedHeadOid = '',
+    files = [],
+    message = ''
+} = {}) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    const safeBranch = String(branch || '').trim();
+    const safeHeadOid = String(expectedHeadOid || '').trim();
+    const fileEntries = Array.isArray(files) ? files : [];
+    if (!safeBranch || !safeHeadOid || fileEntries.length === 0) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN' ? 'GraphQL commit 参数不完整' : 'Missing GraphQL commit inputs'
+        };
+    }
+
+    const additions = fileEntries
+        .map((file) => ({
+            path: normalizeSyncRelativePath(file?.path || ''),
+            contents: syncTextToBase64(file?.text || '')
+        }))
+        .filter((file) => file.path);
+    if (!additions.length) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN' ? '没有可提交的文档文件' : 'No document files to commit'
+        };
+    }
+
+    const mutation = `
+        mutation CreateSyncCommitOnBranch($input: CreateCommitOnBranchInput!) {
+          createCommitOnBranch(input: $input) {
+            commit {
+              oid
+            }
+          }
+        }
+    `;
+    const headline = String(message || '').trim() || 'Bookmark Sync';
+    const result = await syncGitHubRequestGraphQL(config, mutation, {
+        input: {
+            branch: {
+                repositoryNameWithOwner: `${config.owner}/${config.repo}`,
+                branchName: safeBranch
+            },
+            expectedHeadOid: safeHeadOid,
+            message: {
+                headline
+            },
+            fileChanges: {
+                additions
+            }
+        }
+    });
+    if (!result.success) {
+        return result;
+    }
+    const commitSha = String(result?.data?.createCommitOnBranch?.commit?.oid || '').trim();
+    if (!commitSha) {
+        return {
+            success: false,
+            error: currentLang === 'zh_CN' ? 'GraphQL commit 缺少 SHA' : 'GraphQL commit missing SHA'
+        };
+    }
+    return {
+        success: true,
+        sha: commitSha
+    };
+}
+
+function buildSyncGitHubTreeTextEntry(path, text) {
+    return {
+        path: normalizeSyncRelativePath(path),
+        mode: '100644',
+        type: 'blob',
+        content: String(text == null ? '' : text)
+    };
 }
 
 async function syncGitHubListFiles(repoConfig, rootPath, { branch = '' } = {}) {
@@ -10119,7 +10574,7 @@ function setSyncRepoStatusText(textOrLocalized, type = 'neutral') {
     } else {
         text = String(textOrLocalized || '');
     }
-    statusEl.textContent = text || getSyncText('syncRepoStatusIdle', '等待配置');
+    statusEl.dataset.syncRepoStatusText = text || getSyncText('syncRepoStatusIdle', '等待配置');
     statusEl.classList.remove('sync-repo-status-neutral', 'sync-repo-status-success', 'sync-repo-status-error');
     if (type === 'success') {
         statusEl.classList.add('sync-repo-status-success');
@@ -10128,6 +10583,70 @@ function setSyncRepoStatusText(textOrLocalized, type = 'neutral') {
     } else {
         statusEl.classList.add('sync-repo-status-neutral');
     }
+    updateSyncRepoCollapseCopy();
+}
+
+function getSyncActionButtonIdleText(button) {
+    const id = String(button?.id || '');
+    if (id === 'syncPullBtn') {
+        return getSyncText('syncPullBtnText', currentLang === 'zh_CN' ? '拉取更新' : 'Pull Updates');
+    }
+    if (id === 'syncPushBtn') {
+        return getSyncText('syncPushBtnText', currentLang === 'zh_CN' ? '推送当前' : 'Push');
+    }
+    return String(button?.querySelector('span')?.textContent || '').trim();
+}
+
+function getSyncActionButtonIdleIcon(button) {
+    const id = String(button?.id || '');
+    if (id === 'syncPullBtn') return 'fas fa-download';
+    if (id === 'syncPushBtn') return 'fas fa-upload';
+    return String(button?.querySelector('i')?.className || 'fas fa-circle');
+}
+
+function beginSyncActionButtonProgress(button, loadingText) {
+    if (!button) return '';
+    const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const icon = button.querySelector('i');
+    const text = button.querySelector('span');
+    button.dataset.syncActionToken = token;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.classList.remove('sync-action-btn-success', 'sync-action-btn-error');
+    button.classList.add('sync-action-btn-loading');
+    if (icon) icon.className = 'fas fa-spinner fa-spin';
+    if (text) text.textContent = String(loadingText || '').trim() || getSyncActionButtonIdleText(button);
+    return token;
+}
+
+function finishSyncActionButtonProgress(button, token, state, options = {}) {
+    if (!button || !token || button.dataset.syncActionToken !== token) return;
+    const icon = button.querySelector('i');
+    const text = button.querySelector('span');
+    const isSuccess = state === 'success';
+    button.classList.remove('sync-action-btn-loading', 'sync-action-btn-success', 'sync-action-btn-error');
+    button.classList.add(isSuccess ? 'sync-action-btn-success' : 'sync-action-btn-error');
+    button.removeAttribute('aria-busy');
+    if (icon) icon.className = isSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-triangle';
+    if (text) {
+        text.textContent = isSuccess
+            ? String(options.successText || getSyncActionButtonIdleText(button))
+            : String(options.errorText || getSyncActionButtonIdleText(button));
+    }
+    const restoreDelay = Math.max(600, Number(options.restoreDelayMs || 1200) || 1200);
+    setTimeout(() => restoreSyncActionButton(button, token), restoreDelay);
+}
+
+function restoreSyncActionButton(button, token) {
+    if (!button || !token || button.dataset.syncActionToken !== token) return;
+    const icon = button.querySelector('i');
+    const text = button.querySelector('span');
+    delete button.dataset.syncActionToken;
+    button.classList.remove('sync-action-btn-loading', 'sync-action-btn-success', 'sync-action-btn-error');
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+    if (icon) icon.className = getSyncActionButtonIdleIcon(button);
+    if (text) text.textContent = getSyncActionButtonIdleText(button);
 }
 
 function updateSyncRepoFormState() {
@@ -10150,15 +10669,13 @@ function updateSyncRepoFormState() {
         testBtn.disabled = !isGithub;
     }
     const statusEl = document.getElementById('syncRepoStatusText');
-    const currentStatus = String(statusEl?.textContent || '').trim();
+    const currentStatus = String(statusEl?.dataset?.syncRepoStatusText || statusEl?.textContent || '').trim();
     const isLocalModeStatus = /本地快照模式|local snapshot mode/i.test(currentStatus);
+    const isIdleStatus = /等待配置|waiting for configuration/i.test(currentStatus);
     if (!isGithub) {
-        setSyncRepoStatusText({
-            zh_CN: '当前使用本地快照模式',
-            en: 'Using local snapshot mode'
-        }, 'neutral');
-    } else if (!currentStatus || isLocalModeStatus) {
-        setSyncRepoStatusText(getSyncText('syncRepoStatusIdle', '等待配置'), 'neutral');
+        applySyncRepoActivityStatusToUI({ force: true });
+    } else if (!currentStatus || isLocalModeStatus || isIdleStatus) {
+        applySyncRepoActivityStatusToUI({ force: true });
     }
     updateSyncRepoCollapseButton();
 }
@@ -10255,7 +10772,17 @@ function readSyncConfigFromUI() {
 }
 
 async function saveSyncConfigToStorage() {
-    return await syncStorageSet({ [SYNC_CONFIG_STORAGE_KEY]: { ...syncConfigState } });
+    const configSnapshot = { ...syncConfigState };
+    const nextActivity = buildSyncActivityWithConfigSaved(syncActivityState, configSnapshot);
+    const saved = await syncStorageSet({
+        [SYNC_CONFIG_STORAGE_KEY]: configSnapshot,
+        [SYNC_ACTIVITY_STORAGE_KEY]: nextActivity
+    });
+    if (saved) {
+        syncActivityState = nextActivity;
+        applySyncRepoActivityStatusToUI({ force: true });
+    }
+    return saved;
 }
 
 async function persistSyncConfigFromUI({ showErrorToast = true } = {}) {
@@ -11763,10 +12290,12 @@ async function loadSyncStateFromStorage() {
     const result = await syncStorageGet([
         SYNC_CONFIG_STORAGE_KEY,
         SYNC_DOCS_STORAGE_KEY,
-        SYNC_REMOTE_DOC_CACHE_STORAGE_KEY
+        SYNC_REMOTE_DOC_CACHE_STORAGE_KEY,
+        SYNC_ACTIVITY_STORAGE_KEY
     ]);
 
     syncConfigState = normalizeSyncConfig(result?.[SYNC_CONFIG_STORAGE_KEY] || null);
+    syncActivityState = normalizeSyncActivityState(result?.[SYNC_ACTIVITY_STORAGE_KEY] || null);
     syncRepoCollapsed = false;
     syncPushPackageInfoVisible = false;
     syncPullPolicyInfoVisible = false;
@@ -11783,14 +12312,7 @@ async function loadSyncStateFromStorage() {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
     setSyncStatusText(getSyncI18nPair('syncStatusLoaded', '状态：已加载本地同步数据', 'Status: Loaded local sync data'));
-    if (syncConfigState.remoteProvider === SYNC_PROVIDER_LOCAL) {
-        setSyncRepoStatusText({
-            zh_CN: '当前使用本地快照模式',
-            en: 'Using local snapshot mode'
-        }, 'neutral');
-    } else {
-        setSyncRepoStatusText(getSyncText('syncRepoStatusIdle', '等待配置'), 'neutral');
-    }
+    applySyncRepoActivityStatusToUI({ force: true });
 }
 
 function normalizeAdditionsRecordsForSync(raw) {
@@ -12031,6 +12553,14 @@ async function persistSyncBrowsingRowsToCache(localData = {}, rows = [], timesta
     return cachePayload;
 }
 
+function getSyncHistoryVisitsConcurrency(itemCount = 0) {
+    const count = Math.max(0, Number(itemCount || 0) || 0);
+    if (count >= 800) return 16;
+    if (count >= 240) return 14;
+    if (count >= 60) return 12;
+    return Math.max(1, Math.min(8, count || 1));
+}
+
 async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
     if (!browserAPI?.history?.search) {
         return { ok: false, rows: [], source: 'chrome_history_unavailable' };
@@ -12200,7 +12730,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
             });
         });
     } else {
-        const concurrency = Math.max(1, Math.min(8, relevantItems.length));
+        const concurrency = getSyncHistoryVisitsConcurrency(relevantItems.length);
         let cursor = 0;
         const processNext = async () => {
             while (cursor < relevantItems.length) {
@@ -12269,6 +12799,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
             historyItemLimit: maxItems,
             searchPageSize: pageSize,
             maxVisitsPerUrl,
+            getVisitsConcurrency: concurrency,
             lookbackDays,
             truncated: historyItemsTruncated
         }
@@ -12635,6 +13166,17 @@ function normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerS
 async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) {
     const limitSnapshots = Math.max(1, Number(options.limitSnapshots || 5) || 5);
     const limitItemsPerSnapshot = Math.max(1, Number(options.limitItemsPerSnapshot || 160) || 160);
+    const derivedSnapshots = buildRelatedRecordsFromRows(rows, additionsRecords, {
+        limitSnapshots,
+        limitItemsPerSnapshot
+    });
+    if (derivedSnapshots.length) {
+        return derivedSnapshots;
+    }
+    const cachedSnapshots = buildRelatedRecordsFromSnapshots(limitSnapshots, limitItemsPerSnapshot);
+    if (cachedSnapshots.length) {
+        return cachedSnapshots;
+    }
     const ranges = ['day', 'week', 'month', 'year', 'all'];
     const snapshots = [];
 
@@ -12657,10 +13199,7 @@ async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) 
             .slice(0, limitSnapshots);
     }
 
-    return buildRelatedRecordsFromRows(rows, additionsRecords, {
-        limitSnapshots,
-        limitItemsPerSnapshot
-    });
+    return [];
 }
 
 async function buildTimeRankingsForSync(limit = 100) {
@@ -12772,6 +13311,7 @@ function buildSyncDocsPayload() {
 }
 
 async function collectSyncPushPayload(config) {
+    const timing = createSyncTimingLogger('collect-payload');
     const selection = getSyncPackageSelection(config || syncConfigState);
     config = {
         recommendPool: selection.bookmarkRecommend,
@@ -12792,6 +13332,10 @@ async function collectSyncPushPayload(config) {
             };
             console.warn('[SyncView] 推荐分数推送前刷新失败，继续使用当前缓存:', error);
         }
+        timing.mark('prepare_recommend_scores', {
+            ready: recommendScoresReadyResult?.ready === true,
+            success: recommendScoresReadyResult?.success !== false
+        });
     }
     const keySet = new Set();
     const addKeys = (...items) => items.filter(Boolean).forEach((item) => keySet.add(item));
@@ -12845,6 +13389,7 @@ async function collectSyncPushPayload(config) {
         }
         localData = localResult.data || {};
     }
+    timing.mark('read_local_storage', { keys: keys.length });
 
     const payload = {
         schema: 'bookmark_record_and_recommend.ai-push.v3',
@@ -12899,6 +13444,7 @@ async function collectSyncPushPayload(config) {
                 }
             }
         };
+        timing.mark('build_recommend_pool', { scores: scoreCount });
     }
 
     if (config.recommendEvents) {
@@ -12967,6 +13513,10 @@ async function collectSyncPushPayload(config) {
                 flipHistoryDailyIndexV1: localData?.[HEATMAP_DAILY_INDEX_STORAGE_KEY] || null
             }
         };
+        timing.mark('build_recommend_events', {
+            reviews: Object.keys(reviews).length,
+            flipHistory: flipHistory.length
+        });
     }
 
     let additionsRecords = null;
@@ -13031,6 +13581,11 @@ async function collectSyncPushPayload(config) {
                 }
             }
         };
+        timing.mark('build_bookmark_records', {
+            rows: rows.length,
+            records: browsingRecordCount,
+            relatedSnapshots: relatedSnapshots.length
+        });
     }
 
     if (config.timeTracking) {
@@ -13055,6 +13610,10 @@ async function collectSyncPushPayload(config) {
                 rankings
             }
         };
+        timing.mark('build_time_tracking', {
+            composite: rankings.composite.length,
+            wakes: rankings.wakes.length
+        });
     }
 
     if (config.bookmarkTreeSnapshot) {
@@ -13080,8 +13639,16 @@ async function collectSyncPushPayload(config) {
                 recordCount: browsingRecordCount
             }
         };
+        timing.mark('build_raw_native', {
+            bookmarks: Number(treeSnapshot.itemCount || 0),
+            historyVisits: browsingRecordCount
+        });
     }
 
+    timing.done({
+        packages: Object.keys(payload.packages || {}).length,
+        docs: Array.isArray(payload.docs) ? payload.docs.length : 0
+    });
     return payload;
 }
 
@@ -13749,16 +14316,6 @@ function buildHistoryVisitsJsonlExport(snapshot, limit = SYNC_HISTORY_VISITS_EXP
     };
 }
 
-function isSyncRuleRemotePath(path = '', basePath = '') {
-    const normalizedPath = normalizeSyncRelativePath(path);
-    const normalizedBase = normalizeSyncRelativePath(basePath);
-    if (!normalizedPath || !normalizedBase || !normalizedPath.startsWith(`${normalizedBase}/`)) return false;
-    const relative = normalizedPath.slice(normalizedBase.length + 1);
-    if (!relative || relative.includes('/')) return false;
-    const name = getSyncPathBasename(relative).toLowerCase();
-    return isSyncRuleDocName(name);
-}
-
 async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigState, options = {}) {
     const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
     const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
@@ -14003,11 +14560,20 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     };
 }
 
-async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
+async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
+    const timing = createSyncTimingLogger('github-push');
     const safeSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
     const nowTs = Number(safeSnapshot.updatedAt || Date.now()) || Date.now();
     let paths = buildSyncRepoPaths(repoConfig, nowTs);
-    const branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    const prefetchedBranchReady = options?.branchReadyPromise
+        ? await options.branchReadyPromise
+        : null;
+    let branchReady = prefetchedBranchReady?.success
+        ? prefetchedBranchReady
+        : await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    if (branchReady?.success && branchReady.branchWillBeCreated === true) {
+        branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    }
     if (!branchReady.success) {
         return {
             success: false,
@@ -14016,253 +14582,187 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot) {
     }
     const branch = String(branchReady.branch || '').trim();
     const branchCreated = branchReady.branchCreated === true;
+    timing.mark('ensure_branch', { branchCreated });
+    let headCommitSha = String(branchReady.sha || '').trim();
+    if (!headCommitSha) {
+        const branchRef = await syncGitHubGetBranchRef(repoConfig, branch);
+        if (!branchRef.success) {
+            return {
+                success: false,
+                error: branchRef.error || (currentLang === 'zh_CN' ? '读取分支指针失败' : 'Failed to read branch ref'),
+                branch
+            };
+        }
+        headCommitSha = String(branchRef.sha || '').trim();
+        timing.mark('read_branch_ref');
+    }
     const exportBundle = await buildSyncExportFiles(safeSnapshot, repoConfig, {
         provider: SYNC_PROVIDER_GITHUB,
         branch,
-        writeMode: 'github-contents-api-multi-commit'
+        writeMode: 'github-git-data-api-single-commit'
     });
+    timing.mark('build_export');
     paths = exportBundle.paths || paths;
     const filesToPush = Array.isArray(exportBundle.files) ? exportBundle.files : [];
     const commitPrefix = `[sync:${exportBundle.pushId || buildSyncPushId(nowTs)}]`;
-    const docCacheUpdates = [];
-    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
-    const expectedInputDocPaths = exportBundle.expectedInputDocPaths instanceof Set
-        ? exportBundle.expectedInputDocPaths
-        : new Set();
-    const expectedRulePaths = exportBundle.expectedRulePaths instanceof Set
-        ? exportBundle.expectedRulePaths
-        : new Set();
-    const packagesRoot = joinSyncRelativePath(paths.basePath, 'data/packages');
-    const expectedPackagePaths = new Set(
-        filesToPush
-            .map((file) => normalizeSyncRelativePath(file?.path || ''))
-            .filter((path) => path && path.startsWith(`${packagesRoot}/`))
+    const packageSelection = exportBundle.manifest && typeof exportBundle.manifest === 'object'
+        ? getSyncPackageSelection(exportBundle.manifest.packageSelection)
+        : getSyncPackageSelection(safeSnapshot.pushConfig || syncConfigState);
+    const selectedPackageCount = SYNC_PACKAGE_FIELDS.reduce(
+        (count, field) => count + (packageSelection[field.key] ? 1 : 0),
+        0
     );
-    const inputListResult = await syncGitHubListFiles(repoConfig, inputDocsRoot, { branch });
-    if (!inputListResult.success) {
+    timing.mark('skip_remote_cleanup_scan', { selectedPackages: selectedPackageCount });
+
+    const treeEntryMap = new Map();
+    const addTextEntry = (file) => {
+        const path = normalizeSyncRelativePath(file?.path || '');
+        if (!path) return;
+        treeEntryMap.set(path, buildSyncGitHubTreeTextEntry(path, file?.text || ''));
+    };
+
+    filesToPush.forEach(addTextEntry);
+
+    const deletedCount = 0;
+    const treeEntries = Array.from(treeEntryMap.values()).filter((entry) => entry && entry.path);
+    if (!treeEntries.length) {
         return {
             success: false,
-            error: inputListResult.error || (currentLang === 'zh_CN' ? '读取云端 input-docs 目录失败' : 'Failed to list remote input-docs'),
+            error: currentLang === 'zh_CN' ? '没有可提交的同步文件' : 'No sync files to commit',
             branch
         };
     }
-    const remoteInputDeleteQueue = (Array.isArray(inputListResult.files) ? inputListResult.files : [])
+
+    const buildDocCacheUpdates = (remoteShaByPath = null) => filesToPush
+        .filter((file) => file?.docCache && typeof file.docCache === 'object')
         .map((file) => ({
-            path: normalizeSyncRelativePath(file?.path || ''),
-            sha: String(file?.sha || '')
-        }))
-        .filter((file) => file.path && /\.md$/i.test(file.path))
-        .filter((file) => !expectedInputDocPaths.has(file.path));
+            kind: file.docCache.kind || SYNC_DOC_KIND_INPUT,
+            name: file.docCache.name || '',
+            markdown: String(file.docCache.markdown || ''),
+            remoteSha: remoteShaByPath instanceof Map
+                ? String(remoteShaByPath.get(normalizeSyncRelativePath(file.path || '')) || '')
+                : '',
+            remotePath: normalizeSyncRelativePath(file.path || ''),
+            updatedAt: nowTs
+        }));
 
-    const rootEntriesResult = await syncGitHubListDirEntries(repoConfig, paths.basePath, { branch });
-    if (!rootEntriesResult.success) {
-        return {
-            success: false,
-            error: rootEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端同步根目录失败' : 'Failed to list remote sync root'),
-            branch
-        };
-    }
-    const remoteRuleDeleteQueue = (Array.isArray(rootEntriesResult.entries) ? rootEntriesResult.entries : [])
-        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
-        .map((entry) => ({
-            path: normalizeSyncRelativePath(entry?.path || ''),
-            sha: String(entry?.sha || '')
-        }))
-        .filter((file) => isSyncRuleRemotePath(file.path, paths.basePath))
-        .filter((file) => !expectedRulePaths.has(file.path));
-
-    const dataRoot = joinSyncRelativePath(paths.basePath, 'data');
-    const dataEntriesResult = await syncGitHubListDirEntries(repoConfig, dataRoot, { branch });
-    if (!dataEntriesResult.success) {
-        return {
-            success: false,
-            error: dataEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端 data 目录失败' : 'Failed to list remote data directory'),
-            branch
-        };
-    }
-    const obsoleteDataDeleteQueue = (Array.isArray(dataEntriesResult.entries) ? dataEntriesResult.entries : [])
-        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
-        .map((entry) => ({
-            path: normalizeSyncRelativePath(entry?.path || ''),
-            sha: String(entry?.sha || '')
-        }))
-        .filter((file) => file.path === normalizeSyncRelativePath(paths.obsoleteDataLatestPath));
-
-    const packageEntriesResult = await syncGitHubListDirEntries(repoConfig, packagesRoot, { branch });
-    if (!packageEntriesResult.success) {
-        return {
-            success: false,
-            error: packageEntriesResult.error || (currentLang === 'zh_CN' ? '读取云端 packages 目录失败' : 'Failed to list remote packages directory'),
-            branch
-        };
-    }
-    const obsoletePackageDeleteQueue = (Array.isArray(packageEntriesResult.entries) ? packageEntriesResult.entries : [])
-        .filter((entry) => String(entry?.type || '').toLowerCase() === 'file')
-        .map((entry) => ({
-            path: normalizeSyncRelativePath(entry?.path || ''),
-            sha: String(entry?.sha || '')
-        }))
-        .filter((file) => file.path && !expectedPackagePaths.has(file.path));
-
-    const snapshotsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_DATA_SNAPSHOTS_ROOT);
-    const snapshotListResult = await syncGitHubListFiles(repoConfig, snapshotsRoot, { branch });
-    if (!snapshotListResult.success) {
-        return {
-            success: false,
-            error: snapshotListResult.error || (currentLang === 'zh_CN' ? '读取云端快照目录失败' : 'Failed to list remote snapshots'),
-            branch
-        };
-    }
-    const remoteSnapshotDeleteQueue = (Array.isArray(snapshotListResult.files) ? snapshotListResult.files : [])
-        .map((file) => ({
-            path: normalizeSyncRelativePath(file?.path || ''),
-            sha: String(file?.sha || '')
-        }))
-        .filter((file) => file.path && /\.json$/i.test(file.path));
-
-    let pushedCount = 0;
-    let deletedCount = 0;
-    for (let i = 0; i < remoteInputDeleteQueue.length; i += 1) {
-        const file = remoteInputDeleteQueue[i];
-        const relativeDocPath = file.path.startsWith(`${inputDocsRoot}/`)
-            ? file.path.slice(inputDocsRoot.length + 1)
-            : file.path;
-        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
-            path: file.path,
-            sha: file.sha,
+    if (selectedPackageCount === 0) {
+        const graphqlCommitResult = await syncGitHubCreateCommitOnBranch(repoConfig, {
             branch,
-            message: `${commitPrefix} delete input doc ${relativeDocPath}`
+            expectedHeadOid: headCommitSha,
+            files: filesToPush,
+            message: `${commitPrefix} push docs-only ${filesToPush.length} files`
         });
-        if (!deleteResult.success) {
-            return {
-                success: false,
-                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端删除失败' : 'Remote delete failed'),
-                branch,
-                pushedCount,
-                deletedCount,
-                failedPath: file.path
-            };
-        }
-        if (!deleteResult.notFound) deletedCount += 1;
-    }
-
-    for (let i = 0; i < remoteRuleDeleteQueue.length; i += 1) {
-        const file = remoteRuleDeleteQueue[i];
-        const ruleName = getSyncPathBasename(file.path);
-        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
-            path: file.path,
-            sha: file.sha,
-            branch,
-            message: `${commitPrefix} delete rule file ${ruleName || 'AGENTS.md'}`
+        timing.mark('create_graphql_commit', {
+            writes: filesToPush.length,
+            success: graphqlCommitResult?.success === true
         });
-        if (!deleteResult.success) {
-            return {
-                success: false,
-                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端规则文件删除失败' : 'Remote rule delete failed'),
+        if (graphqlCommitResult?.success) {
+            timing.done({
+                success: true,
                 branch,
-                pushedCount,
-                deletedCount,
-                failedPath: file.path
-            };
-        }
-        if (!deleteResult.notFound) deletedCount += 1;
-    }
-
-    for (let i = 0; i < obsoleteDataDeleteQueue.length; i += 1) {
-        const file = obsoleteDataDeleteQueue[i];
-        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
-            path: file.path,
-            sha: file.sha,
-            branch,
-            message: `${commitPrefix} delete obsolete data/latest.json`
-        });
-        if (!deleteResult.success) {
-            return {
-                success: false,
-                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端旧数据入口删除失败' : 'Remote obsolete data delete failed'),
-                branch,
-                pushedCount,
-                deletedCount,
-                failedPath: file.path
-            };
-        }
-        if (!deleteResult.notFound) deletedCount += 1;
-    }
-
-    for (let i = 0; i < obsoletePackageDeleteQueue.length; i += 1) {
-        const file = obsoletePackageDeleteQueue[i];
-        const relativePackagePath = file.path.startsWith(`${packagesRoot}/`)
-            ? file.path.slice(packagesRoot.length + 1)
-            : file.path;
-        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
-            path: file.path,
-            sha: file.sha,
-            branch,
-            message: `${commitPrefix} delete obsolete package ${relativePackagePath}`
-        });
-        if (!deleteResult.success) {
-            return {
-                success: false,
-                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端旧数据包删除失败' : 'Remote obsolete package delete failed'),
-                branch,
-                pushedCount,
-                deletedCount,
-                failedPath: file.path
-            };
-        }
-        if (!deleteResult.notFound) deletedCount += 1;
-    }
-
-    for (let i = 0; i < remoteSnapshotDeleteQueue.length; i += 1) {
-        const file = remoteSnapshotDeleteQueue[i];
-        const relativeSnapshotPath = file.path.startsWith(`${snapshotsRoot}/`)
-            ? file.path.slice(snapshotsRoot.length + 1)
-            : file.path;
-        const deleteResult = await syncGitHubDeleteFile(repoConfig, {
-            path: file.path,
-            sha: file.sha,
-            branch,
-            message: `${commitPrefix} delete obsolete snapshot ${relativeSnapshotPath}`
-        });
-        if (!deleteResult.success) {
-            return {
-                success: false,
-                error: deleteResult.error || (currentLang === 'zh_CN' ? '云端删除失败' : 'Remote delete failed'),
-                branch,
-                pushedCount,
-                deletedCount,
-                failedPath: file.path
-            };
-        }
-        if (!deleteResult.notFound) deletedCount += 1;
-    }
-
-    for (let i = 0; i < filesToPush.length; i += 1) {
-        const file = filesToPush[i];
-        const putResult = await syncGitHubPutFile(repoConfig, { ...file, branch });
-        if (!putResult.success) {
-            return {
-                success: false,
-                error: putResult.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'),
-                branch,
-                pushedCount,
-                failedPath: file.path
-            };
-        }
-        if (file?.docCache && typeof file.docCache === 'object') {
-            docCacheUpdates.push({
-                kind: file.docCache.kind || SYNC_DOC_KIND_INPUT,
-                name: file.docCache.name || '',
-                markdown: String(file.docCache.markdown || ''),
-                remoteSha: String(putResult.sha || ''),
-                remotePath: normalizeSyncRelativePath(file.path || ''),
-                updatedAt: nowTs
+                files: filesToPush.length,
+                deleted: 0,
+                docsOnlyGraphql: true,
+                cleanupScanSkipped: true
             });
+            return {
+                success: true,
+                branch,
+                branchCreated,
+                pushedCount: filesToPush.length,
+                deletedCount: 0,
+                paths,
+                docCacheUpdates: buildDocCacheUpdates(),
+                commitSha: String(graphqlCommitResult.sha || '')
+            };
         }
-        pushedCount += 1;
+        console.warn('[SyncView] docs-only GraphQL commit failed, fallback to Git Data API:', graphqlCommitResult?.error);
     }
 
-    return { success: true, branch, branchCreated, pushedCount, deletedCount, paths, docCacheUpdates };
+    let headCommitPromise = null;
+    if (options?.headCommitPromise && String(branchReady.sha || '').trim() === headCommitSha) {
+        headCommitPromise = Promise.resolve(options.headCommitPromise)
+            .then((result) => result?.success ? result : syncGitHubGetCommit(repoConfig, headCommitSha));
+    }
+    const headCommit = await (headCommitPromise || syncGitHubGetCommit(repoConfig, headCommitSha));
+    timing.mark('read_head_commit');
+    if (!headCommit.success) {
+        return {
+            success: false,
+            error: headCommit.error || (currentLang === 'zh_CN' ? '读取分支 commit 失败' : 'Failed to read branch commit'),
+            branch
+        };
+    }
+
+    const treeResult = await syncGitHubCreateTree(repoConfig, {
+        baseTreeSha: headCommit.treeSha,
+        entries: treeEntries
+    });
+    timing.mark('create_tree', {
+        writes: filesToPush.length,
+        deletes: deletedCount
+    });
+    if (!treeResult.success) {
+        return {
+            success: false,
+            error: treeResult.error || (currentLang === 'zh_CN' ? '创建批量 tree 失败' : 'Failed to create batch tree'),
+            branch
+        };
+    }
+
+    const commitMessageParts = [`${commitPrefix} push ${filesToPush.length} files`];
+    if (deletedCount > 0) commitMessageParts.push(`delete ${deletedCount}`);
+    const commitResult = await syncGitHubCreateCommit(repoConfig, {
+        message: commitMessageParts.join(', '),
+        treeSha: treeResult.sha,
+        parentSha: headCommitSha
+    });
+    timing.mark('create_commit');
+    if (!commitResult.success) {
+        return {
+            success: false,
+            error: commitResult.error || (currentLang === 'zh_CN' ? '创建批量 commit 失败' : 'Failed to create batch commit'),
+            branch
+        };
+    }
+
+    const updateRefResult = await syncGitHubUpdateBranchRef(repoConfig, {
+        branch,
+        commitSha: commitResult.sha
+    });
+    timing.mark('update_ref');
+    if (!updateRefResult.success) {
+        return {
+            success: false,
+            error: updateRefResult.error || (currentLang === 'zh_CN' ? '发布批量 commit 失败' : 'Failed to publish batch commit'),
+            branch,
+            commitSha: commitResult.sha
+        };
+    }
+
+    const blobShaByPath = new Map((Array.isArray(treeResult.entries) ? treeResult.entries : [])
+        .map((entry) => [normalizeSyncRelativePath(entry?.path || ''), String(entry?.sha || '')])
+        .filter(([path]) => path));
+    const docCacheUpdates = buildDocCacheUpdates(blobShaByPath);
+
+    timing.done({
+        success: true,
+        branch,
+        files: filesToPush.length,
+        deleted: deletedCount,
+        cleanupScanSkipped: true
+    });
+    return {
+        success: true,
+        branch,
+        branchCreated,
+        pushedCount: filesToPush.length,
+        deletedCount,
+        paths,
+        docCacheUpdates,
+        commitSha: String(commitResult.sha || '')
+    };
 }
 
 async function pullSyncDocsFromGitHub(repoConfig) {
@@ -14409,6 +14909,7 @@ async function pullSyncDocsFromGitHub(repoConfig) {
 }
 
 async function pushSyncSnapshotToCloud() {
+    const timing = createSyncTimingLogger('sync-push');
     const config = readSyncConfigFromUI();
     const configSaved = await saveSyncConfigToStorage();
     if (!configSaved) {
@@ -14419,7 +14920,9 @@ async function pushSyncSnapshotToCloud() {
         showToast(currentLang === 'zh_CN' ? '推送失败：同步配置保存失败' : 'Push failed: unable to save sync settings');
         return null;
     }
+    timing.mark('save_config');
     const repoConfig = buildSyncRepoConfig(config);
+    const selectedPackageCount = countEnabledSyncPackages(config);
     const missingRepoReason = getSyncRepoMissingReason(repoConfig);
     if (repoConfig.provider === SYNC_PROVIDER_GITHUB && missingRepoReason.code) {
         setSyncStatusText({
@@ -14430,11 +14933,40 @@ async function pushSyncSnapshotToCloud() {
         showToast(currentLang === 'zh_CN' ? `推送失败：${missingRepoReason.text}` : `Push failed: ${missingRepoReason.text}`);
         return null;
     }
+    let githubBranchReadyPromise = null;
+    let githubHeadCommitPromise = null;
+    if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
+        githubBranchReadyPromise = ensureSyncGitHubBranch(repoConfig, { createIfMissing: false })
+            .catch((error) => ({
+                success: false,
+                error: formatSyncGitHubError(error)
+            }));
+        if (selectedPackageCount > 0) {
+            githubHeadCommitPromise = githubBranchReadyPromise
+                .then((branchReady) => {
+                    const headSha = String(branchReady?.sha || '').trim();
+                    if (!branchReady?.success || branchReady.branchWillBeCreated === true || !headSha) {
+                        return null;
+                    }
+                    return syncGitHubGetCommit(repoConfig, headSha);
+                })
+                .catch((error) => ({
+                    success: false,
+                    error: formatSyncGitHubError(error)
+                }));
+        }
+        timing.mark('start_remote_prefetch');
+    }
     await flushCurrentSyncDocBeforeTransfer('push-before-collect');
-    const selectedPackageCount = countEnabledSyncPackages(config);
+    timing.mark('flush_current_doc');
     let payload = null;
     try {
         payload = await collectSyncPushPayload(config);
+        timing.mark('collect_payload', {
+            selectedPackages: selectedPackageCount,
+            payloadPackages: Object.keys(payload?.packages || {}).length,
+            docs: Array.isArray(payload?.docs) ? payload.docs.length : 0
+        });
     } catch (error) {
         const errorI18n = getSyncPushPayloadErrorI18n(error);
         setSyncStatusText(errorI18n.status);
@@ -14454,18 +14986,17 @@ async function pushSyncSnapshotToCloud() {
         docs: payload.docs,
         payload
     };
-    const saved = await syncStorageSet({ [SYNC_CLOUD_SNAPSHOT_STORAGE_KEY]: snapshot });
-    if (!saved) {
-        setSyncStatusText({
-            zh_CN: '状态：推送失败（写入快照失败）',
-            en: 'Status: Push failed (snapshot write failed)'
-        });
-        showToast(currentLang === 'zh_CN' ? '推送失败：本地存储写入失败' : 'Push failed: storage write failed');
-        return null;
-    }
 
     const isLocalProvider = repoConfig.provider === SYNC_PROVIDER_LOCAL;
     let localSnapshotDownloadResult = null;
+    const pushActivityMeta = {
+        at: Date.now(),
+        provider: repoConfig.provider,
+        branch: repoConfig.branch,
+        fileCount: 0,
+        packageCount,
+        docCount: Array.isArray(payload.docs) ? payload.docs.length : 0
+    };
 
     if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
         setSyncRepoStatusText({
@@ -14474,10 +15005,14 @@ async function pushSyncSnapshotToCloud() {
         }, 'neutral');
         let remotePushResult = null;
         try {
-            remotePushResult = await pushSyncSnapshotToGitHub(repoConfig, snapshot);
+            remotePushResult = await pushSyncSnapshotToGitHub(repoConfig, snapshot, {
+                branchReadyPromise: githubBranchReadyPromise,
+                headCommitPromise: githubHeadCommitPromise
+            });
         } catch (error) {
             remotePushResult = { success: false, error: formatSyncGitHubError(error) };
         }
+        timing.mark('remote_push');
         if (!remotePushResult?.success) {
             const remoteError = String(remotePushResult?.error || (currentLang === 'zh_CN' ? 'GitHub 推送失败' : 'GitHub push failed'));
             setSyncStatusText({
@@ -14491,13 +15026,18 @@ async function pushSyncSnapshotToCloud() {
         const pushedCount = Number(remotePushResult.pushedCount || 0);
         const deletedCount = Math.max(0, Number(remotePushResult.deletedCount || 0));
         const pushedBranch = String(remotePushResult.branch || repoConfig.branch || '').trim();
+        pushActivityMeta.branch = pushedBranch || repoConfig.branch;
+        pushActivityMeta.fileCount = pushedCount;
         const branchCreatedNoteZh = remotePushResult.branchCreated ? '，已自动创建分支' : '';
         const branchCreatedNoteEn = remotePushResult.branchCreated ? ' (branch auto-created)' : '';
         const deletedNoteZh = deletedCount > 0 ? `，删除 ${deletedCount} 个云端文件` : '';
         const deletedNoteEn = deletedCount > 0 ? `, deleted ${deletedCount} remote files` : '';
+        const commitSha = String(remotePushResult.commitSha || '').trim();
+        const commitNoteZh = commitSha ? `，commit ${commitSha.slice(0, 7)}` : '，1 个 commit';
+        const commitNoteEn = commitSha ? `, commit ${commitSha.slice(0, 7)}` : ', 1 commit';
         setSyncRepoStatusText({
-            zh_CN: `GitHub 已推送 ${pushedCount} 个文件（${pushedBranch}）${branchCreatedNoteZh}${deletedNoteZh}`,
-            en: `GitHub pushed ${pushedCount} files (${pushedBranch})${branchCreatedNoteEn}${deletedNoteEn}`
+            zh_CN: `GitHub 已批量推送 ${pushedCount} 个文件（${pushedBranch}${commitNoteZh}）${branchCreatedNoteZh}${deletedNoteZh}`,
+            en: `GitHub batch pushed ${pushedCount} files (${pushedBranch}${commitNoteEn})${branchCreatedNoteEn}${deletedNoteEn}`
         }, 'success');
         markSyncRepoConnected(config);
         const pushedDocCacheUpdates = Array.isArray(remotePushResult.docCacheUpdates)
@@ -14523,12 +15063,14 @@ async function pushSyncSnapshotToCloud() {
         }
     } else {
         localSnapshotDownloadResult = await downloadSyncLocalExportBundle(snapshot, repoConfig);
+        timing.mark('local_export');
         const filesTotal = Math.max(0, Number(localSnapshotDownloadResult?.filesTotal || 0));
         const downloadedCount = Math.max(0, Number(localSnapshotDownloadResult?.downloadedCount || 0));
         const failedCount = Math.max(0, Number(localSnapshotDownloadResult?.failedCount || 0));
         const exportMode = String(localSnapshotDownloadResult?.exportMode || '').trim();
         const archiveName = String(localSnapshotDownloadResult?.archiveName || '').trim();
         const archiveEntries = Math.max(0, Number(localSnapshotDownloadResult?.archiveEntries || 0));
+        pushActivityMeta.fileCount = archiveEntries || downloadedCount || filesTotal;
         setSyncRepoStatusText({
             zh_CN: localSnapshotDownloadResult?.success
                 ? (failedCount > 0
@@ -14572,12 +15114,28 @@ async function pushSyncSnapshotToCloud() {
         }
     }
 
+    const snapshotSaved = await syncStorageSet({ [SYNC_CLOUD_SNAPSHOT_STORAGE_KEY]: snapshot });
+    timing.mark('save_snapshot', { deferred: true, saved: snapshotSaved });
+    if (!snapshotSaved) {
+        console.warn('[SyncView] push completed but local snapshot save failed');
+        if (isLocalProvider) {
+            setSyncRepoStatusText({
+                zh_CN: '本地导出完成，但快照写入本地存储失败',
+                en: 'Local export completed, but snapshot storage failed'
+            }, 'neutral');
+        }
+    }
+
     const pushedZh = isLocalProvider
-        ? '状态：已写入本地快照'
-        : (i18n?.syncStatusPushed?.zh_CN || '状态：已推送到云端快照');
+        ? (snapshotSaved ? '状态：已写入本地快照' : '状态：本地导出完成（快照写入失败）')
+        : (snapshotSaved
+            ? (i18n?.syncStatusPushed?.zh_CN || '状态：已推送到云端快照')
+            : '状态：已推送到云端（本地快照写入失败）');
     const pushedEn = isLocalProvider
-        ? 'Status: Saved local snapshot'
-        : (i18n?.syncStatusPushed?.en || 'Status: Pushed to cloud snapshot');
+        ? (snapshotSaved ? 'Status: Saved local snapshot' : 'Status: Local export completed (snapshot save failed)')
+        : (snapshotSaved
+            ? (i18n?.syncStatusPushed?.en || 'Status: Pushed to cloud snapshot')
+            : 'Status: Pushed to cloud (snapshot save failed)');
     if (packageCount > 0) {
         setSyncStatusText({
             zh_CN: `${pushedZh}（${packageCount} 包）`,
@@ -14679,9 +15237,24 @@ async function pushSyncSnapshotToCloud() {
             );
         }
     }
+    if (!snapshotSaved) {
+        showToast(
+            currentLang === 'zh_CN'
+                ? (isLocalProvider ? '本地导出已完成，但快照写入本地存储失败' : '云端推送已完成，但本地快照写入失败')
+                : (isLocalProvider ? 'Local export completed, but snapshot storage failed' : 'Cloud push completed, but local snapshot save failed')
+        );
+    }
     if (selectedPackageCount !== packageCount) {
         console.warn('[SyncView] selected package count mismatch:', { selectedPackageCount, packageCount });
     }
+    pushActivityMeta.at = Date.now();
+    await recordSyncTransferActivity('push', pushActivityMeta);
+    timing.done({
+        success: true,
+        provider: repoConfig.provider,
+        packageCount,
+        docs: Array.isArray(payload.docs) ? payload.docs.length : 0
+    });
     return snapshot;
 }
 
@@ -14899,6 +15472,12 @@ async function pullSyncSnapshotFromCloud() {
             ? `拉取完成：按最新修改取胜（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}`
             : `Pull completed: latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}`
     );
+    await recordSyncTransferActivity('pull', {
+        at: Date.now(),
+        provider: repoConfig.provider,
+        branch: repoConfig.branch,
+        docCount: cloudDocs.length
+    });
     return true;
 }
 
@@ -15076,12 +15655,22 @@ function bindSyncViewEvents() {
     const pullBtn = document.getElementById('syncPullBtn');
     if (pullBtn) {
         pullBtn.addEventListener('click', async () => {
+            const progressToken = beginSyncActionButtonProgress(
+                pullBtn,
+                getSyncText('syncPullBtnLoadingText', currentLang === 'zh_CN' ? '拉取中...' : 'Pulling...')
+            );
+            let pulled = false;
             try {
-                await pullSyncSnapshotFromCloud();
+                pulled = await pullSyncSnapshotFromCloud();
             } catch (error) {
                 setSyncStatusText({ zh_CN: '状态：拉取失败', en: 'Status: Pull failed' });
                 showToast(currentLang === 'zh_CN' ? '拉取失败，请稍后重试' : 'Pull failed, please retry');
                 console.error('[SyncView] pull failed:', error);
+            } finally {
+                finishSyncActionButtonProgress(pullBtn, progressToken, pulled ? 'success' : 'error', {
+                    successText: getSyncText('syncPullBtnSuccessText', currentLang === 'zh_CN' ? '拉取完成' : 'Pulled'),
+                    errorText: getSyncText('syncPullBtnErrorText', currentLang === 'zh_CN' ? '拉取失败' : 'Pull Failed')
+                });
             }
         });
     }
@@ -15113,15 +15702,25 @@ function bindSyncViewEvents() {
     const pushBtn = document.getElementById('syncPushBtn');
     if (pushBtn) {
         pushBtn.addEventListener('click', async () => {
+            const progressToken = beginSyncActionButtonProgress(
+                pushBtn,
+                getSyncText('syncPushBtnLoadingText', currentLang === 'zh_CN' ? '推送中...' : 'Pushing...')
+            );
+            let pushed = false;
             try {
                 if (commitSyncEditorToCurrentDoc({ markEdited: false })) {
                     await saveSyncDocsToStorage();
                 }
-                await pushSyncSnapshotToCloud();
+                pushed = !!(await pushSyncSnapshotToCloud());
             } catch (error) {
                 setSyncStatusText({ zh_CN: '状态：推送失败', en: 'Status: Push failed' });
                 showToast(currentLang === 'zh_CN' ? '推送失败，请稍后重试' : 'Push failed, please retry');
                 console.error('[SyncView] push failed:', error);
+            } finally {
+                finishSyncActionButtonProgress(pushBtn, progressToken, pushed ? 'success' : 'error', {
+                    successText: getSyncText('syncPushBtnSuccessText', currentLang === 'zh_CN' ? '推送完成' : 'Pushed'),
+                    errorText: getSyncText('syncPushBtnErrorText', currentLang === 'zh_CN' ? '推送失败' : 'Push Failed')
+                });
             }
         });
     }

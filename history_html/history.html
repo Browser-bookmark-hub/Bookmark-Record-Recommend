@@ -1434,7 +1434,10 @@
                         <div class="sync-actions">
                             <button id="syncRepoCollapseBtn" class="view-action-btn view-action-btn-ghost sync-repo-collapse-btn" type="button">
                                 <i class="fas fa-chevron-up"></i>
-                                <span id="syncRepoCollapseBtnText">折叠配置方式</span>
+                                <span class="sync-repo-collapse-copy">
+                                    <span id="syncRepoCollapseBtnText" class="sync-repo-collapse-title">折叠配置方式</span>
+                                    <span id="syncRepoStatusText" class="sync-repo-status-text sync-repo-status-neutral">等待配置</span>
+                                </span>
                             </button>
                             <button id="syncPushBtn" class="view-action-btn" type="button">
                                 <i class="fas fa-upload"></i>
@@ -1485,7 +1488,6 @@
                                             <span id="syncRepoOpenHtmlBtnText">配置说明</span>
                                         </button>
                                     </div>
-                                    <span id="syncRepoStatusText" class="sync-repo-status-text">等待配置</span>
                                 </div>
                             </div>
                         </div>
