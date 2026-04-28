@@ -11,7 +11,7 @@
 2. 保留当前已经可用的数据采集逻辑，不先重写推荐、记录、时间捕捉等核心采集。
 3. 移除旧 `latest.json/current.json` 入口，新入口固定为 `data/manifest.json`。
 4. 让 GitHub 上的文件变更天然可读：AI 通过 commits/compare 分析变化，不由插件生成本地变化摘要。
-5. 让 `AGENTS.md` 成为同步根目录固定规则文件：缺失时推送默认模板，不做其他规则文件名兼容。
+5. 让 `AGENTS.md` 成为产品文件夹固定规则文件：缺失时推送默认模板，不做其他规则文件名兼容。
 
 一句话结论：
 从“单体快照 + 6 个工程包”升级为“实时事实源采集 + 导出 adapter + 多文件事实包 + manifest 索引 + GitHub diff 分析”。
@@ -34,7 +34,7 @@
    - 时间捕捉统计与排行
    - 书签树快照
 3. GitHub 推送当前使用 Contents API 逐文件 `PUT /contents/...`，一次用户推送会生成多个 commit，而不是一个 commit。
-4. 当前 `AGENTS.md` 按同步根目录固定文件处理：
+4. 当前 `AGENTS.md` 按产品文件夹固定文件处理：
    - 推送时必须写入 `AGENTS.md`
    - 拉取时只读取 `AGENTS.md`
 5. 当前 `buildBookmarkTreeSnapshot()` 并不总是 Chrome Bookmarks API 原生树：
@@ -88,10 +88,10 @@ AI 的变化分析流程应为：
 
 ## 5. 目标目录结构
 
-`<basePath>` 即同步根路径，当前默认 `bookmark_record_and_recommend_sync`。
+同步范围固定为产品文件夹，不再使用 `sync` 云端子目录。
 
 ```text
-<basePath>/
+书签记录与推荐/ 或 Bookmark Record and Recommend/
 |-- AGENTS.md                                  [PUSH]
 |-- data/
 |   |-- manifest.json                          [PUSH]  # AI 入口索引，不是正文
@@ -126,7 +126,6 @@ AI 的变化分析流程应为：
   "snapshotId": "2026-04-25T12-30-22Z_8f2c",
   "generatedAt": 1777081822000,
   "generatedAtText": "2026-04-25 20:30:11",
-  "basePath": "bookmark_record_and_recommend_sync",
   "writeMode": "github-contents-api-multi-commit",
   "packageSelection": {
     "bookmarkRecord": true,
@@ -359,7 +358,7 @@ Phase B 可选增强：
 ## 9. AGENTS.md 调整（根目录固定）
 
 目标行为：
-1. 文件位置固定在 `<basePath>/AGENTS.md`。
+1. 文件位置固定在产品文件夹下的 `AGENTS.md`。
 2. 规则文件固定为 `AGENTS.md`。
 3. 若用户未编辑规则，推送时使用内置默认规则模板写入固定路径。
 
@@ -367,8 +366,8 @@ Phase B 可选增强：
 1. `normalizeSyncDocs()` 将规则文件统一归一为 `AGENTS.md`。
 2. UI 可以显示“默认规则预览”。
 3. 用户编辑规则内容时，仍写入固定的 `AGENTS.md`。
-4. 推送时必须写入同步根目录的 `AGENTS.md`。
-5. 拉取时只读取同步根目录的 `AGENTS.md`。
+4. 推送时必须写入产品文件夹下的 `AGENTS.md`。
+5. 拉取时只读取产品文件夹下的 `AGENTS.md`。
 6. 不支持其他规则文件名别名。
 
 建议写入 AGENTS.md 的核心规则：
@@ -457,7 +456,7 @@ Phase A 实现步骤：
 这部分不需要读取数据包正文。
 
 需要调整：
-1. Pull 规则文件时只读同步根目录的 `AGENTS.md`。
+1. Pull 规则文件时只读产品文件夹下的 `AGENTS.md`。
 2. 远端暂未生成 `AGENTS.md` 不视为 AI 结果拉取失败。
 3. 仅拉取 AI 结果文档和固定规则文件。
 4. 下一次 Push 会写入固定 `AGENTS.md`。
@@ -479,7 +478,7 @@ Phase A 实现步骤：
 
 1. UI 包选择区切为 3 项。
 2. 不提供旧入口文件。
-3. `AGENTS.md` 固定写入同步根目录。
+3. `AGENTS.md` 固定写入产品文件夹。
 4. 路径说明区切换到新结构。
 5. 不提供旧结构写入开关。
 
@@ -502,7 +501,7 @@ Phase A 实现步骤：
    - `data/raw-native/history-visits.jsonl`
 3. `manifest.json` 只包含索引、hash、count、readOrder、pushId，不包含正文和本地变化摘要。
 4. 同一次推送产生的 commits 拥有相同 `pushId`，AI 可以聚合 compare。
-5. `AGENTS.md` 固定写入同步根目录，拉取也只读取这个固定文件。
+5. `AGENTS.md` 固定写入产品文件夹，拉取也只读取这个固定文件。
 6. 本地 ZIP 导出与 GitHub 推送文件结构一致。
 7. 不生成 `latest.json/current.json`，且 GitHub 推送会删除远端旧残留。
 
@@ -512,4 +511,4 @@ Phase A 实现步骤：
 
 1. `history-visits.jsonl` 单次导出上限：当前沿用历史读取上限，manifest 中标注 `limit/truncated`；记录包 `clickRecords.meta` 标注匹配方式和是否来自缓存。
 2. Phase A 是否只做 pushId 多 commit 聚合，不切 Git Data API：建议是。
-3. 规则文件名不允许改名；同步根目录只使用 `AGENTS.md`。
+3. 规则文件名不允许改名；产品文件夹只使用 `AGENTS.md`。

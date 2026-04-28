@@ -56,14 +56,14 @@
 ## 3. 路径约定（草案）
 
 ```text
-sync/<clientId>/data/latest/*.json
-sync/<clientId>/data/snapshots/<YYYY-MM-DD>/<HHmmss>/*.json
+书签记录与推荐/data/latest/*.json
+书签记录与推荐/data/snapshots/<YYYY-MM-DD>/<HHmmss>/*.json
 
-bookmark_record_and_recommend_sync/AGENTS.md
-sync/<clientId>/ai/results/latest.md
-sync/<clientId>/ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md
+书签记录与推荐/AGENTS.md
+书签记录与推荐/ai/results/latest.md
+书签记录与推荐/ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md
 
-sync/<clientId>/meta/sync_state.json
+书签记录与推荐/meta/sync_state.json
 ```
 
 说明：
@@ -75,7 +75,7 @@ sync/<clientId>/meta/sync_state.json
 
 ## 4. AGENTS.md 规则文件（拟定）
 
-新增文件：`bookmark_record_and_recommend_sync/AGENTS.md`，用途：
+新增文件：`书签记录与推荐/AGENTS.md`，用途：
 
 1. 规定 AI 允许读取的输入路径。
 2. 规定 AI 必须输出的路径与格式。

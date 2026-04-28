@@ -25,11 +25,12 @@ Bookmark Record and Recommend
 书签添加记录 / Bookmark Addition Records
 书签点击记录 / Bookmark Click Records
 
-AI 同步根目录：
-bookmark_record_and_recommend_sync
+AI 同步写入位置：
+书签记录与推荐 / Bookmark Record and Recommend
 
 固定规则文件：
-bookmark_record_and_recommend_sync/AGENTS.md
+书签记录与推荐/AGENTS.md
+Bookmark Record and Recommend/AGENTS.md
 
 AI 同步 schema：
 bookmark_record_and_recommend.*
@@ -57,8 +58,8 @@ bookmark_record_and_recommend.*
 它们继续通过 AI 同步包进入：
 
 ```text
-bookmark_record_and_recommend_sync/data/packages/bookmark-record.json
-bookmark_record_and_recommend_sync/data/packages/bookmark-recommend.json
+书签记录与推荐/data/packages/bookmark-record.json
+书签记录与推荐/data/packages/bookmark-recommend.json
 ```
 
 ## 3. 手动导出结果
@@ -103,13 +104,14 @@ Downloads/
 云端根目录：
 
 ```text
-bookmark_record_and_recommend_sync/
+书签记录与推荐/
+Bookmark Record and Recommend/
 ```
 
 云端结构：
 
 ```text
-bookmark_record_and_recommend_sync/
+书签记录与推荐/ 或 Bookmark Record and Recommend/
   AGENTS.md
   data/
     manifest.json
@@ -130,25 +132,29 @@ bookmark_record_and_recommend_sync/
 本地压缩包：
 
 ```text
-bookmark_record_and_recommend_sync_YYYYMMDD_HHMMSS.zip
+bookmark_record_and_recommend_YYYYMMDD_HHMMSS.zip
 ```
 
-zip 内部根目录：
+zip 内部结构：
 
 ```text
-bookmark_record_and_recommend_sync/
+书签记录与推荐/AGENTS.md
+Bookmark Record and Recommend/AGENTS.md
+data/
+ai/
+meta/
 ```
 
 固定规则文件：
 
 ```text
-bookmark_record_and_recommend_sync/AGENTS.md
+AGENTS.md
 ```
 
 规则：
 
-- 推送时只写 `AGENTS.md`。
-- 拉取时只读 `AGENTS.md`。
+- 推送时只写产品文件夹下的 `AGENTS.md`。
+- 拉取时只读产品文件夹下的 `AGENTS.md`。
 - 不按用户自定义标题改文件名。
 - 不识别其他规则文件名别名。
 - 不做旧同步路径迁移。
@@ -174,7 +180,7 @@ doc/BOOKMARK_RECORD_AND_RECOMMEND_NAMING_UNIFICATION_PLAN_2026-04-25.md
 - `getBrowsingExportRootFolder()`
 - `getBrowsingExportFolder()`
 - `BrowsingHistoryCalendar.generateExportFilename(mode)`
-- `SYNC_GITHUB_DEFAULT_BASE_PATH`
+- 固定产品文件夹写入逻辑
 - `buildSyncLocalSnapshotFileName()`
 - `buildSyncLocalExportArchiveName()`
 - `buildSyncRepoPaths()`
@@ -204,7 +210,7 @@ git diff HEAD --check
 - 旧 AI 同步 schema 命名空间无残留。
 - 旧本地同步压缩包前缀无残留。
 - 旧规则文件名别名兼容无残留。
-- `AGENTS.md` 只固定在同步根目录。
+- `AGENTS.md` 只固定在产品文件夹。
 
 ## 7. 仍然不改的内容
 
@@ -222,6 +228,6 @@ storage key，例如 aiSyncConfig_v1
 原因：
 
 - 展示名当前已经是 `书签记录与推荐 / Bookmark Record and Recommend`。
-- storage key 和内部端口名不属于用户可见导出目录或同步根目录。
+- storage key 和内部端口名不属于用户可见导出目录或仓库写入位置。
 - 数据包文件名表达的是包类型，不是产品路径 slug。
 - 点击排行、关联记录、时间排行当前没有普通手动导出入口。

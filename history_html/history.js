@@ -104,7 +104,10 @@ let syncFilesCardOriginalParent = null;
 let syncFilesCardOriginalNextSibling = null;
 let syncFilesCardLayoutObserver = null;
 let syncRemoteDocCacheState = {};
+let syncRemoteDocDeleteQueueState = {};
 let syncActivityState = null;
+let syncMarkdownViewMode = 'split';
+let syncMarkdownViewModeHydrated = false;
 
 const isSidePanelMode = detectSidePanelModeFromLocation();
 const LAST_ACTIVE_VIEW_STORAGE_KEY = getLastActiveViewStorageKey(isSidePanelMode);
@@ -112,12 +115,13 @@ const SYNC_CONFIG_STORAGE_KEY = 'aiSyncConfig_v1';
 const SYNC_DOCS_STORAGE_KEY = 'aiSyncDocuments_v1';
 const SYNC_CLOUD_SNAPSHOT_STORAGE_KEY = 'aiSyncCloudSnapshot_v1';
 const SYNC_REMOTE_DOC_CACHE_STORAGE_KEY = 'aiSyncRemoteDocCache_v1';
+const SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY = 'aiSyncRemoteDocDeleteQueue_v1';
 const SYNC_ACTIVITY_STORAGE_KEY = 'aiSyncActivity_v1';
 const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2';
+const SYNC_MARKDOWN_VIEW_MODE_STORAGE_KEY = 'aiSyncMarkdownViewMode_v1';
 const SYNC_REALTIME_MARKDOWN_RENDER = true;
 const SYNC_PROVIDER_GITHUB = 'github';
 const SYNC_PROVIDER_LOCAL = 'local';
-const SYNC_GITHUB_DEFAULT_BASE_PATH = 'bookmark_record_and_recommend_sync';
 const SYNC_GITHUB_RESULTS_SUBDIR = 'ai/results';
 const SYNC_GITHUB_INPUT_DOCS_SUBDIR = 'ai/input-docs';
 const SYNC_GITHUB_DATA_SNAPSHOTS_ROOT = 'data/snapshots';
@@ -127,7 +131,7 @@ const SYNC_AGENT_DOC_NAME = 'AGENTS.md';
 const SYNC_DOC_KIND_AGENT = 'agent';
 const SYNC_DOC_KIND_INPUT = 'input';
 const SYNC_DOC_KIND_RESULT = 'result';
-const SYNC_AGENT_FORMAT_GUIDE_ZH = `## 8. 结果 Markdown 格式（必须遵循本地格式工具）
+const SYNC_AGENT_FORMAT_GUIDE_ZH = `## 11. 结果 Markdown 格式（必须遵循本地格式工具）
 - 结果文件（ai/results/**/*.md）必须兼容本地渲染与格式工具，不输出额外方言语法。
 - 标题：\`#\`、\`##\`、\`###\`
 - 加粗：\`**文本**\`
@@ -145,7 +149,7 @@ const SYNC_AGENT_FORMAT_GUIDE_ZH = `## 8. 结果 Markdown 格式（必须遵循�
   \`> [!note] 标题\`
   \`> 内容\`
 - 不使用 \`[[wikilink]]\` 双链语法。`;
-const SYNC_AGENT_FORMAT_GUIDE_EN = `## 8. Result Markdown Format (Must Follow Local Formatting Tools)
+const SYNC_AGENT_FORMAT_GUIDE_EN = `## 11. Result Markdown Format (Must Follow Local Formatting Tools)
 - Result files (ai/results/**/*.md) must remain compatible with local renderer and formatting tools.
 - Headings: \`#\`, \`##\`, \`###\`
 - Bold: \`**text**\`
@@ -172,21 +176,22 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - 打开任意书签时，能还原它的上下文
 
 ## 2. 可读输入（路径白名单 + Git）
+所有同步文件都位于 GitHub 仓库的 \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` 文件夹下；下面路径均相对该文件夹。
 - data/manifest.json                # AI 入口索引：pushId、文件列表、hash、读取顺序
 - data/packages/bookmark-record.json
 - data/packages/bookmark-recommend.json
 - data/raw-native/bookmarks-tree.json
 - data/raw-native/history-visits.jsonl
-- AGENTS.md                         # 本文件（同步根目录固定规则文件）
+- AGENTS.md                         # 本文件（产品文件夹固定规则文件）
 - ai/input-docs/...                 # 用户本地草稿
-- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}
 - GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
 - GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
 - Web Search                        # 用于补充同类别推荐、背景核验和外部资料来源
 
 ## 3. Git 优先流程（按 pushId 聚合 commits）
 1. 先读取 \`data/manifest.json\`，记录 \`pushId\` 与 \`readOrder\`。
-2. 读取 basePath 下最近 commits（建议最近 30 条），按 commit message 中的 \`[sync:<pushId>]\` 聚合同一次用户推送。
+2. 读取仓库最近 commits（建议最近 30 条），按 commit message 中的 \`[sync:<pushId>]\` 聚合同一次用户推送。
 3. 对同一 pushId 的 commit group：compare base = 最早 commit 的 parent，head = 最晚 commit。
 4. 从 compare 结果判断哪些业务文件变化；需要正文时再按 manifest.readOrder 读取。
 5. 输出结论时，必须标注引用的 pushId、短 commit SHA 与对应路径。
@@ -198,7 +203,8 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - 推荐分数缓存状态看 \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`：包括 \`recommendScoresTime\`、\`staleMeta\`、\`ensureResult\`、\`templateScoreCount\`、\`templateScoreRatio\`。template 分是临时可用分，解释优先级时要标注不确定性。
 - \`recommend_reviews_similar\` 可能为 null；必须查看 \`recommend_reviews_similar_meta\` 的 \`available/source/skippedReason\`，不要把“未生成相似候选”解释成“没有相似书签”。
 
-## 5. 必写输出（路径白名单）
+## 5. 执行分析时必写输出（路径白名单）
+同步 push/pull 本身只负责传输数据包与 Markdown 文档；当 AI 代理执行分析时，必须写入下面的结果路径。
 - ai/results/latest.md                       # 覆盖写
 - ai/results/daily/<YYYY-MM-DD>.md           # 日报
 - ai/results/weekly/<YYYY-Www>.md            # 周报
@@ -240,7 +246,7 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 
 ## 10. 风格与禁忌
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
-- 引用书签时给出：\`(bookmarkId)\` + 标题 + 所在文件夹路径。
+- 引用书签时给出：\`(bookmarkId)\` + \`[标题](URL)\` + 所在文件夹路径；只要有 URL，标题必须渲染成可点击的 Markdown 链接。
 - 参考 bookmark-recommend.data.recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
   不同模式的"重要"定义会略有偏移。
 - 不泄露 Token / Owner / Repo 等同步配置字段。
@@ -257,21 +263,22 @@ You are the bookmark assistant. Goals:
 - Recover context for any selected bookmark
 
 ## 2. Readable Inputs (Path Allowlist + Git)
+All sync files live under the \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` folder in the GitHub repository. Paths below are relative to that folder.
 - data/manifest.json                # AI entry index: pushId, files, hashes, read order
 - data/packages/bookmark-record.json
 - data/packages/bookmark-recommend.json
 - data/raw-native/bookmarks-tree.json
 - data/raw-native/history-visits.jsonl
-- AGENTS.md                         # this required rule file at the sync root
+- AGENTS.md                         # this required rule file in the product folder
 - ai/input-docs/...                 # local user drafts
-- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}&path={basePath}
+- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}
 - GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
 - GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
 - Web Search                        # supplement related recommendations, context checks, and external sources
 
 ## 3. Git-First Workflow (group commits by pushId)
 1. Read \`data/manifest.json\` first and capture \`pushId\` plus \`readOrder\`.
-2. Read recent commits under \`basePath\` (recommend latest 30) and group commits that share \`[sync:<pushId>]\` in the message.
+2. Read recent repository commits (recommend latest 30) and group commits that share \`[sync:<pushId>]\` in the message.
 3. For one pushId group: compare base = earliest commit parent, head = latest commit.
 4. Use compare to identify changed business files; read package bodies only when needed, in manifest.readOrder.
 5. Always cite pushId, short commit SHA, and file paths in conclusions.
@@ -283,7 +290,8 @@ You are the bookmark assistant. Goals:
 - For recommendation score freshness, read \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`: \`recommendScoresTime\`, \`staleMeta\`, \`ensureResult\`, \`templateScoreCount\`, and \`templateScoreRatio\`. Template scores are temporary usable scores; mark uncertainty when interpreting priority.
 - \`recommend_reviews_similar\` may be null. Always inspect \`recommend_reviews_similar_meta.available/source/skippedReason\`; do not treat missing similar candidates as proof that no similar bookmarks exist.
 
-## 5. Required Outputs (Path Allowlist)
+## 5. Required Outputs When Running Analysis (Path Allowlist)
+Sync push/pull only transfers data packages and Markdown documents. When an AI agent runs analysis, it must write the result paths below.
 - ai/results/latest.md                       # overwrite
 - ai/results/daily/<YYYY-MM-DD>.md           # daily report
 - ai/results/weekly/<YYYY-Www>.md            # weekly report
@@ -324,7 +332,7 @@ Follow the same importance strategy, web-search rules, and elevated-permission b
 
 ## 10. Style & Safety
 - Output Markdown only
-- Include (bookmarkId), title, and folder path when citing bookmarks
+- Include (bookmarkId), \`[title](URL)\`, and folder path when citing bookmarks. When a URL exists, the title must be a clickable Markdown link.
 - Respect recommend mode (default / archaeology / consolidate / wander / priority)
 - Never leak token/owner/repo sync settings
 
@@ -332,9 +340,11 @@ ${SYNC_AGENT_FORMAT_GUIDE_EN}
 `;
 
 function getDefaultSyncAgentDocTemplate(lang = currentLang) {
-    return String(lang || '').toLowerCase() === 'en'
+    const rootFolder = getSyncCloudRootFolderName(lang);
+    const template = String(lang || '').toLowerCase() === 'en'
         ? SYNC_AGENT_DOC_TEMPLATE_EN
         : SYNC_AGENT_DOC_TEMPLATE_ZH;
+    return template.replace(/\{\{SYNC_CLOUD_ROOT_FOLDER\}\}/g, rootFolder);
 }
 
 const SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH = 'data/latest.json';
@@ -344,9 +354,10 @@ const SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH = 'data/packages/bookmark-reco
 const SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH = 'data/raw-native/bookmarks-tree.json';
 const SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH = 'data/raw-native/history-visits.jsonl';
 const SYNC_GITHUB_META_STATE_PATH = 'meta/sync_state.json';
-const SYNC_GITHUB_PULL_MAX_FILES = 60;
 const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
 const SYNC_HISTORY_VISITS_EXPORT_LIMIT = 50000;
+const SYNC_CLOUD_ROOT_FOLDER_ZH = '书签记录与推荐';
+const SYNC_CLOUD_ROOT_FOLDER_EN = 'Bookmark Record and Recommend';
 
 const SYNC_DEFAULT_CONFIG = Object.freeze({
     remoteProvider: SYNC_PROVIDER_GITHUB,
@@ -354,7 +365,6 @@ const SYNC_DEFAULT_CONFIG = Object.freeze({
     githubRepoOwner: '',
     githubRepoName: '',
     githubRepoBranch: 'main',
-    githubRepoBasePath: SYNC_GITHUB_DEFAULT_BASE_PATH,
     bookmarkRecommend: true,
     bookmarkRecord: true,
     rawNative: true
@@ -3263,8 +3273,8 @@ const i18n = {pageTitle: {
         'zh_CN': '同步 / AI分析',
         'en': 'Sync / AI Analysis'
     },syncViewDescription: {
-        'zh_CN': '手动推送推荐/记录数据，并拉取 AI 结果 Markdown。',
-        'en': 'Manually push recommendation/record data and pull AI Markdown outputs.'
+        'zh_CN': '手动推送推荐/记录数据，并同步可查看的 Markdown。',
+        'en': 'Manually push recommendation/record data and sync visible Markdown files.'
     },syncControlPanelCollapseBtnText: {
         'zh_CN': '折叠',
         'en': 'Collapse'
@@ -3295,9 +3305,6 @@ const i18n = {pageTitle: {
     },syncGithubBranchLabel: {
         'zh_CN': '分支',
         'en': 'Branch'
-    },syncGithubBasePathLabel: {
-        'zh_CN': '同步根路径',
-        'en': 'Sync Base Path'
     },syncRepoTestBtnText: {
         'zh_CN': '测试连接',
         'en': 'Test Connection'
@@ -4846,8 +4853,6 @@ function applyLanguage() {
     if (syncGithubRepoLabel) syncGithubRepoLabel.textContent = i18n.syncGithubRepoLabel[currentLang];
     const syncGithubBranchLabel = document.getElementById('syncGithubBranchLabel');
     if (syncGithubBranchLabel) syncGithubBranchLabel.textContent = i18n.syncGithubBranchLabel[currentLang];
-    const syncGithubBasePathLabel = document.getElementById('syncGithubBasePathLabel');
-    if (syncGithubBasePathLabel) syncGithubBasePathLabel.textContent = i18n.syncGithubBasePathLabel[currentLang];
     const syncRepoTestBtnText = document.getElementById('syncRepoTestBtnText');
     if (syncRepoTestBtnText) syncRepoTestBtnText.textContent = i18n.syncRepoTestBtnText[currentLang];
     const syncRepoOpenHtmlBtnText = document.getElementById('syncRepoOpenHtmlBtnText');
@@ -8422,13 +8427,13 @@ function buildSyncTimeKey(timestamp = Date.now()) {
 function buildSyncLocalSnapshotFileName(timestamp = Date.now()) {
     const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
     const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark_record_and_recommend_sync_${dateKey}_${timeKey}.json`;
+    return `bookmark_record_and_recommend_${dateKey}_${timeKey}.json`;
 }
 
 function buildSyncLocalExportArchiveName(timestamp = Date.now()) {
     const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
     const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark_record_and_recommend_sync_${dateKey}_${timeKey}.zip`;
+    return `bookmark_record_and_recommend_${dateKey}_${timeKey}.zip`;
 }
 
 async function downloadSyncLocalSnapshot(snapshotInput) {
@@ -8967,6 +8972,7 @@ function sanitizeSyncDocRelativePath(name = '', fallback = 'ai-result.md') {
                 .trim()
                 .replace(/[\\:*?"<>|]+/g, '-')
                 .replace(/\s+/g, ' ');
+            if (safe === '.' || safe === '..') return 'untitled';
             return safe || 'untitled';
         });
     let output = safeSegments.join('/');
@@ -8980,76 +8986,77 @@ function buildSyncRepoConfig(configInput = syncConfigState) {
     const config = normalizeSyncConfig(configInput || null);
     const rawProvider = String(raw.provider || '').trim().toLowerCase();
     const rawBranch = String(raw.branch || '').trim();
-    const rawBasePath = normalizeSyncRelativePath(raw.basePath || '');
     return {
         provider: rawProvider || String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
         token: String(raw.token || config.githubRepoToken || '').trim(),
         owner: String(raw.owner || config.githubRepoOwner || '').trim(),
         repo: String(raw.repo || config.githubRepoName || '').trim(),
-        branch: rawBranch || String(config.githubRepoBranch || 'main').trim() || 'main',
-        basePath: rawBasePath || normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
-            || SYNC_GITHUB_DEFAULT_BASE_PATH
+        branch: rawBranch || String(config.githubRepoBranch || 'main').trim() || 'main'
     };
 }
 
+function getSyncCloudRootFolderName(lang = currentLang) {
+    const isEnglish = String(lang || '').trim().toLowerCase() === 'en';
+    return normalizeSyncDownloadPathSegment(isEnglish ? SYNC_CLOUD_ROOT_FOLDER_EN : SYNC_CLOUD_ROOT_FOLDER_ZH);
+}
+
 function buildSyncRepoPaths(repoConfig, timestamp = Date.now()) {
-    const basePath = normalizeSyncRelativePath(repoConfig?.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    const rootFolder = getSyncCloudRootFolderName(currentLang);
     return {
-        basePath,
-        resultsRootPath: joinSyncRelativePath(basePath, SYNC_GITHUB_RESULTS_SUBDIR),
-        obsoleteDataLatestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH),
-        dataManifestPath: joinSyncRelativePath(basePath, SYNC_GITHUB_DATA_MANIFEST_PATH),
-        packageBookmarkRecordPath: joinSyncRelativePath(basePath, SYNC_GITHUB_PACKAGE_BOOKMARK_RECORD_PATH),
-        packageBookmarkRecommendPath: joinSyncRelativePath(basePath, SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH),
-        rawNativeBookmarksTreePath: joinSyncRelativePath(basePath, SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH),
-        rawNativeHistoryVisitsPath: joinSyncRelativePath(basePath, SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH),
-        metaStatePath: joinSyncRelativePath(basePath, SYNC_GITHUB_META_STATE_PATH)
+        rootFolder,
+        resultsRootPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_RESULTS_SUBDIR),
+        obsoleteDataLatestPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH),
+        dataManifestPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_DATA_MANIFEST_PATH),
+        packageBookmarkRecordPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_PACKAGE_BOOKMARK_RECORD_PATH),
+        packageBookmarkRecommendPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH),
+        rawNativeBookmarksTreePath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH),
+        rawNativeHistoryVisitsPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH),
+        metaStatePath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_META_STATE_PATH)
     };
 }
 
 function getSyncResultsRootPath(configInput = syncConfigState) {
-    const config = buildSyncRepoConfig(configInput);
-    return joinSyncRelativePath(config.basePath, SYNC_GITHUB_RESULTS_SUBDIR);
+    return buildSyncRepoPaths(buildSyncRepoConfig(configInput), Date.now()).resultsRootPath;
 }
 
 function buildSyncCloudPathDiagram(configInput = syncConfigState) {
-    const repoConfig = buildSyncRepoConfig(configInput);
-    const basePath = normalizeSyncRelativePath(repoConfig.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    const repoPaths = buildSyncRepoPaths(buildSyncRepoConfig(configInput), Date.now());
+    const rootLabel = repoPaths.rootFolder;
     const ruleFileName = SYNC_AGENT_DOC_NAME;
     const isZh = currentLang === 'zh_CN';
 
     const rows = isZh
         ? [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI 分析规则文档：固定写入同步根目录，限定可读路径、结果格式、manifest 与 pushId 聚合流程。' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI 分析规则文档：固定写入产品文件夹，限定可读路径、结果格式、manifest 与 pushId 聚合流程。' },
             { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI 入口索引：列出本次 pushId、正文文件、hash、读取顺序；不包含正文或本地变化摘要。' },
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: '书签记录包：新增、点击、点击排行、关联记录、当前时间排行与时间屏蔽状态。' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: '书签推荐包：S 分数池、候选池、推荐模式、复习、屏蔽、跳过、翻卡事件。' },
             { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: '书签树/准原生事实源：Phase A 标注 source 与 flattened-records 格式。' },
             { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: '浏览历史事实源：JSONL 明细，manifest 标注 limit 与 truncated。' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: '“查看”区输入文档索引：记录任务 Markdown 的文件名与更新时间。' },
-            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: '输入任务文档：你在“查看”里维护的问题、上下文、约束与补充说明。' },
-            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI 输出结果文档：latest/daily/weekly/monthly/runs 等分析结果。' },
-            { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: '同步目录提交时间线：查看最近改动文件与变更频率。' },
+            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PULL/PUSH]', desc: '输入任务文档：你在“查看”里维护；本地/云端删除会按拉取或推送同步。' },
+            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。' },
+            { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: '仓库提交时间线：查看最近改动文件与变更频率。' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。' },
             { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' }
         ]
         : [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document at the sync root: manifest, pushId grouping, output format, and citation rules.' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document in the product folder: manifest, pushId grouping, output format, and citation rules.' },
             { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI entry index: pushId, package files, hashes, read order; no package body or local delta summary.' },
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: 'Bookmark record bundle: additions, clicks, rankings, related records, current time rankings and blocked state.' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: 'Bookmark recommendation bundle: S-scores, candidates, mode, review/block/skip/flip events.' },
             { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: 'Bookmark-tree fact source: Phase A marks source and flattened-records format.' },
             { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: 'History fact source: JSONL rows; manifest records limit and truncated.' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: 'Input-doc index in the View panel: file names and update timestamps.' },
-            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PUSH]', desc: 'Input task docs: prompts, context, constraints, and notes you maintain in View.' },
-            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL]', desc: 'AI result docs: latest/daily/weekly/monthly/runs outputs.' },
-            { branch: '|--', path: 'GitHub /commits?path=<basePath>', op: '[READ]', desc: 'Commit timeline for the sync directory and change frequency.' },
+            { branch: '|--', path: 'ai/input-docs/*.md', op: '[PULL/PUSH]', desc: 'Input task docs maintained in View; local/cloud deletes sync through push or pull.' },
+            { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.' },
+            { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: 'Commit timeline for the repository and change frequency.' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary after grouping commits by pushId; no local delta summary is generated.' },
             { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' }
         ];
 
     const pathWidth = rows.reduce((max, row) => Math.max(max, String(row.path || '').length), 0);
-    const lines = [`${basePath}/`];
+    const lines = [`${rootLabel}/`];
     rows.forEach((row) => {
         const pathText = String(row.path || '').padEnd(pathWidth, ' ');
         lines.push(`${row.branch} ${pathText} ${row.op} ${row.desc}`);
@@ -9058,10 +9065,10 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
 }
 
 function updateSyncPathInfoText() {
-    const config = buildSyncRepoConfig(syncConfigState);
-    const basePath = normalizeSyncRelativePath(config.basePath || SYNC_GITHUB_DEFAULT_BASE_PATH) || SYNC_GITHUB_DEFAULT_BASE_PATH;
+    const paths = buildSyncRepoPaths(buildSyncRepoConfig(syncConfigState), Date.now());
     const ruleFileName = SYNC_AGENT_DOC_NAME;
-    const ruleExamplePath = `${basePath}/${ruleFileName}`;
+    const ruleExamplePath = joinSyncRelativePath(paths.rootFolder, ruleFileName);
+    const manifestPath = paths.dataManifestPath;
     const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
     const hasUserCreatedDoc = docs.some((doc) => doc && doc.kind === SYNC_DOC_KIND_INPUT);
     const filesTitle = document.getElementById('syncFilesTitle');
@@ -9076,8 +9083,8 @@ function updateSyncPathInfoText() {
                 : 'Note: items support edit/delete; deleted items are removed from cloud on next push.';
         } else {
             filesHint.textContent = currentLang === 'zh_CN'
-                ? `顶层说明：${ruleFileName} 会固定写入 ${ruleExamplePath}。AI 入口为 ${basePath}/data/manifest.json，变化分析来自 GitHub commits/compare。`
-                : `Top-level note: ${ruleFileName} is always written to ${ruleExamplePath}. AI entry is ${basePath}/data/manifest.json and change analysis comes from GitHub commits/compare.`;
+                ? `路径说明：${ruleFileName} 会固定写入 ${ruleExamplePath}。AI 入口为 ${manifestPath}，变化分析来自 GitHub commits/compare。`
+                : `Path note: ${ruleFileName} is always written to ${ruleExamplePath}. AI entry is ${manifestPath} and change analysis comes from GitHub commits/compare.`;
         }
     }
     const pathTitle = document.getElementById('syncPushPackagePathTitle');
@@ -9130,12 +9137,8 @@ function persistSyncControlPanelCollapsedState() {
     } catch (_) { }
 }
 
-function isSyncSingleColumnLayout() {
-    return window.matchMedia('(max-width: 360px)').matches;
-}
-
 function isSyncStackedPanelLayout() {
-    return window.matchMedia('(max-width: 920px)').matches;
+    return window.matchMedia('(max-width: 720px)').matches;
 }
 
 function scheduleSyncControlPanelLayout(delayMs = 0) {
@@ -9240,15 +9243,6 @@ function applySyncFilesCardLayout() {
     if (!syncFilesCardOriginalParent) {
         syncFilesCardOriginalParent = filesCard.parentNode;
         syncFilesCardOriginalNextSibling = filesCard.nextSibling;
-    }
-
-    const useSingleColumnLayout = isSyncSingleColumnLayout();
-    if (!useSingleColumnLayout) {
-        if (filesCard.parentNode !== renderMount) {
-            renderMount.appendChild(filesCard);
-        }
-        if (renderPanel) renderPanel.classList.add('has-sync-files-top');
-        return;
     }
 
     if (renderPanel) renderPanel.classList.remove('has-sync-files-top');
@@ -10098,6 +10092,15 @@ function buildSyncGitHubTreeTextEntry(path, text) {
     };
 }
 
+function buildSyncGitHubTreeDeleteEntry(path) {
+    return {
+        path: normalizeSyncRelativePath(path),
+        mode: '100644',
+        type: 'blob',
+        sha: null
+    };
+}
+
 async function syncGitHubListFiles(repoConfig, rootPath, { branch = '' } = {}) {
     const config = repoConfig || buildSyncRepoConfig(syncConfigState);
     const normalizedRoot = normalizeSyncRelativePath(rootPath);
@@ -10135,6 +10138,172 @@ async function syncGitHubListFiles(repoConfig, rootPath, { branch = '' } = {}) {
     }
 
     return { success: true, files };
+}
+
+async function buildSyncInputDocDeleteEntries(repoConfig, inputDocsRoot, expectedInputDocPathsInput, { branch = '' } = {}) {
+    const normalizedRoot = normalizeSyncRelativePath(inputDocsRoot);
+    if (!normalizedRoot) {
+        return { success: true, entries: [], deletedPaths: [] };
+    }
+
+    const expectedPaths = expectedInputDocPathsInput instanceof Set
+        ? expectedInputDocPathsInput
+        : new Set((Array.isArray(expectedInputDocPathsInput) ? expectedInputDocPathsInput : [])
+            .map((path) => normalizeSyncRelativePath(path))
+            .filter(Boolean));
+    const listResult = await syncGitHubListFiles(repoConfig, normalizedRoot, { branch });
+    if (!listResult.success) {
+        return {
+            success: false,
+            error: listResult.error || (currentLang === 'zh_CN' ? '读取云端输入文档失败' : 'Failed to read remote input docs')
+        };
+    }
+
+    const deletedPaths = (Array.isArray(listResult.files) ? listResult.files : [])
+        .map((file) => normalizeSyncRelativePath(file?.path || ''))
+        .filter((path) => path && path.startsWith(`${normalizedRoot}/`))
+        .filter((path) => /\.md$/i.test(path))
+        .filter((path) => !expectedPaths.has(path))
+        .sort((a, b) => a.localeCompare(b));
+
+    return {
+        success: true,
+        entries: deletedPaths.map((path) => buildSyncGitHubTreeDeleteEntry(path)),
+        deletedPaths
+    };
+}
+
+async function buildSyncQueuedRemoteDocDeleteEntries(repoConfig, deleteQueueInput, { branch = '', protectedPaths = null } = {}) {
+    const queue = normalizeSyncRemoteDocDeleteQueue(deleteQueueInput);
+    const repoPaths = buildSyncRepoPaths(repoConfig, Date.now());
+    const inputDocsRoot = joinSyncRelativePath(repoPaths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const protectedSet = protectedPaths instanceof Set ? protectedPaths : new Set();
+    const candidatePaths = Object.keys(queue)
+        .map((path) => normalizeSyncRelativePath(path))
+        .filter((path) => path && !protectedSet.has(path))
+        .filter((path) => isSyncManagedMarkdownRemotePath(path, repoConfig))
+        .sort((a, b) => a.localeCompare(b));
+
+    if (!candidatePaths.length) {
+        return { success: true, entries: [], deletedPaths: [], resolvedQueuePaths: [] };
+    }
+
+    const rootsToRead = new Set();
+    candidatePaths.forEach((path) => {
+        if (path.startsWith(`${inputDocsRoot}/`)) rootsToRead.add(inputDocsRoot);
+        if (path.startsWith(`${repoPaths.resultsRootPath}/`)) rootsToRead.add(repoPaths.resultsRootPath);
+    });
+
+    const existingPaths = new Set();
+    for (const root of rootsToRead) {
+        const listResult = await syncGitHubListFiles(repoConfig, root, { branch });
+        if (!listResult.success) {
+            return {
+                success: false,
+                error: listResult.error || (currentLang === 'zh_CN' ? '读取云端 Markdown 失败' : 'Failed to read remote Markdown files')
+            };
+        }
+        (Array.isArray(listResult.files) ? listResult.files : [])
+            .map((file) => normalizeSyncRelativePath(file?.path || ''))
+            .filter((path) => path && /\.md$/i.test(path))
+            .forEach((path) => existingPaths.add(path));
+    }
+
+    const deletedPaths = candidatePaths.filter((path) => existingPaths.has(path));
+    return {
+        success: true,
+        entries: deletedPaths.map((path) => buildSyncGitHubTreeDeleteEntry(path)),
+        deletedPaths,
+        resolvedQueuePaths: candidatePaths
+    };
+}
+
+async function readSyncGitHubMarkdownDocs(repoConfig, rootPath, { branch = '', kind = SYNC_DOC_KIND_RESULT, missingError = '' } = {}) {
+    const normalizedRoot = normalizeSyncRelativePath(rootPath);
+    const docKind = normalizeSyncDocKind(kind);
+    if (!normalizedRoot) {
+        return {
+            success: true,
+            docs: [],
+            remoteDocMetaByKey: Object.create(null),
+            remoteMarkdownPaths: [],
+            failedReads: 0,
+            firstReadError: ''
+        };
+    }
+    const listResult = await syncGitHubListFiles(repoConfig, normalizedRoot, { branch });
+    if (!listResult.success) {
+        return {
+            success: false,
+            error: listResult.error || missingError || (currentLang === 'zh_CN' ? '读取云端 Markdown 目录失败' : 'Failed to read remote Markdown directory')
+        };
+    }
+
+    const markdownFileEntries = (Array.isArray(listResult.files) ? listResult.files : [])
+        .map((file) => ({
+            path: normalizeSyncRelativePath(file?.path || ''),
+            sha: String(file?.sha || '')
+        }))
+        .filter((file) => file.path && /\.md$/i.test(file.path))
+        .sort((a, b) => String(b.path || '').localeCompare(String(a.path || '')));
+    const markdownFiles = markdownFileEntries.map((file) => file.path);
+    const docs = [];
+    const remoteDocMetaByKey = Object.create(null);
+    let failedReads = 0;
+    let firstReadError = '';
+    const committedAtMapResult = await syncGitHubReadCommittedAtMap(
+        repoConfig,
+        markdownFiles,
+        { branch, maxWorkers: 4 }
+    );
+    const committedAtByPath = committedAtMapResult?.committedAtByPath && typeof committedAtMapResult.committedAtByPath === 'object'
+        ? committedAtMapResult.committedAtByPath
+        : Object.create(null);
+    if (Number(committedAtMapResult?.failedCount || 0) > 0 && committedAtMapResult?.firstError) {
+        firstReadError = String(committedAtMapResult.firstError);
+    }
+
+    for (let i = 0; i < markdownFiles.length; i += 1) {
+        const remotePath = markdownFiles[i];
+        const readResult = await syncGitHubGetFile(repoConfig, remotePath, { branch });
+        if (!readResult.success) {
+            failedReads += 1;
+            if (!firstReadError && readResult.error) {
+                firstReadError = String(readResult.error);
+            }
+            continue;
+        }
+        const relativeName = remotePath.startsWith(`${normalizedRoot}/`)
+            ? remotePath.slice(normalizedRoot.length + 1)
+            : remotePath;
+        const remoteCommittedAt = Number(committedAtByPath[remotePath] || 0) || 0;
+        const doc = {
+            id: buildSyncDocId(relativeName || `remote-${i + 1}.md`, i),
+            name: relativeName || sanitizeSyncDocName(remotePath, `remote-${i + 1}.md`),
+            kind: docKind,
+            markdown: String(readResult.text || ''),
+            updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : -1,
+            localEdited: false
+        };
+        docs.push(doc);
+        const mergeKey = buildSyncDocMergeKey(doc);
+        if (mergeKey) {
+            remoteDocMetaByKey[mergeKey] = {
+                remoteSha: String(readResult.sha || ''),
+                remotePath: normalizeSyncRelativePath(remotePath),
+                updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : 0
+            };
+        }
+    }
+
+    return {
+        success: true,
+        docs,
+        remoteDocMetaByKey,
+        remoteMarkdownPaths: markdownFiles,
+        failedReads,
+        firstReadError
+    };
 }
 
 async function syncGitHubReadLatestCommitAtByPath(repoConfig, path, { branch = '' } = {}) {
@@ -10217,15 +10386,12 @@ function normalizeSyncConfig(raw) {
     const providerRaw = readString('remoteProvider', SYNC_PROVIDER_GITHUB).toLowerCase();
     const remoteProvider = providerRaw === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
     const githubRepoBranch = readString('githubRepoBranch', 'main');
-    const githubRepoBasePath = normalizeSyncRelativePath(readString('githubRepoBasePath', SYNC_GITHUB_DEFAULT_BASE_PATH));
-
     return {
         remoteProvider,
         githubRepoToken: readString('githubRepoToken', ''),
         githubRepoOwner: readString('githubRepoOwner', ''),
         githubRepoName: readString('githubRepoName', ''),
         githubRepoBranch: githubRepoBranch || 'main',
-        githubRepoBasePath: githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH,
         bookmarkRecommend: readBoolean('bookmarkRecommend', true),
         bookmarkRecord: readBoolean('bookmarkRecord', true),
         rawNative: readBoolean('rawNative', true)
@@ -10249,8 +10415,6 @@ function buildSanitizedSyncConfigSnapshot(configInput) {
     return {
         remoteProvider: config.remoteProvider,
         githubRepoBranch: String(config.githubRepoBranch || 'main').trim() || 'main',
-        githubRepoBasePath: normalizeSyncRelativePath(config.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH)
-            || SYNC_GITHUB_DEFAULT_BASE_PATH,
         githubRepoToken: '',
         githubRepoOwner: '',
         githubRepoName: '',
@@ -10375,6 +10539,28 @@ function normalizeSyncRemoteDocCache(raw) {
     return normalized;
 }
 
+function normalizeSyncRemoteDocDeleteQueue(raw) {
+    const normalized = {};
+    const entries = Array.isArray(raw)
+        ? raw.map((item) => [item?.path || item?.remotePath || '', item])
+        : Object.entries(raw && typeof raw === 'object' ? raw : {});
+    entries.forEach(([rawPath, rawValue]) => {
+        const value = rawValue && typeof rawValue === 'object' ? rawValue : {};
+        const path = normalizeSyncRelativePath(value.path || value.remotePath || rawPath || '');
+        if (!path || !/\.md$/i.test(path)) return;
+        const kind = normalizeSyncDocKind(value.kind || '');
+        if (kind === SYNC_DOC_KIND_AGENT) return;
+        normalized[path] = {
+            path,
+            kind,
+            name: String(value.name || ''),
+            mergeKey: String(value.mergeKey || ''),
+            queuedAt: Number(value.queuedAt || Date.now()) || Date.now()
+        };
+    });
+    return normalized;
+}
+
 function updateSyncRemoteDocCacheEntry(doc = null, meta = null) {
     const key = buildSyncDocMergeKey(doc);
     if (!key) return;
@@ -10385,6 +10571,77 @@ function updateSyncRemoteDocCacheEntry(doc = null, meta = null) {
         remotePath: normalizeSyncRelativePath(details.remotePath || doc?.name || ''),
         updatedAt: Number(details.updatedAt || Date.now()) || Date.now()
     };
+}
+
+function getSyncRemoteDocCacheEntry(doc = null) {
+    const key = buildSyncDocMergeKey(doc);
+    if (!key) return null;
+    const value = syncRemoteDocCacheState && typeof syncRemoteDocCacheState === 'object'
+        ? syncRemoteDocCacheState[key]
+        : null;
+    return value && typeof value === 'object' ? value : null;
+}
+
+function buildSyncDocRemotePath(doc = null, repoConfigInput = syncConfigState) {
+    if (!doc || typeof doc !== 'object') return '';
+    const kind = normalizeSyncDocKind(doc.kind || (doc.id === SYNC_AGENT_DOC_ID ? SYNC_DOC_KIND_AGENT : SYNC_DOC_KIND_INPUT));
+    if (kind === SYNC_DOC_KIND_AGENT) return '';
+    const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
+    const paths = buildSyncRepoPaths(repoConfig, Date.now());
+    const metaPath = normalizeSyncRelativePath(getSyncRemoteDocCacheEntry(doc)?.remotePath || '');
+    if (metaPath && isSyncManagedMarkdownRemotePath(metaPath, repoConfig)) {
+        return metaPath;
+    }
+    const fallbackName = kind === SYNC_DOC_KIND_RESULT ? 'result.md' : 'input.md';
+    const safeName = sanitizeSyncDocRelativePath(doc.name || fallbackName, fallbackName);
+    if (kind === SYNC_DOC_KIND_RESULT) {
+        const relativeName = stripSyncPathPrefix(safeName, paths.resultsRootPath);
+        const resultRelativeName = stripSyncPathPrefix(relativeName, SYNC_GITHUB_RESULTS_SUBDIR);
+        return joinSyncRelativePath(paths.resultsRootPath, resultRelativeName);
+    }
+    const inputRelativeName = stripSyncPathPrefix(
+        stripSyncPathPrefix(safeName, joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR)),
+        SYNC_GITHUB_INPUT_DOCS_SUBDIR
+    );
+    return joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR, inputRelativeName);
+}
+
+function isSyncManagedMarkdownRemotePath(path = '', repoConfigInput = syncConfigState) {
+    const remotePath = normalizeSyncRelativePath(path);
+    if (!remotePath || !/\.md$/i.test(remotePath)) return false;
+    const repoConfig = buildSyncRepoConfig(repoConfigInput || syncConfigState);
+    const paths = buildSyncRepoPaths(repoConfig, Date.now());
+    const inputDocsRoot = joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    return remotePath.startsWith(`${inputDocsRoot}/`) || remotePath.startsWith(`${paths.resultsRootPath}/`);
+}
+
+function queueSyncRemoteDocDelete(path = '', details = {}, repoConfigInput = syncConfigState) {
+    const remotePath = normalizeSyncRelativePath(path);
+    if (!isSyncManagedMarkdownRemotePath(remotePath, repoConfigInput)) return false;
+    syncRemoteDocDeleteQueueState = normalizeSyncRemoteDocDeleteQueue(syncRemoteDocDeleteQueueState);
+    const kind = normalizeSyncDocKind(details.kind || '');
+    syncRemoteDocDeleteQueueState[remotePath] = {
+        path: remotePath,
+        kind: kind === SYNC_DOC_KIND_AGENT ? SYNC_DOC_KIND_INPUT : kind,
+        name: String(details.name || ''),
+        mergeKey: String(details.mergeKey || ''),
+        queuedAt: Number(details.queuedAt || Date.now()) || Date.now()
+    };
+    return true;
+}
+
+function clearSyncRemoteDocDeleteQueuePaths(pathsInput = []) {
+    const paths = Array.isArray(pathsInput) ? pathsInput : [];
+    if (!paths.length) return false;
+    syncRemoteDocDeleteQueueState = normalizeSyncRemoteDocDeleteQueue(syncRemoteDocDeleteQueueState);
+    let changed = false;
+    paths.forEach((path) => {
+        const remotePath = normalizeSyncRelativePath(path);
+        if (!remotePath || !syncRemoteDocDeleteQueueState[remotePath]) return;
+        delete syncRemoteDocDeleteQueueState[remotePath];
+        changed = true;
+    });
+    return changed;
 }
 
 function normalizeSyncDocs(rawDocs) {
@@ -10656,8 +10913,7 @@ function updateSyncRepoFormState() {
         'syncGithubTokenInput',
         'syncGithubOwnerInput',
         'syncGithubRepoInput',
-        'syncGithubBranchInput',
-        'syncGithubBasePathInput'
+        'syncGithubBranchInput'
     ];
     inputIds.forEach((id) => {
         const input = document.getElementById(id);
@@ -10735,8 +10991,6 @@ function applySyncConfigToUI() {
     if (repoInput) repoInput.value = String(syncConfigState.githubRepoName || '');
     const branchInput = document.getElementById('syncGithubBranchInput');
     if (branchInput) branchInput.value = String(syncConfigState.githubRepoBranch || 'main');
-    const basePathInput = document.getElementById('syncGithubBasePathInput');
-    if (basePathInput) basePathInput.value = String(syncConfigState.githubRepoBasePath || SYNC_GITHUB_DEFAULT_BASE_PATH);
     const tokenInput = document.getElementById('syncGithubTokenInput');
     if (tokenInput) tokenInput.value = String(syncConfigState.githubRepoToken || '');
     const selection = getSyncPackageSelection(syncConfigState);
@@ -10757,8 +11011,7 @@ function readSyncConfigFromUI() {
         githubRepoToken: String(document.getElementById('syncGithubTokenInput')?.value || '').trim(),
         githubRepoOwner: String(document.getElementById('syncGithubOwnerInput')?.value || '').trim(),
         githubRepoName: String(document.getElementById('syncGithubRepoInput')?.value || '').trim(),
-        githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim(),
-        githubRepoBasePath: String(document.getElementById('syncGithubBasePathInput')?.value || '').trim()
+        githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim()
     };
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const checkbox = getSyncPackageCheckboxByKey(field.key);
@@ -10828,6 +11081,12 @@ async function saveSyncDocsToStorage() {
 async function saveSyncRemoteDocCacheToStorage() {
     return await syncStorageSet({
         [SYNC_REMOTE_DOC_CACHE_STORAGE_KEY]: syncRemoteDocCacheState
+    });
+}
+
+async function saveSyncRemoteDocDeleteQueueToStorage() {
+    return await syncStorageSet({
+        [SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY]: syncRemoteDocDeleteQueueState
     });
 }
 
@@ -10980,30 +11239,32 @@ async function createSyncRuleDoc({ focusDoc = true } = {}) {
     return !!saved;
 }
 
-function getSyncDocGroupKey(doc) {
-    if (!doc) return 'other';
-    if (doc.kind === SYNC_DOC_KIND_AGENT) return 'agent';
-    const name = String(doc.name || '');
-    const firstSeg = name.split('/')[0] || '';
-    if (firstSeg === 'daily') return 'daily';
-    if (firstSeg === 'weekly') return 'weekly';
-    if (firstSeg === 'monthly') return 'monthly';
-    if (firstSeg === 'runs') return 'runs';
-    if (!name.includes('/')) return 'root';
-    return 'other';
+function getSyncDocDisplayPath(doc = null) {
+    if (!doc || typeof doc !== 'object') return '';
+    const kind = normalizeSyncDocKind(doc.kind || (doc.id === SYNC_AGENT_DOC_ID ? SYNC_DOC_KIND_AGENT : SYNC_DOC_KIND_INPUT));
+    if (kind === SYNC_DOC_KIND_AGENT) return SYNC_AGENT_DOC_NAME;
+
+    const rawName = normalizeSyncRelativePath(doc.name || '');
+    if (kind === SYNC_DOC_KIND_RESULT) {
+        const relativeName = stripSyncPathPrefix(
+            stripSyncPathPrefix(rawName, SYNC_GITHUB_RESULTS_SUBDIR),
+            getSyncResultsRootPath(syncConfigState)
+        );
+        return joinSyncRelativePath(SYNC_GITHUB_RESULTS_SUBDIR, relativeName || 'result.md');
+    }
+
+    const relativeName = stripSyncPathPrefix(
+        stripSyncPathPrefix(rawName, SYNC_GITHUB_INPUT_DOCS_SUBDIR),
+        joinSyncRelativePath(buildSyncRepoPaths(buildSyncRepoConfig(syncConfigState), Date.now()).rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR)
+    );
+    return joinSyncRelativePath(SYNC_GITHUB_INPUT_DOCS_SUBDIR, relativeName || 'input.md');
 }
 
-function getSyncGroupLabel(groupKey) {
-    const dict = {
-        agent:   { zh_CN: '规则文件', en: 'Rule file' },
-        root:    { zh_CN: '顶层', en: 'Top-level' },
-        daily:   { zh_CN: '日报', en: 'Daily' },
-        weekly:  { zh_CN: '周报', en: 'Weekly' },
-        monthly: { zh_CN: '月报', en: 'Monthly' },
-        runs:    { zh_CN: '历史 runs', en: 'History runs' },
-        other:   { zh_CN: '其他', en: 'Other' }
-    };
-    return dict[groupKey]?.[currentLang] || groupKey;
+function getSyncDocDisplayName(doc = null) {
+    const pathName = getSyncPathBasename(getSyncDocDisplayPath(doc));
+    if (pathName) return pathName;
+    const docName = getSyncPathBasename(doc?.name || '');
+    return docName || String(doc?.name || '').trim() || '--';
 }
 
 function ensureSyncRenderPanelVisible({ force = false } = {}) {
@@ -11037,7 +11298,6 @@ function renderSyncFileList() {
     if (!listEl) return;
 
     const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
-    const topLevelPullSource = `${getSyncResultsRootPath(syncConfigState)}/**/*.md`;
     updateSyncPathInfoText();
     const hasRuleDoc = !!getSyncRuleDoc();
 
@@ -11046,12 +11306,10 @@ function renderSyncFileList() {
         syncCurrentDocId = docs[0]?.id || null;
     }
 
-    const groupOrder = ['agent', 'root', 'daily', 'weekly', 'monthly', 'runs', 'other'];
-    const groups = new Map();
-    docs.forEach((doc) => {
-        const key = getSyncDocGroupKey(doc);
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(doc);
+    const sortedDocs = docs.slice().sort((a, b) => {
+        const left = getSyncDocDisplayName(a).toLowerCase();
+        const right = getSyncDocDisplayName(b).toLowerCase();
+        return left.localeCompare(right);
     });
 
     listEl.innerHTML = '';
@@ -11064,7 +11322,7 @@ function renderSyncFileList() {
         main.type = 'button';
         main.className = 'sync-file-main';
         const previewName = currentLang === 'zh_CN' ? '默认 AGENTS.md' : 'Default AGENTS.md';
-        const previewMeta = currentLang === 'zh_CN' ? '未手动编辑；推送时会写入同步根目录' : 'Not manually edited; pushed to the sync root';
+        const previewMeta = currentLang === 'zh_CN' ? '未手动编辑；推送时会写入产品文件夹' : 'Not manually edited; pushed to the product folder';
         main.innerHTML = `
             <span class="sync-file-name">
                 <i class="fas fa-gavel"></i>
@@ -11106,99 +11364,81 @@ function renderSyncFileList() {
     if (!docs.length) {
         return;
     }
-    groupOrder.forEach((groupKey) => {
-        const list = groups.get(groupKey);
-        if (!list || !list.length) return;
-        if (groupKey !== 'agent') {
-            const header = document.createElement('div');
-            header.className = 'sync-file-group-header';
-            const groupLabel = getSyncGroupLabel(groupKey);
-            if (groupKey === 'root') {
-                const sourceText = currentLang === 'zh_CN'
-                    ? `（顶层拉取来源：${topLevelPullSource}）`
-                    : `(Top-level pull source: ${topLevelPullSource})`;
-                header.classList.add('sync-file-group-header-with-source');
-                header.innerHTML = `<span>${escapeHtml(groupLabel)}</span><span class="sync-file-group-source">${escapeHtml(sourceText)}</span>`;
-            } else {
-                header.textContent = groupLabel;
-            }
-            listEl.appendChild(header);
-        }
-        list.forEach((doc) => {
-            const isAgent = doc.kind === SYNC_DOC_KIND_AGENT;
-            const isResult = doc.kind === SYNC_DOC_KIND_RESULT;
-            const item = document.createElement('div');
-            item.className = `sync-file-item${doc.id === syncCurrentDocId ? ' active' : ''}${isAgent ? ' sync-file-item-agent' : ''}${isResult ? ' sync-file-item-result' : ''}`;
-            item.dataset.docId = doc.id;
+    sortedDocs.forEach((doc) => {
+        const isAgent = doc.kind === SYNC_DOC_KIND_AGENT;
+        const isResult = doc.kind === SYNC_DOC_KIND_RESULT;
+        const displayName = getSyncDocDisplayName(doc);
+        const item = document.createElement('div');
+        item.className = `sync-file-item${doc.id === syncCurrentDocId ? ' active' : ''}${isAgent ? ' sync-file-item-agent' : ''}${isResult ? ' sync-file-item-result' : ''}`;
+        item.dataset.docId = doc.id;
 
-            const mainBtn = document.createElement('button');
-            mainBtn.type = 'button';
-            mainBtn.className = 'sync-file-main';
-            const timeText = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
-            const dirtyText = doc.localEdited ? (currentLang === 'zh_CN' ? '本地编辑' : 'Local edit') : '';
-            const kindLabel = isAgent
-                ? (currentLang === 'zh_CN' ? '规则' : 'Rules')
-                : (isResult ? (currentLang === 'zh_CN' ? '结果' : 'Result') : '');
-            const iconCls = isAgent ? 'fas fa-gavel' : (isResult ? 'fas fa-file-alt' : 'fas fa-pen');
-            mainBtn.innerHTML = `
+        const mainBtn = document.createElement('button');
+        mainBtn.type = 'button';
+        mainBtn.className = 'sync-file-main';
+        const timeText = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
+        const dirtyText = doc.localEdited ? (currentLang === 'zh_CN' ? '本地编辑' : 'Local edit') : '';
+        const kindLabel = isAgent
+            ? (currentLang === 'zh_CN' ? '规则' : 'Rules')
+            : (isResult ? (currentLang === 'zh_CN' ? '结果' : 'Result') : '');
+        const iconCls = isAgent ? 'fas fa-gavel' : (isResult ? 'fas fa-file-alt' : 'fas fa-pen');
+        mainBtn.innerHTML = `
                 <span class="sync-file-name">
                     <i class="${iconCls}"></i>
-                    <span class="sync-file-name-text">${escapeHtml(doc.name || '--')}</span>
+                    <span class="sync-file-name-text">${escapeHtml(displayName)}</span>
                     ${kindLabel ? `<span class="sync-file-kind">${escapeHtml(kindLabel)}</span>` : ''}
                 </span>
                 <span class="sync-file-meta">${escapeHtml([timeText, dirtyText].filter(Boolean).join(' · '))}</span>
             `;
-            mainBtn.addEventListener('click', () => {
-                commitSyncEditorToCurrentDoc({ markEdited: false });
-                syncCurrentDocId = doc.id;
-                renderSyncFileList();
-                renderSyncMarkdown();
-                ensureSyncRenderPanelVisible();
-            });
-
-            const editLabel = getSyncText('syncFileItemEditText', currentLang === 'zh_CN' ? '编辑' : 'Edit');
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-edit-btn';
-            editBtn.setAttribute('aria-label', editLabel);
-            editBtn.title = editLabel;
-            editBtn.innerHTML = '<i class="fas fa-edit"></i>';
-            editBtn.addEventListener('click', async (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                try {
-                    await renameSyncDocByIdFromPrompt(doc.id, { focusDoc: true });
-                } catch (error) {
-                    console.error('[SyncView] rename doc from list failed:', error);
-                }
-            });
-
-            const deleteLabel = getSyncText('syncFileItemDeleteText', currentLang === 'zh_CN' ? '删除' : 'Delete');
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-delete-btn';
-            deleteBtn.setAttribute('aria-label', deleteLabel);
-            deleteBtn.title = deleteLabel;
-            deleteBtn.innerHTML = '<i class="fas fa-times"></i>';
-            deleteBtn.addEventListener('click', async (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                try {
-                    await deleteSyncDocById(doc.id, { focusNeighbor: true });
-                } catch (error) {
-                    console.error('[SyncView] delete doc from list failed:', error);
-                }
-            });
-
-            const actions = document.createElement('div');
-            actions.className = 'sync-file-item-actions';
-            actions.appendChild(editBtn);
-            actions.appendChild(deleteBtn);
-
-            item.appendChild(mainBtn);
-            item.appendChild(actions);
-            listEl.appendChild(item);
+        mainBtn.addEventListener('click', () => {
+            commitSyncEditorToCurrentDoc({ markEdited: false });
+            syncCurrentDocId = doc.id;
+            renderSyncFileList();
+            renderSyncMarkdown();
+            ensureSyncRenderPanelVisible();
         });
+
+        const editLabel = getSyncText('syncFileItemEditText', currentLang === 'zh_CN' ? '编辑' : 'Edit');
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-edit-btn';
+        editBtn.setAttribute('aria-label', editLabel);
+        editBtn.title = editLabel;
+        editBtn.innerHTML = '<i class="fas fa-edit"></i>';
+        editBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                await renameSyncDocByIdFromPrompt(doc.id, { focusDoc: true });
+            } catch (error) {
+                console.error('[SyncView] rename doc from list failed:', error);
+            }
+        });
+
+        const deleteLabel = getSyncText('syncFileItemDeleteText', currentLang === 'zh_CN' ? '删除' : 'Delete');
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-delete-btn';
+        deleteBtn.setAttribute('aria-label', deleteLabel);
+        deleteBtn.title = deleteLabel;
+        deleteBtn.innerHTML = '<i class="fas fa-times"></i>';
+        deleteBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                await deleteSyncDocById(doc.id, { focusNeighbor: true });
+            } catch (error) {
+                console.error('[SyncView] delete doc from list failed:', error);
+            }
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'sync-file-item-actions';
+        actions.appendChild(editBtn);
+        actions.appendChild(deleteBtn);
+
+        item.appendChild(mainBtn);
+        item.appendChild(actions);
+        listEl.appendChild(item);
     });
 }
 
@@ -11429,6 +11669,121 @@ function setSyncMarkdownToolsVisible(visible) {
     const toolsEl = document.getElementById('syncMarkdownTools');
     if (!toolsEl) return;
     toolsEl.hidden = !visible;
+}
+
+function resizeSyncMarkdownEditorForViewMode() {
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    if (!editorEl) return;
+    const mode = normalizeSyncMarkdownViewMode(syncMarkdownViewMode);
+    if (mode !== 'editor' || editorEl.hidden) {
+        editorEl.style.height = '';
+        editorEl.style.overflowY = '';
+        return;
+    }
+    editorEl.style.overflowY = 'hidden';
+    editorEl.style.height = 'auto';
+    const nextHeight = Math.max(300, Number(editorEl.scrollHeight || 0));
+    editorEl.style.height = `${nextHeight}px`;
+}
+
+function normalizeSyncMarkdownViewMode(mode = '') {
+    const raw = String(mode || '').trim().toLowerCase();
+    if (raw === 'editor' || raw === 'render' || raw === 'split') return raw;
+    return 'split';
+}
+
+function getSyncMarkdownViewModeLabel(mode = syncMarkdownViewMode) {
+    const normalized = normalizeSyncMarkdownViewMode(mode);
+    const labels = {
+        editor: {
+            zh_CN: '只显示编辑',
+            en: 'Editor only'
+        },
+        render: {
+            zh_CN: '只显示预览',
+            en: 'Preview only'
+        },
+        split: {
+            zh_CN: '编辑和预览',
+            en: 'Editor and preview'
+        }
+    };
+    return labels[normalized]?.[currentLang] || labels[normalized]?.en || normalized;
+}
+
+function hydrateSyncMarkdownViewMode() {
+    if (syncMarkdownViewModeHydrated) return;
+    syncMarkdownViewModeHydrated = true;
+    try {
+        syncMarkdownViewMode = normalizeSyncMarkdownViewMode(localStorage.getItem(SYNC_MARKDOWN_VIEW_MODE_STORAGE_KEY));
+    } catch (_) {
+        syncMarkdownViewMode = 'split';
+    }
+}
+
+function persistSyncMarkdownViewMode() {
+    try {
+        localStorage.setItem(SYNC_MARKDOWN_VIEW_MODE_STORAGE_KEY, normalizeSyncMarkdownViewMode(syncMarkdownViewMode));
+    } catch (_) { }
+}
+
+function updateSyncMarkdownViewModeButtons() {
+    const buttons = document.querySelectorAll('#syncMarkdownViewModeGroup [data-sync-markdown-view-mode]');
+    const activeMode = normalizeSyncMarkdownViewMode(syncMarkdownViewMode);
+    buttons.forEach((button) => {
+        const mode = normalizeSyncMarkdownViewMode(button.getAttribute('data-sync-markdown-view-mode') || '');
+        const label = getSyncMarkdownViewModeLabel(mode);
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+        button.setAttribute('aria-pressed', mode === activeMode ? 'true' : 'false');
+    });
+}
+
+function applySyncMarkdownViewModeToLayout() {
+    hydrateSyncMarkdownViewMode();
+    const mode = normalizeSyncMarkdownViewMode(syncMarkdownViewMode);
+    syncMarkdownViewMode = mode;
+    const livePaneEl = document.getElementById('syncMarkdownLivePane');
+    const editorPaneEl = document.getElementById('syncMarkdownEditorPane');
+    const renderPaneEl = document.getElementById('syncMarkdownRenderPane');
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    const renderEl = document.getElementById('syncMarkdownRender');
+    updateSyncMarkdownViewModeButtons();
+
+    if (!livePaneEl || livePaneEl.hidden) return;
+    livePaneEl.dataset.viewMode = mode;
+
+    const showEditor = mode !== 'render';
+    const showRender = mode !== 'editor';
+    if (editorPaneEl) {
+        editorPaneEl.hidden = !showEditor;
+        editorPaneEl.style.display = showEditor ? '' : 'none';
+    }
+    if (renderPaneEl) {
+        renderPaneEl.hidden = !showRender;
+        renderPaneEl.style.display = showRender ? '' : 'none';
+    }
+    if (editorEl) {
+        editorEl.hidden = !showEditor;
+        editorEl.style.display = showEditor ? '' : 'none';
+    }
+    if (renderEl) {
+        renderEl.hidden = !showRender;
+        renderEl.style.display = showRender ? '' : 'none';
+    }
+    setSyncMarkdownToolsVisible(showEditor);
+    resizeSyncMarkdownEditorForViewMode();
+    if (!showEditor) hideSyncMarkdownGlobalTooltip();
+}
+
+function setSyncMarkdownViewMode(mode = 'split', { persist = true } = {}) {
+    syncMarkdownViewMode = normalizeSyncMarkdownViewMode(mode);
+    if (persist) persistSyncMarkdownViewMode();
+    applySyncMarkdownViewModeToLayout();
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    if (syncMarkdownViewMode !== 'editor' && editorEl) {
+        renderSyncMarkdownPreview(editorEl.value || '');
+    }
 }
 
 function getSyncMarkdownEditorSelection(editor) {
@@ -12003,6 +12358,8 @@ function renderSyncMarkdown() {
     updateSyncEditModeButtonText();
     updateSyncSaveButtonTooltip();
     refreshSyncMarkdownToolLabels();
+    hydrateSyncMarkdownViewMode();
+    updateSyncMarkdownViewModeButtons();
 
     let doc = getSyncCurrentDoc();
     const usingDefaultRulePreview = !doc && !getSyncRuleDoc()
@@ -12030,12 +12387,13 @@ function renderSyncMarkdown() {
         fileTimeEl.textContent = '--';
         clearSyncMarkdownPreviewTimer();
         updateSyncSaveButtonState();
+        applySyncMarkdownViewModeToLayout();
         return;
     }
 
-    fileNameEl.textContent = doc.name || '--';
+    fileNameEl.textContent = getSyncDocDisplayName(doc);
     fileTimeEl.textContent = usingDefaultRulePreview
-        ? (currentLang === 'zh_CN' ? '推送时写入同步根目录' : 'Pushed to the sync root')
+        ? (currentLang === 'zh_CN' ? '推送时写入产品文件夹' : 'Pushed to the product folder')
         : (doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--');
     emptyEl.hidden = true;
     livePaneEl.hidden = false;
@@ -12056,6 +12414,7 @@ function renderSyncMarkdown() {
     }
     editorEl.readOnly = usingDefaultRulePreview;
     renderSyncMarkdownPreview(editorEl.value || markdown);
+    applySyncMarkdownViewModeToLayout();
     syncSyncMarkdownActiveLine({ scrollPreview: false });
     updateSyncSaveButtonState();
 }
@@ -12110,6 +12469,8 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
 
     const doc = syncDocsState[index];
     const isAgent = doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID;
+    const oldMergeKey = buildSyncDocMergeKey(doc);
+    const oldRemotePath = isAgent ? '' : buildSyncDocRemotePath(doc);
     if (isAgent) {
         if (String(doc.name || '').trim() !== SYNC_AGENT_DOC_NAME) {
             syncDocsState[index] = {
@@ -12145,14 +12506,35 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
         return false;
     }
 
-    syncDocsState[index] = {
-        ...syncDocsState[index],
+    const nextDoc = {
+        ...doc,
         name: nextName,
         updatedAt: Date.now(),
         localEdited: true
     };
+    const nextRemotePath = buildSyncDocRemotePath(nextDoc);
+    const shouldQueueOldRemotePath = oldRemotePath
+        && nextRemotePath
+        && oldRemotePath.toLowerCase() !== nextRemotePath.toLowerCase();
+    if (shouldQueueOldRemotePath) {
+        queueSyncRemoteDocDelete(oldRemotePath, {
+            kind: doc.kind,
+            name: doc.name,
+            mergeKey: oldMergeKey
+        });
+    }
+    if (oldMergeKey) {
+        delete syncRemoteDocCacheState[oldMergeKey];
+    }
+    syncDocsState[index] = {
+        ...nextDoc
+    };
     if (focusDoc) syncCurrentDocId = syncDocsState[index].id;
     await saveSyncDocsToStorage();
+    await saveSyncRemoteDocCacheToStorage();
+    if (shouldQueueOldRemotePath) {
+        await saveSyncRemoteDocDeleteQueueToStorage();
+    }
     renderSyncFileList();
     renderSyncMarkdown();
     updateSyncPathInfoText();
@@ -12171,16 +12553,26 @@ async function deleteSyncDocById(docId, { focusNeighbor = false } = {}) {
 
     const doc = syncDocsState[index];
     const isAgent = doc.kind === SYNC_DOC_KIND_AGENT || doc.id === SYNC_AGENT_DOC_ID;
+    const mergeKey = buildSyncDocMergeKey(doc);
+    const remotePath = isAgent ? '' : buildSyncDocRemotePath(doc);
 
     const confirmText = isAgent
         ? (currentLang === 'zh_CN'
-            ? `确认删除 ${doc.name} 的自定义内容吗？删除后下次推送会用默认 AGENTS.md 写入同步根目录。`
-            : `Delete the custom ${doc.name} content? The next push will write the default AGENTS.md to the sync root.`)
+            ? `确认删除 ${doc.name} 的自定义内容吗？删除后下次推送会用默认 AGENTS.md 写入产品文件夹。`
+            : `Delete the custom ${doc.name} content? The next push will write the default AGENTS.md to the product folder.`)
         : (currentLang === 'zh_CN'
             ? `确认删除 ${doc.name} 吗？删除后下次推送会同步删除云端对应文件。`
             : `Delete ${doc.name}? The corresponding cloud file will be removed on next push.`);
     if (!window.confirm(confirmText)) return false;
 
+    const queuedRemoteDelete = !isAgent && queueSyncRemoteDocDelete(remotePath, {
+        kind: doc.kind || SYNC_DOC_KIND_INPUT,
+        name: doc.name,
+        mergeKey
+    });
+    if (mergeKey) {
+        delete syncRemoteDocCacheState[mergeKey];
+    }
     syncDocsState.splice(index, 1);
 
     if (focusNeighbor || syncCurrentDocId === safeId) {
@@ -12189,6 +12581,10 @@ async function deleteSyncDocById(docId, { focusNeighbor = false } = {}) {
     }
 
     await saveSyncDocsToStorage();
+    await saveSyncRemoteDocCacheToStorage();
+    if (queuedRemoteDelete) {
+        await saveSyncRemoteDocDeleteQueueToStorage();
+    }
     renderSyncFileList();
     renderSyncMarkdown();
     updateSyncPathInfoText();
@@ -12291,6 +12687,7 @@ async function loadSyncStateFromStorage() {
         SYNC_CONFIG_STORAGE_KEY,
         SYNC_DOCS_STORAGE_KEY,
         SYNC_REMOTE_DOC_CACHE_STORAGE_KEY,
+        SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY,
         SYNC_ACTIVITY_STORAGE_KEY
     ]);
 
@@ -12308,6 +12705,7 @@ async function loadSyncStateFromStorage() {
     }
     syncDocsState = docs;
     syncRemoteDocCacheState = normalizeSyncRemoteDocCache(result?.[SYNC_REMOTE_DOC_CACHE_STORAGE_KEY] || null);
+    syncRemoteDocDeleteQueueState = normalizeSyncRemoteDocDeleteQueue(result?.[SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY] || null);
     if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
@@ -12706,6 +13104,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
     };
 
     const hasVisitDetails = typeof browserAPI.history.getVisits === 'function';
+    let getVisitsConcurrency = 0;
     const getVisitsAsync = (url) => new Promise((resolve) => {
         try {
             const maybePromise = browserAPI.history.getVisits({ url }, (visits) => {
@@ -12730,7 +13129,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
             });
         });
     } else {
-        const concurrency = getSyncHistoryVisitsConcurrency(relevantItems.length);
+        getVisitsConcurrency = getSyncHistoryVisitsConcurrency(relevantItems.length);
         let cursor = 0;
         const processNext = async () => {
             while (cursor < relevantItems.length) {
@@ -12771,7 +13170,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
                 }
             }
         };
-        await Promise.all(Array.from({ length: concurrency }, () => processNext()));
+        await Promise.all(Array.from({ length: getVisitsConcurrency }, () => processNext()));
     }
 
     const rows = Array.from(rowsByDate.entries())
@@ -12799,7 +13198,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
             historyItemLimit: maxItems,
             searchPageSize: pageSize,
             maxVisitsPerUrl,
-            getVisitsConcurrency: concurrency,
+            getVisitsConcurrency,
             lookbackDays,
             truncated: historyItemsTruncated
         }
@@ -13680,11 +14079,11 @@ function buildSyncSnapshotId(timestamp = Date.now(), pushId = '') {
     return `${iso}_${suffix}`;
 }
 
-function stripSyncBasePath(path = '', basePath = '') {
+function stripSyncPathPrefix(path = '', prefixPath = '') {
     const normalizedPath = normalizeSyncRelativePath(path);
-    const normalizedBase = normalizeSyncRelativePath(basePath);
-    if (!normalizedBase || !normalizedPath.startsWith(`${normalizedBase}/`)) return normalizedPath;
-    return normalizedPath.slice(normalizedBase.length + 1);
+    const normalizedPrefix = normalizeSyncRelativePath(prefixPath);
+    if (!normalizedPrefix || !normalizedPath.startsWith(`${normalizedPrefix}/`)) return normalizedPath;
+    return normalizedPath.slice(normalizedPrefix.length + 1);
 }
 
 function normalizeSyncSignalText(value = '') {
@@ -14337,7 +14736,7 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
         const file = {
             path: normalizedPath,
             text: String(entry?.text == null ? '' : entry.text),
-            message: String(entry?.message || `${commitPrefix} update ${stripSyncBasePath(normalizedPath, paths.basePath)}`)
+            message: String(entry?.message || `${commitPrefix} update ${normalizedPath}`)
         };
         if (entry?.docCache) file.docCache = entry.docCache;
         files.push(file);
@@ -14345,7 +14744,7 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     };
 
     const addManifestFileEntry = async (role, path, schema, text, extra = {}) => {
-        const relativePath = stripSyncBasePath(path, paths.basePath);
+        const relativePath = stripSyncPathPrefix(path, paths.rootFolder);
         const sha256 = await computeSyncTextSha256Hex(text);
         manifestFileEntries.push({
             role,
@@ -14439,12 +14838,12 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     }
 
     const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
-    const inputDocsRoot = joinSyncRelativePath(paths.basePath, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const inputDocsRoot = joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
     const localAgentDoc = docs.find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
     const agentMarkdown = String(localAgentDoc?.markdown || localAgentDoc?.content || '').trim()
         ? String(localAgentDoc.markdown || localAgentDoc.content || '')
         : getDefaultSyncAgentDocTemplate(currentLang);
-    const agentRuleFilePath = joinSyncRelativePath(paths.basePath, SYNC_AGENT_DOC_NAME);
+    const agentRuleFilePath = joinSyncRelativePath(paths.rootFolder, SYNC_AGENT_DOC_NAME);
     expectedRulePaths.add(normalizeSyncRelativePath(agentRuleFilePath));
     addFile({
         path: agentRuleFilePath,
@@ -14470,6 +14869,25 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
             return;
         }
         if (kind === SYNC_DOC_KIND_RESULT) {
+            if (!doc?.localEdited) {
+                return;
+            }
+            const rawName = normalizeSyncRelativePath(doc?.name || `result-${index + 1}.md`);
+            const relativeName = stripSyncPathPrefix(
+                stripSyncPathPrefix(rawName, paths.resultsRootPath),
+                SYNC_GITHUB_RESULTS_SUBDIR
+            );
+            const safeRelativePath = sanitizeSyncDocRelativePath(relativeName, `result-${index + 1}.md`);
+            addFile({
+                path: joinSyncRelativePath(paths.resultsRootPath, safeRelativePath),
+                text: String(doc?.markdown || ''),
+                message: `${commitPrefix} update result doc ${safeRelativePath}`,
+                docCache: {
+                    kind: SYNC_DOC_KIND_RESULT,
+                    name: safeRelativePath,
+                    markdown: String(doc?.markdown || '')
+                }
+            });
             return;
         }
         const safeRelativePath = sanitizeSyncDocRelativePath(doc?.name, `doc-${index + 1}.md`);
@@ -14502,7 +14920,6 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
         schema: 'bookmark_record_and_recommend.ai-sync-state.v1',
         provider: String(options.provider || repoConfig.provider || SYNC_PROVIDER_GITHUB),
         branch: String(options.branch || repoConfig.branch || '').trim() || 'main',
-        basePath: paths.basePath,
         pushId,
         snapshotId,
         pushedAt: nowTs,
@@ -14523,7 +14940,6 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
         snapshotId,
         generatedAt: nowTs,
         generatedAtText: getSyncNowLabel(nowTs),
-        basePath: paths.basePath,
         writeMode: String(options.writeMode || 'github-contents-api-multi-commit'),
         packageSelection,
         files: manifestFileEntries,
@@ -14556,7 +14972,7 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
         expectedInputDocPaths,
         expectedRulePaths,
         manifest,
-        rootFolder: paths.basePath
+        rootFolder: paths.rootFolder
     };
 }
 
@@ -14612,7 +15028,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
         (count, field) => count + (packageSelection[field.key] ? 1 : 0),
         0
     );
-    timing.mark('skip_remote_cleanup_scan', { selectedPackages: selectedPackageCount });
+    const inputDocsRoot = joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
 
     const treeEntryMap = new Map();
     const addTextEntry = (file) => {
@@ -14623,7 +15039,69 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
 
     filesToPush.forEach(addTextEntry);
 
-    const deletedCount = 0;
+    const inputDocDeleteResult = await buildSyncInputDocDeleteEntries(
+        repoConfig,
+        inputDocsRoot,
+        exportBundle.expectedInputDocPaths,
+        { branch }
+    );
+    if (!inputDocDeleteResult.success) {
+        return {
+            success: false,
+            error: inputDocDeleteResult.error || (currentLang === 'zh_CN' ? '同步删除输入文档失败' : 'Failed to mirror input doc deletes'),
+            branch
+        };
+    }
+    (inputDocDeleteResult.entries || []).forEach((entry) => {
+        const path = normalizeSyncRelativePath(entry?.path || '');
+        if (!path) return;
+        treeEntryMap.set(path, entry);
+    });
+    const protectedWritePaths = new Set();
+    treeEntryMap.forEach((entry, path) => {
+        if (entry && entry.sha == null && !Object.prototype.hasOwnProperty.call(entry, 'content')) return;
+        if (path) protectedWritePaths.add(path);
+    });
+    const queuedDeleteResult = await buildSyncQueuedRemoteDocDeleteEntries(
+        repoConfig,
+        syncRemoteDocDeleteQueueState,
+        {
+            branch,
+            protectedPaths: protectedWritePaths
+        }
+    );
+    if (!queuedDeleteResult.success) {
+        return {
+            success: false,
+            error: queuedDeleteResult.error || (currentLang === 'zh_CN' ? '同步删除 Markdown 文件失败' : 'Failed to sync Markdown deletes'),
+            branch
+        };
+    }
+    (queuedDeleteResult.entries || []).forEach((entry) => {
+        const path = normalizeSyncRelativePath(entry?.path || '');
+        if (!path) return;
+        treeEntryMap.set(path, entry);
+    });
+    const deletedPathSet = new Set();
+    (Array.isArray(inputDocDeleteResult.deletedPaths) ? inputDocDeleteResult.deletedPaths : [])
+        .forEach((path) => {
+            const normalized = normalizeSyncRelativePath(path);
+            if (normalized) deletedPathSet.add(normalized);
+        });
+    (Array.isArray(queuedDeleteResult.deletedPaths) ? queuedDeleteResult.deletedPaths : [])
+        .forEach((path) => {
+            const normalized = normalizeSyncRelativePath(path);
+            if (normalized) deletedPathSet.add(normalized);
+        });
+    const deletedQueuePaths = Array.isArray(queuedDeleteResult.resolvedQueuePaths)
+        ? queuedDeleteResult.resolvedQueuePaths.map((path) => normalizeSyncRelativePath(path)).filter(Boolean)
+        : [];
+    const deletedCount = deletedPathSet.size;
+    timing.mark('input_doc_cleanup_scan', {
+        selectedPackages: selectedPackageCount,
+        deletes: deletedCount,
+        queuedDeletes: deletedQueuePaths.length
+    });
     const treeEntries = Array.from(treeEntryMap.values()).filter((entry) => entry && entry.path);
     if (!treeEntries.length) {
         return {
@@ -14646,7 +15124,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
             updatedAt: nowTs
         }));
 
-    if (selectedPackageCount === 0) {
+    if (selectedPackageCount === 0 && deletedCount === 0) {
         const graphqlCommitResult = await syncGitHubCreateCommitOnBranch(repoConfig, {
             branch,
             expectedHeadOid: headCommitSha,
@@ -14664,7 +15142,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
                 files: filesToPush.length,
                 deleted: 0,
                 docsOnlyGraphql: true,
-                cleanupScanSkipped: true
+                inputDocCleanupScan: true
             });
             return {
                 success: true,
@@ -14672,6 +15150,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
                 branchCreated,
                 pushedCount: filesToPush.length,
                 deletedCount: 0,
+                deletedQueuePaths,
                 paths,
                 docCacheUpdates: buildDocCacheUpdates(),
                 commitSha: String(graphqlCommitResult.sha || '')
@@ -14751,7 +15230,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
         branch,
         files: filesToPush.length,
         deleted: deletedCount,
-        cleanupScanSkipped: true
+        inputDocCleanupScan: true
     });
     return {
         success: true,
@@ -14759,6 +15238,7 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
         branchCreated,
         pushedCount: filesToPush.length,
         deletedCount,
+        deletedQueuePaths,
         paths,
         docCacheUpdates,
         commitSha: String(commitResult.sha || '')
@@ -14768,74 +15248,57 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
 async function pullSyncDocsFromGitHub(repoConfig) {
     const paths = buildSyncRepoPaths(repoConfig, Date.now());
     const branch = await resolveSyncGitHubBranch(repoConfig);
-    const listResult = await syncGitHubListFiles(repoConfig, paths.resultsRootPath, { branch });
-    if (!listResult.success) {
-        return {
-            success: false,
-            error: listResult.error || (currentLang === 'zh_CN' ? '读取云端结果目录失败' : 'Failed to read remote results directory')
-        };
-    }
-
-    const allFiles = Array.isArray(listResult.files) ? listResult.files : [];
-    const markdownFileEntries = allFiles
-        .map((file) => ({
-            path: normalizeSyncRelativePath(file?.path || ''),
-            sha: String(file?.sha || '')
-        }))
-        .filter((file) => file.path && /\.md$/i.test(file.path))
-        .sort((a, b) => String(b.path || '').localeCompare(String(a.path || '')))
-        .slice(0, SYNC_GITHUB_PULL_MAX_FILES);
-    const markdownFiles = markdownFileEntries.map((file) => file.path);
-
     const docs = [];
     const remoteDocMetaByKey = Object.create(null);
+    const remoteMarkdownPathSet = new Set();
+    const inputDocsRoot = joinSyncRelativePath(paths.rootFolder, SYNC_GITHUB_INPUT_DOCS_SUBDIR);
+    const scannedMarkdownRoots = [paths.resultsRootPath, inputDocsRoot].map((path) => normalizeSyncRelativePath(path)).filter(Boolean);
     let failedReads = 0;
     let firstReadError = '';
-    const resultCommittedAtMap = await syncGitHubReadCommittedAtMap(
-        repoConfig,
-        markdownFiles,
-        { branch, maxWorkers: 4 }
-    );
-    const committedAtByPath = resultCommittedAtMap?.committedAtByPath && typeof resultCommittedAtMap.committedAtByPath === 'object'
-        ? resultCommittedAtMap.committedAtByPath
-        : Object.create(null);
-    if (Number(resultCommittedAtMap?.failedCount || 0) > 0 && !firstReadError && resultCommittedAtMap?.firstError) {
-        firstReadError = String(resultCommittedAtMap.firstError);
-    }
-    for (let i = 0; i < markdownFiles.length; i += 1) {
-        const remotePath = markdownFiles[i];
-        const readResult = await syncGitHubGetFile(repoConfig, remotePath, { branch });
-        if (!readResult.success) {
-            failedReads += 1;
-            if (!firstReadError && readResult.error) {
-                firstReadError = String(readResult.error);
-            }
-            continue;
-        }
-        const relativeName = remotePath.startsWith(`${paths.resultsRootPath}/`)
-            ? remotePath.slice(paths.resultsRootPath.length + 1)
-            : remotePath;
-        const remoteCommittedAt = Number(committedAtByPath[remotePath] || 0) || 0;
-        const doc = {
-            id: buildSyncDocId(relativeName || `remote-${i + 1}.md`, i),
-            name: relativeName || sanitizeSyncDocName(remotePath, `remote-${i + 1}.md`),
-            kind: SYNC_DOC_KIND_RESULT,
-            markdown: String(readResult.text || ''),
-            updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : -1,
-            localEdited: false
-        };
-        docs.push(doc);
-        const mergeKey = buildSyncDocMergeKey(doc);
-        if (mergeKey) {
-            remoteDocMetaByKey[mergeKey] = {
-                remoteSha: String(readResult.sha || ''),
-                remotePath: normalizeSyncRelativePath(remotePath),
-                updatedAt: remoteCommittedAt > 0 ? remoteCommittedAt : 0
-            };
-        }
-    }
 
-    let preferredRulePath = joinSyncRelativePath(paths.basePath, SYNC_AGENT_DOC_NAME);
+    const appendMarkdownReadResult = (readResult) => {
+        if (!readResult?.success) return;
+        (Array.isArray(readResult.docs) ? readResult.docs : []).forEach((doc) => docs.push(doc));
+        Object.entries(readResult.remoteDocMetaByKey || {}).forEach(([key, value]) => {
+            if (key) remoteDocMetaByKey[key] = value;
+        });
+        (Array.isArray(readResult.remoteMarkdownPaths) ? readResult.remoteMarkdownPaths : []).forEach((path) => {
+            const normalized = normalizeSyncRelativePath(path);
+            if (normalized) remoteMarkdownPathSet.add(normalized);
+        });
+        failedReads += Math.max(0, Number(readResult.failedReads || 0));
+        if (!firstReadError && readResult.firstReadError) {
+            firstReadError = String(readResult.firstReadError);
+        }
+    };
+
+    const resultDocsRead = await readSyncGitHubMarkdownDocs(repoConfig, paths.resultsRootPath, {
+        branch,
+        kind: SYNC_DOC_KIND_RESULT,
+        missingError: currentLang === 'zh_CN' ? '读取云端结果目录失败' : 'Failed to read remote results directory'
+    });
+    if (!resultDocsRead.success) {
+        return {
+            success: false,
+            error: resultDocsRead.error || (currentLang === 'zh_CN' ? '读取云端结果目录失败' : 'Failed to read remote results directory')
+        };
+    }
+    appendMarkdownReadResult(resultDocsRead);
+
+    const inputDocsRead = await readSyncGitHubMarkdownDocs(repoConfig, inputDocsRoot, {
+        branch,
+        kind: SYNC_DOC_KIND_INPUT,
+        missingError: currentLang === 'zh_CN' ? '读取云端输入文档失败' : 'Failed to read remote input docs'
+    });
+    if (!inputDocsRead.success) {
+        return {
+            success: false,
+            error: inputDocsRead.error || (currentLang === 'zh_CN' ? '读取云端输入文档失败' : 'Failed to read remote input docs')
+        };
+    }
+    appendMarkdownReadResult(inputDocsRead);
+
+    let preferredRulePath = joinSyncRelativePath(paths.rootFolder, SYNC_AGENT_DOC_NAME);
     let preferredRuleReadResult = await syncGitHubGetFile(repoConfig, preferredRulePath, { branch });
     if (!preferredRuleReadResult.success) {
         if (preferredRuleReadResult.error && !/404/.test(String(preferredRuleReadResult.error))) {
@@ -14878,7 +15341,8 @@ async function pullSyncDocsFromGitHub(repoConfig) {
         }
     }
 
-    if (!docs.length && markdownFiles.length > 0 && failedReads >= markdownFiles.length) {
+    const remoteMarkdownPaths = Array.from(remoteMarkdownPathSet);
+    if (!docs.length && remoteMarkdownPaths.length > 0 && failedReads >= remoteMarkdownPaths.length) {
         return {
             success: false,
             error: firstReadError || (currentLang === 'zh_CN' ? '云端 Markdown 读取失败' : 'Failed to read remote Markdown files')
@@ -14890,7 +15354,9 @@ async function pullSyncDocsFromGitHub(repoConfig) {
             success: true,
             docs: normalizeSyncDocs(docs),
             remoteDocMetaByKey,
-            source: 'github-results-md',
+            remoteMarkdownPaths,
+            scannedMarkdownRoots,
+            source: 'github-markdown',
             branch,
             failedReads,
             firstReadError
@@ -14901,6 +15367,8 @@ async function pullSyncDocsFromGitHub(repoConfig) {
         success: true,
         docs: [],
         remoteDocMetaByKey,
+        remoteMarkdownPaths,
+        scannedMarkdownRoots,
         source: 'empty',
         branch,
         failedReads,
@@ -15043,6 +15511,9 @@ async function pushSyncSnapshotToCloud() {
         const pushedDocCacheUpdates = Array.isArray(remotePushResult.docCacheUpdates)
             ? remotePushResult.docCacheUpdates
             : [];
+        const deletedQueuePaths = Array.isArray(remotePushResult.deletedQueuePaths)
+            ? remotePushResult.deletedQueuePaths
+            : [];
         if (pushedDocCacheUpdates.length > 0) {
             pushedDocCacheUpdates.forEach((item) => {
                 const mergeKey = buildSyncDocMergeKeyFromParts(item?.kind, item?.name);
@@ -15060,6 +15531,9 @@ async function pushSyncSnapshotToCloud() {
                 await saveSyncDocsToStorage();
             }
             await saveSyncRemoteDocCacheToStorage();
+        }
+        if (clearSyncRemoteDocDeleteQueuePaths(deletedQueuePaths)) {
+            await saveSyncRemoteDocDeleteQueueToStorage();
         }
     } else {
         localSnapshotDownloadResult = await downloadSyncLocalExportBundle(snapshot, repoConfig);
@@ -15259,30 +15733,25 @@ async function pushSyncSnapshotToCloud() {
 }
 
 function mergePulledDocsWithLocal(cloudDocs, options = {}) {
-    if (!Array.isArray(cloudDocs) || !cloudDocs.length) {
-        return {
-            docs: [],
-            summary: {
-                remoteWins: 0,
-                localWins: 0,
-                remoteOnly: 0,
-                localOnly: 0,
-                compared: 0,
-                remoteTimeUnknownKeptLocal: 0
-            }
-        };
-    }
-    const normalizedCloud = normalizeSyncDocs(cloudDocs);
+    const normalizedCloud = normalizeSyncDocs(Array.isArray(cloudDocs) ? cloudDocs : []);
     const remoteDocMetaByKey = options && options.remoteDocMetaByKey && typeof options.remoteDocMetaByKey === 'object'
         ? options.remoteDocMetaByKey
         : {};
+    const remoteMarkdownPathSet = new Set((Array.isArray(options.remoteMarkdownPaths) ? options.remoteMarkdownPaths : [])
+        .map((path) => normalizeSyncRelativePath(path))
+        .filter(Boolean));
+    const scannedMarkdownRoots = (Array.isArray(options.scannedMarkdownRoots) ? options.scannedMarkdownRoots : [])
+        .map((path) => normalizeSyncRelativePath(path))
+        .filter(Boolean);
     const summary = {
         remoteWins: 0,
         localWins: 0,
         remoteOnly: 0,
         localOnly: 0,
         compared: 0,
-        remoteTimeUnknownKeptLocal: 0
+        remoteTimeUnknownKeptLocal: 0,
+        remoteSkippedByLocalDelete: 0,
+        remoteDeletes: 0
     };
 
     const localMap = new Map();
@@ -15295,10 +15764,35 @@ function mergePulledDocsWithLocal(cloudDocs, options = {}) {
         const ts = Number(doc?.updatedAt || 0);
         return Number.isFinite(ts) && ts > 0 ? ts : 0;
     };
+    const queuedRemoteDeletes = normalizeSyncRemoteDocDeleteQueue(syncRemoteDocDeleteQueueState);
+    const isQueuedForRemoteDelete = (key, doc) => {
+        if (!key || !doc || doc.kind === SYNC_DOC_KIND_AGENT) return false;
+        const metaPath = normalizeSyncRelativePath(remoteDocMetaByKey[key]?.remotePath || '');
+        const fallbackPath = buildSyncDocRemotePath(doc);
+        const remotePath = metaPath || fallbackPath;
+        return !!(remotePath && queuedRemoteDeletes[remotePath]);
+    };
+    const isUnderScannedRoot = (path) => {
+        const remotePath = normalizeSyncRelativePath(path);
+        if (!remotePath) return false;
+        return scannedMarkdownRoots.some((root) => root && (remotePath === root || remotePath.startsWith(`${root}/`)));
+    };
+    const getCachedManagedPathForLocalDoc = (key) => {
+        if (!key || !syncRemoteDocCacheState || typeof syncRemoteDocCacheState !== 'object') return '';
+        const remotePath = normalizeSyncRelativePath(syncRemoteDocCacheState[key]?.remotePath || '');
+        if (!remotePath || !isSyncManagedMarkdownRemotePath(remotePath)) return '';
+        return remotePath;
+    };
 
     const merged = [];
     normalizedCloud.forEach((doc) => {
         const key = buildSyncDocMergeKey(doc);
+        if (isQueuedForRemoteDelete(key, doc)) {
+            if (key) localMap.delete(key);
+            summary.localWins += 1;
+            summary.remoteSkippedByLocalDelete += 1;
+            return;
+        }
         const localDoc = key ? localMap.get(key) : null;
         if (!localDoc) {
             const remoteOnlyDoc = { ...doc, localEdited: false };
@@ -15343,7 +15837,14 @@ function mergePulledDocsWithLocal(cloudDocs, options = {}) {
         }
     });
 
-    localMap.forEach((doc) => {
+    localMap.forEach((doc, key) => {
+        const cachedRemotePath = getCachedManagedPathForLocalDoc(key);
+        if (cachedRemotePath && isUnderScannedRoot(cachedRemotePath) && !remoteMarkdownPathSet.has(cachedRemotePath)) {
+            delete syncRemoteDocCacheState[key];
+            summary.remoteWins += 1;
+            summary.remoteDeletes += 1;
+            return;
+        }
         merged.push({ ...doc });
         summary.localWins += 1;
         summary.localOnly += 1;
@@ -15367,6 +15868,8 @@ async function pullSyncSnapshotFromCloud() {
     const repoConfig = buildSyncRepoConfig(config);
     let cloudDocs = [];
     let remoteDocMetaByKey = Object.create(null);
+    let remoteMarkdownPaths = [];
+    let scannedMarkdownRoots = [];
     if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
         const missingRepoReason = getSyncRepoMissingReason(repoConfig);
         if (missingRepoReason.code) {
@@ -15402,6 +15905,12 @@ async function pullSyncSnapshotFromCloud() {
         remoteDocMetaByKey = remotePullResult?.remoteDocMetaByKey && typeof remotePullResult.remoteDocMetaByKey === 'object'
             ? remotePullResult.remoteDocMetaByKey
             : Object.create(null);
+        remoteMarkdownPaths = Array.isArray(remotePullResult.remoteMarkdownPaths)
+            ? remotePullResult.remoteMarkdownPaths.map((path) => normalizeSyncRelativePath(path)).filter(Boolean)
+            : [];
+        scannedMarkdownRoots = Array.isArray(remotePullResult.scannedMarkdownRoots)
+            ? remotePullResult.scannedMarkdownRoots.map((path) => normalizeSyncRelativePath(path)).filter(Boolean)
+            : [];
         const failedReads = Math.max(0, Number(remotePullResult.failedReads) || 0);
         setSyncRepoStatusText({
             zh_CN: failedReads > 0
@@ -15434,14 +15943,24 @@ async function pullSyncSnapshotFromCloud() {
         }, 'success');
     }
 
-    if (!cloudDocs.length) {
+    const hasCachedSyncedMarkdownInScannedRoots = repoConfig.provider === SYNC_PROVIDER_GITHUB
+        && scannedMarkdownRoots.length > 0
+        && (Array.isArray(syncDocsState) ? syncDocsState : []).some((doc) => {
+            const key = buildSyncDocMergeKey(doc);
+            const remotePath = normalizeSyncRelativePath(syncRemoteDocCacheState?.[key]?.remotePath || '');
+            if (!remotePath || !isSyncManagedMarkdownRemotePath(remotePath, repoConfig)) return false;
+            return scannedMarkdownRoots.some((root) => root && remotePath.startsWith(`${root}/`));
+        });
+    if (!cloudDocs.length && !hasCachedSyncedMarkdownInScannedRoots) {
         setSyncStatusText(getSyncI18nPair('syncStatusNoCloud', '状态：云端暂无可拉取快照', 'Status: No cloud snapshot to pull'));
         showToast(currentLang === 'zh_CN' ? '云端快照没有 Markdown 文件' : 'Cloud snapshot has no Markdown files');
         return false;
     }
 
     const mergeResult = mergePulledDocsWithLocal(cloudDocs, {
-        remoteDocMetaByKey
+        remoteDocMetaByKey,
+        remoteMarkdownPaths,
+        scannedMarkdownRoots
     });
     const mergedDocs = Array.isArray(mergeResult?.docs) ? mergeResult.docs : [];
     const mergeSummary = mergeResult?.summary || {};
@@ -15457,20 +15976,34 @@ async function pullSyncSnapshotFromCloud() {
     const remoteWins = Math.max(0, Number(mergeSummary.remoteWins || 0));
     const localWins = Math.max(0, Number(mergeSummary.localWins || 0));
     const remoteTimeUnknownKeptLocal = Math.max(0, Number(mergeSummary.remoteTimeUnknownKeptLocal || 0));
+    const remoteSkippedByLocalDelete = Math.max(0, Number(mergeSummary.remoteSkippedByLocalDelete || 0));
+    const remoteDeletes = Math.max(0, Number(mergeSummary.remoteDeletes || 0));
     const unknownHintZh = remoteTimeUnknownKeptLocal > 0
         ? `，云端时间缺失 ${remoteTimeUnknownKeptLocal} 条已保留本地`
         : '';
     const unknownHintEn = remoteTimeUnknownKeptLocal > 0
         ? `, kept local for ${remoteTimeUnknownKeptLocal} docs with missing cloud timestamp`
         : '';
+    const deleteHintZh = remoteSkippedByLocalDelete > 0
+        ? `，待删除 ${remoteSkippedByLocalDelete} 条未重新拉回`
+        : '';
+    const deleteHintEn = remoteSkippedByLocalDelete > 0
+        ? `, kept ${remoteSkippedByLocalDelete} pending deletes out of pull`
+        : '';
+    const remoteDeleteHintZh = remoteDeletes > 0
+        ? `，云端删除 ${remoteDeletes} 条`
+        : '';
+    const remoteDeleteHintEn = remoteDeletes > 0
+        ? `, removed ${remoteDeletes} cloud-deleted docs`
+        : '';
     setSyncStatusText({
-        zh_CN: `状态：已拉取并按最新修改更新（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}`,
-        en: `Status: Pulled by latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}`
+        zh_CN: `状态：已拉取并按最新修改更新（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}${deleteHintZh}${remoteDeleteHintZh}`,
+        en: `Status: Pulled by latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}${deleteHintEn}${remoteDeleteHintEn}`
     });
     showToast(
         currentLang === 'zh_CN'
-            ? `拉取完成：按最新修改取胜（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}`
-            : `Pull completed: latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}`
+            ? `拉取完成：按最新修改取胜（云端生效 ${remoteWins}，本地保留 ${localWins}）${unknownHintZh}${deleteHintZh}${remoteDeleteHintZh}`
+            : `Pull completed: latest-modified policy (cloud ${remoteWins}, local ${localWins})${unknownHintEn}${deleteHintEn}${remoteDeleteHintEn}`
     );
     await recordSyncTransferActivity('pull', {
         at: Date.now(),
@@ -15563,7 +16096,6 @@ function bindSyncViewEvents() {
         'syncGithubOwnerInput',
         'syncGithubRepoInput',
         'syncGithubBranchInput',
-        'syncGithubBasePathInput',
         ...SYNC_PACKAGE_FIELDS.map((field) => field.checkboxId)
     ];
     configIds.forEach((id) => {
@@ -15807,6 +16339,15 @@ function bindSyncViewEvents() {
         });
     }
 
+    document.querySelectorAll('#syncMarkdownViewModeGroup [data-sync-markdown-view-mode]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const mode = button.getAttribute('data-sync-markdown-view-mode') || 'split';
+            setSyncMarkdownViewMode(mode, { persist: true });
+        });
+    });
+
     const editorEl = document.getElementById('syncMarkdownEditor');
     if (editorEl) {
         const syncCursorLineToPreview = (scrollPreview) => {
@@ -15815,6 +16356,7 @@ function bindSyncViewEvents() {
             });
         };
         editorEl.addEventListener('input', () => {
+            resizeSyncMarkdownEditorForViewMode();
             updateSyncSaveButtonState();
             syncCursorLineToPreview(false);
             scheduleSyncMarkdownPreview(80);
@@ -15844,6 +16386,9 @@ function bindSyncViewEvents() {
             });
         });
     }
+    window.addEventListener('resize', () => {
+        resizeSyncMarkdownEditorForViewMode();
+    }, { passive: true });
 
     const markdownTools = document.getElementById('syncMarkdownTools');
     if (markdownTools) {
@@ -15913,6 +16458,7 @@ async function renderSyncView() {
         syncViewInitialized = true;
     }
     hydrateSyncControlPanelCollapsedState();
+    hydrateSyncMarkdownViewMode();
     bindSyncViewEvents();
     applySyncConfigToUI();
     renderSyncFileList();

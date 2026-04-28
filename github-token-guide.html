@@ -554,11 +554,7 @@
         <li><strong>Repo</strong>：仓库名（例如 <code>bookmark-sync</code>）</li>
         <li><strong>Token（PAT）</strong>：粘贴刚生成的 Fine‑grained Token</li>
         <li><strong>Branch（可选）</strong>：留空=默认分支（推荐）</li>
-        <li>
-          <strong>Base Path（可选）</strong>：仓库内的同步根目录。留空=直接写入
-          <code>bookmark_record_and_recommend_sync/...</code>；例如填 <code>sync/chrome</code>，最终写入
-          <code>sync/chrome/...</code>
-        </li>
+        <li><strong>写入位置</strong>：固定写入产品文件夹，例如 <code>书签记录与推荐/AGENTS.md</code>、<code>书签记录与推荐/data/manifest.json</code>、<code>书签记录与推荐/ai/input-docs/...</code></li>
       </ul>
       <p>然后点击“测试连接”，通过后点击“保存配置”。</p>
 
@@ -567,7 +563,7 @@
         <li>本扩展通过 GitHub API 直接读写仓库文件；不会在浏览器里执行本地 Git 命令。</li>
         <li>Obsidian 侧的官方 Obsidian Git 插件负责在 Vault 内执行 <code>commit / pull / push</code>。</li>
         <li>请确保两端使用同一个 <strong>Owner / Repo / Branch</strong>。</li>
-        <li>本扩展的 <strong>Base Path</strong> 是云端仓库子目录；Obsidian Git 的 <strong>Custom base path</strong> 是本地仓库路径语义，二者不同。</li>
+        <li>本扩展不再配置 <code>sync</code> 云端子目录；同步文件固定写入产品文件夹。</li>
       </ul>
 
       <h2>问答 (Q&A)</h2>
@@ -737,11 +733,7 @@
         <li><strong>Repo</strong>: repository name (e.g. <code>bookmark-sync</code>)</li>
         <li><strong>Token (PAT)</strong>: paste the Fine‑grained token</li>
         <li><strong>Branch (optional)</strong>: leave empty to use the default branch (recommended)</li>
-        <li>
-          <strong>Base Path (optional)</strong>: the sync root folder inside the repo. Empty = write to
-          <code>bookmark_record_and_recommend_sync/...</code>; e.g. <code>sync/chrome</code> → write to
-          <code>sync/chrome/...</code>
-        </li>
+        <li><strong>Write location</strong>: fixed under the product folder, for example <code>Bookmark Record and Recommend/AGENTS.md</code>, <code>Bookmark Record and Recommend/data/manifest.json</code>, <code>Bookmark Record and Recommend/ai/input-docs/...</code></li>
       </ul>
       <p>Then click “Test Connection”, and “Save Config”.</p>
 
@@ -750,7 +742,7 @@
         <li>This extension reads/writes repository files through GitHub API; it does not run local Git commands in browser.</li>
         <li>The official Obsidian Git plugin on Obsidian side executes <code>commit / pull / push</code> inside your vault.</li>
         <li>Make sure both sides use the same <strong>Owner / Repo / Branch</strong>.</li>
-        <li>This extension's <strong>Base Path</strong> means a remote repo subfolder; Obsidian Git's <strong>Custom base path</strong> refers to local repository-path semantics. They are not the same field.</li>
+        <li>This extension no longer configures a <code>sync</code> remote subfolder; sync files are written under the product folder.</li>
       </ul>
 
       <h2>Q&A</h2>

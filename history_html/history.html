@@ -1419,35 +1419,36 @@
             <!-- 同步 / AI分析视图 -->
             <div id="syncView" class="view">
                 <div class="sync-view-layout">
-                    <section class="sync-control-panel">
-                        <div class="sync-view-header">
-                            <div class="sync-view-header-row">
-                                <h2 id="syncViewTitle">同步 / AI分析</h2>
-                                <button id="syncControlPanelCollapseBtn" class="view-action-btn view-action-btn-ghost sync-control-collapse-btn" type="button" aria-expanded="true">
-                                    <i class="fas fa-angle-left"></i>
-                                    <span id="syncControlPanelCollapseBtnText">折叠</span>
+                    <div class="sync-left-column">
+                        <section class="sync-control-panel">
+                            <div class="sync-view-header">
+                                <div class="sync-view-header-row">
+                                    <h2 id="syncViewTitle">同步 / AI分析</h2>
+                                    <button id="syncControlPanelCollapseBtn" class="view-action-btn view-action-btn-ghost sync-control-collapse-btn" type="button" aria-expanded="true">
+                                        <i class="fas fa-angle-left"></i>
+                                        <span id="syncControlPanelCollapseBtnText">折叠</span>
+                                    </button>
+                                </div>
+                                <p id="syncViewDescription">手动推送推荐/记录数据，并拉取 AI 结果 Markdown。</p>
+                            </div>
+
+                            <div class="sync-actions">
+                                <button id="syncRepoCollapseBtn" class="view-action-btn view-action-btn-ghost sync-repo-collapse-btn" type="button">
+                                    <i class="fas fa-chevron-up"></i>
+                                    <span class="sync-repo-collapse-copy">
+                                        <span id="syncRepoCollapseBtnText" class="sync-repo-collapse-title">折叠配置方式</span>
+                                        <span id="syncRepoStatusText" class="sync-repo-status-text sync-repo-status-neutral">等待配置</span>
+                                    </span>
+                                </button>
+                                <button id="syncPushBtn" class="view-action-btn" type="button">
+                                    <i class="fas fa-upload"></i>
+                                    <span id="syncPushBtnText">推送当前</span>
                                 </button>
                             </div>
-                            <p id="syncViewDescription">手动推送推荐/记录数据，并拉取 AI 结果 Markdown。</p>
-                        </div>
 
-                        <div class="sync-actions">
-                            <button id="syncRepoCollapseBtn" class="view-action-btn view-action-btn-ghost sync-repo-collapse-btn" type="button">
-                                <i class="fas fa-chevron-up"></i>
-                                <span class="sync-repo-collapse-copy">
-                                    <span id="syncRepoCollapseBtnText" class="sync-repo-collapse-title">折叠配置方式</span>
-                                    <span id="syncRepoStatusText" class="sync-repo-status-text sync-repo-status-neutral">等待配置</span>
-                                </span>
-                            </button>
-                            <button id="syncPushBtn" class="view-action-btn" type="button">
-                                <i class="fas fa-upload"></i>
-                                <span id="syncPushBtnText">推送当前</span>
-                            </button>
-                        </div>
-
-                        <div class="sync-settings-card sync-repo-card" id="syncRepoCard">
-                            <div class="sync-settings-title" id="syncRepoSettingsTitle">配置方式</div>
-                            <div class="sync-repo-card-body" id="syncRepoCardBody">
+                            <div class="sync-settings-card sync-repo-card" id="syncRepoCard">
+                                <div class="sync-settings-title" id="syncRepoSettingsTitle">配置方式</div>
+                                <div class="sync-repo-card-body" id="syncRepoCardBody">
                                 <div class="sync-form-grid">
                                     <label class="sync-form-row" for="syncProviderSelect">
                                         <span class="sync-field-label" id="syncProviderLabel">同步方式</span>
@@ -1467,10 +1468,6 @@
                                     <label class="sync-form-row" for="syncGithubBranchInput">
                                         <span class="sync-field-label" id="syncGithubBranchLabel">Branch</span>
                                         <input id="syncGithubBranchInput" class="sync-field-input" type="text" placeholder="main" autocomplete="off">
-                                    </label>
-                                    <label class="sync-form-row" for="syncGithubBasePathInput">
-                                        <span class="sync-field-label" id="syncGithubBasePathLabel">Base Path</span>
-                                        <input id="syncGithubBasePathInput" class="sync-field-input" type="text" placeholder="bookmark_record_and_recommend_sync" autocomplete="off">
                                     </label>
                                     <label class="sync-form-row sync-form-row-wide" for="syncGithubTokenInput">
                                         <span class="sync-field-label" id="syncGithubTokenLabel">GitHub Token</span>
@@ -1492,8 +1489,8 @@
                             </div>
                         </div>
 
-                        <div class="sync-settings-card">
-                            <div class="sync-settings-title-row">
+                            <div class="sync-settings-card">
+                                <div class="sync-settings-title-row">
                                 <div class="sync-settings-title" id="syncSettingsTitle">推送数据包</div>
                                 <button id="syncPushPackageInfoBtn" class="view-action-btn view-action-btn-ghost sync-info-btn" type="button">
                                     <i class="fas fa-info-circle"></i>
@@ -1512,7 +1509,13 @@
                                 <input type="checkbox" id="syncPushPackageBookmarkTreeSnapshot" checked>
                                 <span id="syncPushPackageBookmarkTreeSnapshotText" class="sync-setting-item-text">原生真相源包（书签树/浏览历史事实源）</span>
                             </label>
-                        </div>
+                            </div>
+
+                            <div class="sync-state-row">
+                                <span id="syncStatusText" class="sync-status-text">状态：未同步</span>
+                                <span id="syncLastActionTime" class="sync-last-action-time">--</span>
+                            </div>
+                        </section>
 
                         <div id="syncFilesCardContainer" class="sync-files-card">
                             <div class="sync-files-header">
@@ -1534,15 +1537,10 @@
                                     </button>
                                 </div>
                             </div>
-                            <div id="syncFilesPathHint" class="sync-files-path-hint">顶层说明：AGENTS.md 是规则文件（位于 bookmark_record_and_recommend_sync/AGENTS.md），用于定义 AI 处理规则；新建 Markdown 后，这里会自动切换为拉取来源说明。</div>
+                            <div id="syncFilesPathHint" class="sync-files-path-hint">路径说明：AGENTS.md 是规则文件（位于书签记录与推荐/AGENTS.md），用于定义 AI 处理规则；新建 Markdown 后，这里会自动切换为拉取来源说明。</div>
                             <div id="syncFileList" class="sync-file-list"></div>
                         </div>
-
-                        <div class="sync-state-row">
-                            <span id="syncStatusText" class="sync-status-text">状态：未同步</span>
-                            <span id="syncLastActionTime" class="sync-last-action-time">--</span>
-                        </div>
-                    </section>
+                    </div>
 
                     <section class="sync-render-panel">
                         <div id="syncFilesCardRenderMount" class="sync-files-card-render-mount"></div>
@@ -1550,6 +1548,17 @@
                             <div class="sync-file-active-meta">
                                 <span id="syncActiveFileName">--</span>
                                 <span id="syncActiveFileTime">--</span>
+                            </div>
+                            <div id="syncMarkdownViewModeGroup" class="sync-view-mode-toggle" role="group" aria-label="视图模式">
+                                <button type="button" class="sync-view-mode-btn" data-sync-markdown-view-mode="editor" aria-pressed="false">
+                                    <i class="fas fa-pen"></i>
+                                </button>
+                                <button type="button" class="sync-view-mode-btn" data-sync-markdown-view-mode="render" aria-pressed="false">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button type="button" class="sync-view-mode-btn" data-sync-markdown-view-mode="split" aria-pressed="true">
+                                    <i class="fas fa-columns"></i>
+                                </button>
                             </div>
                         </div>
                         <div id="syncMarkdownTools" class="sync-md-tools" hidden>
