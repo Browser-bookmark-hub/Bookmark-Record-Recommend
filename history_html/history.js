@@ -3534,7 +3534,7 @@ const i18n = {pageTitle: {
         'zh_CN': '其他',
         'en': 'Other'
     },widgetsWeekTotal: {
-        'zh_CN': '本周合计 {count} 条',
+        'zh_CN': '本周共 {count} 条',
         'en': '{count} this week'
     },widgetsRelatedWidgetTitle: {
         'zh_CN': '关联记录',
@@ -18970,7 +18970,7 @@ function getWidgetsWeekdayLabel(date) {
 function formatWidgetsRangeTotal(total, range = 'week') {
     const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
     if (currentLang === 'zh_CN') {
-        return `合计${safeTotal}条`;
+        return `共${safeTotal}条`;
     }
     return `Total ${safeTotal}`;
 }

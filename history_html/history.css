@@ -2568,12 +2568,25 @@ html.layout-resizing *::after {
 #widgetsAdditionsWeekWidgetTitle,
 #widgetsHistoryWeekWidgetTitle {
     line-height: 1.25;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+#widgetsAdditionsWeekWidgetTitle .widgets-week-title-base,
+#widgetsHistoryWeekWidgetTitle .widgets-week-title-base {
+    flex-shrink: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
 }
 
 #widgetsAdditionsWeekWidgetTitle .widgets-week-title-bracket,
 #widgetsHistoryWeekWidgetTitle .widgets-week-title-bracket {
     display: inline-block;
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* Specific override for the toggle button to avoid blue accent if generic styles apply */
@@ -2749,12 +2762,14 @@ html.layout-resizing *::after {
 
 #widgetsRankingWidgetTitle,
 #widgetsTimeRankingWidgetTitle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
+    display: block;
     height: 20px;
     line-height: 20px;
     min-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 #widgetsRankingWidget .widget-header-action-btn,
@@ -2855,24 +2870,24 @@ html.layout-resizing *::after {
 .time-tracking-widget-item.time-ranking-item {
     position: relative;
     gap: 4px;
-    padding-right: 94px;
+    padding-right: 8px;
 }
 
 .time-tracking-widget-item.time-ranking-item .time-ranking-metrics {
     position: absolute;
-    right: 8px;
+    right: 2px;
     top: 50%;
-    width: 82px;
-    min-width: 82px;
-    height: 16px;
-    display: grid;
-    grid-template-columns: 40px 40px;
-    column-gap: 2px;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    min-height: 18px;
+    display: flex;
+    gap: 6px;
     align-items: center;
-    padding: 0 1px;
+    padding: 0 6px;
     border-radius: 999px;
     border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
-    background: color-mix(in srgb, var(--bg-elevated) 42%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 85%, transparent);
     backdrop-filter: blur(3px);
     -webkit-backdrop-filter: blur(3px);
     opacity: 0.94;
@@ -2884,12 +2899,10 @@ html.layout-resizing *::after {
 
 .time-tracking-widget-item.time-ranking-item:hover .time-ranking-metrics,
 .time-tracking-widget-item.time-ranking-item:focus-within .time-ranking-metrics {
-    opacity: 0.94;
-    visibility: visible;
-    pointer-events: auto;
-    transform: translateY(-50%) translateX(0);
-    background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 24%, var(--border-color));
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(4px);
 }
 
 .time-tracking-widget-item.time-ranking-item:focus-visible {
@@ -2909,17 +2922,18 @@ html.layout-resizing *::after {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
+    width: auto;
     font-size: 11px;
     line-height: 1.2;
     flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-wakes {
     color: var(--text-tertiary);
     min-width: 0;
     text-align: center;
-    transform: translateX(4px);
+    transform: none;
 }
 
 .time-tracking-widget-item.time-ranking-item .time-ranking-metrics .item-time {
@@ -5504,10 +5518,6 @@ html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
     transform: none;
 }
 
-.widgets-cards-row .recommend-card::before {
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-}
 
 .widgets-cards-row .card-title {
     font-size: 13px;
@@ -11425,17 +11435,6 @@ a.tree-label.tree-bookmark-link:hover {
     min-height: 140px;
 }
 
-.recommend-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, var(--accent-primary), var(--success));
-    opacity: 0;
-    transition: opacity 0.2s;
-}
 
 .recommend-card:hover {
     transform: translateY(-4px);
@@ -11449,13 +11448,6 @@ a.tree-label.tree-bookmark-link:hover {
     box-shadow: none;
 }
 
-.cards-row.recommend-actions-suppressed .recommend-card:hover::before {
-    opacity: 0;
-}
-
-.recommend-card:hover::before {
-    opacity: 1;
-}
 
 .recommend-card.empty {
     opacity: 0.5;
@@ -11549,10 +11541,6 @@ a.tree-label.tree-bookmark-link:hover {
     box-shadow: 0 0 0 1px rgba(255, 152, 0, 0.25), 0 8px 18px rgba(255, 152, 0, 0.12);
 }
 
-.recommend-card.force-due::before {
-    opacity: 1;
-    background: linear-gradient(90deg, #ff9800, #ffb74d);
-}
 
 .recommend-card.force-due:hover {
     border-color: #ff9800;
