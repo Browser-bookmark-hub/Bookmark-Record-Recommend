@@ -8564,6 +8564,7 @@ function normalizeSyncDownloadPathSegment(segment = '') {
 }
 
 let syncZipCrc32TableCache = null;
+const SYNC_ZIP_UTF8_FILENAME_FLAG = 0x0800;
 
 function getSyncZipCrc32Table() {
     if (syncZipCrc32TableCache) return syncZipCrc32TableCache;
@@ -8622,8 +8623,9 @@ function concatSyncUint8Arrays(chunks = []) {
     return output;
 }
 
-function buildSyncLocalExportZipEntryPath(path = '') {
-    const normalized = normalizeSyncRelativePath(path);
+function buildSyncLocalExportZipEntryPath(path = '', rootFolder = '') {
+    const normalizedRoot = normalizeSyncRelativePath(rootFolder);
+    const normalized = stripSyncPathPrefix(path, normalizedRoot);
     if (!normalized) return '';
     return normalized
         .split('/')
@@ -8650,9 +8652,10 @@ function buildSyncLocalExportZipBlob(bundleInput) {
         };
     }
     const encoder = new TextEncoder();
+    const rootFolder = normalizeSyncRelativePath(bundle.rootFolder || '');
     const entryMap = new Map();
     files.forEach((file) => {
-        const safePath = buildSyncLocalExportZipEntryPath(file?.path || '');
+        const safePath = buildSyncLocalExportZipEntryPath(file?.path || '', rootFolder);
         if (!safePath) return;
         entryMap.set(safePath, {
             path: safePath,
@@ -8699,7 +8702,7 @@ function buildSyncLocalExportZipBlob(bundleInput) {
         const localView = new DataView(localHeader.buffer);
         localView.setUint32(0, 0x04034b50, true);
         localView.setUint16(4, 20, true);
-        localView.setUint16(6, 0, true);
+        localView.setUint16(6, SYNC_ZIP_UTF8_FILENAME_FLAG, true);
         localView.setUint16(8, 0, true);
         localView.setUint16(10, dosTime, true);
         localView.setUint16(12, dosDate, true);
@@ -8716,7 +8719,7 @@ function buildSyncLocalExportZipBlob(bundleInput) {
         centralView.setUint32(0, 0x02014b50, true);
         centralView.setUint16(4, 20, true);
         centralView.setUint16(6, 20, true);
-        centralView.setUint16(8, 0, true);
+        centralView.setUint16(8, SYNC_ZIP_UTF8_FILENAME_FLAG, true);
         centralView.setUint16(10, 0, true);
         centralView.setUint16(12, dosTime, true);
         centralView.setUint16(14, dosDate, true);
