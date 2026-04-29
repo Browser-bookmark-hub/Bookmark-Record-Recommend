@@ -14113,6 +14113,136 @@ html.side-panel-mode .recommend-last-updated-main {
     text-align: right;
 }
 
+/* 侧边栏适配：时间捕捉与排行表格 */
+html.side-panel-mode .tracking-table-wrapper {
+    padding: 6px 4px;
+}
+
+html.side-panel-mode .tracking-table {
+    table-layout: fixed;
+    font-size: 11px;
+}
+
+html.side-panel-mode .tracking-table thead th,
+html.side-panel-mode .tracking-table tbody td {
+    padding: 6px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html.side-panel-mode .tracking-table thead th:nth-child(1) { width: 34px; }
+html.side-panel-mode .tracking-table thead th:nth-child(3) { width: 60px; }
+html.side-panel-mode .tracking-table thead th:nth-child(4) { width: 36px; }
+html.side-panel-mode .tracking-table thead th:nth-child(5) { width: 40px; }
+
+html.side-panel-mode #trackingStateHelpBtn {
+    display: none;
+}
+
+html.side-panel-mode #trackingHeaderTime {
+    font-size: 0;
+}
+
+html.side-panel-mode #trackingHeaderTime::after {
+    content: "时间";
+    font-size: 11px;
+}
+
+html.side-panel-mode .tracking-table thead th:nth-child(2) {
+    text-align: left;
+    padding-left: 12px;
+}
+
+html.side-panel-mode .tracking-table .tracking-title-cell {
+    justify-content: flex-start;
+    padding-left: 4px;
+}
+
+html.side-panel-mode .tracking-table .tracking-title {
+    font-size: 11px;
+    max-width: 100px;
+}
+
+html.side-panel-mode .tracking-table .tracking-state {
+    font-size: 12px;
+}
+
+html.side-panel-mode .tracking-table .tracking-time {
+    font-size: 10px;
+    letter-spacing: -0.5px;
+}
+
+html.side-panel-mode .tracking-ranking-item {
+    min-width: 0;
+    padding: 6px 8px;
+    grid-template-columns: 20px 16px minmax(50px, 1fr) 55px 46px;
+    gap: 6px;
+}
+
+html.side-panel-mode .ranking-number {
+    font-size: 12px;
+}
+
+html.side-panel-mode .tracking-ranking-item .ranking-title {
+    font-size: 11px;
+}
+
+html.side-panel-mode .tracking-ranking-item .ranking-time {
+    font-size: 11px;
+    letter-spacing: -0.5px;
+}
+
+html.side-panel-mode .tracking-ranking-item .ranking-wakes {
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* 侧边栏适配：时间捕捉表格悬浮显示完整标题 */
+html.side-panel-mode .tracking-table tbody td:nth-child(n+3) {
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+html.side-panel-mode .tracking-table tbody tr:hover td:nth-child(n+3) {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(4px);
+}
+
+html.side-panel-mode .tracking-table tbody tr:hover td:nth-child(2) {
+    overflow: visible;
+    position: relative;
+    z-index: 10;
+}
+
+html.side-panel-mode .tracking-table tbody tr:hover .tracking-title {
+    overflow: visible;
+    max-width: none;
+    position: relative;
+    z-index: 10;
+    text-shadow: 0 0 4px var(--accent-light), 0 0 8px var(--accent-light);
+}
+
+/* 侧边栏适配：点击排行悬浮显示完整标题 */
+html.side-panel-mode .tracking-ranking-item .ranking-wakes,
+html.side-panel-mode .tracking-ranking-item .ranking-time {
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+html.side-panel-mode .tracking-ranking-item:hover .ranking-wakes,
+html.side-panel-mode .tracking-ranking-item:hover .ranking-time {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(4px);
+}
+
+html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
+    overflow: visible;
+    position: relative;
+    z-index: 10;
+    text-shadow: 0 0 4px var(--accent-light), 0 0 8px var(--accent-light);
+}
+
 /* =============================================================================
    时间捕捉面板（书签记录子视图）
    ============================================================================= */
@@ -17020,4 +17150,136 @@ html.side-panel-mode .related-history-url {
 
 html.side-panel-mode .related-history-time {
     font-size: 10px;
+}
+/* =============================================================================
+   窄屏适配（小屏幕/标签页等）：时间捕捉与排行表格
+   ============================================================================= */
+@media (max-width: 680px) {
+    .tracking-table-wrapper {
+        padding: 6px 4px;
+    }
+
+    .tracking-table {
+        table-layout: fixed;
+        font-size: 11px;
+    }
+
+    .tracking-table thead th,
+    .tracking-table tbody td {
+        padding: 6px 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .tracking-table thead th:nth-child(1) { width: 34px; }
+    .tracking-table thead th:nth-child(3) { width: 60px; }
+    .tracking-table thead th:nth-child(4) { width: 36px; }
+    .tracking-table thead th:nth-child(5) { width: 40px; }
+
+    #trackingStateHelpBtn {
+        display: none;
+    }
+
+    #trackingHeaderTime {
+        font-size: 0;
+    }
+
+    #trackingHeaderTime::after {
+        content: "时间";
+        font-size: 11px;
+    }
+
+    .tracking-table thead th:nth-child(2) {
+        text-align: left;
+        padding-left: 12px;
+    }
+
+    .tracking-table .tracking-title-cell {
+        justify-content: flex-start;
+        padding-left: 4px;
+    }
+
+    .tracking-table .tracking-title {
+        font-size: 11px;
+        max-width: 100px;
+    }
+
+    .tracking-table .tracking-state {
+        font-size: 12px;
+    }
+
+    .tracking-table .tracking-time {
+        font-size: 10px;
+        letter-spacing: -0.5px;
+    }
+
+    .tracking-ranking-item {
+        min-width: 0;
+        padding: 6px 8px;
+        grid-template-columns: 20px 16px minmax(50px, 1fr) 55px 46px;
+        gap: 6px;
+    }
+
+    .ranking-number {
+        font-size: 12px;
+    }
+
+    .tracking-ranking-item .ranking-title {
+        font-size: 11px;
+    }
+
+    .tracking-ranking-item .ranking-time {
+        font-size: 11px;
+        letter-spacing: -0.5px;
+    }
+
+    .tracking-ranking-item .ranking-wakes {
+        font-size: 10px;
+        white-space: nowrap;
+    }
+
+    /* 悬浮显示完整标题 */
+    .tracking-table tbody td:nth-child(n+3) {
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .tracking-table tbody tr:hover td:nth-child(n+3) {
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(4px);
+    }
+
+    .tracking-table tbody tr:hover td:nth-child(2) {
+        overflow: visible;
+        position: relative;
+        z-index: 10;
+    }
+
+    .tracking-table tbody tr:hover .tracking-title {
+        overflow: visible;
+        max-width: none;
+        position: relative;
+        z-index: 10;
+        text-shadow: 0 0 4px var(--accent-light), 0 0 8px var(--accent-light);
+    }
+
+    .tracking-ranking-item .ranking-wakes,
+    .tracking-ranking-item .ranking-time {
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .tracking-ranking-item:hover .ranking-wakes,
+    .tracking-ranking-item:hover .ranking-time {
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(4px);
+    }
+
+    .tracking-ranking-item:hover .ranking-title {
+        overflow: visible;
+        position: relative;
+        z-index: 10;
+        text-shadow: 0 0 4px var(--accent-light), 0 0 8px var(--accent-light);
+    }
 }
