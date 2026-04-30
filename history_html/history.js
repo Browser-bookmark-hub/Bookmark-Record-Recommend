@@ -36804,8 +36804,23 @@ function getBrowsingRelatedQueryBounds(range) {
     };
 }
 
-function buildBrowsingRelatedSnapshotKey(range, statsVersion) {
-    return `${getBrowsingRelatedScopeKey(range)}|stats:${statsVersion}`;
+function normalizeBrowsingRelatedExplicitBounds(bounds) {
+    if (!bounds || typeof bounds !== 'object') return null;
+    const rawStart = Number(bounds.startTime);
+    const rawEnd = Number(bounds.endTime);
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+
+    const startTime = Math.max(0, Math.min(rawStart, rawEnd));
+    const endTime = Math.max(startTime, Math.max(rawStart, rawEnd));
+    return { startTime, endTime };
+}
+
+function buildBrowsingRelatedSnapshotKey(range, statsVersion, options = {}) {
+    const explicitScopeKey = typeof options.scopeKey === 'string' && options.scopeKey
+        ? options.scopeKey
+        : '';
+    const scopeKey = explicitScopeKey || getBrowsingRelatedScopeKey(range);
+    return `${scopeKey}|stats:${statsVersion}`;
 }
 
 function getBrowsingRelatedSnapshot(key) {
@@ -37196,6 +37211,11 @@ async function getBrowsingRelatedHistoryData(range = 'day') {
 }
 
 function getBrowsingRelatedQueryBoundsForBuild(range, options = {}) {
+    const explicitBounds = normalizeBrowsingRelatedExplicitBounds(options.queryBounds);
+    if (explicitBounds) {
+        return explicitBounds;
+    }
+
     const safeRange = normalizeBrowsingRelatedRange(range);
     if (!options.ignoreCustomBounds) {
         return getBrowsingRelatedQueryBounds(safeRange);
@@ -37335,6 +37355,10 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
     const loadSeq = ++browsingRelatedLoadSeq;
     const userInitiated = options && options.userInitiated === true;
     const forceRecompute = options && options.forceRecompute === true;
+    const queryBounds = normalizeBrowsingRelatedExplicitBounds(options && options.queryBounds);
+    const snapshotScopeKey = queryBounds
+        ? (options.snapshotScopeKey || `query:${queryBounds.startTime}:${queryBounds.endTime}`)
+        : null;
 
     const isZh = currentLang === 'zh_CN';
     const loadingTitle = isZh ? '正在读取历史记录...' : 'Loading history...';
@@ -37343,7 +37367,7 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
     try {
         const stats = await ensureBrowsingClickRankingStats();
         const statsVersion = getBrowsingRelatedStatsVersion(stats);
-        const snapshotKey = buildBrowsingRelatedSnapshotKey(safeRange, statsVersion);
+        const snapshotKey = buildBrowsingRelatedSnapshotKey(safeRange, statsVersion, { scopeKey: snapshotScopeKey });
         const cachedSnapshot = forceRecompute ? null : getBrowsingRelatedSnapshot(snapshotKey);
 
         if (cachedSnapshot && Array.isArray(cachedSnapshot.historyItemsExpanded)) {
@@ -37375,7 +37399,9 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
             </div>
         `;
 
-        const relatedSnapshot = await buildBrowsingRelatedSnapshotForRange(safeRange);
+        const relatedSnapshot = await buildBrowsingRelatedSnapshotForRange(safeRange, {
+            queryBounds
+        });
         if (!relatedSnapshot.historyItemsExpanded.length) {
             const emptyTitle = isZh ? '该时间范围内没有历史记录' : 'No history in this time range';
             listContainer.innerHTML = `
@@ -39055,6 +39081,18 @@ function buildRangeFilter(range, visitDate) {
     }
 }
 
+function buildRelatedTargetDayBounds(visitDate) {
+    if (!(visitDate instanceof Date) || Number.isNaN(visitDate.getTime())) return null;
+    const start = new Date(visitDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(visitDate);
+    end.setHours(23, 59, 59, 999);
+    return {
+        startTime: start.getTime(),
+        endTime: end.getTime()
+    };
+}
+
 function buildRelatedRangeStrategies(visitTime, options = {}) {
     const strategies = [];
     const seen = new Set();
@@ -39062,15 +39100,17 @@ function buildRelatedRangeStrategies(visitTime, options = {}) {
     const hasVisitTime = typeof visitTime === 'number' && !Number.isNaN(visitTime);
     const visitDate = hasVisitTime ? new Date(visitTime) : null;
 
-    const pushStrategy = (range, filter = null) => {
+    const pushStrategy = (range, filter = null, extra = {}) => {
         if (!range) return;
         const filterKey = filter
             ? `${filter.type}-${filter.value instanceof Date ? filter.value.toISOString() : filter.value}`
             : 'none';
-        const key = `${range}|${filterKey}`;
+        const queryBounds = normalizeBrowsingRelatedExplicitBounds(extra.queryBounds);
+        const boundsKey = queryBounds ? `${queryBounds.startTime}-${queryBounds.endTime}` : 'default';
+        const key = `${range}|${filterKey}|${boundsKey}`;
         if (seen.has(key)) return;
         seen.add(key);
-        strategies.push({ range, filter });
+        strategies.push({ range, filter, ...extra, ...(queryBounds ? { queryBounds } : {}) });
     };
 
     if (!visitDate) {
@@ -39097,7 +39137,22 @@ function buildRelatedRangeStrategies(visitTime, options = {}) {
         uniqueRanges.push(range);
     });
 
+    if (preferredRange) {
+        pushStrategy(preferredRange, buildRangeFilter(preferredRange, visitDate));
+    }
+
+    const targetDayBounds = buildRelatedTargetDayBounds(visitDate);
+    if (targetDayBounds) {
+        pushStrategy('all', null, {
+            queryBounds: targetDayBounds,
+            snapshotScopeKey: `jump-day:${targetDayBounds.startTime}:${targetDayBounds.endTime}`,
+            forceRecompute: true,
+            exactTargetDay: true
+        });
+    }
+
     uniqueRanges.forEach(range => {
+        if (preferredRange && range === preferredRange) return;
         pushStrategy(range, buildRangeFilter(range, visitDate));
     });
 
@@ -39140,10 +39195,25 @@ function activateRelatedRangeStrategy(strategy) {
         }, 20);
     };
 
+    const buildLoadOptions = () => {
+        const opts = {};
+        const queryBounds = normalizeBrowsingRelatedExplicitBounds(strategy.queryBounds);
+        if (queryBounds) {
+            opts.queryBounds = queryBounds;
+        }
+        if (strategy.snapshotScopeKey) {
+            opts.snapshotScopeKey = strategy.snapshotScopeKey;
+        }
+        if (strategy.forceRecompute === true) {
+            opts.forceRecompute = true;
+        }
+        return opts;
+    };
+
     if (silentMode) {
         browsingRelatedCurrentRange = strategy.range;
         browsingRelatedTimeFilter = strategy.filter || null;
-        loadBrowsingRelatedHistory(strategy.range)
+        loadBrowsingRelatedHistory(strategy.range, buildLoadOptions())
             .then(loadAndHighlightSilently)
             .catch(loadAndHighlightSilently);
         return;
@@ -39164,14 +39234,14 @@ function activateRelatedRangeStrategy(strategy) {
             filterBtn.click();
             setTimeout(triggerHighlightFlow, 350);
         } else {
-            loadBrowsingRelatedHistory(strategy.range).then(() => {
+            loadBrowsingRelatedHistory(strategy.range, buildLoadOptions()).then(() => {
                 triggerHighlightFlow();
             }).catch(() => {
                 triggerHighlightFlow();
             });
         }
     } else {
-        loadBrowsingRelatedHistory(strategy.range).then(() => {
+        loadBrowsingRelatedHistory(strategy.range, buildLoadOptions()).then(() => {
             triggerHighlightFlow();
         }).catch(() => {
             triggerHighlightFlow();
@@ -39460,8 +39530,8 @@ function highlightRelatedHistoryItem(retryCount = 0) {
 // 显示暂无记录提示
 function showNoRecordToast() {
     const msg = typeof currentLang !== 'undefined' && currentLang === 'zh_CN'
-        ? '暂无浏览记录（可能是导入的书签）'
-        : 'No browsing history found (may be imported bookmark)';
+        ? '未匹配到浏览记录（可能是导入书签、历史记录已清除，或浏览器未保留该访问）'
+        : 'No matching browsing history found (imported bookmark, cleared history, or browser no longer keeps that visit).';
 
     // 创建提示元素
     let toast = document.getElementById('noRecordToast');
@@ -39478,6 +39548,9 @@ function showNoRecordToast() {
             padding: 16px 24px;
             border-radius: 8px;
             font-size: 14px;
+            line-height: 1.5;
+            text-align: center;
+            max-width: min(420px, calc(100vw - 48px));
             z-index: 10000;
             opacity: 0;
             transition: opacity 0.3s ease;
