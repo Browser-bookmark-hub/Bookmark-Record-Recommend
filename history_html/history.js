@@ -13501,44 +13501,31 @@ function extractSyncHistoryItemsFromRows(rows = []) {
 }
 
 function buildRelatedRecordsFromRows(rows, additionsRecords, options = {}) {
-    const limitSnapshots = Math.max(1, Number(options.limitSnapshots || 5) || 5);
-    const limitItemsPerSnapshot = Math.max(1, Number(options.limitItemsPerSnapshot || 160) || 160);
     const now = Date.now();
-    const ranges = ['day', 'week', 'month', 'year', 'all'];
     const historyItems = extractSyncHistoryItemsFromRows(rows);
     if (!historyItems.length) return [];
     const { bookmarkUrls, bookmarkTitles } = buildBookmarkReferenceSetsFromAdditionsRecords(additionsRecords);
-    const snapshots = [];
 
-    ranges.forEach((range) => {
-        const startTime = range === 'all' ? 0 : getTimeRangeStart(range);
-        const filtered = historyItems
-            .filter((item) => {
-                const ts = Number(item.lastVisitTime || 0);
-                if (!Number.isFinite(ts) || ts <= 0) return false;
-                return ts >= startTime && ts <= now;
-            })
-            .sort((a, b) => (b.lastVisitTime || 0) - (a.lastVisitTime || 0))
-            .slice(0, limitItemsPerSnapshot)
-            .map((item) => ({
-                url: item.url,
-                title: item.title,
-                lastVisitTime: Number(item.lastVisitTime || 0),
-                visitCount: Number(item.visitCount || 0) || 1
-            }));
-        if (!filtered.length) return;
-        snapshots.push({
-            scopeKey: `derived:preset:${range}`,
-            savedAt: now,
-            items: filtered,
-            bookmarkUrlCount: bookmarkUrls.size,
-            bookmarkTitleCount: bookmarkTitles.size
-        });
-    });
-
-    return snapshots
-        .sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0))
-        .slice(0, limitSnapshots);
+    const sorted = historyItems
+        .filter((item) => {
+            const ts = Number(item.lastVisitTime || 0);
+            return Number.isFinite(ts) && ts > 0 && ts <= now;
+        })
+        .sort((a, b) => (b.lastVisitTime || 0) - (a.lastVisitTime || 0))
+        .map((item) => ({
+            url: item.url,
+            title: item.title,
+            lastVisitTime: Number(item.lastVisitTime || 0),
+            visitCount: Number(item.visitCount || 0) || 1
+        }));
+    if (!sorted.length) return [];
+    return [{
+        scopeKey: 'derived:preset:all',
+        savedAt: now,
+        items: sorted,
+        bookmarkUrlCount: bookmarkUrls.size,
+        bookmarkTitleCount: bookmarkTitles.size
+    }];
 }
 
 function normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerSnapshot = 160) {
@@ -13566,40 +13553,23 @@ function normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerS
 }
 
 async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) {
-    const limitSnapshots = Math.max(1, Number(options.limitSnapshots || 5) || 5);
-    const limitItemsPerSnapshot = Math.max(1, Number(options.limitItemsPerSnapshot || 160) || 160);
-    const derivedSnapshots = buildRelatedRecordsFromRows(rows, additionsRecords, {
-        limitSnapshots,
-        limitItemsPerSnapshot
-    });
+    const derivedSnapshots = buildRelatedRecordsFromRows(rows, additionsRecords);
     if (derivedSnapshots.length) {
         return derivedSnapshots;
     }
-    const cachedSnapshots = buildRelatedRecordsFromSnapshots(limitSnapshots, limitItemsPerSnapshot);
+    const cachedSnapshots = buildRelatedRecordsFromSnapshots(1, Infinity);
     if (cachedSnapshots.length) {
         return cachedSnapshots;
     }
-    const ranges = ['day', 'week', 'month', 'year', 'all'];
-    const snapshots = [];
-
-    for (const range of ranges) {
-        try {
-            const snapshot = await buildBrowsingRelatedSnapshotForRange(range, {
-                ignoreCustomBounds: true,
-                calendarTimeout: 3500,
-                calendarPollMs: 100
-            });
-            const normalized = normalizeBrowsingRelatedSnapshotForSync(snapshot, range, limitItemsPerSnapshot);
-            if (normalized) snapshots.push(normalized);
-            if (snapshots.length >= limitSnapshots) break;
-        } catch (_) { }
-    }
-
-    if (snapshots.length) {
-        return snapshots
-            .sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0))
-            .slice(0, limitSnapshots);
-    }
+    try {
+        const snapshot = await buildBrowsingRelatedSnapshotForRange('all', {
+            ignoreCustomBounds: true,
+            calendarTimeout: 3500,
+            calendarPollMs: 100
+        });
+        const normalized = normalizeBrowsingRelatedSnapshotForSync(snapshot, 'all', Infinity);
+        if (normalized) return [normalized];
+    } catch (_) { }
 
     return [];
 }
@@ -13950,7 +13920,7 @@ async function collectSyncPushPayload(config) {
         const rows = await ensureBrowsingRows();
         const additions = ensureAdditionsRecords();
         const clickRanking = await buildClickRankingForSync(rows, 300);
-        const relatedSnapshots = await buildRelatedRecordsForSync(rows, additions, { limitSnapshots: 5, limitItemsPerSnapshot: 160 });
+        const relatedSnapshots = await buildRelatedRecordsForSync(rows, additions);
         let relatedActiveRange = 'day';
         try {
             relatedActiveRange = String(localStorage.getItem('browsingRelatedActiveRange') || 'day');
