@@ -1492,10 +1492,19 @@
                             <div class="sync-settings-card">
                                 <div class="sync-settings-title-row">
                                 <div class="sync-settings-title" id="syncSettingsTitle">推送数据包</div>
-                                <button id="syncPushPackageInfoBtn" class="view-action-btn view-action-btn-ghost sync-info-btn" type="button">
-                                    <i class="fas fa-info-circle"></i>
-                                    <span id="syncPushPackageInfoBtnText">说明</span>
-                                </button>
+                                <div class="sync-settings-title-actions">
+                                    <div class="sync-push-time-range-wrap" id="syncPushTimeRangeWrap">
+                                        <button id="syncPushTimeRangeBtn" class="view-action-btn view-action-btn-ghost sync-info-btn sync-push-time-range-trigger" type="button">
+                                            <span id="syncPushTimeRangeBtnText">本月</span>
+                                            <i class="fas fa-chevron-down sync-push-time-range-caret"></i>
+                                        </button>
+                                        <div id="syncPushTimeRangeDropdown" class="sync-push-time-range-dropdown" hidden></div>
+                                    </div>
+                                    <button id="syncPushPackageInfoBtn" class="view-action-btn view-action-btn-ghost sync-info-btn" type="button">
+                                        <i class="fas fa-info-circle"></i>
+                                        <span id="syncPushPackageInfoBtnText">说明</span>
+                                    </button>
+                                </div>
                             </div>
                             <label class="sync-setting-item">
                                 <input type="checkbox" id="syncPushPackageRecommend" checked>

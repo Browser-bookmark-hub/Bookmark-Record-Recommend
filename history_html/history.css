@@ -3624,6 +3624,71 @@ html.sidebar-state-hidden #sidebar {
     animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
+.sync-settings-title-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sync-settings-title-actions .sync-info-btn {
+    min-height: 22px;
+    padding: 1px 6px;
+    font-size: 11px;
+}
+
+.sync-push-time-range-wrap {
+    position: relative;
+}
+
+.sync-push-time-range-trigger {
+    gap: 4px;
+}
+
+.sync-push-time-range-caret {
+    font-size: 9px;
+    transition: transform 0.15s;
+}
+
+.sync-push-time-range-wrap.open .sync-push-time-range-caret {
+    transform: rotate(180deg);
+}
+
+.sync-push-time-range-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 84px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    z-index: 200;
+    padding: 4px 0;
+}
+
+.sync-push-time-range-option {
+    display: block;
+    width: 100%;
+    padding: 5px 12px;
+    font-size: 12px;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sync-push-time-range-option:hover {
+    background: var(--bg-hover);
+}
+
+.sync-push-time-range-option.active {
+    color: var(--accent-primary);
+    font-weight: 500;
+}
+
 .sync-state-row {
     display: flex;
     align-items: center;

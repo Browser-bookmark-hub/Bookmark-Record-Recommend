@@ -92,6 +92,7 @@ let syncMarkdownGlobalTooltipBound = false;
 let syncMarkdownGlobalTooltipActiveBtn = null;
 let syncRepoCollapsed = false;
 let syncPushPackageInfoVisible = false;
+let syncPushTimeRange = 'month';
 let syncPullPolicyInfoVisible = false;
 let syncControlPanelCollapsed = false;
 let syncControlPanelCollapseBound = false;
@@ -395,6 +396,15 @@ const SYNC_PACKAGE_FIELDS = Object.freeze([
     }
 ]);
 const SYNC_DYNAMIC_PACKAGE_FIELDS = Object.freeze([]);
+
+const SYNC_PUSH_TIME_RANGE_OPTIONS = Object.freeze([
+    { key: 'day', i18nKey: 'syncPushTimeRangeDay' },
+    { key: 'week', i18nKey: 'syncPushTimeRangeWeek' },
+    { key: 'month', i18nKey: 'syncPushTimeRangeMonth' },
+    { key: 'quarter', i18nKey: 'syncPushTimeRangeQuarter' },
+    { key: 'year', i18nKey: 'syncPushTimeRangeYear' },
+    { key: 'all', i18nKey: 'syncPushTimeRangeAll' }
+]);
 
 const SYNC_DEFAULT_DOCS = Object.freeze([]);
 
@@ -3347,6 +3357,27 @@ const i18n = {pageTitle: {
     },syncPushPackageTrackingText: {
         'zh_CN': '时间捕捉（按天/周/月统计）',
         'en': 'Time tracking (daily/weekly/monthly stats)'
+    },syncPushTimeRangeLabel: {
+        'zh_CN': '推送范围',
+        'en': 'Push Range'
+    },syncPushTimeRangeDay: {
+        'zh_CN': '今天',
+        'en': 'Today'
+    },syncPushTimeRangeWeek: {
+        'zh_CN': '本周',
+        'en': 'This Week'
+    },syncPushTimeRangeMonth: {
+        'zh_CN': '本月',
+        'en': 'This Month'
+    },syncPushTimeRangeQuarter: {
+        'zh_CN': '本季度',
+        'en': 'This Quarter'
+    },syncPushTimeRangeYear: {
+        'zh_CN': '本年',
+        'en': 'This Year'
+    },syncPushTimeRangeAll: {
+        'zh_CN': '全部',
+        'en': 'All'
     },syncPullPolicyInfoBtnLabel: {
         'zh_CN': '说明',
         'en': 'Info'
@@ -4881,6 +4912,7 @@ function applyLanguage() {
             textEl.textContent = i18nPayload[currentLang];
         }
     });
+    renderSyncPushTimeRangeButtons();
     const syncPullPolicyInfoBtn = document.getElementById('syncPullPolicyInfoBtn');
     if (syncPullPolicyInfoBtn) {
         const label = getSyncText('syncPullPolicyInfoBtnLabel', currentLang === 'zh_CN' ? '说明' : 'Info');
@@ -10487,6 +10519,63 @@ function ensureSyncPackageOptionElements() {
     });
 }
 
+function renderSyncPushTimeRangeButtons() {
+    const wrap = document.getElementById('syncPushTimeRangeWrap');
+    const btnText = document.getElementById('syncPushTimeRangeBtnText');
+    const triggerBtn = document.getElementById('syncPushTimeRangeBtn');
+    const dropdown = document.getElementById('syncPushTimeRangeDropdown');
+    if (!wrap || !btnText || !triggerBtn || !dropdown) return;
+
+    const currentOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || SYNC_PUSH_TIME_RANGE_OPTIONS[2];
+    btnText.textContent = (i18n[currentOpt.i18nKey] || {})[currentLang] || currentOpt.key;
+
+    dropdown.innerHTML = '';
+    SYNC_PUSH_TIME_RANGE_OPTIONS.forEach((opt) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'sync-push-time-range-option' + (syncPushTimeRange === opt.key ? ' active' : '');
+        item.dataset.range = opt.key;
+        item.textContent = (i18n[opt.i18nKey] || {})[currentLang] || opt.key;
+        item.addEventListener('click', () => {
+            syncPushTimeRange = opt.key;
+            saveSyncPushTimeRange();
+            dropdown.hidden = true;
+            wrap.classList.remove('open');
+            renderSyncPushTimeRangeButtons();
+        });
+        dropdown.appendChild(item);
+    });
+
+    if (!wrap._timeRangeInited) {
+        wrap._timeRangeInited = true;
+        triggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const opening = dropdown.hidden;
+            dropdown.hidden = !opening;
+            wrap.classList.toggle('open', opening);
+        });
+        document.addEventListener('click', (e) => {
+            if (!dropdown.hidden && !wrap.contains(e.target)) {
+                dropdown.hidden = true;
+                wrap.classList.remove('open');
+            }
+        });
+    }
+}
+
+function saveSyncPushTimeRange() {
+    try { localStorage.setItem('syncPushTimeRange', syncPushTimeRange); } catch(e) {}
+}
+
+function loadSyncPushTimeRange() {
+    try {
+        const stored = localStorage.getItem('syncPushTimeRange');
+        if (stored && SYNC_PUSH_TIME_RANGE_OPTIONS.some(o => o.key === stored)) {
+            syncPushTimeRange = stored;
+        }
+    } catch(e) {}
+}
+
 function buildSyncDocId(name = '', index = 0) {
     const base = String(name || `doc-${index + 1}`)
         .trim()
@@ -12712,6 +12801,7 @@ async function loadSyncStateFromStorage() {
     if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
+    loadSyncPushTimeRange();
     setSyncStatusText(getSyncI18nPair('syncStatusLoaded', '状态：已加载本地同步数据', 'Status: Loaded local sync data'));
     applySyncRepoActivityStatusToUI({ force: true });
 }
@@ -13574,14 +13664,15 @@ async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) 
     return [];
 }
 
-async function buildTimeRankingsForSync(limit = 100) {
-    const empty = { composite: [], wakes: [], generatedAt: Date.now(), range: 'all' };
+async function buildTimeRankingsForSync(limit = 100, startTime = 0) {
+    const rangeLabel = startTime > 0 ? 'filtered' : 'all';
+    const empty = { composite: [], wakes: [], generatedAt: Date.now(), range: rangeLabel };
     try {
         // Export persisted ranking summaries only. In-progress active sessions are intentionally not part of sync.
         const response = await browserAPI.runtime.sendMessage({
             action: 'getTrackingRankingStatsByRange',
             range: 'all',
-            startTime: 0,
+            startTime: startTime || 0,
             endTime: Date.now()
         });
         if (!response || !response.success || !response.stats || typeof response.stats !== 'object') {
@@ -13613,7 +13704,7 @@ async function buildTimeRankingsForSync(limit = 100) {
             composite,
             wakes,
             generatedAt: Date.now(),
-            range: 'all'
+            range: rangeLabel
         };
     } catch (_) {
         return empty;
@@ -13763,10 +13854,26 @@ async function collectSyncPushPayload(config) {
     }
     timing.mark('read_local_storage', { keys: keys.length });
 
+    const pushTimeRangeStart = getTimeRangeStart(syncPushTimeRange);
+    const pushTimeRangeEnd = Date.now();
+    const pushTimeRangeStartDateKey = pushTimeRangeStart > 0
+        ? new Date(pushTimeRangeStart).toISOString().slice(0, 10)
+        : null;
+    const pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || {};
     const payload = {
         schema: 'bookmark_record_and_recommend.ai-push.v3',
-        generatedAt: Date.now(),
-        generatedAtText: getSyncNowLabel(Date.now()),
+        generatedAt: pushTimeRangeEnd,
+        generatedAtText: getSyncNowLabel(pushTimeRangeEnd),
+        timeRange: {
+            range: syncPushTimeRange,
+            startTime: pushTimeRangeStart,
+            startTimeText: pushTimeRangeStart > 0 ? new Date(pushTimeRangeStart).toISOString().slice(0, 10) : null,
+            endTime: pushTimeRangeEnd,
+            label: {
+                zh_CN: (i18n[pushTimeRangeOpt.i18nKey] || {}).zh_CN || syncPushTimeRange,
+                en: (i18n[pushTimeRangeOpt.i18nKey] || {}).en || syncPushTimeRange
+            }
+        },
         packages: {},
         docs: buildSyncDocsPayload()
     };
@@ -13894,7 +14001,11 @@ async function collectSyncPushPayload(config) {
     let additionsRecords = null;
     const ensureAdditionsRecords = () => {
         if (additionsRecords) return additionsRecords;
-        additionsRecords = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
+        let raw = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
+        if (pushTimeRangeStart > 0) {
+            raw = raw.filter(entry => (entry.dateAdded || 0) >= pushTimeRangeStart);
+        }
+        additionsRecords = raw;
         return additionsRecords;
     };
 
@@ -13906,7 +14017,11 @@ async function collectSyncPushPayload(config) {
     const ensureBrowsingRows = async () => {
         if (browsingRowsReady) return browsingRows;
         const resolvedRows = await resolveSyncBrowsingCacheRows(localData);
-        browsingRows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
+        let rows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
+        if (pushTimeRangeStartDateKey) {
+            rows = rows.filter(row => (row?.[0] || '') >= pushTimeRangeStartDateKey);
+        }
+        browsingRows = rows;
         browsingRowsSource = String(resolvedRows?.source || 'empty');
         browsingRowsMeta = resolvedRows?.meta && typeof resolvedRows.meta === 'object'
             ? resolvedRows.meta
@@ -13961,7 +14076,7 @@ async function collectSyncPushPayload(config) {
     }
 
     if (config.timeTracking) {
-        const rankings = await buildTimeRankingsForSync(100);
+        const rankings = await buildTimeRankingsForSync(100, pushTimeRangeStart);
         const trackingBlocked = normalizeBlockedState(localData?.timetracking_blocked);
         const trackingBlockedCount = ['bookmarks', 'folders', 'domains']
             .reduce((sum, key) => sum + (Array.isArray(trackingBlocked[key]) ? trackingBlocked[key].length : 0), 0);
@@ -37132,6 +37247,10 @@ function getTimeRangeStart(range) {
             break;
         case 'month':
             startTime.setDate(1);
+            startTime.setHours(0, 0, 0, 0);
+            break;
+        case 'quarter':
+            startTime.setMonth(Math.floor(now.getMonth() / 3) * 3, 1);
             startTime.setHours(0, 0, 0, 0);
             break;
         case 'year':
