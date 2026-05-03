@@ -13052,19 +13052,25 @@ function getSyncHistoryVisitsConcurrency(itemCount = 0) {
     return Math.max(1, Math.min(8, count || 1));
 }
 
-async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
+async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {}) {
     if (!browserAPI?.history?.search) {
         return { ok: false, rows: [], source: 'chrome_history_unavailable' };
     }
 
     const now = Date.now();
+    const requestedStartTime = Math.max(0, Number(options?.startTime || 0) || 0);
+    const requestedEndTimeRaw = Number(options?.endTime || 0) || 0;
+    const requestedEndTime = requestedEndTimeRaw > 0 ? Math.min(requestedEndTimeRaw, now) : now;
+    const shouldPersistCache = options?.persistCache !== false && requestedStartTime <= 0;
     const bookmarkRecordResult = await loadSyncHistoryBookmarkRecords(localData);
     const bookmarkRecords = Array.isArray(bookmarkRecordResult?.records) ? bookmarkRecordResult.records : [];
     const refs = buildSyncHistoryBookmarkRefs(bookmarkRecords);
     if (!(refs.urlMap instanceof Map) || refs.urlMap.size === 0) {
         if (bookmarkRecordResult?.authoritative) {
             const rows = [];
-            await persistSyncBrowsingRowsToCache(localData, rows, now);
+            if (shouldPersistCache) {
+                await persistSyncBrowsingRowsToCache(localData, rows, now);
+            }
             return {
                 ok: true,
                 rows,
@@ -13098,7 +13104,8 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
         ? BROWSING_HISTORY_LOOKBACK_DAYS
         : 0;
     const cutoffTime = lookbackDays ? now - lookbackDays * 24 * 60 * 60 * 1000 : 0;
-    const effectiveStartTime = cutoffTime || 0;
+    const effectiveStartTime = Math.max(cutoffTime || 0, requestedStartTime || 0);
+    const effectiveEndTime = Math.max(effectiveStartTime, requestedEndTime || now);
 
     let historySearchError = '';
     let historyItemsTruncated = false;
@@ -13135,7 +13142,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
     });
 
     const historyItems = [];
-    let pageEnd = now;
+    let pageEnd = effectiveEndTime;
     while (pageEnd >= effectiveStartTime) {
         const batch = await fetchHistoryBatch(effectiveStartTime, pageEnd);
         if (historySearchError) break;
@@ -13182,8 +13189,8 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
     const addRecord = (item, visitTime, match, options = {}) => {
         const safeVisitTime = Number(visitTime || 0);
         if (!Number.isFinite(safeVisitTime) || safeVisitTime <= 0) return false;
-        if (cutoffTime && safeVisitTime < cutoffTime) return false;
-        if (safeVisitTime > now + 60 * 1000) return false;
+        if (effectiveStartTime && safeVisitTime < effectiveStartTime) return false;
+        if (safeVisitTime > effectiveEndTime + 60 * 1000) return false;
         const url = String(item?.url || '').trim();
         if (!url) return false;
         const visitKey = `${url}|${safeVisitTime}`;
@@ -13273,7 +13280,9 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
         ])
         .sort((a, b) => String(a?.[0] || '').localeCompare(String(b?.[0] || '')));
 
-    await persistSyncBrowsingRowsToCache(localData, rows, now);
+    if (shouldPersistCache) {
+        await persistSyncBrowsingRowsToCache(localData, rows, now);
+    }
 
     return {
         ok: true,
@@ -13293,6 +13302,8 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
             maxVisitsPerUrl,
             getVisitsConcurrency,
             lookbackDays,
+            requestedStartTime,
+            requestedEndTime: effectiveEndTime,
             truncated: historyItemsTruncated
         }
     };
@@ -13300,7 +13311,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}) {
 
 async function resolveSyncBrowsingCacheRows(localData = {}, options = {}) {
     if (options.preferLive !== false) {
-        const fromHistoryApi = await resolveSyncBrowsingRowsFromHistoryApi(localData);
+        const fromHistoryApi = await resolveSyncBrowsingRowsFromHistoryApi(localData, options);
         if (fromHistoryApi?.ok) {
             return fromHistoryApi;
         }
@@ -13856,9 +13867,7 @@ async function collectSyncPushPayload(config) {
 
     const pushTimeRangeStart = getTimeRangeStart(syncPushTimeRange);
     const pushTimeRangeEnd = Date.now();
-    const pushTimeRangeStartDateKey = pushTimeRangeStart > 0
-        ? new Date(pushTimeRangeStart).toISOString().slice(0, 10)
-        : null;
+    const pushTimeRangeStartDateKey = pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null;
     const pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || {};
     const payload = {
         schema: 'bookmark_record_and_recommend.ai-push.v3',
@@ -13867,7 +13876,7 @@ async function collectSyncPushPayload(config) {
         timeRange: {
             range: syncPushTimeRange,
             startTime: pushTimeRangeStart,
-            startTimeText: pushTimeRangeStart > 0 ? new Date(pushTimeRangeStart).toISOString().slice(0, 10) : null,
+            startTimeText: pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null,
             endTime: pushTimeRangeEnd,
             label: {
                 zh_CN: (i18n[pushTimeRangeOpt.i18nKey] || {}).zh_CN || syncPushTimeRange,
@@ -14016,7 +14025,10 @@ async function collectSyncPushPayload(config) {
     let browsingRowsMeta = { scope: 'bookmark_matched_history', source: 'empty' };
     const ensureBrowsingRows = async () => {
         if (browsingRowsReady) return browsingRows;
-        const resolvedRows = await resolveSyncBrowsingCacheRows(localData);
+        const resolvedRows = await resolveSyncBrowsingCacheRows(localData, {
+            startTime: pushTimeRangeStart,
+            endTime: pushTimeRangeEnd
+        });
         let rows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
         if (pushTimeRangeStartDateKey) {
             rows = rows.filter(row => (row?.[0] || '') >= pushTimeRangeStartDateKey);
@@ -14059,7 +14071,7 @@ async function collectSyncPushPayload(config) {
                 },
                 clickRanking: {
                     generatedAt: Date.now(),
-                    range: 'all',
+                    range: syncPushTimeRange,
                     items: Array.isArray(clickRanking) ? clickRanking : []
                 },
                 relatedRecords: {
