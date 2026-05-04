@@ -401,7 +401,6 @@ const SYNC_PUSH_TIME_RANGE_OPTIONS = Object.freeze([
     { key: 'day', i18nKey: 'syncPushTimeRangeDay' },
     { key: 'week', i18nKey: 'syncPushTimeRangeWeek' },
     { key: 'month', i18nKey: 'syncPushTimeRangeMonth' },
-    { key: 'quarter', i18nKey: 'syncPushTimeRangeQuarter' },
     { key: 'year', i18nKey: 'syncPushTimeRangeYear' },
     { key: 'all', i18nKey: 'syncPushTimeRangeAll' }
 ]);
@@ -3369,9 +3368,6 @@ const i18n = {pageTitle: {
     },syncPushTimeRangeMonth: {
         'zh_CN': '本月',
         'en': 'This Month'
-    },syncPushTimeRangeQuarter: {
-        'zh_CN': '本季度',
-        'en': 'This Quarter'
     },syncPushTimeRangeYear: {
         'zh_CN': '本年',
         'en': 'This Year'
@@ -10572,6 +10568,9 @@ function loadSyncPushTimeRange() {
         const stored = localStorage.getItem('syncPushTimeRange');
         if (stored && SYNC_PUSH_TIME_RANGE_OPTIONS.some(o => o.key === stored)) {
             syncPushTimeRange = stored;
+        } else if (stored === 'quarter') {
+            syncPushTimeRange = 'month';
+            saveSyncPushTimeRange();
         }
     } catch(e) {}
 }
@@ -13865,22 +13864,27 @@ async function collectSyncPushPayload(config) {
     }
     timing.mark('read_local_storage', { keys: keys.length });
 
-    const pushTimeRangeStart = getTimeRangeStart(syncPushTimeRange);
+    const pushTimeRange = SYNC_PUSH_TIME_RANGE_OPTIONS.some(o => o.key === syncPushTimeRange) ? syncPushTimeRange : 'month';
+    if (pushTimeRange !== syncPushTimeRange) {
+        syncPushTimeRange = pushTimeRange;
+        saveSyncPushTimeRange();
+    }
+    const pushTimeRangeStart = getTimeRangeStart(pushTimeRange);
     const pushTimeRangeEnd = Date.now();
     const pushTimeRangeStartDateKey = pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null;
-    const pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || {};
+    const pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === pushTimeRange) || {};
     const payload = {
         schema: 'bookmark_record_and_recommend.ai-push.v3',
         generatedAt: pushTimeRangeEnd,
         generatedAtText: getSyncNowLabel(pushTimeRangeEnd),
         timeRange: {
-            range: syncPushTimeRange,
+            range: pushTimeRange,
             startTime: pushTimeRangeStart,
             startTimeText: pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null,
             endTime: pushTimeRangeEnd,
             label: {
-                zh_CN: (i18n[pushTimeRangeOpt.i18nKey] || {}).zh_CN || syncPushTimeRange,
-                en: (i18n[pushTimeRangeOpt.i18nKey] || {}).en || syncPushTimeRange
+                zh_CN: (i18n[pushTimeRangeOpt.i18nKey] || {}).zh_CN || pushTimeRange,
+                en: (i18n[pushTimeRangeOpt.i18nKey] || {}).en || pushTimeRange
             }
         },
         packages: {},
@@ -14071,7 +14075,7 @@ async function collectSyncPushPayload(config) {
                 },
                 clickRanking: {
                     generatedAt: Date.now(),
-                    range: syncPushTimeRange,
+                    range: pushTimeRange,
                     items: Array.isArray(clickRanking) ? clickRanking : []
                 },
                 relatedRecords: {
