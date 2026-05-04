@@ -233,14 +233,11 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - 合并结果时必须由主流程统一判断、去重和校验；输出中必要时说明哪些结论来自 subagent，哪些来自主流程直接核验。
 
 ## 9. 输出模板
-### latest.md
-\`\`\`md
-# 现在该看什么
-## 复习优先（基于待复习 + 相似推荐）
-## 值得打开的新书签
-## 建议屏蔽 / 跳过
-## 信号来源（简要）
-\`\`\`
+- latest.md 使用一级标题：\`现在该看什么\`
+- latest.md 必须包含二级标题：\`复习优先（基于待复习 + 相似推荐）\`
+- latest.md 必须包含二级标题：\`值得打开的新书签\`
+- latest.md 必须包含二级标题：\`建议屏蔽 / 跳过\`
+- latest.md 必须包含二级标题：\`信号来源（简要）\`
 
 ### daily / weekly / monthly
 按本文件第 6-8 节的重要性权重、外部搜索规则和高级权限边界输出。
@@ -319,14 +316,11 @@ Sync push/pull only transfers data packages and Markdown documents. When an AI a
 - The main flow must merge, deduplicate, and verify subagent results. When useful, state which conclusions came from subagents and which were directly verified by the main flow.
 
 ## 9. Output Structure
-### latest.md
-\`\`\`md
-# What to Read Now
-## Review First
-## Worth Opening
-## Skip / Block Suggestions
-## Signal Sources
-\`\`\`
+- latest.md uses the level-1 heading: \`What to Read Now\`
+- latest.md must include the level-2 heading: \`Review First\`
+- latest.md must include the level-2 heading: \`Worth Opening\`
+- latest.md must include the level-2 heading: \`Skip / Block Suggestions\`
+- latest.md must include the level-2 heading: \`Signal Sources\`
 
 ### daily / weekly / monthly
 Follow the same importance strategy, web-search rules, and elevated-permission boundaries in sections 6-8.
