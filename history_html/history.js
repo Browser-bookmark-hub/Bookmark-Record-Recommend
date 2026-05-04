@@ -3260,8 +3260,8 @@ const i18n = {pageTitle: {
         'zh_CN': '小组件',
         'en': 'Widgets'
     },navSync: {
-        'zh_CN': '同步/AI分析',
-        'en': 'Sync / AI'
+        'zh_CN': '推送与分析',
+        'en': 'Push & Analysis'
     },sidePanelTitleWidgets: {
         'zh_CN': '小组件',
         'en': 'Widgets'
@@ -3275,8 +3275,8 @@ const i18n = {pageTitle: {
         'zh_CN': '同步',
         'en': 'Sync'
     },syncViewTitle: {
-        'zh_CN': '同步 / AI分析',
-        'en': 'Sync / AI Analysis'
+        'zh_CN': '推送与分析',
+        'en': 'Push & Analysis'
     },syncViewDescription: {
         'zh_CN': '手动推送推荐/记录数据，并同步可查看的 Markdown。',
         'en': 'Manually push recommendation/record data and sync visible Markdown files.'
