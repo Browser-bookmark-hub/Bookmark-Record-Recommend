@@ -220,17 +220,18 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 3. 近 7 天新加但未打开（bookmark-record.data.additionsRecords vs clickRecords）= 需要提醒。
 4. 屏蔽（bookmark-recommend.data.recommendEvents.recommend_blocked）= 永远排除。
 
-## 7. 外部搜索补充推荐
-- 同类别推荐可以来自本地上下文（书签树、文件夹、标题、当前页面、用户草稿），也可以来自网络搜索；如果本地上下文不足，主动搜索同主题网页、论坛、项目文档、相关工具或替代方案。
-- 搜索提示词优先使用书签标题、URL 域名、文件夹路径、页面关键词和用户问题；可加入“相关网页 / 论坛讨论 / 替代方案 / 教程 / review”等词，不要只搜泛泛类别。
+## 7. 网络搜索作为第二证据层
+- 本地同步数据回答“用户保存过、点击过、复习过什么”；网络搜索回答“这些内容在外部世界是否仍有价值、有哪些替代或延伸”。推荐结论应优先结合两者，而不是只在本地信息不足时才搜索。
+- 对“待复习、高频点击、当前时间排行靠前、近 7 天新加但未打开”的候选，若需要判断是否值得现在打开、是否过时、是否有更好的替代，应主动搜索官方文档、项目主页、权威资料、近期讨论或同类工具。
+- 搜索提示词优先使用书签标题、URL 域名、文件夹路径、页面关键词和用户问题；可加入“替代方案 / 教程 / review / benchmark / changelog / docs / forum”等词，避免只搜泛泛类别。
 - 学术、论文、法律、医学、金融等高风险或专业主题，优先使用论文数据库、官方文档、法规/机构网站、专业指南等权威来源；论坛或社区讨论只能作为辅助线索。
-- 输出时区分“本地同步数据推断”和“网络搜索补充”，给出来源或简短依据；不要把搜索结果写成用户已收藏、已点击或已复习的事实。
+- 输出时明确区分“本地同步数据事实”“基于本地数据的推断”“网络搜索补充”，给出来源或简短依据；不要把搜索结果写成用户已收藏、已点击或已复习的事实。
 
-## 8. Subagents 高级权限
-- Subagents 是高成本并行能力，默认不要启用；只有用户明确要求、任务特别多、用户语气明显表示很急/很重要，或单个回答需要并行检查多类数据源时才考虑。
-- 使用前确认当前环境允许该能力；如果系统或工具要求明确授权，先取得用户明确要求或授权。
-- 每个 subagent 只负责清晰、独立的小任务，例如分别检查推荐包、记录包、raw-native、Git diff、外部资料；不要让多个 subagents 重复做同一件事。
-- 合并结果时必须由主流程统一判断、去重和校验；输出中必要时说明哪些结论来自 subagent，哪些来自主流程直接核验。
+## 8. 复杂任务的自主拆分与核验
+- 是否使用 subagents、并行检索或其他高级工具，由模型根据任务规模、可用工具、成本、时效和置信度自行判断；不要把 subagents 当成必须启用或必须避免的固定流程。
+- 当问题涉及多类数据源（推荐包、记录包、raw-native、Git diff、输入文档、外部资料）或结论风险较高时，可将任务拆成相互独立的小检查，再由主流程统一合并、去重和校验。
+- 如果当前环境没有 subagents 或高级并行能力，使用普通工具逐项完成同样的核验目标；不要因为工具不可用就跳过关键证据。
+- 输出结论时优先说明证据链和不确定性；只有当区分来源有助于用户判断时，才说明哪些结论来自并行检查或外部搜索。
 
 ## 9. 输出模板
 - latest.md 使用一级标题：\`现在该看什么\`
@@ -240,7 +241,7 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - latest.md 必须包含二级标题：\`信号来源（简要）\`
 
 ### daily / weekly / monthly
-按本文件第 6-8 节的重要性权重、外部搜索规则和高级权限边界输出。
+按本文件第 6-8 节的重要性权重、网络搜索策略和复杂任务核验原则输出。
 
 ## 10. 风格与禁忌
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
@@ -303,17 +304,18 @@ Sync push/pull only transfers data packages and Markdown documents. When an AI a
 3. Newly added but unopened in last 7 days = reminder candidates
 4. Blocked bookmarks/folders/domains = always excluded
 
-## 7. Web Search for Related Recommendations
-- Same-category recommendations may come from local context (bookmark tree, folders, titles, current page, user drafts) and from web search. If local context is thin, search for related pages, forum discussions, project docs, comparable tools, or alternatives.
-- Build search queries from bookmark titles, URL domains, folder paths, page keywords, and the user's question; add terms like related pages, forum discussion, alternatives, tutorial, or review instead of searching only broad categories.
+## 7. Web Search as a Second Evidence Layer
+- Local sync data answers what the user saved, clicked, or reviewed. Web search answers whether those items are still valuable externally, and what alternatives or follow-up resources exist. Recommendations should combine both when useful, not search only when local context is thin.
+- For candidates in the review queue, high-click items, top current time-ranking items, or newly added but unopened bookmarks, search proactively when judging whether to open them now, whether they are outdated, or whether better alternatives exist.
+- Build search queries from bookmark titles, URL domains, folder paths, page keywords, and the user's question; add terms such as alternatives, tutorial, review, benchmark, changelog, docs, or forum instead of searching only broad categories.
 - For academic, paper, legal, medical, financial, or other high-stakes topics, prioritize authoritative sources such as paper databases, official docs, regulations, institutional sites, and professional guidelines. Treat forums or community discussions as secondary signals.
-- In outputs, separate local sync-data inferences from web-sourced suggestions, and include the source or brief rationale. Do not present web search results as bookmarks the user has saved, clicked, or reviewed.
+- In outputs, clearly separate local sync-data facts, inferences from local data, and web-sourced additions. Include the source or brief rationale, and do not present web search results as bookmarks the user has saved, clicked, or reviewed.
 
-## 8. Subagents Elevated Permission
-- Subagents are a higher-cost parallel capability. Do not use them by default; consider them only when the user explicitly asks, the task is large, the user's wording clearly signals urgency or high importance, or one answer needs parallel checks across multiple data sources.
-- Confirm that the current environment permits this capability. If the system or tool requires explicit authorization, obtain the user's explicit request or authorization first.
-- Each subagent should own a clear, independent task, such as checking the recommendation package, record package, raw-native files, Git diff, or external sources. Do not assign several subagents to repeat the same work.
-- The main flow must merge, deduplicate, and verify subagent results. When useful, state which conclusions came from subagents and which were directly verified by the main flow.
+## 8. Autonomous Decomposition and Verification
+- Whether to use subagents, parallel retrieval, or other advanced tools is up to the model based on task size, available tools, cost, urgency, and confidence. Do not treat subagents as a fixed step that must always be used or always be avoided.
+- When a question spans multiple data sources (recommendation package, record package, raw-native files, Git diff, input docs, or external sources), or when the conclusion has higher risk, split the work into independent checks and let the main flow merge, deduplicate, and verify the results.
+- If subagents or advanced parallel capabilities are unavailable in the current environment, use normal tools to complete the same verification goals step by step; do not skip key evidence just because a tool is unavailable.
+- In the final output, prioritize the evidence chain and uncertainty. Mention which conclusions came from parallel checks or web search only when that helps the user judge reliability.
 
 ## 9. Output Structure
 - latest.md uses the level-1 heading: \`What to Read Now\`
@@ -323,7 +325,7 @@ Sync push/pull only transfers data packages and Markdown documents. When an AI a
 - latest.md must include the level-2 heading: \`Signal Sources\`
 
 ### daily / weekly / monthly
-Follow the same importance strategy, web-search rules, and elevated-permission boundaries in sections 6-8.
+Follow the same importance strategy, web-search strategy, and complex-task verification principles in sections 6-8.
 
 ## 10. Style & Safety
 - Output Markdown only
