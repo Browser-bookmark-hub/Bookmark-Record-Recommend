@@ -3268,6 +3268,13 @@ html.sidebar-state-hidden #sidebar {
     gap: 8px;
 }
 
+.sync-settings-title-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
 .sync-info-btn {
     width: auto;
     min-height: 28px;
@@ -3313,20 +3320,6 @@ html.sidebar-state-hidden #sidebar {
     border-radius: 6px;
     padding: 8px;
     overflow: auto;
-}
-
-.sync-path-modal {
-    width: min(1060px, calc(100vw - 40px));
-    max-width: min(1060px, calc(100vw - 40px));
-    max-height: 86vh;
-}
-
-.sync-path-modal-body {
-    padding: 10px 14px 14px;
-}
-
-.sync-path-modal .sync-path-info-diagram {
-    max-height: calc(86vh - 118px);
 }
 
 .sync-form-grid {
@@ -3721,15 +3714,100 @@ html.sidebar-state-hidden #sidebar {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    min-width: 0;
+    padding-right: 10px;
+}
+
+.sync-files-title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-height: 20px;
+    min-width: 0;
+}
+
+.sync-files-page-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 3px;
+    padding-left: 7px;
+    border-left: 1px solid var(--border-color);
+    min-height: 24px;
+}
+
+.sync-files-page-actions[hidden] {
+    display: none;
+}
+
+.sync-files-page-btn {
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.sync-files-page-btn:hover:not(:disabled) {
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 32%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+}
+
+.sync-files-page-btn:disabled {
+    opacity: 0.38;
+    cursor: default;
+}
+
+.sync-files-page-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-variant-numeric: tabular-nums;
+}
+
+.sync-files-page-input {
+    width: 22px;
+    min-width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 36%, var(--border-color));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    outline: none;
+}
+
+.sync-files-page-input:focus {
+    border-color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
 
 .sync-files-header-actions {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     flex-wrap: nowrap;
     justify-content: flex-end;
     min-width: 0;
+    max-width: 100%;
+    flex: 0 1 auto;
 }
 
 .sync-files-info-wrap {
@@ -3740,14 +3818,14 @@ html.sidebar-state-hidden #sidebar {
 }
 
 .sync-files-info-btn {
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    font-size: 13px;
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: 12px;
     font-weight: 700;
     line-height: 1;
     cursor: pointer;
@@ -3759,7 +3837,7 @@ html.sidebar-state-hidden #sidebar {
 
 .sync-files-info-btn:hover {
     color: var(--accent-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 32%, var(--border-color));
+    background: transparent;
 }
 
 .sync-files-info-btn:focus-visible {
@@ -3767,10 +3845,32 @@ html.sidebar-state-hidden #sidebar {
     outline-offset: 2px;
 }
 
+.sync-push-package-info-btn {
+    flex: 0 0 auto;
+}
+
+.sync-files-info-popover.sync-push-package-info-popover {
+    width: min(560px, calc(100vw - 24px));
+}
+
+.sync-push-package-info-popover #syncPushPackagePathTitle {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.sync-push-package-info-popover .sync-path-info-diagram {
+    max-height: 320px;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
 .sync-files-info-popover {
     position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
+    bottom: calc(100% + 8px);
+    left: 50%;
     width: min(320px, calc(100vw - 24px));
     padding: 8px 10px;
     border: 1px solid var(--border-color);
@@ -3782,15 +3882,96 @@ html.sidebar-state-hidden #sidebar {
     box-shadow: 0 8px 20px color-mix(in srgb, #000 12%, transparent);
     z-index: 1200;
     white-space: normal;
+    transform: translateX(-50%);
 }
 
 .sync-files-header .view-action-btn {
     width: auto;
-    padding: 4px 6px;
-    min-height: 28px;
-    font-size: 11px;
-    gap: 4px;
+    min-width: 0;
+    max-width: none;
+    padding: 2px 5px;
+    min-height: 27px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.2;
+    gap: 3px;
     white-space: nowrap;
+    justify-content: center;
+}
+
+.sync-files-header .sync-files-header-btn.view-action-btn {
+    height: 27px;
+    min-height: 27px;
+    max-height: 27px;
+    border-radius: 5px;
+}
+
+.sync-files-header .sync-files-header-btn.view-action-btn i {
+    width: 10px;
+    font-size: 10px;
+    text-align: center;
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn {
+    width: 74px;
+    min-width: 74px;
+    max-width: 74px;
+    height: 27px;
+    min-height: 27px;
+    max-height: 27px;
+    background: var(--accent-primary);
+    color: #ffffff;
+    border: none;
+}
+
+.sync-files-header #syncNewFileBtn.view-action-btn {
+    width: 37px;
+    min-width: 37px;
+    max-width: 37px;
+    height: 27px;
+    min-height: 27px;
+    max-height: 27px;
+    padding-top: 0;
+    padding-bottom: 0;
+    align-items: center;
+}
+
+.sync-files-header #syncNewFileBtn.view-action-btn i {
+    display: none;
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn:hover {
+    background: var(--accent-hover);
+    color: #ffffff;
+}
+
+.sync-files-header .view-action-btn:disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    opacity: 0.72;
+    transform: none;
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn.sync-action-btn-loading {
+    opacity: 0.9;
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn.sync-action-btn-success {
+    background: var(--success);
+    color: #ffffff;
+    border-color: var(--success);
+    animation: pulse-green 1s;
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn.sync-action-btn-error {
+    background: var(--error);
+    color: #ffffff;
+    border-color: var(--error);
+}
+
+.sync-files-header .sync-files-pull-btn.view-action-btn.sync-action-btn-success i {
+    color: #ffffff;
+    animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .sync-files-path-hint {
@@ -3857,7 +4038,7 @@ html.sidebar-state-hidden #sidebar {
 .sync-file-item-actions {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 3px;
     flex-shrink: 0;
     align-self: center;
 }
@@ -3873,21 +4054,50 @@ html.sidebar-state-hidden #sidebar {
     gap: 0;
 }
 
+.sync-file-pin-btn,
+.sync-file-edit-btn,
+.sync-file-delete-btn {
+    width: 13px;
+    min-width: 13px;
+    height: 13px;
+    min-height: 13px;
+    border-radius: 4px;
+}
+
 .sync-file-edit-btn {
-    font-size: 11px;
+    font-size: 6px;
 }
 
 .sync-file-edit-btn i {
-    font-size: 12px;
+    font-size: 6px;
     margin: 0;
 }
 
+.sync-file-pin-btn {
+    font-size: 6px;
+}
+
+.sync-file-pin-btn i {
+    font-size: 6px;
+    margin: 0;
+}
+
+.sync-file-pin-btn.active {
+    color: #f5b301;
+    border-color: color-mix(in srgb, #f5b301 52%, var(--border-color) 48%);
+    background: color-mix(in srgb, #f5b301 12%, transparent);
+}
+
+.sync-file-pin-btn.active i {
+    color: #f5b301;
+}
+
 .sync-file-delete-btn {
-    font-size: 11px;
+    font-size: 6px;
 }
 
 .sync-file-delete-btn i {
-    font-size: 12px;
+    font-size: 6px;
     margin: 0;
 }
 
@@ -3931,6 +4141,10 @@ html.sidebar-state-hidden #sidebar {
 .sync-file-item-agent.active {
     border-color: var(--accent-primary);
     background: var(--accent-light);
+}
+
+.sync-file-item-pinned {
+    border-color: color-mix(in srgb, var(--accent-primary) 26%, var(--border-color) 74%);
 }
 
 .sync-file-item-virtual {
@@ -4642,22 +4856,6 @@ html.sidebar-state-hidden #sidebar {
 }
 
 @media (max-width: 680px) {
-    .sync-path-modal {
-        width: min(calc(100vw - 18px), 960px);
-        max-width: min(calc(100vw - 18px), 960px);
-        max-height: 90vh;
-    }
-
-    .sync-path-modal-body {
-        padding: 8px 10px 10px;
-    }
-
-    .sync-path-modal .sync-path-info-diagram {
-        font-size: 11px;
-        line-height: 1.45;
-        max-height: calc(90vh - 112px);
-    }
-
     .sync-render-panel {
         --sync-render-left-indent: 20px;
     }
@@ -7239,8 +7437,33 @@ html.side-panel-mode .widgets-cards-row .card-debug-btn i {
     box-shadow: none;
 }
 
+.sync-files-header .sync-pull-header-btn.view-action-btn.view-action-btn-ghost {
+    background: var(--accent-primary);
+    color: #ffffff;
+    border-color: transparent;
+}
+
+.sync-files-header .sync-pull-header-btn.view-action-btn.view-action-btn-ghost:hover {
+    background: var(--accent-hover);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: var(--shadow-sm);
+}
+
 .view-action-btn.view-action-btn-ghost:active {
     transform: translateY(0);
+}
+
+.sync-file-pin-btn.view-action-btn.view-action-btn-ghost.active,
+.sync-file-pin-btn.view-action-btn.view-action-btn-ghost.active:hover {
+    color: #f5b301;
+    border-color: color-mix(in srgb, #f5b301 52%, var(--border-color) 48%);
+    background: color-mix(in srgb, #f5b301 12%, transparent);
+}
+
+.sync-file-pin-btn.view-action-btn.view-action-btn-ghost.active i,
+.sync-file-pin-btn.view-action-btn.view-action-btn-ghost.active:hover i {
+    color: #f5b301;
 }
 
 .calibration-desc-highlight {

@@ -1491,7 +1491,18 @@
 
                             <div class="sync-settings-card">
                                 <div class="sync-settings-title-row">
-                                <div class="sync-settings-title" id="syncSettingsTitle">推送数据包</div>
+                                <div class="sync-settings-title-inline">
+                                    <div class="sync-settings-title" id="syncSettingsTitle">推送数据包</div>
+                                    <div id="syncPushPackageInfoWrap" class="sync-files-info-wrap">
+                                        <button id="syncPushPackageInfoBtn" class="sync-files-info-btn sync-push-package-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">
+                                            <i class="fas fa-info-circle"></i>
+                                        </button>
+                                        <div id="syncPushPackageInfoPanel" class="sync-files-info-popover sync-push-package-info-popover" hidden>
+                                            <span id="syncPushPackagePathTitle">推送到云端路径结构</span>
+                                            <pre id="syncPushPackagePathDiagram" class="sync-path-info-diagram"></pre>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div class="sync-settings-title-actions">
                                     <div class="sync-push-time-range-wrap" id="syncPushTimeRangeWrap">
                                         <button id="syncPushTimeRangeBtn" class="view-action-btn view-action-btn-ghost sync-info-btn sync-push-time-range-trigger" type="button">
@@ -1500,10 +1511,6 @@
                                         </button>
                                         <div id="syncPushTimeRangeDropdown" class="sync-push-time-range-dropdown" hidden></div>
                                     </div>
-                                    <button id="syncPushPackageInfoBtn" class="view-action-btn view-action-btn-ghost sync-info-btn" type="button">
-                                        <i class="fas fa-info-circle"></i>
-                                        <span id="syncPushPackageInfoBtnText">说明</span>
-                                    </button>
                                 </div>
                             </div>
                             <label class="sync-setting-item">
@@ -1528,21 +1535,34 @@
 
                         <div id="syncFilesCardContainer" class="sync-files-card">
                             <div class="sync-files-header">
-                                <span id="syncFilesTitle">查看</span>
-                                <div class="sync-files-header-actions">
+                                <div class="sync-files-title-row">
+                                    <span id="syncFilesTitle">查看</span>
                                     <div id="syncPullPolicyInfoWrap" class="sync-files-info-wrap">
-                                        <button id="syncPullPolicyInfoBtn" class="sync-files-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">?</button>
+                                        <button id="syncPullPolicyInfoBtn" class="sync-files-info-btn" type="button" aria-label="说明" title="说明" aria-expanded="false">
+                                            <i class="fas fa-info-circle"></i>
+                                        </button>
                                         <div id="syncPullPolicyInfoPanel" class="sync-files-info-popover" hidden>
                                             <span id="syncPullPolicyInfoText">拉取策略：最新修改版本取胜，不做复杂 MERGE。</span>
                                         </div>
                                     </div>
-                                    <button id="syncPullBtn" class="view-action-btn" type="button">
-                                        <i class="fas fa-download"></i>
-                                        <span id="syncPullBtnText">拉取更新</span>
-                                    </button>
-                                    <button id="syncNewFileBtn" class="view-action-btn view-action-btn-ghost" type="button">
+                                    <div class="sync-files-page-actions" role="group" aria-label="翻页" hidden>
+                                        <button id="syncFilesPrevBtn" class="sync-files-page-btn" type="button" aria-label="上一页" title="上一页">
+                                            <i class="fas fa-chevron-left"></i>
+                                        </button>
+                                        <span id="syncFilesPageText" class="sync-files-page-text">1/1</span>
+                                        <button id="syncFilesNextBtn" class="sync-files-page-btn" type="button" aria-label="下一页" title="下一页">
+                                            <i class="fas fa-chevron-right"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="sync-files-header-actions">
+                                    <button id="syncNewFileBtn" class="view-action-btn view-action-btn-ghost sync-files-header-btn" type="button">
                                         <i class="fas fa-plus"></i>
                                         <span id="syncNewFileText">新建</span>
+                                    </button>
+                                    <button id="syncPullBtn" class="view-action-btn view-action-btn-ghost sync-files-header-btn sync-pull-header-btn" type="button">
+                                        <i class="fas fa-download"></i>
+                                        <span id="syncPullBtnText">拉取更新</span>
                                     </button>
                                 </div>
                             </div>
@@ -1602,18 +1622,6 @@
                             </div>
                         </div>
                     </section>
-                </div>
-            </div>
-
-            <div id="syncPushPackageInfoModal" class="modal content-center">
-                <div class="modal-content sync-path-modal">
-                    <div class="modal-header compact">
-                        <h3 id="syncPushPackagePathTitle">推送到云端路径结构</h3>
-                        <button class="modal-close" id="syncPushPackageInfoModalClose" aria-label="关闭">×</button>
-                    </div>
-                    <div class="modal-body sync-path-modal-body">
-                        <pre id="syncPushPackagePathDiagram" class="sync-path-info-diagram"></pre>
-                    </div>
                 </div>
             </div>
 

@@ -77,6 +77,7 @@ let syncViewInitialized = false;
 let syncConfigState = null;
 let syncDocsState = [];
 let syncCurrentDocId = null;
+let syncFilesPageIndex = 0;
 let syncStatusState = {
     text: '',
     localized: null,
@@ -129,6 +130,7 @@ const SYNC_GITHUB_INPUT_DOCS_SUBDIR = 'ai/input-docs';
 const SYNC_GITHUB_DATA_SNAPSHOTS_ROOT = 'data/snapshots';
 const SYNC_AGENT_DOC_ID = '__agent_rules__';
 const SYNC_DEFAULT_RULE_PREVIEW_ID = '__default_rule_preview__';
+const SYNC_FILES_PAGE_SIZE = 10;
 const SYNC_AGENT_DOC_NAME = 'AGENTS.md';
 const SYNC_DOC_KIND_AGENT = 'agent';
 const SYNC_DOC_KIND_INPUT = 'input';
@@ -3342,9 +3344,6 @@ const i18n = {pageTitle: {
     },syncPushPackageInfoBtnText: {
         'zh_CN': '说明',
         'en': 'Info'
-    },syncPushPackageInfoModalCloseLabel: {
-        'zh_CN': '关闭',
-        'en': 'Close'
     },syncPushPackagePathTitle: {
         'zh_CN': '推送到云端路径结构',
         'en': 'Cloud Path Layout'
@@ -3393,9 +3392,15 @@ const i18n = {pageTitle: {
     },syncPullPolicyInfoText: {
         'zh_CN': '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。',
         'en': 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
+    },syncFilesPrevText: {
+        'zh_CN': '上一页',
+        'en': 'Previous page'
+    },syncFilesNextText: {
+        'zh_CN': '下一页',
+        'en': 'Next page'
     },syncPullBtnText: {
         'zh_CN': '拉取更新',
-        'en': 'Pull Updates'
+        'en': 'Pull'
     },syncPullBtnLoadingText: {
         'zh_CN': '拉取中...',
         'en': 'Pulling...'
@@ -3438,6 +3443,12 @@ const i18n = {pageTitle: {
     },syncFileItemEditText: {
         'zh_CN': '编辑',
         'en': 'Edit'
+    },syncFileItemPinText: {
+        'zh_CN': '置顶',
+        'en': 'Pin'
+    },syncFileItemUnpinText: {
+        'zh_CN': '取消置顶',
+        'en': 'Unpin'
     },syncFileItemDeleteText: {
         'zh_CN': '删除',
         'en': 'Delete'
@@ -4467,6 +4478,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 立即应用视图状态到DOM
     try { window.currentView = currentView; } catch (_) { }
 
+    if (currentView === 'sync') {
+        hydrateAndApplySyncControlPanelLayout();
+    }
+
     document.querySelectorAll('.nav-tab').forEach(tab => {
         if (tab.dataset.view === currentView) {
             tab.classList.add('active');
@@ -4905,13 +4920,11 @@ function applyLanguage() {
     applySyncRepoActivityStatusToUI({ force: true });
     const syncSettingsTitle = document.getElementById('syncSettingsTitle');
     if (syncSettingsTitle) syncSettingsTitle.textContent = i18n.syncSettingsTitle[currentLang];
-    const syncPushPackageInfoBtnText = document.getElementById('syncPushPackageInfoBtnText');
-    if (syncPushPackageInfoBtnText) syncPushPackageInfoBtnText.textContent = i18n.syncPushPackageInfoBtnText[currentLang];
-    const syncPushPackageInfoModalClose = document.getElementById('syncPushPackageInfoModalClose');
-    if (syncPushPackageInfoModalClose) {
-        const closeLabel = getSyncText('syncPushPackageInfoModalCloseLabel', currentLang === 'zh_CN' ? '关闭' : 'Close');
-        syncPushPackageInfoModalClose.setAttribute('aria-label', closeLabel);
-        syncPushPackageInfoModalClose.title = closeLabel;
+    const syncPushPackageInfoBtn = document.getElementById('syncPushPackageInfoBtn');
+    if (syncPushPackageInfoBtn) {
+        const infoLabel = getSyncText('syncPushPackageInfoBtnText', currentLang === 'zh_CN' ? '说明' : 'Info');
+        syncPushPackageInfoBtn.title = infoLabel;
+        syncPushPackageInfoBtn.setAttribute('aria-label', infoLabel);
     }
     ensureSyncPackageOptionElements();
     SYNC_PACKAGE_FIELDS.forEach((field) => {
@@ -4930,12 +4943,7 @@ function applyLanguage() {
     }
     const syncPullPolicyInfoText = document.getElementById('syncPullPolicyInfoText');
     if (syncPullPolicyInfoText) {
-        syncPullPolicyInfoText.textContent = getSyncText(
-            'syncPullPolicyInfoText',
-            currentLang === 'zh_CN'
-                ? '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。'
-                : 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
-        );
+        updateSyncPullPolicyInfoText();
     }
     const syncPullBtnText = document.getElementById('syncPullBtnText');
     if (syncPullBtnText) syncPullBtnText.textContent = i18n.syncPullBtnText[currentLang];
@@ -8074,6 +8082,10 @@ function switchView(view) {
 
     updateMainSearchVisibility();
 
+    if (view === 'sync') {
+        hydrateAndApplySyncControlPanelLayout();
+    }
+
     // 更新导航标签
     document.querySelectorAll('.nav-tab').forEach(tab => {
         if (tab.dataset.view === view) {
@@ -8414,9 +8426,11 @@ function cloneSyncDefaultDocs() {
     return SYNC_DEFAULT_DOCS.map((doc) => ({
         id: String(doc.id || doc.name || `doc-${Date.now()}`),
         name: String(doc.name || doc.id || SYNC_AGENT_DOC_NAME),
+        kind: doc.kind || SYNC_DOC_KIND_INPUT,
         markdown: String(doc.markdown || ''),
         updatedAt: Number(doc.updatedAt || Date.now()),
-        localEdited: Boolean(doc.localEdited)
+        localEdited: Boolean(doc.localEdited),
+        pinned: Boolean(doc.pinned || doc.kind === SYNC_DOC_KIND_AGENT)
     }));
 }
 
@@ -9118,27 +9132,15 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
 }
 
 function updateSyncPathInfoText() {
-    const paths = buildSyncRepoPaths(buildSyncRepoConfig(syncConfigState), Date.now());
-    const ruleFileName = SYNC_AGENT_DOC_NAME;
-    const ruleExamplePath = joinSyncRelativePath(paths.rootFolder, ruleFileName);
-    const manifestPath = paths.dataManifestPath;
-    const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
-    const hasUserCreatedDoc = docs.some((doc) => doc && doc.kind === SYNC_DOC_KIND_INPUT);
     const filesTitle = document.getElementById('syncFilesTitle');
     if (filesTitle) {
         filesTitle.textContent = getSyncText('syncFilesTitle', currentLang === 'zh_CN' ? '查看' : 'View');
     }
+    updateSyncFileListNavButtons();
+    updateSyncPullPolicyInfoText();
     const filesHint = document.getElementById('syncFilesPathHint');
     if (filesHint) {
-        if (hasUserCreatedDoc) {
-            filesHint.textContent = currentLang === 'zh_CN'
-                ? '说明：条目支持编辑与删除；删除后在下次推送时会同步删除云端对应文件。'
-                : 'Note: items support edit/delete; deleted items are removed from cloud on next push.';
-        } else {
-            filesHint.textContent = currentLang === 'zh_CN'
-                ? `路径说明：${ruleFileName} 会固定写入 ${ruleExamplePath}。AI 入口为 ${manifestPath}，变化分析来自 GitHub commits/compare。`
-                : `Path note: ${ruleFileName} is always written to ${ruleExamplePath}. AI entry is ${manifestPath} and change analysis comes from GitHub commits/compare.`;
-        }
+        filesHint.textContent = '';
     }
     const pathTitle = document.getElementById('syncPushPackagePathTitle');
     if (pathTitle) {
@@ -9150,11 +9152,54 @@ function updateSyncPathInfoText() {
     }
 }
 
+function buildSyncFilesPathNoteText() {
+    const paths = buildSyncRepoPaths(buildSyncRepoConfig(syncConfigState), Date.now());
+    const ruleExamplePath = joinSyncRelativePath(paths.rootFolder, SYNC_AGENT_DOC_NAME);
+    const manifestPath = paths.dataManifestPath;
+    return currentLang === 'zh_CN'
+        ? `路径说明：${SYNC_AGENT_DOC_NAME} 会固定写入 ${ruleExamplePath}。AI 入口为 ${manifestPath}，变化分析来自 GitHub commits/compare。`
+        : `Path note: ${SYNC_AGENT_DOC_NAME} is always written to ${ruleExamplePath}. AI entry is ${manifestPath}; change analysis comes from GitHub commits/compare.`;
+}
+
+function updateSyncPullPolicyInfoText() {
+    const infoText = document.getElementById('syncPullPolicyInfoText');
+    if (!infoText) return;
+    const pullPolicyText = getSyncText(
+        'syncPullPolicyInfoText',
+        currentLang === 'zh_CN'
+            ? '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。'
+            : 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
+    );
+    infoText.textContent = `${buildSyncFilesPathNoteText()}\n${pullPolicyText}`;
+}
+
+function positionSyncInfoPopover(panel) {
+    if (!panel) return;
+    const wrap = panel.closest('.sync-files-info-wrap');
+    const button = wrap?.querySelector('.sync-files-info-btn');
+    const container = wrap?.closest('.sync-settings-card, .sync-files-card') || wrap?.parentElement;
+    if (!wrap || !button || !container) return;
+    const wrapRect = wrap.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const maxWidth = panel.classList.contains('sync-push-package-info-popover') ? 560 : 420;
+    const availableWidth = Math.max(180, Math.floor(Math.min(containerRect.width - 16, window.innerWidth - 24)));
+    const panelWidth = Math.min(maxWidth, availableWidth);
+    const minLeft = containerRect.left + 8;
+    const maxLeft = containerRect.right - 8 - panelWidth;
+    const centeredLeft = buttonRect.left + (buttonRect.width / 2) - (panelWidth / 2);
+    const absoluteLeft = Math.min(Math.max(centeredLeft, minLeft), maxLeft);
+    panel.style.width = `${panelWidth}px`;
+    panel.style.left = `${absoluteLeft - wrapRect.left}px`;
+    panel.style.transform = 'none';
+}
+
 function setSyncPushPackageInfoVisible(visible) {
     syncPushPackageInfoVisible = !!visible;
-    const modal = document.getElementById('syncPushPackageInfoModal');
-    if (modal) {
-        modal.classList.toggle('show', syncPushPackageInfoVisible);
+    const panel = document.getElementById('syncPushPackageInfoPanel');
+    if (panel) {
+        panel.hidden = !syncPushPackageInfoVisible;
+        if (syncPushPackageInfoVisible) positionSyncInfoPopover(panel);
     }
     const btn = document.getElementById('syncPushPackageInfoBtn');
     if (btn) btn.setAttribute('aria-expanded', syncPushPackageInfoVisible ? 'true' : 'false');
@@ -9163,7 +9208,10 @@ function setSyncPushPackageInfoVisible(visible) {
 function setSyncPullPolicyInfoVisible(visible) {
     syncPullPolicyInfoVisible = !!visible;
     const panel = document.getElementById('syncPullPolicyInfoPanel');
-    if (panel) panel.hidden = !syncPullPolicyInfoVisible;
+    if (panel) {
+        panel.hidden = !syncPullPolicyInfoVisible;
+        if (syncPullPolicyInfoVisible) positionSyncInfoPopover(panel);
+    }
     const btn = document.getElementById('syncPullPolicyInfoBtn');
     if (btn) btn.setAttribute('aria-expanded', syncPullPolicyInfoVisible ? 'true' : 'false');
 }
@@ -9242,6 +9290,11 @@ function applySyncControlPanelLayout() {
         expandBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
         expandBtn.title = expandTitle;
     }
+}
+
+function hydrateAndApplySyncControlPanelLayout() {
+    hydrateSyncControlPanelCollapsedState();
+    applySyncControlPanelLayout();
 }
 
 function bindSyncControlPanelLayout() {
@@ -10789,7 +10842,8 @@ function normalizeSyncDocs(rawDocs) {
             kind,
             markdown: rawMarkdown,
             updatedAt: Number(item.updatedAt || Date.now()),
-            localEdited: Boolean(item.localEdited)
+            localEdited: Boolean(item.localEdited),
+            pinned: Object.prototype.hasOwnProperty.call(item, 'pinned') ? Boolean(item.pinned) : isAgent
         });
     });
     if (hasAgent) {
@@ -10959,7 +11013,7 @@ function setSyncRepoStatusText(textOrLocalized, type = 'neutral') {
 function getSyncActionButtonIdleText(button) {
     const id = String(button?.id || '');
     if (id === 'syncPullBtn') {
-        return getSyncText('syncPullBtnText', currentLang === 'zh_CN' ? '拉取更新' : 'Pull Updates');
+        return getSyncText('syncPullBtnText', currentLang === 'zh_CN' ? '拉取更新' : 'Pull');
     }
     if (id === 'syncPushBtn') {
         return getSyncText('syncPushBtnText', currentLang === 'zh_CN' ? '推送当前' : 'Push');
@@ -11186,7 +11240,8 @@ async function saveSyncDocsToStorage() {
             kind: doc.kind || SYNC_DOC_KIND_INPUT,
             markdown: doc.markdown,
             updatedAt: doc.updatedAt,
-            localEdited: !!doc.localEdited
+            localEdited: !!doc.localEdited,
+            pinned: isSyncDocPinned(doc)
         }))
     });
 }
@@ -11321,10 +11376,160 @@ function getSyncRuleDoc() {
         .find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID) || null;
 }
 
+function isSyncDocPinned(doc = null) {
+    return !!(doc && typeof doc === 'object' && doc.pinned === true);
+}
+
+function getSyncOrderedDocs(docsInput = syncDocsState) {
+    const docs = Array.isArray(docsInput) ? docsInput : [];
+    return docs.slice().sort((a, b) => {
+        const aIsAgent = a?.id === SYNC_AGENT_DOC_ID || a?.kind === SYNC_DOC_KIND_AGENT;
+        const bIsAgent = b?.id === SYNC_AGENT_DOC_ID || b?.kind === SYNC_DOC_KIND_AGENT;
+        const agentDiff = Number(bIsAgent) - Number(aIsAgent);
+        if (agentDiff) return agentDiff;
+        const pinnedDiff = Number(isSyncDocPinned(b)) - Number(isSyncDocPinned(a));
+        if (pinnedDiff) return pinnedDiff;
+        const timeDiff = Number(b?.updatedAt || 0) - Number(a?.updatedAt || 0);
+        if (timeDiff) return timeDiff;
+        const left = getSyncDocDisplayName(a).toLowerCase();
+        const right = getSyncDocDisplayName(b).toLowerCase();
+        return left.localeCompare(right);
+    });
+}
+
+function getSyncFileNavigationEntries() {
+    const docs = getSyncOrderedDocs(syncDocsState);
+    const hasRuleDoc = !!getSyncRuleDoc();
+    if (!hasRuleDoc) {
+        return [{ id: SYNC_DEFAULT_RULE_PREVIEW_ID, virtual: true, doc: null }, ...docs.map((doc) => ({ id: doc.id, virtual: false, doc }))];
+    }
+    return docs.map((doc) => ({ id: doc.id, virtual: false, doc }));
+}
+
+function getSyncFileListPageCount(entriesInput = getSyncFileNavigationEntries()) {
+    const total = Array.isArray(entriesInput) ? entriesInput.length : 0;
+    return Math.max(1, Math.ceil(total / SYNC_FILES_PAGE_SIZE));
+}
+
+function normalizeSyncFileListPageIndex(entriesInput = getSyncFileNavigationEntries()) {
+    const pageCount = getSyncFileListPageCount(entriesInput);
+    syncFilesPageIndex = Math.max(0, Math.min(pageCount - 1, Number(syncFilesPageIndex) || 0));
+    return syncFilesPageIndex;
+}
+
+function focusSyncFileListPageForEntry(entryId = syncCurrentDocId) {
+    const safeId = String(entryId || '').trim();
+    if (!safeId) return false;
+    const entries = getSyncFileNavigationEntries();
+    const entryIndex = entries.findIndex((entry) => entry && entry.id === safeId);
+    if (entryIndex < 0) return false;
+    const nextPage = Math.floor(entryIndex / SYNC_FILES_PAGE_SIZE);
+    if (nextPage === syncFilesPageIndex) return false;
+    syncFilesPageIndex = nextPage;
+    return true;
+}
+
+function renderSyncFileListPageNumbers(container, pageIndex, pageCount) {
+    if (!container) return;
+    container.innerHTML = '';
+    const pageInput = document.createElement('input');
+    pageInput.type = 'text';
+    pageInput.inputMode = 'numeric';
+    pageInput.pattern = '[0-9]*';
+    pageInput.className = 'sync-files-page-input';
+    pageInput.value = String(pageIndex + 1);
+    pageInput.title = currentLang === 'zh_CN' ? '输入页码，回车跳转' : 'Enter page number';
+    pageInput.setAttribute('aria-label', pageInput.title);
+    pageInput.setAttribute('aria-current', 'page');
+    const commitPageInput = () => {
+        const rawPage = Number.parseInt(String(pageInput.value || '').trim(), 10);
+        if (!Number.isFinite(rawPage)) {
+            pageInput.value = String(syncFilesPageIndex + 1);
+            return;
+        }
+        const nextPage = Math.max(1, Math.min(pageCount, rawPage)) - 1;
+        if (nextPage === syncFilesPageIndex) {
+            pageInput.value = String(syncFilesPageIndex + 1);
+            return;
+        }
+        syncFilesPageIndex = nextPage;
+        renderSyncFileList();
+    };
+    pageInput.addEventListener('focus', () => {
+        pageInput.select();
+    });
+    pageInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            commitPageInput();
+        }
+    });
+    pageInput.addEventListener('blur', commitPageInput);
+    container.appendChild(pageInput);
+}
+
+function updateSyncFileListNavButtons() {
+    const entries = getSyncFileNavigationEntries();
+    const pageIndex = normalizeSyncFileListPageIndex(entries);
+    const pageCount = getSyncFileListPageCount(entries);
+    const pageActions = document.querySelector('.sync-files-page-actions');
+    const prevBtn = document.getElementById('syncFilesPrevBtn');
+    const nextBtn = document.getElementById('syncFilesNextBtn');
+    const pageText = document.getElementById('syncFilesPageText');
+    const prevLabel = getSyncText('syncFilesPrevText', currentLang === 'zh_CN' ? '上一页' : 'Previous page');
+    const nextLabel = getSyncText('syncFilesNextText', currentLang === 'zh_CN' ? '下一页' : 'Next page');
+    if (pageActions) {
+        pageActions.hidden = pageCount <= 1;
+    }
+    if (pageText) {
+        renderSyncFileListPageNumbers(pageText, pageIndex, pageCount);
+    }
+    if (prevBtn) {
+        prevBtn.disabled = pageIndex <= 0;
+        prevBtn.title = prevLabel;
+        prevBtn.setAttribute('aria-label', prevLabel);
+    }
+    if (nextBtn) {
+        nextBtn.disabled = pageIndex >= pageCount - 1;
+        nextBtn.title = nextLabel;
+        nextBtn.setAttribute('aria-label', nextLabel);
+    }
+}
+
+function navigateSyncFileListPage(direction = 0) {
+    const entries = getSyncFileNavigationEntries();
+    if (!entries.length) return false;
+    const pageCount = getSyncFileListPageCount(entries);
+    const currentPage = normalizeSyncFileListPageIndex(entries);
+    const nextPage = Math.max(0, Math.min(pageCount - 1, currentPage + Number(direction || 0)));
+    if (nextPage === currentPage) return false;
+    syncFilesPageIndex = nextPage;
+    renderSyncFileList();
+    return true;
+}
+
+async function toggleSyncDocPin(docId) {
+    const safeId = String(docId || '').trim();
+    if (!safeId) return false;
+    const index = syncDocsState.findIndex((doc) => doc && doc.id === safeId);
+    if (index < 0) return false;
+    commitSyncEditorToCurrentDoc({ markEdited: false });
+    syncDocsState[index] = {
+        ...syncDocsState[index],
+        pinned: !isSyncDocPinned(syncDocsState[index])
+    };
+    const saved = await saveSyncDocsToStorage();
+    focusSyncFileListPageForEntry(safeId);
+    renderSyncFileList();
+    renderSyncMarkdown();
+    return saved;
+}
+
 async function createSyncRuleDoc({ focusDoc = true } = {}) {
     if (getSyncRuleDoc()) {
         if (focusDoc) {
             syncCurrentDocId = getSyncRuleDoc().id;
+            focusSyncFileListPageForEntry(syncCurrentDocId);
             renderSyncFileList();
             renderSyncMarkdown();
         }
@@ -11337,12 +11542,14 @@ async function createSyncRuleDoc({ focusDoc = true } = {}) {
         kind: SYNC_DOC_KIND_AGENT,
         markdown: getDefaultSyncAgentDocTemplate(currentLang),
         updatedAt: now,
-        localEdited: true
+        localEdited: true,
+        pinned: true
     };
     syncDocsState.unshift(doc);
     if (focusDoc) syncCurrentDocId = doc.id;
     const saved = await saveSyncDocsToStorage();
     await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: computeSyncStringHash(doc.markdown) });
+    if (focusDoc) focusSyncFileListPageForEntry(doc.id);
     renderSyncFileList();
     renderSyncMarkdown();
     updateSyncPathInfoText();
@@ -11414,20 +11621,18 @@ function renderSyncFileList() {
     const docs = Array.isArray(syncDocsState) ? syncDocsState : [];
     updateSyncPathInfoText();
     const hasRuleDoc = !!getSyncRuleDoc();
+    const sortedDocs = getSyncOrderedDocs(docs);
 
     const isPreviewSelected = syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID && !hasRuleDoc;
     if (!isPreviewSelected && (!syncCurrentDocId || !docs.some((doc) => doc.id === syncCurrentDocId))) {
-        syncCurrentDocId = docs[0]?.id || null;
+        syncCurrentDocId = sortedDocs[0]?.id || null;
     }
 
-    const sortedDocs = docs.slice().sort((a, b) => {
-        const left = getSyncDocDisplayName(a).toLowerCase();
-        const right = getSyncDocDisplayName(b).toLowerCase();
-        return left.localeCompare(right);
-    });
-
     listEl.innerHTML = '';
-    if (!hasRuleDoc) {
+    const entries = getSyncFileNavigationEntries();
+    const pageIndex = normalizeSyncFileListPageIndex(entries);
+    const pageEntries = entries.slice(pageIndex * SYNC_FILES_PAGE_SIZE, (pageIndex + 1) * SYNC_FILES_PAGE_SIZE);
+    if (pageEntries.some((entry) => entry.virtual)) {
         const preview = document.createElement('div');
         const previewActive = syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID || !docs.length;
         preview.className = `sync-file-item sync-file-item-agent sync-file-item-virtual${previewActive ? ' active' : ''}`;
@@ -11475,22 +11680,27 @@ function renderSyncFileList() {
         preview.appendChild(actions);
         listEl.appendChild(preview);
     }
-    if (!docs.length) {
+    const visibleDocs = pageEntries
+        .filter((entry) => entry && !entry.virtual && entry.doc)
+        .map((entry) => entry.doc);
+    if (!visibleDocs.length) {
+        updateSyncFileListNavButtons();
         return;
     }
-    sortedDocs.forEach((doc) => {
+    visibleDocs.forEach((doc) => {
         const isAgent = doc.kind === SYNC_DOC_KIND_AGENT;
         const isResult = doc.kind === SYNC_DOC_KIND_RESULT;
+        const isPinned = isSyncDocPinned(doc);
         const displayName = getSyncDocDisplayName(doc);
         const item = document.createElement('div');
-        item.className = `sync-file-item${doc.id === syncCurrentDocId ? ' active' : ''}${isAgent ? ' sync-file-item-agent' : ''}${isResult ? ' sync-file-item-result' : ''}`;
+        item.className = `sync-file-item${doc.id === syncCurrentDocId ? ' active' : ''}${isAgent ? ' sync-file-item-agent' : ''}${isResult ? ' sync-file-item-result' : ''}${isPinned ? ' sync-file-item-pinned' : ''}`;
         item.dataset.docId = doc.id;
 
         const mainBtn = document.createElement('button');
         mainBtn.type = 'button';
         mainBtn.className = 'sync-file-main';
         const timeText = doc.updatedAt ? getSyncNowLabel(doc.updatedAt) : '--';
-        const dirtyText = doc.localEdited ? (currentLang === 'zh_CN' ? '本地编辑' : 'Local edit') : '';
+        const editStateLabel = doc.localEdited ? (currentLang === 'zh_CN' ? '本地编辑' : 'Local edit') : '';
         const kindLabel = isAgent
             ? (currentLang === 'zh_CN' ? '规则' : 'Rules')
             : (isResult ? (currentLang === 'zh_CN' ? '结果' : 'Result') : '');
@@ -11500,8 +11710,9 @@ function renderSyncFileList() {
                     <i class="${iconCls}"></i>
                     <span class="sync-file-name-text">${escapeHtml(displayName)}</span>
                     ${kindLabel ? `<span class="sync-file-kind">${escapeHtml(kindLabel)}</span>` : ''}
+                    ${editStateLabel ? `<span class="sync-file-kind sync-file-edit-state">${escapeHtml(editStateLabel)}</span>` : ''}
                 </span>
-                <span class="sync-file-meta">${escapeHtml([timeText, dirtyText].filter(Boolean).join(' · '))}</span>
+                <span class="sync-file-meta">${escapeHtml(timeText)}</span>
             `;
         mainBtn.addEventListener('click', () => {
             commitSyncEditorToCurrentDoc({ markEdited: false });
@@ -11528,6 +11739,26 @@ function renderSyncFileList() {
             }
         });
 
+        const pinLabel = isPinned
+            ? getSyncText('syncFileItemUnpinText', currentLang === 'zh_CN' ? '取消置顶' : 'Unpin')
+            : getSyncText('syncFileItemPinText', currentLang === 'zh_CN' ? '置顶' : 'Pin');
+        const pinBtn = document.createElement('button');
+        pinBtn.type = 'button';
+        pinBtn.className = `view-action-btn view-action-btn-ghost sync-file-icon-btn sync-file-pin-btn${isPinned ? ' active' : ''}`;
+        pinBtn.setAttribute('aria-label', pinLabel);
+        pinBtn.setAttribute('aria-pressed', isPinned ? 'true' : 'false');
+        pinBtn.title = pinLabel;
+        pinBtn.innerHTML = '<i class="fas fa-thumbtack"></i>';
+        pinBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                await toggleSyncDocPin(doc.id);
+            } catch (error) {
+                console.error('[SyncView] toggle doc pin from list failed:', error);
+            }
+        });
+
         const deleteLabel = getSyncText('syncFileItemDeleteText', currentLang === 'zh_CN' ? '删除' : 'Delete');
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
@@ -11547,6 +11778,7 @@ function renderSyncFileList() {
 
         const actions = document.createElement('div');
         actions.className = 'sync-file-item-actions';
+        actions.appendChild(pinBtn);
         actions.appendChild(editBtn);
         actions.appendChild(deleteBtn);
 
@@ -11554,6 +11786,7 @@ function renderSyncFileList() {
         item.appendChild(actions);
         listEl.appendChild(item);
     });
+    updateSyncFileListNavButtons();
 }
 
 function isSyncEditModeEnabled() {
@@ -12595,6 +12828,7 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
             };
             if (focusDoc) syncCurrentDocId = syncDocsState[index].id;
             await saveSyncDocsToStorage();
+            if (focusDoc) focusSyncFileListPageForEntry(syncDocsState[index].id);
             renderSyncFileList();
             renderSyncMarkdown();
             updateSyncPathInfoText();
@@ -12649,6 +12883,7 @@ async function renameSyncDocByIdFromPrompt(docId, { focusDoc = false } = {}) {
     if (shouldQueueOldRemotePath) {
         await saveSyncRemoteDocDeleteQueueToStorage();
     }
+    if (focusDoc) focusSyncFileListPageForEntry(syncDocsState[index].id);
     renderSyncFileList();
     renderSyncMarkdown();
     updateSyncPathInfoText();
@@ -12692,6 +12927,7 @@ async function deleteSyncDocById(docId, { focusNeighbor = false } = {}) {
     if (focusNeighbor || syncCurrentDocId === safeId) {
         const safeIndex = Math.max(0, Math.min(index, syncDocsState.length - 1));
         syncCurrentDocId = syncDocsState[safeIndex]?.id || syncDocsState[0]?.id || null;
+        focusSyncFileListPageForEntry(syncCurrentDocId);
     }
 
     await saveSyncDocsToStorage();
@@ -12884,6 +13120,7 @@ async function loadSyncStateFromStorage() {
     if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
+    focusSyncFileListPageForEntry(syncCurrentDocId);
     loadSyncPushTimeRange();
     await maybeUpgradeSyncAgentDocTemplate(
         String(result?.[SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY] || '')
@@ -16159,6 +16396,7 @@ async function pullSyncSnapshotFromCloud() {
     if (!syncCurrentDocId || !syncDocsState.some((doc) => doc.id === syncCurrentDocId)) {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
+    focusSyncFileListPageForEntry(syncCurrentDocId);
     await saveSyncDocsToStorage();
     await saveSyncRemoteDocCacheToStorage();
     renderSyncFileList();
@@ -16230,6 +16468,7 @@ async function createSyncDocFromPrompt() {
     }
     syncCurrentDocId = newDoc.id;
     await saveSyncDocsToStorage();
+    focusSyncFileListPageForEntry(newDoc.id);
     renderSyncFileList();
     renderSyncMarkdown();
     setSyncStatusText({
@@ -16409,16 +16648,37 @@ function bindSyncViewEvents() {
             setSyncPullPolicyInfoVisible(!syncPullPolicyInfoVisible);
         });
     }
+    const filesPrevBtn = document.getElementById('syncFilesPrevBtn');
+    if (filesPrevBtn) {
+        filesPrevBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            navigateSyncFileListPage(-1);
+        });
+    }
+    const filesNextBtn = document.getElementById('syncFilesNextBtn');
+    if (filesNextBtn) {
+        filesNextBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            navigateSyncFileListPage(1);
+        });
+    }
     document.addEventListener('pointerdown', (event) => {
-        if (!syncPullPolicyInfoVisible) return;
-        const wrap = document.getElementById('syncPullPolicyInfoWrap');
+        if (!syncPullPolicyInfoVisible && !syncPushPackageInfoVisible) return;
         const target = event.target;
         if (!(target instanceof Node)) {
-            setSyncPullPolicyInfoVisible(false);
+            if (syncPullPolicyInfoVisible) setSyncPullPolicyInfoVisible(false);
+            if (syncPushPackageInfoVisible) setSyncPushPackageInfoVisible(false);
             return;
         }
-        if (!wrap || !wrap.contains(target)) {
+        const pullWrap = document.getElementById('syncPullPolicyInfoWrap');
+        if (syncPullPolicyInfoVisible && (!pullWrap || !pullWrap.contains(target))) {
             setSyncPullPolicyInfoVisible(false);
+        }
+        const pushWrap = document.getElementById('syncPushPackageInfoWrap');
+        if (syncPushPackageInfoVisible && (!pushWrap || !pushWrap.contains(target))) {
+            setSyncPushPackageInfoVisible(false);
         }
     }, true);
 
@@ -16459,23 +16719,11 @@ function bindSyncViewEvents() {
 
     const pushPackageInfoBtn = document.getElementById('syncPushPackageInfoBtn');
     if (pushPackageInfoBtn) {
-        pushPackageInfoBtn.addEventListener('click', () => {
+        pushPackageInfoBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
             updateSyncPathInfoText();
             setSyncPushPackageInfoVisible(!syncPushPackageInfoVisible);
-        });
-    }
-    const pushPackageInfoModal = document.getElementById('syncPushPackageInfoModal');
-    if (pushPackageInfoModal) {
-        pushPackageInfoModal.addEventListener('click', (event) => {
-            if (event.target === pushPackageInfoModal) {
-                setSyncPushPackageInfoVisible(false);
-            }
-        });
-    }
-    const pushPackageInfoModalClose = document.getElementById('syncPushPackageInfoModalClose');
-    if (pushPackageInfoModalClose) {
-        pushPackageInfoModalClose.addEventListener('click', () => {
-            setSyncPushPackageInfoVisible(false);
         });
     }
     document.addEventListener('keydown', (event) => {
@@ -16644,11 +16892,11 @@ function bindSyncViewEvents() {
 
 async function renderSyncView() {
     ensureSyncPackageOptionElements();
+    hydrateAndApplySyncControlPanelLayout();
     if (!syncViewInitialized) {
         await loadSyncStateFromStorage();
         syncViewInitialized = true;
     }
-    hydrateSyncControlPanelCollapsedState();
     hydrateSyncMarkdownViewMode();
     bindSyncViewEvents();
     applySyncConfigToUI();
