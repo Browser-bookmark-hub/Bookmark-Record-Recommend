@@ -120,6 +120,7 @@ const SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY = 'aiSyncRemoteDocDeleteQueue_v1'
 const SYNC_ACTIVITY_STORAGE_KEY = 'aiSyncActivity_v1';
 const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2';
 const SYNC_MARKDOWN_VIEW_MODE_STORAGE_KEY = 'aiSyncMarkdownViewMode_v1';
+const SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY = 'aiSyncAgentTemplateHash_v1';
 const SYNC_REALTIME_MARKDOWN_RENDER = true;
 const SYNC_PROVIDER_GITHUB = 'github';
 const SYNC_PROVIDER_LOCAL = 'local';
@@ -8419,6 +8420,15 @@ function cloneSyncDefaultDocs() {
     }));
 }
 
+function computeSyncStringHash(str) {
+    const s = String(str || '');
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) + h + s.charCodeAt(i)) & 0x7fffffff;
+    }
+    return h.toString(16);
+}
+
 function normalizeSyncRelativePath(path = '') {
     return String(path || '')
         .trim()
@@ -11332,6 +11342,7 @@ async function createSyncRuleDoc({ focusDoc = true } = {}) {
     syncDocsState.unshift(doc);
     if (focusDoc) syncCurrentDocId = doc.id;
     const saved = await saveSyncDocsToStorage();
+    await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: computeSyncStringHash(doc.markdown) });
     renderSyncFileList();
     renderSyncMarkdown();
     updateSyncPathInfoText();
@@ -12785,13 +12796,74 @@ function markSyncDocsCleanAfterPush(docCacheUpdates = []) {
     return changed;
 }
 
+function isSyncAgentDocLikelyDefaultTemplate(markdown) {
+    const text = String(markdown || '').trim();
+    if (!text.startsWith('# AGENTS.md')) return false;
+    const sectionMatches = text.match(/^## \d+\.\s/gm);
+    return !!(sectionMatches && sectionMatches.length >= 8);
+}
+
+async function applySyncAgentDocUpgrade(currentLangForTemplate) {
+    const newTemplate = getDefaultSyncAgentDocTemplate(currentLangForTemplate);
+    const newHash = computeSyncStringHash(newTemplate);
+    const docIndex = syncDocsState.findIndex(
+        (d) => d.id === SYNC_AGENT_DOC_ID || d.kind === SYNC_DOC_KIND_AGENT
+    );
+    if (docIndex < 0) return false;
+    syncDocsState[docIndex] = {
+        ...syncDocsState[docIndex],
+        markdown: newTemplate,
+        updatedAt: Date.now(),
+        localEdited: true
+    };
+    await saveSyncDocsToStorage();
+    await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: newHash });
+    console.log('[SyncAgentUpgrade] AGENTS.md auto-upgraded to new default template');
+    return true;
+}
+
+async function maybeUpgradeSyncAgentDocTemplate(storedHash) {
+    const agentDoc = getSyncRuleDoc();
+    if (!agentDoc) return false;
+
+    const currentHashZh = computeSyncStringHash(getDefaultSyncAgentDocTemplate('zh_CN'));
+    const currentHashEn = computeSyncStringHash(getDefaultSyncAgentDocTemplate('en'));
+    const currentTemplateHashes = new Set([currentHashZh, currentHashEn]);
+
+    if (storedHash && currentTemplateHashes.has(storedHash)) {
+        return false;
+    }
+
+    const contentHash = computeSyncStringHash(agentDoc.markdown);
+
+    if (currentTemplateHashes.has(contentHash)) {
+        await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: contentHash });
+        return false;
+    }
+
+    if (!storedHash) {
+        if (isSyncAgentDocLikelyDefaultTemplate(agentDoc.markdown)) {
+            return await applySyncAgentDocUpgrade(currentLang);
+        }
+        await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: contentHash });
+        return false;
+    }
+
+    if (contentHash === storedHash) {
+        return await applySyncAgentDocUpgrade(currentLang);
+    }
+
+    return false;
+}
+
 async function loadSyncStateFromStorage() {
     const result = await syncStorageGet([
         SYNC_CONFIG_STORAGE_KEY,
         SYNC_DOCS_STORAGE_KEY,
         SYNC_REMOTE_DOC_CACHE_STORAGE_KEY,
         SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY,
-        SYNC_ACTIVITY_STORAGE_KEY
+        SYNC_ACTIVITY_STORAGE_KEY,
+        SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY
     ]);
 
     syncConfigState = normalizeSyncConfig(result?.[SYNC_CONFIG_STORAGE_KEY] || null);
@@ -12813,6 +12885,9 @@ async function loadSyncStateFromStorage() {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
     loadSyncPushTimeRange();
+    await maybeUpgradeSyncAgentDocTemplate(
+        String(result?.[SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY] || '')
+    );
     setSyncStatusText(getSyncI18nPair('syncStatusLoaded', '状态：已加载本地同步数据', 'Status: Loaded local sync data'));
     applySyncRepoActivityStatusToUI({ force: true });
 }
