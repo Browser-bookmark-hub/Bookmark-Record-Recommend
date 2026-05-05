@@ -1,7 +1,7 @@
 ## Switch to [English](#english)
 
-[![GitHub Releases](https://img.shields.io/badge/GitHub_Releases-v0.2.3-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
-[![Microsoft Edge Add-ons](https://img.shields.io/badge/Edge_Add--ons-v0.2.3-0078D7?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/hdoajmdijappigkbiiefbhkfifbfoleb)
+[![GitHub Releases](https://img.shields.io/github/v/release/Browser-bookmark-hub/Bookmark-Record-Recommend?logo=github&logoColor=white&label=GitHub+Releases)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
+[![Microsoft Edge Add-ons](https://img.shields.io/badge/Edge_Add--ons-Available-0078D7?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/hdoajmdijappigkbiiefbhkfifbfoleb)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ehodmhbidnoegdodnceiepdekgeoggck?color=0F9D58&logo=googlechrome&logoColor=white&label=Chrome+Web+Store)](https://chromewebstore.google.com/detail/ehodmhbidnoegdodnceiepdekgeoggck)
 
 ### 简介
@@ -11,6 +11,8 @@
 ### 特色功能
 - **双工作区**：支持 Side Panel + 独立 HTML 页面，适配不同使用习惯。
 - **推荐引擎（v6.2）**：基于 S 值与池子模型，支持三卡位轮换与优先复习队列。
+- **AI 推送与分析**：支持将书签记录、推荐信号和 Markdown 文档推送到 GitHub 云端，并配合 AGENTS.md 进行 AI 分析。
+- **小组件中心**：聚合推荐、时间捕捉、排行、周统计等常用信息，快速查看当前书签状态。
 - **推荐操作语义清晰**：`待复习 / 跳过 / 屏蔽` 三种操作可直接影响后续推荐。
 - **书签记录三件套**：书签添加记录、点击排行、关联记录（含日历与筛选）。
 - **时间捕捉与排行**：按书签页面活跃时长统计，支持多时间范围查看。
@@ -27,7 +29,8 @@
 
 
 ### 主要视图
-- **小组件**：聚合小组件（推荐、时间捕捉、排行、周统计等）。
+- **小组件**：聚合推荐、时间捕捉、排行、周统计等常用信息。
+- **推送与分析**：GitHub 同步、数据包推送、Markdown 文档管理与 AI 分析规则。
 - **书签推​​荐**：推荐卡片、待复习、屏蔽管理、复习热力图。
 - **书签记录**：添加记录 / 浏览记录 / 时间捕捉。
 
@@ -50,6 +53,8 @@ It not only tracks multi-dimensional bookmark browsing data (calendar logs, visi
 ### Highlights
 - **Dual workspace**: works in Side Panel and standalone page.
 - **Recommendation engine (v6.2)**: S-score + pool model with 3-card rotation and due-first queue.
+- **AI Push & Analyze**: push bookmark records, recommendation signals, and Markdown docs to GitHub cloud sync, with AGENTS.md rules for AI analysis.
+- **Widget center**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
 - **Actionable recommendation controls**: `Review Later / Skip / Block` directly shape future recommendations.
 - **Bookmark record suite**: additions, click ranking, and related history with calendar/filter views.
 - **Active-time tracking**: weighted bookmark-page activity with range-based ranking.
@@ -66,7 +71,8 @@ It not only tracks multi-dimensional bookmark browsing data (calendar logs, visi
 | <img src="doc/screenshots/search_en.png" width="400"> | <img src="doc/screenshots/ranking_en.png" width="400"> |
 
 ### Main Views
-- **Widgets**: consolidated widgets for recommendations, tracking, ranking, weekly summaries.
+- **Widgets**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
+- **Push & Analyze**: GitHub sync, data-package push, Markdown document management, and AI analysis rules.
 - **Bookmark Recommend**: recommendation cards, review-later queue, block manager, review heatmap.
 - **Bookmark Records**: additions / browsing history / time tracking.
 
