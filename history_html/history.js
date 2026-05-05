@@ -3933,11 +3933,11 @@ const i18n = {pageTitle: {
         'zh_CN': '清除记录',
         'en': 'Clear Records'
     },trackingBlockBtn: {
-        'zh_CN': '屏蔽管理',
-        'en': 'Block Manager'
+        'zh_CN': '屏蔽',
+        'en': 'Block'
     },trackingBlockModalTitle: {
-        'zh_CN': '时间追踪屏蔽管理',
-        'en': 'Time Tracking Block Manager'
+        'zh_CN': '时间追踪屏蔽',
+        'en': 'Time Tracking Block'
     },trackingBlockedBookmarksTitle: {
         'zh_CN': '已屏蔽书签',
         'en': 'Blocked Bookmarks'
@@ -3983,12 +3983,15 @@ const i18n = {pageTitle: {
     },trackingHeaderState: {
         'zh_CN': '状态',
         'en': 'Status'
+    },trackingStateHelpTitle: {
+        'zh_CN': '状态说明',
+        'en': 'State guide'
     },trackingHeaderTitle: {
         'zh_CN': '书签',
         'en': 'Bookmark'
     },trackingHeaderTime: {
-        'zh_CN': '综合时间（当前）',
-        'en': 'Composite Time (Current)'
+        'zh_CN': '综合时长（当前）',
+        'en': 'Composite Duration (Current)'
     },trackingHeaderWakes: {
         'zh_CN': '唤醒',
         'en': 'Wakes'
@@ -3999,8 +4002,8 @@ const i18n = {pageTitle: {
         'zh_CN': '综合排行',
         'en': 'Ranking'
     },trackingRankingTypeComposite: {
-        'zh_CN': '综合时间',
-        'en': 'Composite Time'
+        'zh_CN': '综合时长',
+        'en': 'Composite Duration'
     },trackingRankingTypeWakes: {
         'zh_CN': '唤醒次数',
         'en': 'Wake Count'
@@ -4272,8 +4275,8 @@ const i18n = {pageTitle: {
         'zh_CN': '添加',
         'en': 'Add'
     },blockManageTitle: {
-        'zh_CN': '屏蔽管理',
-        'en': 'Block Management'
+        'zh_CN': '屏蔽',
+        'en': 'Block'
     },blockedBookmarksTitle: {
         'zh_CN': '已屏蔽书签',
         'en': 'Blocked Bookmarks'
@@ -5350,8 +5353,26 @@ function applyLanguage() {
     if (trackingCurrentTitle) trackingCurrentTitle.textContent = i18n.trackingCurrentTitle[currentLang];
     const trackingNoActiveText = document.getElementById('trackingNoActiveText');
     if (trackingNoActiveText) trackingNoActiveText.textContent = i18n.trackingNoActive[currentLang];
-    const trackingHeaderStateText = document.querySelector('#trackingHeaderState .tracking-header-text');
-    if (trackingHeaderStateText) trackingHeaderStateText.textContent = i18n.trackingHeaderState[currentLang];
+    const trackingHeaderState = document.getElementById('trackingHeaderState');
+    if (trackingHeaderState) {
+        let trackingHeaderStateText = trackingHeaderState.querySelector('.tracking-header-text');
+        if (!trackingHeaderStateText) {
+            trackingHeaderStateText = document.createElement('span');
+            trackingHeaderStateText.className = 'tracking-header-text';
+            trackingHeaderState.textContent = '';
+            trackingHeaderState.appendChild(trackingHeaderStateText);
+        }
+        trackingHeaderStateText.textContent = i18n.trackingHeaderState[currentLang];
+        let trackingStateHelpBtn = trackingHeaderState.querySelector('.tracking-state-help');
+        if (!trackingStateHelpBtn) {
+            trackingStateHelpBtn = document.createElement('i');
+            trackingStateHelpBtn.className = 'fas fa-question-circle tracking-state-help';
+            trackingStateHelpBtn.id = 'trackingStateHelpBtn';
+            trackingHeaderState.appendChild(trackingStateHelpBtn);
+        }
+        trackingStateHelpBtn.title = i18n.trackingStateHelpTitle[currentLang];
+        trackingStateHelpBtn.setAttribute('aria-label', i18n.trackingStateHelpTitle[currentLang]);
+    }
     const trackingHeaderTitle = document.getElementById('trackingHeaderTitle');
     if (trackingHeaderTitle) trackingHeaderTitle.textContent = i18n.trackingHeaderTitle[currentLang];
     const trackingHeaderTime = document.getElementById('trackingHeaderTime');

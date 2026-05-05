@@ -13686,6 +13686,7 @@ html.side-panel-mode .recommend-last-updated-main {
 /* 状态表头（文字和图标在同一行） */
 #trackingHeaderState {
     white-space: nowrap;
+    overflow: visible;
 }
 
 .tracking-header-text {
@@ -13702,6 +13703,7 @@ html.side-panel-mode .recommend-last-updated-main {
     transition: all 0.2s;
     vertical-align: middle;
     display: inline-block;
+    flex-shrink: 0;
 }
 
 .tracking-state-help:hover {
@@ -13792,6 +13794,132 @@ html.side-panel-mode .recommend-last-updated-main {
     padding: 4px 10px;
     border-radius: 4px;
     display: inline-block;
+}
+
+html.side-panel-mode .tracking-state-modal {
+    width: min(96vw, 420px);
+    max-height: 86vh;
+    overflow: hidden;
+}
+
+html.side-panel-mode .tracking-state-modal .modal-header {
+    padding: 10px 12px;
+}
+
+html.side-panel-mode .tracking-state-modal .modal-header h2 {
+    font-size: 14px;
+    line-height: 1.2;
+}
+
+html.side-panel-mode .tracking-state-content {
+    padding: 10px;
+    overflow-y: auto;
+    max-height: calc(86vh - 44px);
+}
+
+html.side-panel-mode .tracking-state-table {
+    font-size: 11px;
+    table-layout: fixed;
+}
+
+html.side-panel-mode .tracking-state-table th,
+html.side-panel-mode .tracking-state-table td {
+    padding: 6px 5px;
+    line-height: 1.25;
+}
+
+html.side-panel-mode .tracking-state-table th {
+    font-size: 10px;
+}
+
+html.side-panel-mode .tracking-state-table .state-icon-cell {
+    width: 28px;
+    font-size: 13px;
+}
+
+html.side-panel-mode .tracking-state-table .state-rate-cell {
+    width: 42px;
+    font-size: 10px;
+}
+
+html.side-panel-mode .tracking-state-table td:last-child {
+    font-size: 10px;
+}
+
+html.side-panel-mode .tracking-state-formula {
+    margin-top: 10px;
+    padding: 8px;
+    font-size: 11px;
+}
+
+html.side-panel-mode .tracking-state-formula code {
+    padding: 3px 6px;
+    line-height: 1.35;
+    white-space: normal;
+}
+
+@media (max-width: 520px) {
+    .tracking-state-modal {
+        width: min(96vw, 420px);
+        max-height: 86vh;
+        overflow: hidden;
+    }
+
+    .tracking-state-modal .modal-header {
+        padding: 10px 12px;
+    }
+
+    .tracking-state-modal .modal-header h2 {
+        font-size: 14px;
+        line-height: 1.2;
+    }
+
+    .tracking-state-content {
+        padding: 10px;
+        overflow-y: auto;
+        max-height: calc(86vh - 44px);
+    }
+
+    .tracking-state-table {
+        font-size: 11px;
+        table-layout: fixed;
+    }
+
+    .tracking-state-table th,
+    .tracking-state-table td {
+        padding: 6px 5px;
+        line-height: 1.25;
+    }
+
+    .tracking-state-table th {
+        font-size: 10px;
+    }
+
+    .tracking-state-table .state-icon-cell {
+        width: 28px;
+        font-size: 13px;
+    }
+
+    .tracking-state-table .state-rate-cell {
+        width: 42px;
+        font-size: 10px;
+    }
+
+    .tracking-state-table td:last-child {
+        font-size: 10px;
+    }
+
+    .tracking-state-formula {
+        margin-top: 10px;
+        padding: 8px;
+        font-size: 11px;
+    }
+
+    .tracking-state-formula code {
+        padding: 3px 6px;
+        line-height: 1.35;
+        white-space: normal;
+    }
 }
 
 .empty-state-small {
@@ -14419,21 +14547,44 @@ html.side-panel-mode .tracking-table tbody td {
     text-overflow: ellipsis;
 }
 
-html.side-panel-mode .tracking-table thead th:nth-child(1) { width: 34px; }
+html.side-panel-mode .tracking-table thead th:nth-child(1) { width: 46px; }
 html.side-panel-mode .tracking-table thead th:nth-child(3) { width: 60px; }
 html.side-panel-mode .tracking-table thead th:nth-child(4) { width: 36px; }
 html.side-panel-mode .tracking-table thead th:nth-child(5) { width: 40px; }
 
+html.side-panel-mode #trackingHeaderState {
+    overflow: visible;
+    text-overflow: clip;
+    text-align: center;
+}
+
+html.side-panel-mode #trackingHeaderState .tracking-header-text {
+    display: inline-block;
+    max-width: 28px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: clip;
+    vertical-align: middle;
+}
+
 html.side-panel-mode #trackingStateHelpBtn {
-    display: none;
+    display: inline-block;
+    margin-left: 2px;
+    font-size: 10px;
+    vertical-align: middle;
 }
 
 html.side-panel-mode #trackingHeaderTime {
     font-size: 0;
 }
 
-html.side-panel-mode #trackingHeaderTime::after {
-    content: "时间";
+html[lang="zh"].side-panel-mode #trackingHeaderTime::after {
+    content: "时长";
+    font-size: 11px;
+}
+
+html[lang="en"].side-panel-mode #trackingHeaderTime::after {
+    content: "Time";
     font-size: 11px;
 }
 
