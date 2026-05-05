@@ -16,6 +16,7 @@ const CONFIG = {
     PERIODIC_SAVE_INTERVAL: 30000,    // 定期保存间隔：30秒（防止崩溃丢失数据）
     SLEEP_DETECTION_INTERVAL: 1000,   // 休眠检测间隔：1秒
     SLEEP_THRESHOLD_MS: 5000,         // 休眠判定阈值：时间跳跃>5秒视为休眠
+    SESSION_HEALTH_CHECK_INTERVAL_MS: 30 * 60 * 1000,
     AUTO_BOOKMARK_ATTRIBUTION_TTL_MS: 6 * 60 * 60 * 1000, // 书签打开归因TTL：6小时
     AUTO_BOOKMARK_REDIRECT_WINDOW_MS: 15000, // 仅把“打开后短时间内的跳转/重定向”算作同一次书签打开
     TRACKING_STATS_MAX_ENTRIES: 0,
@@ -973,6 +974,7 @@ async function persistActiveSessionsToStorage() {
                     isBackground: session.isBackground,
                     isVisible: session.isVisible,
                     isSleeping: session.isSleeping,
+                    lastHealthCheckElapsedMs: session.lastHealthCheckElapsedMs || 0,
                     // 记录保存时间，用于恢复时计算时间差
                     persistedAt: now,
                     // 保存原始开始时间
@@ -1095,6 +1097,12 @@ async function restoreActiveSessionsFromStorage() {
                 session.isBackground = data.isBackground;
                 session.isVisible = data.isVisible;
                 session.isSleeping = data.isSleeping;
+                if (Object.prototype.hasOwnProperty.call(data, 'lastHealthCheckElapsedMs')) {
+                    session.lastHealthCheckElapsedMs = toNonNegativeNumber(data.lastHealthCheckElapsedMs, 0);
+                } else {
+                    const restoredElapsedMs = Math.max(0, now - session.originalStartTime);
+                    session.lastHealthCheckElapsedMs = getCompletedHealthCheckCheckpointMs(restoredElapsedMs);
+                }
 
                 // 设置计时起点为现在（恢复后继续计时）
                 if (session.state === SessionState.ACTIVE) {
@@ -1520,6 +1528,7 @@ class SessionData {
         this.bookmarkId = null;
         this.matchType = null;
         this.forceBookmarkTracking = false;
+        this.lastHealthCheckElapsedMs = 0;
         // 已保存到数据库的累积值（用于显示时加回来）
         this.savedActiveMs = 0;
         this.savedPauseMs = 0;
@@ -1831,6 +1840,226 @@ class SessionData {
     getTotalWakeCount() {
         return this.savedWakeCount + this.wakeCount;
     }
+}
+
+function getSessionDisplayState(session) {
+    if (!session || session.state === SessionState.INACTIVE || session.state === SessionState.ENDED) {
+        return session?.state || SessionState.INACTIVE;
+    }
+    if (session.state === SessionState.ACTIVE) return 'active';
+    if (session.isSleeping) return 'sleeping';
+    if (session.isBackground) return 'background';
+    if (session.isVisible) return 'visible';
+    return 'paused';
+}
+
+function getSessionHealthCheckPriority(session) {
+    const displayState = getSessionDisplayState(session);
+    if (displayState === 'visible') return 1;
+    if (displayState === 'paused') return 2;
+    if (displayState === 'active') return 3;
+    if (displayState === 'background') return 4;
+    if (displayState === 'sleeping') return 5;
+    return 99;
+}
+
+function getSessionHealthCheckElapsedMs(session, now = Date.now()) {
+    if (!session) return 0;
+    const startTime = toNonNegativeNumber(session.originalStartTime || session.startTime, now);
+    return Math.max(0, now - startTime);
+}
+
+function isSessionHealthCheckDue(session, now = Date.now()) {
+    const elapsedMs = getSessionHealthCheckElapsedMs(session, now);
+    const lastCheckedElapsedMs = toNonNegativeNumber(session?.lastHealthCheckElapsedMs, 0);
+    return elapsedMs >= CONFIG.SESSION_HEALTH_CHECK_INTERVAL_MS
+        && (elapsedMs - lastCheckedElapsedMs) >= CONFIG.SESSION_HEALTH_CHECK_INTERVAL_MS;
+}
+
+function getCompletedHealthCheckCheckpointMs(elapsedMs) {
+    const safeElapsed = toNonNegativeNumber(elapsedMs, 0);
+    const interval = CONFIG.SESSION_HEALTH_CHECK_INTERVAL_MS;
+    if (!Number.isFinite(interval) || interval <= 0) return 0;
+    return Math.floor(safeElapsed / interval) * interval;
+}
+
+function settleSessionCurrentSegment(session, now = Date.now()) {
+    if (!session || session.state === SessionState.INACTIVE || session.state === SessionState.ENDED) return;
+    if (session.state === SessionState.ACTIVE && session.activeStartTime) {
+        session.accumulatedActiveMs += Math.max(0, now - session.activeStartTime);
+        session.activeStartTime = null;
+    }
+    if (session.state === SessionState.PAUSED && session.lastPauseTime && !session.isSleeping) {
+        const pauseDuration = Math.max(0, now - session.lastPauseTime);
+        if (session.isBackground) {
+            session.backgroundTotalMs += pauseDuration;
+        } else if (session.isVisible) {
+            session.visibleTotalMs += pauseDuration;
+        } else {
+            session.pauseTotalMs += pauseDuration;
+        }
+        session.lastPauseTime = null;
+    }
+}
+
+function setSessionCorrectedState(session, targetState, now = Date.now()) {
+    if (!session || !targetState) return false;
+    const currentDisplayState = getSessionDisplayState(session);
+    if (currentDisplayState === targetState) return false;
+
+    settleSessionCurrentSegment(session, now);
+    session.isBackground = false;
+    session.isVisible = false;
+    session.isSleeping = false;
+    session.activeStartTime = null;
+    session.lastPauseTime = null;
+
+    if (targetState === 'active') {
+        session.state = SessionState.ACTIVE;
+        session.activeStartTime = now;
+    } else if (targetState === 'background') {
+        session.state = SessionState.PAUSED;
+        session.isBackground = true;
+        session.lastPauseTime = now;
+    } else if (targetState === 'visible') {
+        session.state = SessionState.PAUSED;
+        session.isVisible = true;
+        session.lastPauseTime = now;
+    } else if (targetState === 'sleeping') {
+        session.state = SessionState.PAUSED;
+        session.isSleeping = true;
+    } else {
+        session.state = SessionState.PAUSED;
+        session.lastPauseTime = now;
+    }
+    return true;
+}
+
+async function endAndSaveActiveSession(tabId, session) {
+    if (!session) return false;
+    const ended = session.end();
+    if (ended && ended.accumulatedActiveMs >= CONFIG.MIN_ACTIVE_MS) {
+        await saveSession(ended);
+    }
+    activeSessions.delete(tabId);
+    return true;
+}
+
+async function queryIdleStateForSessionHealthCheck() {
+    if (!browserAPI?.idle?.queryState) return currentIdleState;
+    return await new Promise((resolve) => {
+        try {
+            browserAPI.idle.queryState(CONFIG.IDLE_DETECTION_INTERVAL, (state) => {
+                if (browserAPI.runtime?.lastError) {
+                    resolve(currentIdleState);
+                    return;
+                }
+                const normalized = String(state || currentIdleState || 'active');
+                if (normalized === 'active' || normalized === 'idle' || normalized === 'locked') {
+                    currentIdleState = normalized;
+                }
+                resolve(currentIdleState);
+            });
+        } catch (_) {
+            resolve(currentIdleState);
+        }
+    });
+}
+
+async function resolveSessionHealthTarget(tabId, session, idleStateForCheck = currentIdleState) {
+    let tab = null;
+    try {
+        tab = await browserAPI.tabs.get(tabId);
+    } catch (_) {
+        return { targetState: 'ended' };
+    }
+    if (!tab || !tab.url) return { targetState: 'ended' };
+
+    const isAttributed = session.matchType === 'auto_bookmark' || !!session.trackedUrl;
+    if (!isAttributed && tab.url !== session.url) {
+        return { targetState: 'ended' };
+    }
+    if (isTrackingBlockedByCache({ url: tab.url, bookmarkId: session.bookmarkId })) {
+        return { targetState: 'ended' };
+    }
+    if (tab.discarded) {
+        return { targetState: 'sleeping', tab };
+    }
+
+    let targetWindow = null;
+    try {
+        targetWindow = await browserAPI.windows.get(tab.windowId);
+    } catch (_) {
+        return { targetState: 'background', tab };
+    }
+
+    let activeTabInWindow = null;
+    try {
+        const tabs = await browserAPI.tabs.query({ active: true, windowId: tab.windowId });
+        activeTabInWindow = tabs && tabs[0] ? tabs[0] : null;
+    } catch (_) { }
+
+    if (!activeTabInWindow || activeTabInWindow.id !== tabId) {
+        return { targetState: 'background', tab };
+    }
+
+    const windowFocused = !!targetWindow.focused;
+    const userActive = idleStateForCheck === 'active';
+    if (windowFocused && userActive) return { targetState: 'active', tab };
+    if (windowFocused && !userActive) return { targetState: 'paused', tab };
+    if (!windowFocused && userActive) return { targetState: 'visible', tab };
+    return { targetState: 'sleeping', tab };
+}
+
+async function reconcileActiveSessionHealth(tabId, session, idleStateForCheck = currentIdleState) {
+    if (!session || activeSessions.get(tabId) !== session) return false;
+    if (session.state === SessionState.INACTIVE || session.state === SessionState.ENDED) return false;
+
+    const { targetState, tab } = await resolveSessionHealthTarget(tabId, session, idleStateForCheck);
+    if (activeSessions.get(tabId) !== session) return false;
+    const checkedElapsedMs = getSessionHealthCheckElapsedMs(session);
+    session.lastHealthCheckElapsedMs = checkedElapsedMs;
+    if (targetState === 'ended') {
+        return await endAndSaveActiveSession(tabId, session);
+    }
+    if (tab) {
+        session.windowId = tab.windowId;
+        if (session.matchType === 'auto_bookmark' || session.trackedUrl) {
+            session.url = tab.url || session.url;
+        }
+    }
+    return setSessionCorrectedState(session, targetState);
+}
+
+async function runSessionHealthCheck() {
+    if (!trackingEnabled || !browserAPI?.tabs || !browserAPI?.windows || activeSessions.size === 0) return false;
+    const now = Date.now();
+    const idleStateForCheck = await queryIdleStateForSessionHealthCheck();
+    const candidates = Array.from(activeSessions.entries())
+        .filter(([, session]) => session && session.state !== SessionState.INACTIVE && session.state !== SessionState.ENDED)
+        .filter(([, session]) => isSessionHealthCheckDue(session, now))
+        .sort((a, b) => {
+            const priorityDiff = getSessionHealthCheckPriority(a[1]) - getSessionHealthCheckPriority(b[1]);
+            if (priorityDiff !== 0) return priorityDiff;
+            const aElapsed = getSessionHealthCheckElapsedMs(a[1], now);
+            const bElapsed = getSessionHealthCheckElapsedMs(b[1], now);
+            return bElapsed - aElapsed;
+        });
+    if (!candidates.length) return false;
+
+    let changed = false;
+    for (const [tabId, session] of candidates) {
+        try {
+            const didChange = await reconcileActiveSessionHealth(tabId, session, idleStateForCheck);
+            changed = changed || didChange;
+        } catch (error) {
+            console.warn('[ActiveTimeTracker] session health check failed:', error);
+        }
+    }
+    if (changed) {
+        await persistActiveSessionsToStorage();
+    }
+    return changed;
 }
 
 // =============================================================================
@@ -2272,6 +2501,7 @@ async function setTrackingEnabled(enabled) {
     trackingEnabled = enabled;
 
     if (!enabled) {
+        stopSessionHealthCheck();
         // 关闭追踪时，结束并保存所有会话
         for (const [tabId, session] of activeSessions) {
             const ended = session.end();
@@ -2284,6 +2514,7 @@ async function setTrackingEnabled(enabled) {
         // 开启追踪时，重建书签缓存并启动当前标签的会话
         await rebuildBookmarkCache();
         await refreshTrackingBlockedCache();
+        startSessionHealthCheck();
 
         try {
             const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
@@ -2624,6 +2855,9 @@ async function initialize() {
 
         // 启动休眠检测（防止唤醒后计时不准）
         startSleepDetection();
+        if (trackingEnabled) {
+            startSessionHealthCheck();
+        }
 
     } catch (error) {
         console.error('[ActiveTimeTracker] 初始化失败:', error);
@@ -2665,6 +2899,33 @@ function stopPeriodicSave() {
         clearInterval(periodicSaveTimer);
         periodicSaveTimer = null;
     }
+}
+
+let sessionHealthCheckTimer = null;
+let sessionHealthCheckRunning = false;
+
+function startSessionHealthCheck() {
+    if (sessionHealthCheckTimer) {
+        clearInterval(sessionHealthCheckTimer);
+    }
+
+    sessionHealthCheckTimer = setInterval(async () => {
+        if (!trackingEnabled || sessionHealthCheckRunning) return;
+        sessionHealthCheckRunning = true;
+        try {
+            await runSessionHealthCheck();
+        } finally {
+            sessionHealthCheckRunning = false;
+        }
+    }, CONFIG.SESSION_HEALTH_CHECK_INTERVAL_MS);
+}
+
+function stopSessionHealthCheck() {
+    if (sessionHealthCheckTimer) {
+        clearInterval(sessionHealthCheckTimer);
+        sessionHealthCheckTimer = null;
+    }
+    sessionHealthCheckRunning = false;
 }
 
 // 休眠检测定时器
