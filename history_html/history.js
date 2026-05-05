@@ -207,13 +207,19 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - 推荐分数缓存状态看 \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`：包括 \`recommendScoresTime\`、\`staleMeta\`、\`ensureResult\`、\`templateScoreCount\`、\`templateScoreRatio\`。template 分是临时可用分，解释优先级时要标注不确定性。
 - \`recommend_reviews_similar\` 可能为 null；必须查看 \`recommend_reviews_similar_meta\` 的 \`available/source/skippedReason\`，不要把“未生成相似候选”解释成“没有相似书签”。
 
-## 5. 执行分析时必写输出（路径白名单）
-同步 push/pull 本身只负责传输数据包与 Markdown 文档；当 AI 代理执行分析时，必须写入下面的结果路径。
-- ai/results/latest.md                       # 覆盖写
+## 5. 分析结果输出（路径白名单）
+同步 push/pull 本身只负责传输数据包与 Markdown 文档；AI 代理执行分析时，将结果写入以下路径。
+- ai/results/latest.md                       # 覆盖写，始终生成
 - ai/results/daily/<YYYY-MM-DD>.md           # 日报
 - ai/results/weekly/<YYYY-Www>.md            # 周报
 - ai/results/monthly/<YYYY-MM>.md            # 月报
-- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # 追加写（可选）
+- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # 追加写运行日志（可选）
+
+latest.md 始终生成；周期报告只需生成与推送范围对应的一种，推送范围见 \`data/manifest.json\` 的 \`timeRange.range\`：
+- day → 日报
+- week → 周报
+- month / year / all → 月报
+无需同时输出所有粒度的报告。
 
 ## 6. 重要性权重（对"重要"的定义）
 1. **待复习**（recommend_reviews / recommend_postponed）= 最高优先级。
@@ -251,8 +257,8 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 - latest.md 必须包含二级标题：\`建议屏蔽 / 跳过\`
 - latest.md 必须包含二级标题：\`信号来源（简要）\`
 
-### daily / weekly / monthly
-按本文件第 6-8 节的重要性权重、网络搜索策略和复杂任务核验原则输出。
+### 周期报告（日报 / 周报 / 月报）
+根据第 5 节的推送范围对应关系，只生成匹配的一种周期报告；按第 6-8 节的重要性权重、网络搜索策略和复杂任务核验原则输出。
 
 ## 10. 风格与禁忌
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
@@ -300,13 +306,19 @@ All sync files live under the \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` folder in the GitH
 - For recommendation score freshness, read \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`: \`recommendScoresTime\`, \`staleMeta\`, \`ensureResult\`, \`templateScoreCount\`, and \`templateScoreRatio\`. Template scores are temporary usable scores; mark uncertainty when interpreting priority.
 - \`recommend_reviews_similar\` may be null. Always inspect \`recommend_reviews_similar_meta.available/source/skippedReason\`; do not treat missing similar candidates as proof that no similar bookmarks exist.
 
-## 5. Required Outputs When Running Analysis (Path Allowlist)
-Sync push/pull only transfers data packages and Markdown documents. When an AI agent runs analysis, it must write the result paths below.
-- ai/results/latest.md                       # overwrite
+## 5. Analysis Result Outputs (Path Allowlist)
+Sync push/pull only transfers data packages and Markdown documents. When an AI agent runs analysis, write results to these paths.
+- ai/results/latest.md                       # overwrite, always generated
 - ai/results/daily/<YYYY-MM-DD>.md           # daily report
 - ai/results/weekly/<YYYY-Www>.md            # weekly report
 - ai/results/monthly/<YYYY-MM>.md            # monthly report
 - ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # append-only run log (optional)
+
+latest.md is always generated. For periodic reports, generate only the one matching the push time range in \`data/manifest.json\` under \`timeRange.range\`:
+- day \u2192 daily report
+- week \u2192 weekly report
+- month / year / all \u2192 monthly report
+There is no need to output all granularities at once.
 
 ## 6. Importance Weights
 1. Review queue (recommend_reviews / recommend_postponed) = highest priority
@@ -343,8 +355,8 @@ When analyzing a sync data package, follow this basic flow instead of linearly r
 - latest.md must include the level-2 heading: \`Skip / Block Suggestions\`
 - latest.md must include the level-2 heading: \`Signal Sources\`
 
-### daily / weekly / monthly
-Follow the same importance strategy, web-search strategy, and complex-task verification principles in sections 6-8.
+### Periodic Report (daily / weekly / monthly)
+Generate only the periodic report matching the push range per section 5. Follow the same importance, web-search, and verification principles in sections 6-8.
 
 ## 10. Style & Safety
 - Output Markdown only
