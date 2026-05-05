@@ -220,6 +220,14 @@ const SYNC_AGENT_DOC_TEMPLATE = `# AGENTS.md — Bookmark Record and Recommend A
 3. 近 7 天新加但未打开（bookmark-record.data.additionsRecords vs clickRecords）= 需要提醒。
 4. 屏蔽（bookmark-recommend.data.recommendEvents.recommend_blocked）= 永远排除。
 
+分析同步数据包时按下面基础步骤进行，不要线性通读原始大文件：
+1. 先看用户本次问题；如果用户指定主题、域名、文件夹、bookmarkId 或时间范围，先按该目标缩小范围。
+2. 读取 \`data/manifest.json\`，确认 \`pushId\`、可用文件、记录数、截断状态与 \`readOrder\`。
+3. 优先读取 \`bookmark-recommend.json\` 的 \`summary\` 与 \`data.signals\`，先处理 \`blockedSummary\`、\`reviewTargets\`、\`postponedTargets\`、\`currentCards\`、\`scoreLeaders\`、\`skippedTargets\`。
+4. 再读取 \`bookmark-record.json\` 的 \`summary\` 与 \`data.signals\`，用 \`recentClicks\`、\`unopenedAdditions\`、\`recentUnopenedAdditions\`、\`topClickedDomains\`、\`topClickedFolders\`、\`topAddedFolders\`、\`timeTracking.rankings\` 补充行为证据。
+5. 基于候选的标题、URL、域名、文件夹路径、bookmarkId 和用户问题，使用搜索工具定向定位原始记录；\`bookmarks-tree.json\` 与 \`history-visits.jsonl\` 只用于核验和补字段。
+6. 输出时说明每个建议来自哪些本地信号；需要判断外部价值、时效或替代方案时，再按第 7 节进行网络搜索。
+
 ## 7. 网络搜索作为第二证据层
 - 本地同步数据回答“用户保存过、点击过、复习过什么”；网络搜索回答“这些内容在外部世界是否仍有价值、有哪些替代或延伸”。推荐结论应优先结合两者，而不是只在本地信息不足时才搜索。
 - 对“待复习、高频点击、当前时间排行靠前、近 7 天新加但未打开”的候选，若需要判断是否值得现在打开、是否过时、是否有更好的替代，应主动搜索官方文档、项目主页、权威资料、近期讨论或同类工具。
@@ -303,6 +311,14 @@ Sync push/pull only transfers data packages and Markdown documents. When an AI a
 2. High clicks + exported current time-ranking signals = second priority
 3. Newly added but unopened in last 7 days = reminder candidates
 4. Blocked bookmarks/folders/domains = always excluded
+
+When analyzing a sync data package, follow this basic flow instead of linearly reading raw large files:
+1. Start from the user's current question. If the user specifies a topic, domain, folder, bookmarkId, or time range, narrow the scope to that target first.
+2. Read \`data/manifest.json\` to confirm \`pushId\`, available files, record counts, truncation status, and \`readOrder\`.
+3. Read \`bookmark-recommend.json\` \`summary\` and \`data.signals\` first, handling \`blockedSummary\`, \`reviewTargets\`, \`postponedTargets\`, \`currentCards\`, \`scoreLeaders\`, and \`skippedTargets\`.
+4. Then read \`bookmark-record.json\` \`summary\` and \`data.signals\`, using \`recentClicks\`, \`unopenedAdditions\`, \`recentUnopenedAdditions\`, \`topClickedDomains\`, \`topClickedFolders\`, \`topAddedFolders\`, and \`timeTracking.rankings\` as behavioral evidence.
+5. Use search tools to locate raw records only after candidates exist, searching by title, URL, domain, folder path, bookmarkId, and the user's question. Use \`bookmarks-tree.json\` and \`history-visits.jsonl\` only for verification and missing fields.
+6. In the output, explain which local signals support each suggestion. When external value, freshness, or alternatives matter, use web search according to section 7.
 
 ## 7. Web Search as a Second Evidence Layer
 - Local sync data answers what the user saved, clicked, or reviewed. Web search answers whether those items are still valuable externally, and what alternatives or follow-up resources exist. Recommendations should combine both when useful, not search only when local context is thin.
