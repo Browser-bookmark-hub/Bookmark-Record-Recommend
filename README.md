@@ -6,7 +6,7 @@
 
 ### 简介
 `书签记录与推荐` 是一款为重度用户打造的增强型扩展，通过“书签记录”、“智能推荐”与“AI 推送”三大核心引擎唤醒你的知识库。
-它基于 S 值算法实现动态推荐，并在本地完成所有复杂的关联计算。“原始数据 + 计算结果”可直接下载到本地或推送到 GitHub，让 AI 结合 `AGENTS.md` 规则“开箱即用”地进行深度分析，免去了处理生数据的算力负担。
+它基于 S 值算法实现动态推荐，并在本地完成所有复杂的关联计算。“原始数据 + 计算结果”可直接下载到本地或推送到 GitHub，让 AI 结合 `AGENTS.md` / `CLAUDE.md` 规则“开箱即用”地进行深度分析，免去了处理生数据的算力负担。
 
 ### 特色功能
 - **双工作区**：支持 Side Panel + 独立 HTML 页面，适配不同使用习惯。
@@ -67,7 +67,7 @@
 
 ### Overview
 `Bookmark Record and Recommend` is an enhanced extension for power bookmark users. It reawakens your knowledge base through three core engines: "Bookmark Records", "Smart Recommendations", and "AI Push".
-It uses an S-Score algorithm for dynamic recommendations and processes all complex data computations locally. The "raw data + computed results" can be downloaded locally or synced to GitHub, allowing AI to perform deep analysis out-of-the-box using `AGENTS.md` rules, bypassing the heavy raw computation burden.
+It uses an S-Score algorithm for dynamic recommendations and processes all complex data computations locally. The "raw data + computed results" can be downloaded locally or synced to GitHub, allowing AI to perform deep analysis out-of-the-box using `AGENTS.md` / `CLAUDE.md` rules, bypassing the heavy raw computation burden.
 
 ### Highlights
 - **Dual workspace**: works in Side Panel and standalone page.
