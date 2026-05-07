@@ -22,13 +22,6 @@
 
 ### 预览
 
-#### 截图预览
-| 侧边栏 | 推荐公式 |
-| :---: | :---: |
-| <img src="Screenshots%20and%20icons/v0.3/侧边栏%20zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推荐公式%20zh.png" width="400"> |
-| **书签记录** | **推送与分析** |
-| <img src="Screenshots%20and%20icons/v0.3/书签记录%20zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推送与分析%20zh.png" width="400"> |
-
 #### 推送与分析结构图预览
 ```text
 书签记录与推荐/
@@ -57,11 +50,12 @@
 - **可选 GitHub 云端同步**：支持将数据与文档上传/下载到你个人的 GitHub 仓库。
 - 插件会请求书签、历史记录、标签页等权限以提供完整功能。
 - favicon 可能通过浏览器内置 favicon 服务或公共 favicon 源加载，并持久化到本地缓存。
-- 更多详情请参考：[隐私政策 (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
+- 更多详情请参考：[隐私政策 (`PRIVACY_POLICY.md`)](PRIVACY_POLICY.md)
 
 ### 相关文档
-- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](Bookmark-Record-Recommend-main/docs/other%20docs/RECOMMEND_POOLS_V6_2.md)：推荐池模型与流转规则（v6.2）
+- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](docs/other%20docs/RECOMMEND_POOLS_V6_2.md)：推荐池模型与流转规则（v6.2）
 
+---
 
 ## English
 
@@ -86,9 +80,9 @@ It uses an S-Score algorithm for dynamic recommendations and processes all compl
 #### Screenshot Preview
 | Sidebar | Recommend |
 | :---: | :---: |
-| <img src="Screenshots%20and%20icons/v0.3/侧边栏%20en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推荐公式%20en.png" width="400"> |
+| <img src="../Screenshots%20and%20icons/v0.3/侧边栏%20en.png" width="400"> | <img src="../Screenshots%20and%20icons/v0.3/推荐公式%20en.png" width="400"> |
 | **Bookmark Record** | **Push & Analyze** |
-| <img src="Screenshots%20and%20icons/v0.3/书签记录%20en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推送与分析%20en.png" width="400"> |
+| <img src="../Screenshots%20and%20icons/v0.3/书签记录%20en.png" width="400"> | <img src="../Screenshots%20and%20icons/v0.3/推送与分析%20en.png" width="400"> |
 
 #### Push & Analyze Structure Preview
 ```text
@@ -118,10 +112,10 @@ Bookmark Record and Recommend/
 - **Optional GitHub Cloud Sync**: Supports uploading/downloading your data and documents to your personal GitHub repository.
 - Permissions include bookmarks/history/tabs to support full functionality.
 - Favicons may be loaded from the browser's built-in favicon service or public favicon providers, then persisted in local cache.
-- For more details, please refer to our [Privacy Policy (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
+- For more details, please refer to our [Privacy Policy (`PRIVACY_POLICY.md`)](PRIVACY_POLICY.md)
 
 ### Docs
-- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](Bookmark-Record-Recommend-main/docs/other%20docs/RECOMMEND_POOLS_V6_2.md): recommendation pool model and flow rules (v6.2)
+- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](docs/other%20docs/RECOMMEND_POOLS_V6_2.md): recommendation pool model and flow rules (v6.2)
 
 ---
 
