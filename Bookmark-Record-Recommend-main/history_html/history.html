@@ -1210,6 +1210,12 @@
                                     id="postponedPriorityBadge" class="priority-mode-badge"
                                     style="display:none;">⚡优先</span></span>
                             <div class="section-header-actions">
+                                <div class="recommend-section-search" id="postponedSearchBox" style="display:none;">
+                                    <input type="text" id="postponedSearchInput" class="recommend-section-search-input"
+                                        placeholder="搜索待复习...">
+                                </div>
+                                <button class="section-action-btn" id="postponedSearchBtn" title="搜索待复习"><i
+                                        class="fas fa-search"></i></button>
                                 <button class="section-action-btn" id="postponedAddBtn" title="添加书签到待复习"><i
                                         class="fas fa-plus"></i></button>
                                 <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
@@ -1230,47 +1236,22 @@
                         <div class="section-header">
                             <span class="section-title"><i class="fas fa-ban"></i> <span
                                     id="blockManageTitle">屏蔽</span></span>
-                            <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                            <div class="section-header-actions">
+                                <div class="recommend-section-search" id="blockSearchBox" style="display:none;">
+                                    <input type="text" id="blockSearchInput" class="recommend-section-search-input"
+                                        placeholder="搜索屏蔽...">
+                                </div>
+                                <button class="section-action-btn" id="blockSearchBtn" title="搜索屏蔽"><i
+                                        class="fas fa-search"></i></button>
+                                <button class="section-action-btn" id="blockAddBtn" title="添加到屏蔽"><i
+                                        class="fas fa-plus"></i></button>
+                                <button class="section-toggle"><i class="fas fa-chevron-down"></i></button>
+                            </div>
                         </div>
                         <div class="section-content">
-                            <!-- 已屏蔽书签 -->
-                            <div class="block-subsection">
-                                <div class="block-subsection-header">
-                                    <span><i class="fas fa-bookmark"></i> <span id="blockedBookmarksTitle">已屏蔽书签</span>
-                                        (<span id="blockedBookmarksCount">0</span>)</span>
-                                </div>
-                                <div class="block-list" id="blockedBookmarksList">
-                                    <div class="empty-state-inline" id="blockedBookmarksEmpty">
-                                        <span id="blockedBookmarksEmptyText">暂无已屏蔽书签</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- 已屏蔽文件夹 -->
-                            <div class="block-subsection">
-                                <div class="block-subsection-header">
-                                    <span><i class="fas fa-folder"></i> <span id="blockedFoldersTitle">已屏蔽文件夹</span>
-                                        (<span id="blockedFoldersCount">0</span>)</span>
-                                    <button class="block-add-btn" id="addBlockFolderBtn"><i
-                                            class="fas fa-plus"></i></button>
-                                </div>
-                                <div class="block-list" id="blockedFoldersList">
-                                    <div class="empty-state-inline" id="blockedFoldersEmpty">
-                                        <span id="blockedFoldersEmptyText">暂无已屏蔽文件夹</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- 已屏蔽域名 -->
-                            <div class="block-subsection">
-                                <div class="block-subsection-header">
-                                    <span><i class="fas fa-globe"></i> <span id="blockedDomainsTitle">已屏蔽域名</span>
-                                        (<span id="blockedDomainsCount">0</span>)</span>
-                                    <button class="block-add-btn" id="addBlockDomainBtn"><i
-                                            class="fas fa-plus"></i></button>
-                                </div>
-                                <div class="block-list" id="blockedDomainsList">
-                                    <div class="empty-state-inline" id="blockedDomainsEmpty">
-                                        <span id="blockedDomainsEmptyText">暂无已屏蔽域名</span>
-                                    </div>
+                            <div class="block-list" id="blockedUnifiedList">
+                                <div class="empty-state-inline" id="blockedUnifiedEmpty">
+                                    <span id="blockedUnifiedEmptyText">暂无屏蔽项</span>
                                 </div>
                             </div>
                         </div>
@@ -1837,8 +1818,8 @@
             <div class="modal-body">
                 <!-- 添加方式选项卡 -->
                 <div class="add-postponed-tabs">
-                    <button class="add-postponed-tab active" data-tab="folder">
-                        <i class="fas fa-folder"></i> <span id="addTabFolder">从文件夹</span>
+                    <button class="add-postponed-tab active" data-tab="tree">
+                        <i class="fas fa-sitemap"></i> <span id="addTabTree">书签树</span>
                     </button>
                     <button class="add-postponed-tab" data-tab="search">
                         <i class="fas fa-search"></i> <span id="addTabSearch">搜索书签</span>
@@ -1846,10 +1827,20 @@
                     <button class="add-postponed-tab" data-tab="domain">
                         <i class="fas fa-globe"></i> <span id="addTabDomain">按域名</span>
                     </button>
+                    <button class="add-postponed-tab" data-tab="folder">
+                        <i class="fas fa-random"></i> <span id="addTabFolder">随机</span>
+                    </button>
+                </div>
+
+                <!-- 书签树添加面板 -->
+                <div class="add-postponed-panel active" data-panel="tree">
+                    <div class="add-bookmark-tree-list" id="addBookmarkTreeList">
+                        <div class="add-results-empty">加载书签树中...</div>
+                    </div>
                 </div>
 
                 <!-- 从文件夹添加面板 -->
-                <div class="add-postponed-panel active" data-panel="folder">
+                <div class="add-postponed-panel" data-panel="folder">
                     <div class="add-panel-row">
                         <label id="addFolderLabel">选择文件夹：</label>
                         <button class="add-folder-select-btn" id="addFolderSelectBtn">
@@ -1918,8 +1909,80 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="modal-btn" id="addPostponedCancelBtn">取消</button>
-                <button class="modal-btn primary" id="addPostponedConfirmBtn">添加</button>
+                <div class="add-selected-count add-tree-footer-selection">
+                    <span id="addTreeSelectedText">已选择</span>: <span id="addTreeSelectedName">-</span>
+                </div>
+                <div class="add-postponed-footer-actions">
+                    <button class="modal-btn" id="addPostponedCancelBtn">取消</button>
+                    <button class="modal-btn primary" id="addPostponedConfirmBtn">添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加到屏蔽弹窗 -->
+    <div id="addToBlockModal" class="modal content-center">
+        <div class="modal-content add-postponed-modal">
+            <div class="modal-header">
+                <h3 id="addBlockModalTitle">添加到屏蔽</h3>
+                <button class="modal-close" id="addBlockModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="add-postponed-tabs">
+                    <button class="add-postponed-tab active" data-tab="tree">
+                        <i class="fas fa-sitemap"></i> <span id="addBlockTabTree">书签树</span>
+                    </button>
+                    <button class="add-postponed-tab" data-tab="search">
+                        <i class="fas fa-search"></i> <span id="addBlockTabSearch">搜索书签</span>
+                    </button>
+                    <button class="add-postponed-tab" data-tab="domain">
+                        <i class="fas fa-globe"></i> <span id="addBlockTabDomain">按域名</span>
+                    </button>
+                </div>
+
+                <div class="add-postponed-panel active" data-panel="tree">
+                    <div class="add-bookmark-tree-list" id="addBlockTreeList">
+                        <div class="add-results-empty">加载书签树中...</div>
+                    </div>
+                </div>
+
+                <div class="add-postponed-panel" data-panel="search">
+                    <div class="add-search-container">
+                        <input type="text" id="addBlockSearchInput" class="add-search-input" placeholder="搜索书签标题或URL...">
+                        <i class="fas fa-search add-search-icon"></i>
+                    </div>
+                    <div class="add-results-list" id="addBlockSearchResults">
+                        <div class="add-results-empty" id="addBlockSearchEmpty">输入关键词搜索书签</div>
+                    </div>
+                </div>
+
+                <div class="add-postponed-panel" data-panel="domain">
+                    <div class="add-panel-hint" id="addBlockDomainHint">
+                        域名按 A-Z 排序；已在待复习中的书签会自动跳过。
+                    </div>
+                    <div class="add-search-container">
+                        <input type="text" id="addBlockUnifiedDomainSearchInput" class="add-search-input" placeholder="搜索域名...">
+                        <i class="fas fa-search add-search-icon"></i>
+                    </div>
+                    <div class="add-domain-list" id="addBlockUnifiedDomainList">
+                        <div class="add-results-empty" id="addBlockUnifiedDomainLoading">加载域名列表中...</div>
+                    </div>
+                    <div class="add-selected-count">
+                        <span id="addBlockUnifiedDomainSelectedText">已选择</span>: <span id="addBlockUnifiedDomainSelectedCount">0</span>
+                        <span id="addBlockUnifiedDomainSelectedLabel">个域名</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="add-selected-count add-tree-footer-selection">
+                    <span id="addBlockFooterSelectedText">已选择</span>: <span id="addBlockFooterSelectedName">-</span>
+                </div>
+                <div class="add-postponed-footer-actions">
+                    <button class="modal-btn" id="addBlockCancelBtn">取消</button>
+                    <button class="modal-btn primary" id="addBlockConfirmBtn">添加屏蔽</button>
+                </div>
             </div>
         </div>
     </div>
@@ -2148,17 +2211,17 @@
             </div>
             <div class="modal-body">
                 <div class="add-search-container">
-                    <input type="text" id="addBlockDomainSearchInput" class="add-search-input" placeholder="搜索或输入域名...">
+                    <input type="text" id="addBlockLegacyDomainSearchInput" class="add-search-input" placeholder="搜索或输入域名...">
                     <i class="fas fa-search add-search-icon"></i>
                 </div>
-                <div class="add-domain-list" id="addBlockDomainList" style="height: 300px; margin-top: 10px;">
-                    <div class="add-results-empty" id="addBlockDomainLoading">加载域名列表中...</div>
+                <div class="add-domain-list" id="addBlockLegacyDomainList" style="height: 300px; margin-top: 10px;">
+                    <div class="add-results-empty" id="addBlockLegacyDomainLoading">加载域名列表中...</div>
                 </div>
                 <!-- 底部操作栏 -->
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
                     <div class="add-selected-count">
-                        <span id="addBlockDomainSelectedText">已选择</span>: <span
-                            id="addBlockDomainSelectedCount">0</span>
+                        <span id="addBlockLegacyDomainSelectedText">已选择</span>: <span
+                            id="addBlockLegacyDomainSelectedCount">0</span>
                     </div>
                     <div style="display: flex; gap: 10px;">
                         <button id="addDomainCancelBtn" class="modal-btn">取消</button>

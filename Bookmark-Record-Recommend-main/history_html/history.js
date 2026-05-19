@@ -4218,8 +4218,11 @@ const i18n = {pageTitle: {
         'zh_CN': '关闭',
         'en': 'Close'
     },addTabFolder: {
-        'zh_CN': '从文件夹',
-        'en': 'From folder'
+        'zh_CN': '随机',
+        'en': 'Random'
+    },addTabTree: {
+        'zh_CN': '书签树',
+        'en': 'Bookmark tree'
     },addTabSearch: {
         'zh_CN': '搜索书签',
         'en': 'Search bookmarks'
@@ -4256,6 +4259,9 @@ const i18n = {pageTitle: {
     },addSearchSelectedText: {
         'zh_CN': '已选择',
         'en': 'Selected'
+    },addTreeSelectedText: {
+        'zh_CN': '已选择',
+        'en': 'Selected'
     },addDomainSearchPlaceholder: {
         'zh_CN': '搜索域名...',
         'en': 'Search domain...'
@@ -4277,24 +4283,51 @@ const i18n = {pageTitle: {
     },blockManageTitle: {
         'zh_CN': '屏蔽',
         'en': 'Block'
-    },blockedBookmarksTitle: {
-        'zh_CN': '已屏蔽书签',
-        'en': 'Blocked Bookmarks'
-    },blockedBookmarksEmptyText: {
-        'zh_CN': '暂无已屏蔽书签',
-        'en': 'No blocked bookmarks'
-    },blockedFoldersTitle: {
-        'zh_CN': '已屏蔽文件夹',
-        'en': 'Blocked Folders'
-    },blockedDomainsTitle: {
-        'zh_CN': '已屏蔽域名',
-        'en': 'Blocked Domains'
-    },blockedFoldersEmptyText: {
-        'zh_CN': '暂无已屏蔽文件夹',
-        'en': 'No blocked folders'
-    },blockedDomainsEmptyText: {
-        'zh_CN': '暂无已屏蔽域名',
-        'en': 'No blocked domains'
+    },blockAddBtnTitle: {
+        'zh_CN': '添加到屏蔽',
+        'en': 'Add to block'
+    },addBlockModalTitle: {
+        'zh_CN': '添加到屏蔽',
+        'en': 'Add to Block'
+    },addBlockConfirmText: {
+        'zh_CN': '添加屏蔽',
+        'en': 'Add Block'
+    },addBlockTabTree: {
+        'zh_CN': '书签树',
+        'en': 'Bookmark tree'
+    },addBlockTabSearch: {
+        'zh_CN': '搜索书签',
+        'en': 'Search bookmarks'
+    },addBlockTabDomain: {
+        'zh_CN': '按域名',
+        'en': 'By domain'
+    },addBlockTreeHint: {
+        'zh_CN': '',
+        'en': ''
+    },addBlockSearchHint: {
+        'zh_CN': '',
+        'en': ''
+    },addBlockDomainHint: {
+        'zh_CN': '域名按 A-Z 排序；已在待复习中的书签会自动跳过。',
+        'en': 'Domains are sorted A-Z. Bookmarks already in review are skipped.'
+    },addBlockTreeSelectedText: {
+        'zh_CN': '已选择',
+        'en': 'Selected'
+    },addBlockSearchSelectedText: {
+        'zh_CN': '已选择',
+        'en': 'Selected'
+    },addBlockUnifiedDomainSelectedText: {
+        'zh_CN': '已选择',
+        'en': 'Selected'
+    },addBlockUnifiedDomainSelectedLabel: {
+        'zh_CN': '个域名',
+        'en': 'domains'
+    },addBlockFooterSelectedText: {
+        'zh_CN': '已选择',
+        'en': 'Selected'
+    },blockedUnifiedEmptyText: {
+        'zh_CN': '暂无屏蔽项',
+        'en': 'No blocked items'
     },addDomainModalTitle: {
         'zh_CN': '添加屏蔽域名',
         'en': 'Add Blocked Domain'
@@ -5513,6 +5546,8 @@ function applyLanguage() {
 
     const addTabFolder = document.getElementById('addTabFolder');
     if (addTabFolder) addTabFolder.textContent = i18n.addTabFolder[currentLang];
+    const addTabTree = document.getElementById('addTabTree');
+    if (addTabTree) addTabTree.textContent = i18n.addTabTree[currentLang];
     const addTabSearch = document.getElementById('addTabSearch');
     if (addTabSearch) addTabSearch.textContent = i18n.addTabSearch[currentLang];
     const addTabDomain = document.getElementById('addTabDomain');
@@ -5537,6 +5572,8 @@ function applyLanguage() {
     if (addSearchEmpty) addSearchEmpty.textContent = i18n.addSearchEmpty[currentLang];
     const addSearchSelectedText = document.getElementById('addSearchSelectedText');
     if (addSearchSelectedText) addSearchSelectedText.textContent = i18n.addSearchSelectedText[currentLang];
+    const addTreeSelectedText = document.getElementById('addTreeSelectedText');
+    if (addTreeSelectedText) addTreeSelectedText.textContent = i18n.addTreeSelectedText[currentLang];
     const addDomainSearchInput = document.getElementById('addDomainSearchInput');
     if (addDomainSearchInput) addDomainSearchInput.placeholder = i18n.addDomainSearchPlaceholder[currentLang];
     const addDomainLoading = document.getElementById('addDomainLoading');
@@ -5590,26 +5627,48 @@ function applyLanguage() {
 
     const blockManageTitle = document.getElementById('blockManageTitle');
     if (blockManageTitle) blockManageTitle.textContent = i18n.blockManageTitle[currentLang];
-    const blockedBookmarksTitle = document.getElementById('blockedBookmarksTitle');
-    if (blockedBookmarksTitle) blockedBookmarksTitle.textContent = i18n.blockedBookmarksTitle[currentLang];
-    const blockedBookmarksEmptyText = document.getElementById('blockedBookmarksEmptyText');
-    if (blockedBookmarksEmptyText) blockedBookmarksEmptyText.textContent = i18n.blockedBookmarksEmptyText[currentLang];
-    const blockedFoldersTitle = document.getElementById('blockedFoldersTitle');
-    if (blockedFoldersTitle) blockedFoldersTitle.textContent = i18n.blockedFoldersTitle[currentLang];
-    const blockedDomainsTitle = document.getElementById('blockedDomainsTitle');
-    if (blockedDomainsTitle) blockedDomainsTitle.textContent = i18n.blockedDomainsTitle[currentLang];
-    const blockedFoldersEmptyText = document.getElementById('blockedFoldersEmptyText');
-    if (blockedFoldersEmptyText) blockedFoldersEmptyText.textContent = i18n.blockedFoldersEmptyText[currentLang];
-    const blockedDomainsEmptyText = document.getElementById('blockedDomainsEmptyText');
-    if (blockedDomainsEmptyText) blockedDomainsEmptyText.textContent = i18n.blockedDomainsEmptyText[currentLang];
+    const blockAddBtn = document.getElementById('blockAddBtn');
+    if (blockAddBtn) blockAddBtn.title = i18n.blockAddBtnTitle[currentLang];
+    const blockedUnifiedEmptyText = document.getElementById('blockedUnifiedEmptyText');
+    if (blockedUnifiedEmptyText) blockedUnifiedEmptyText.textContent = i18n.blockedUnifiedEmptyText[currentLang];
     const addDomainModalTitle = document.getElementById('addDomainModalTitle');
     if (addDomainModalTitle) addDomainModalTitle.textContent = i18n.addDomainModalTitle[currentLang];
+    const addBlockLegacyDomainSelectedText = document.getElementById('addBlockLegacyDomainSelectedText');
+    if (addBlockLegacyDomainSelectedText) addBlockLegacyDomainSelectedText.textContent = i18n.addDomainSelectedText[currentLang];
     const addDomainModalDesc = document.getElementById('addDomainModalDesc');
     if (addDomainModalDesc) addDomainModalDesc.textContent = i18n.addDomainModalDesc[currentLang];
     const addDomainCancelBtn = document.getElementById('addDomainCancelBtn');
     if (addDomainCancelBtn) addDomainCancelBtn.textContent = i18n.addDomainCancelBtn[currentLang];
     const addDomainConfirmBtn = document.getElementById('addDomainConfirmBtn');
     if (addDomainConfirmBtn) addDomainConfirmBtn.textContent = i18n.addDomainConfirmBtn[currentLang];
+    const addBlockModalTitle = document.getElementById('addBlockModalTitle');
+    if (addBlockModalTitle) addBlockModalTitle.textContent = i18n.addBlockModalTitle[currentLang];
+    const addBlockTabTree = document.getElementById('addBlockTabTree');
+    if (addBlockTabTree) addBlockTabTree.textContent = i18n.addBlockTabTree[currentLang];
+    const addBlockTabSearch = document.getElementById('addBlockTabSearch');
+    if (addBlockTabSearch) addBlockTabSearch.textContent = i18n.addBlockTabSearch[currentLang];
+    const addBlockTabDomain = document.getElementById('addBlockTabDomain');
+    if (addBlockTabDomain) addBlockTabDomain.textContent = i18n.addBlockTabDomain[currentLang];
+    const addBlockTreeHint = document.getElementById('addBlockTreeHint');
+    if (addBlockTreeHint) addBlockTreeHint.textContent = i18n.addBlockTreeHint[currentLang];
+    const addBlockSearchHint = document.getElementById('addBlockSearchHint');
+    if (addBlockSearchHint) addBlockSearchHint.textContent = i18n.addBlockSearchHint[currentLang];
+    const addBlockDomainHint = document.getElementById('addBlockDomainHint');
+    if (addBlockDomainHint) addBlockDomainHint.textContent = i18n.addBlockDomainHint[currentLang];
+    const addBlockTreeSelectedText = document.getElementById('addBlockTreeSelectedText');
+    if (addBlockTreeSelectedText) addBlockTreeSelectedText.textContent = i18n.addBlockTreeSelectedText[currentLang];
+    const addBlockSearchSelectedText = document.getElementById('addBlockSearchSelectedText');
+    if (addBlockSearchSelectedText) addBlockSearchSelectedText.textContent = i18n.addBlockSearchSelectedText[currentLang];
+    const addBlockUnifiedDomainSelectedText = document.getElementById('addBlockUnifiedDomainSelectedText');
+    if (addBlockUnifiedDomainSelectedText) addBlockUnifiedDomainSelectedText.textContent = i18n.addBlockUnifiedDomainSelectedText[currentLang];
+    const addBlockUnifiedDomainSelectedLabel = document.getElementById('addBlockUnifiedDomainSelectedLabel');
+    if (addBlockUnifiedDomainSelectedLabel) addBlockUnifiedDomainSelectedLabel.textContent = i18n.addBlockUnifiedDomainSelectedLabel[currentLang];
+    const addBlockFooterSelectedText = document.getElementById('addBlockFooterSelectedText');
+    if (addBlockFooterSelectedText) addBlockFooterSelectedText.textContent = i18n.addBlockFooterSelectedText[currentLang];
+    const addBlockCancelBtn = document.getElementById('addBlockCancelBtn');
+    if (addBlockCancelBtn) addBlockCancelBtn.textContent = i18n.addPostponedCancelText[currentLang];
+    const addBlockConfirmBtn = document.getElementById('addBlockConfirmBtn');
+    if (addBlockConfirmBtn) addBlockConfirmBtn.textContent = i18n.addBlockConfirmText[currentLang];
     const selectFolderModalTitle = document.getElementById('selectFolderModalTitle');
     if (selectFolderModalTitle) selectFolderModalTitle.textContent = i18n.selectFolderModalTitle[currentLang];
 
@@ -23613,15 +23672,10 @@ async function renderWidgetsRecommendCards(options = {}) {
     lastWidgetsRecommendCardSignature = signature;
 
     if (!Array.isArray(recommendCards) || recommendCards.length === 0) {
-        cards.forEach((card, index) => {
-            setCardEmpty(card);
-            if (index === 0) {
-                const titleEl = card.querySelector('.card-title');
-                if (titleEl) {
-                    titleEl.textContent = currentLang === 'zh_CN' ? '暂无推荐书签' : 'No recommendation';
-                }
-            }
-        });
+        setRecommendCardsRowEmptyMessage(
+            cards,
+            currentLang === 'zh_CN' ? '暂无推荐书签' : 'No recommendation'
+        );
         clearRecommendCardsSnapshot();
         return true;
     }
@@ -23631,7 +23685,7 @@ async function renderWidgetsRecommendCards(options = {}) {
             const bookmark = recommendCards[index];
             updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '')));
         } else {
-            setCardEmpty(card);
+            hideUnusedRecommendCardSlot(card);
         }
     });
 
@@ -24622,7 +24676,7 @@ function renderRecommendView() {
         // 初始化稍后复习弹窗
         initLaterModal();
 
-        // 初始化添加域名和文件夹弹窗
+        // 初始化添加域名和文件夹弹窗（旧）
         initAddDomainModal();
         initSelectFolderModal();
         initBlockManageButtons();
@@ -24634,6 +24688,8 @@ function renderRecommendView() {
 
         // 初始化添加到稍后复习弹窗
         initAddToPostponedModal();
+        initAddToBlockModal();
+        initRecommendSectionSearch();
 
         recommendViewInitialized = true;
     }
@@ -26761,7 +26817,7 @@ function renderRecommendCurrentCardsStateToRows(currentCards, options = {}) {
                 const bookmark = cardsToRender[index];
                 updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
             } else {
-                setCardEmpty(card);
+                hideUnusedRecommendCardSlot(card);
             }
         });
         rendered = true;
@@ -26822,7 +26878,7 @@ function applyRecommendSnapshotToCardRows(snapshot) {
                 updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark.id)));
                 applied = true;
             } else {
-                setCardEmpty(card);
+                hideUnusedRecommendCardSlot(card);
             }
         });
     });
@@ -27159,6 +27215,7 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
     );
 
     card.classList.remove('empty');
+    card.hidden = false;
     card.classList.remove('is-opening');
     card.dataset.opening = '0';
     card.removeAttribute('aria-busy');
@@ -27393,6 +27450,7 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
 
 // 设置卡片为空状态
 function setCardEmpty(card) {
+    card.hidden = false;
     card.classList.add('empty');
     card.classList.remove('is-opening');
     card.dataset.opening = '0';
@@ -27433,6 +27491,24 @@ function setCardEmpty(card) {
     if (debugBtn) debugBtn.onclick = null;
     const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
     if (debugCloseBtn) debugCloseBtn.onclick = null;
+}
+
+function hideUnusedRecommendCardSlot(card) {
+    if (!card) return;
+    setCardEmpty(card);
+    card.hidden = true;
+}
+
+function setRecommendCardsRowEmptyMessage(cards, message) {
+    const slots = Array.from(cards || []);
+    slots.forEach((card, index) => {
+        setCardEmpty(card);
+        card.hidden = index > 0;
+        if (index === 0) {
+            const titleEl = card.querySelector('.card-title');
+            if (titleEl) titleEl.textContent = message || '--';
+        }
+    });
 }
 
 
@@ -27931,7 +28007,7 @@ function normalizeBlockedListIds(list = []) {
 function normalizeBlockedDomains(domains = []) {
     const normalizeBlockedDomain = (domain) => {
         if (!domain) return '';
-        return String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+        return getRecommendBaseDomainFromHost(domain);
     };
 
     return Array.from(new Set(
@@ -28068,6 +28144,130 @@ async function savePostponedBookmarks(postponedInput) {
     throw new Error('background_unavailable');
 }
 
+async function clearFlippedForBookmarkIds(bookmarkIds = []) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (ids.length === 0) return;
+
+    try {
+        const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
+        const current = normalizeSkippedBookmarkIds(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
+        const removeSet = new Set(ids);
+        const next = current.filter(id => !removeSet.has(id));
+        if (next.length !== current.length) {
+            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: next });
+        }
+    } catch (_) {
+    }
+}
+
+async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedInput = null) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (ids.length === 0) return { allowedIds: [], blockedIds: [] };
+
+    const blocked = normalizeBlockedState(blockedInput);
+    const blockedBookmarkIds = new Set(blocked.bookmarks);
+    const blockedFolderIds = new Set(blocked.folders);
+    const blockedDomains = new Set(blocked.domains);
+
+    if (blockedBookmarkIds.size === 0 && blockedFolderIds.size === 0 && blockedDomains.size === 0) {
+        return { allowedIds: ids, blockedIds: [] };
+    }
+
+    let bookmarkById = new Map();
+    if (blockedFolderIds.size > 0 || blockedDomains.size > 0) {
+        try {
+            const all = await getAllBookmarksFlat();
+            bookmarkById = new Map(
+                all
+                    .map(bookmark => [String(bookmark?.id || '').trim(), bookmark])
+                    .filter(([id]) => Boolean(id))
+            );
+        } catch (_) {
+            bookmarkById = new Map();
+        }
+    }
+
+    const allowedIds = [];
+    const blockedIds = [];
+
+    for (const id of ids) {
+        if (blockedBookmarkIds.has(id)) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        const bookmark = bookmarkById.get(id);
+        const parentId = String(bookmark?.parentId || '').trim();
+        const ancestors = Array.isArray(bookmark?.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
+        const folderBlocked = Boolean(
+            bookmark
+            && blockedFolderIds.size > 0
+            && (
+                (parentId && blockedFolderIds.has(parentId))
+                || ancestors.some(folderId => blockedFolderIds.has(String(folderId || '').trim()))
+            )
+        );
+        if (folderBlocked) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        let domainBlocked = false;
+        if (bookmark?.url && blockedDomains.size > 0) {
+            try {
+                const domain = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
+                domainBlocked = blockedDomains.has(domain);
+            } catch (_) {
+                domainBlocked = false;
+            }
+        }
+        if (domainBlocked) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        allowedIds.push(id);
+    }
+
+    return { allowedIds, blockedIds };
+}
+
+function collectAddBlockTreeBookmarkIds(nodeKey, state) {
+    const result = [];
+    const visit = (key) => {
+        const node = state?.nodeMap?.get(key);
+        if (!node) return;
+        if (node.kind === 'bookmark') {
+            const id = String(node.id || '').trim();
+            if (id) result.push(id);
+            return;
+        }
+        const childKeys = Array.isArray(node.childKeys) ? node.childKeys : [];
+        childKeys.forEach(visit);
+    };
+    visit(nodeKey);
+    return Array.from(new Set(result));
+}
+
+function sortPostponedByReviewOrder(items = []) {
+    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+        const aAnchor = Number(a?.dueQueueMovedAt || a?.addedAt || a?.createdAt || 0);
+        const bAnchor = Number(b?.dueQueueMovedAt || b?.addedAt || b?.createdAt || 0);
+        if (aAnchor !== bAnchor) return aAnchor - bAnchor; // 旧 -> 新
+        const aBookmarkId = String(a?.bookmarkId || '');
+        const bBookmarkId = String(b?.bookmarkId || '');
+        return aBookmarkId.localeCompare(bBookmarkId);
+    });
+}
+
 async function ensureRecommendScoresReadyForView(reason = '') {
     try {
         const response = await browserAPI.runtime.sendMessage({
@@ -28155,6 +28355,28 @@ async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {})
     }
 
     return { requested: ids.length, updated };
+}
+
+async function blockBookmark(bookmarkId) {
+    try {
+        const id = String(bookmarkId || '').trim();
+        if (!id) return false;
+        const postponed = await getPostponedBookmarks();
+        const postponedIds = new Set(postponed.map(item => String(item?.bookmarkId || '').trim()).filter(Boolean));
+        if (postponedIds.has(id)) {
+            return true;
+        }
+        const blocked = await getBlockedBookmarks();
+        if (!blocked.bookmarks.includes(id)) {
+            blocked.bookmarks.push(id);
+            await saveBlockedBookmarks(blocked);
+            await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId: id });
+        }
+        return true;
+    } catch (e) {
+        console.error('[屏蔽] 添加书签失败:', e);
+        return false;
+    }
 }
 
 // 恢复屏蔽的书签
@@ -28906,7 +29128,7 @@ function initBrowsingCalibrationSettingsModal() {
 let addBlockDomainSelected = new Set();
 let addBlockDomainData = [];
 
-// 初始化添加域名弹窗
+// 初始化添加域名弹窗（旧：已屏蔽域名子项 +）
 function initAddDomainModal() {
     const modal = document.getElementById('addDomainModal');
     if (!modal) return;
@@ -28914,12 +29136,21 @@ function initAddDomainModal() {
     const closeBtn = document.getElementById('addDomainModalClose');
     const cancelBtn = document.getElementById('addDomainCancelBtn');
     const confirmBtn = document.getElementById('addDomainConfirmBtn');
-    const searchInput = document.getElementById('addBlockDomainSearchInput');
+    const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
 
     const hideModal = () => {
         modal.classList.remove('show');
         if (searchInput) searchInput.value = '';
     };
+
+    const localRoot = getBlockUnifiedDomRoot(modal);
+    const searchInputInsideModal = localRoot.querySelector('#addBlockLegacyDomainSearchInput');
+    const listElInsideModal = localRoot.querySelector('#addBlockLegacyDomainList');
+    const selectedCountInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedCount');
+    const selectedTextInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedText');
+    if (selectedTextInsideModal) {
+        selectedTextInsideModal.textContent = i18n.addDomainSelectedText[currentLang];
+    }
 
     if (closeBtn) closeBtn.onclick = hideModal;
     if (cancelBtn) cancelBtn.onclick = hideModal;
@@ -28930,15 +29161,15 @@ function initAddDomainModal() {
 
     // 搜索输入
     let searchTimer = null;
-    if (searchInput) {
-        searchInput.oninput = () => {
+    if (searchInputInsideModal) {
+        searchInputInsideModal.oninput = () => {
             clearTimeout(searchTimer);
             searchTimer = setTimeout(() => {
-                filterBlockDomainList(searchInput.value);
+                filterBlockDomainList(searchInputInsideModal.value);
             }, 200);
         };
         // Allow Enter to confirm
-        searchInput.onkeypress = (e) => {
+        searchInputInsideModal.onkeypress = (e) => {
             if (e.key === 'Enter') confirmBtn.click();
         };
     }
@@ -28948,10 +29179,10 @@ function initAddDomainModal() {
             const selectedDomains = Array.from(addBlockDomainSelected);
 
             // Allow manual entry if not in list
-            const inputVal = searchInput ? searchInput.value.trim() : '';
+            const inputVal = searchInputInsideModal ? searchInputInsideModal.value.trim() : '';
             if (inputVal && !addBlockDomainSelected.has(inputVal)) {
                 if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(String(inputVal).trim().toLowerCase().replace(/^www\./, ''));
+                    selectedDomains.push(getRecommendBaseDomainFromHost(inputVal));
                 }
             }
 
@@ -28994,7 +29225,7 @@ async function showAddDomainModal() {
     if (modal) {
         addBlockDomainSelected.clear();
         updateBlockDomainCount();
-        const searchInput = document.getElementById('addBlockDomainSearchInput');
+        const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
         if (searchInput) {
             searchInput.value = '';
             searchInput.focus();
@@ -29007,7 +29238,8 @@ async function showAddDomainModal() {
 
 // 加载屏蔽域名列表
 async function loadBlockDomainList() {
-    const listEl = document.getElementById('addBlockDomainList');
+    const modal = document.getElementById('addDomainModal');
+    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
     if (!listEl) return;
 
     const isZh = currentLang === 'zh_CN';
@@ -29017,7 +29249,7 @@ async function loadBlockDomainList() {
         const allBookmarks = await getAllBookmarksFlat();
         const blocked = await getBlockedBookmarks();
         const blockedDomains = new Set((blocked.domains || [])
-            .map(d => String(d || '').trim().toLowerCase().replace(/^www\./, ''))
+            .map(d => getRecommendBaseDomainFromHost(d))
             .filter(Boolean));
 
         const domainMap = new Map();
@@ -29025,7 +29257,7 @@ async function loadBlockDomainList() {
             if (!b.url) continue;
             try {
                 const url = new URL(b.url);
-                const domain = String(url.hostname || '').trim().toLowerCase().replace(/^www\./, '');
+                const domain = getRecommendBaseDomainFromHost(url.hostname);
                 if (!domainMap.has(domain)) {
                     domainMap.set(domain, { count: 0 });
                 }
@@ -29040,7 +29272,7 @@ async function loadBlockDomainList() {
             }
         }
 
-        addBlockDomainData = validDomains.sort((a, b) => b[1].count - a[1].count);
+        addBlockDomainData = validDomains.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
         renderBlockDomainList(addBlockDomainData);
 
     } catch (e) {
@@ -29052,7 +29284,8 @@ async function loadBlockDomainList() {
 
 // 渲染屏蔽域名列表
 function renderBlockDomainList(domains) {
-    const listEl = document.getElementById('addBlockDomainList');
+    const modal = document.getElementById('addDomainModal');
+    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
     if (!listEl) return;
 
     const displayDomains = domains.slice(0, 100);
@@ -29106,7 +29339,8 @@ function filterBlockDomainList(keyword) {
 
 // 更新选中数量
 function updateBlockDomainCount() {
-    const el = document.getElementById('addBlockDomainSelectedCount');
+    const modal = document.getElementById('addDomainModal');
+    const el = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainSelectedCount');
     if (el) el.textContent = addBlockDomainSelected.size;
 }
 
@@ -29128,25 +29362,36 @@ async function showSelectFolderModal() {
     // 生成文件夹树HTML
     container.innerHTML = '';
 
-    function countBookmarks(node) {
+    function countSubpaths(node) {
+        if (!node || !Array.isArray(node.children)) return 0;
         let count = 0;
-        if (node.url) count = 1;
-        if (node.children) {
-            for (const child of node.children) {
-                count += countBookmarks(child);
+        for (const child of node.children) {
+            if (!child) continue;
+            if (child.url) {
+                count += 1;
+            } else {
+                count += 1 + countSubpaths(child);
             }
         }
         return count;
     }
 
-    function renderFolders(nodes, parentEl, depth = 0) {
+    const unitState = { firstRowRendered: false };
+
+    function renderFolders(nodes, parentEl, depth = 0, sharedUnitState = unitState) {
         const isZh = currentLang === 'zh_CN';
+        const locale = isZh ? 'zh-CN' : 'en-US';
         const unnamedFolder = i18n.unnamedFolderLabel ? i18n.unnamedFolderLabel[currentLang] : '未命名文件夹';
         for (const node of nodes) {
             if (!node.url && node.children) { // 是文件夹
                 if (blockedFolderSet.has(node.id)) continue; // 已屏蔽的不显示
 
-                const bookmarkCount = countBookmarks(node);
+                const subpathCount = countSubpaths(node);
+                const showUnitLabel = sharedUnitState.firstRowRendered !== true;
+                if (showUnitLabel) sharedUnitState.firstRowRendered = true;
+                const countText = showUnitLabel
+                    ? `${subpathCount.toLocaleString(locale)}（${isZh ? '子路径数量' : 'sub-paths'}）`
+                    : `${subpathCount.toLocaleString(locale)}`;
 
                 // 创建节点包装
                 const nodeWrapper = document.createElement('div');
@@ -29157,7 +29402,7 @@ async function showSelectFolderModal() {
                 item.innerHTML = `
                     <i class="fas fa-folder"></i>
                     <span>${escapeHtml(node.title || unnamedFolder)}</span>
-                    <span class="folder-count">${bookmarkCount}</span>
+                    <span class="folder-count">${countText}</span>
                 `;
                 item.onclick = async () => {
                     await blockFolder(node.id);
@@ -29172,7 +29417,7 @@ async function showSelectFolderModal() {
                 if (childFolders.length > 0) {
                     const childrenContainer = document.createElement('div');
                     childrenContainer.className = 'folder-tree-children';
-                    renderFolders(node.children, childrenContainer, depth + 1);
+                    renderFolders(node.children, childrenContainer, depth + 1, sharedUnitState);
                     nodeWrapper.appendChild(childrenContainer);
                 }
 
@@ -29187,16 +29432,7 @@ async function showSelectFolderModal() {
 
 // 初始化屏蔽管理添加按钮
 function initBlockManageButtons() {
-    const addFolderBtn = document.getElementById('addBlockFolderBtn');
-    const addDomainBtn = document.getElementById('addBlockDomainBtn');
-
-    if (addFolderBtn) {
-        addFolderBtn.onclick = () => showSelectFolderModal();
-    }
-
-    if (addDomainBtn) {
-        addDomainBtn.onclick = () => showAddDomainModal();
-    }
+    // 已迁移到 initAddToBlockModal 统一处理。
 }
 
 // =============================================================================
@@ -29224,7 +29460,7 @@ async function getTrackingBlocked() {
 
 function normalizeTrackingDomain(domain) {
     if (!domain || typeof domain !== 'string') return '';
-    return domain.trim().toLowerCase().replace(/^www\./, '');
+    return getRecommendBaseDomainFromHost(domain);
 }
 
 function normalizeTrackingUrl(url) {
@@ -29800,7 +30036,7 @@ async function loadTrackingBlockDomainList() {
             }
         }
 
-        trackingBlockDomainData = validDomains.sort((a, b) => b[1].count - a[1].count);
+        trackingBlockDomainData = validDomains.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
         renderTrackingBlockDomainList(trackingBlockDomainData);
 
     } catch (e) {
@@ -29914,7 +30150,7 @@ function initAddTrackingBlockDomainModal() {
             const inputVal = searchInput ? searchInput.value.trim() : '';
             if (inputVal && !trackingBlockDomainSelected.has(inputVal)) {
                 if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(inputVal);
+                    selectedDomains.push(normalizeTrackingDomain(inputVal));
                 }
             }
 
@@ -30249,6 +30485,233 @@ let addPostponedSelectedFolder = null;
 let addPostponedSearchSelected = new Set();
 let addPostponedDomainSelected = new Set();
 let addPostponedDomainData = []; // 保存完整的域名数据用于过滤
+let addPostponedTreeState = null;
+
+let addBlockUnifiedSearchSelected = new Set();
+let addBlockUnifiedDomainSelected = new Set();
+let addBlockUnifiedDomainData = [];
+let addBlockUnifiedTreeState = null;
+
+function getBlockUnifiedDomRoot(root = document) {
+    const modal = root?.querySelector?.('#addToBlockModal');
+    return modal || root;
+}
+
+function getAddBlockDomEl(id) {
+    const modal = document.getElementById('addToBlockModal');
+    return modal?.querySelector(`#${id}`) || null;
+}
+
+async function getBookmarkByIdSafe(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return null;
+    try {
+        const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get(id, resolve));
+        return Array.isArray(bookmarks) ? bookmarks[0] || null : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function getRecommendBookmarkSearchText(bookmark, extra = '') {
+    return `${bookmark?.title || ''} ${bookmark?.url || ''} ${getRecommendBookmarkDomainLabel(bookmark)} ${extra || ''}`.toLowerCase();
+}
+
+function clearRecommendSectionList(listEl, selectors) {
+    if (!listEl) return;
+    listEl.querySelectorAll(selectors).forEach(item => item.remove());
+}
+
+async function renderPostponedSearchResults(keyword) {
+    const listEl = document.getElementById('postponedList');
+    const emptyEl = document.getElementById('postponedEmpty');
+    if (!listEl) return;
+
+    clearRecommendSectionList(listEl, '.postponed-item, .postponed-group, .recommend-lazy-more, .recommend-search-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+    if (!normalizedKeyword) {
+        await loadPostponedList();
+        return;
+    }
+
+    const postponed = await getPostponedBookmarks();
+    const now = Date.now();
+    const activePostponed = sortPostponedByReviewOrder(
+        postponed.filter(p => p.manuallyAdded || p.postponeUntil > now)
+    );
+
+    const groups = new Map();
+    const singles = [];
+    const delayedItems = [];
+    for (const p of activePostponed) {
+        const bookmark = await getBookmarkByIdSafe(p.bookmarkId);
+        if (!bookmark) continue;
+        const groupName = String(p.groupName || '');
+        const groupMatches = groupName.toLowerCase().includes(normalizedKeyword);
+        const bookmarkMatches = getRecommendBookmarkSearchText(bookmark, groupName).includes(normalizedKeyword);
+        if (!groupMatches && !bookmarkMatches) continue;
+
+        if (p.groupId && p.manuallyAdded) {
+            if (!groups.has(p.groupId)) {
+                groups.set(p.groupId, {
+                    type: p.groupType,
+                    name: p.groupName,
+                    compactLabel: p.groupCompactLabel === true || p.groupName === '顺序刷新' || p.groupName === 'Refresh in order',
+                    items: []
+                });
+            }
+            groups.get(p.groupId).items.push(p);
+        } else if (p.manuallyAdded && !p.groupId) {
+            singles.push(p);
+        } else {
+            delayedItems.push(p);
+        }
+    }
+
+    const renderEntries = [
+        ...Array.from(groups.entries()).map(([groupId, group]) => ({ type: 'group', groupId, group })),
+        ...singles.map(item => ({ type: 'item', item })),
+        ...delayedItems.map(item => ({ type: 'item', item }))
+    ];
+
+    if (renderEntries.length === 0) {
+        listEl.insertAdjacentHTML('beforeend', `<div class="add-results-empty recommend-search-empty">${currentLang === 'zh_CN' ? '没有匹配的待复习书签' : 'No matching review bookmarks'}</div>`);
+        return;
+    }
+
+    await renderRecommendLazyBatch(listEl, renderEntries, async (entry) => {
+        if (entry.type === 'group') {
+            await renderPostponedGroup(listEl, entry.groupId, entry.group);
+        } else {
+            await renderPostponedItem(listEl, entry.item);
+        }
+    });
+}
+
+async function renderBlockedSearchResults(keyword) {
+    const listEl = document.getElementById('blockedUnifiedList');
+    const emptyEl = document.getElementById('blockedUnifiedEmpty');
+    if (!listEl) return;
+
+    clearRecommendSectionList(listEl, '.block-item, .block-group, .recommend-lazy-more, .recommend-search-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+    if (!normalizedKeyword) {
+        await loadBlockedLists();
+        return;
+    }
+
+    const blocked = await getBlockedBookmarks();
+    const matchedById = new Map();
+    const addIfMatched = (bookmark, extra = '') => {
+        if (!bookmark?.url) return;
+        const text = getRecommendBookmarkSearchText(bookmark, extra);
+        if (text.includes(normalizedKeyword)) {
+            const id = String(bookmark.id || '').trim();
+            if (id) matchedById.set(id, bookmark);
+        }
+    };
+
+    for (const bookmarkId of Array.isArray(blocked?.bookmarks) ? blocked.bookmarks : []) {
+        const bookmark = await getBookmarkByIdSafe(bookmarkId);
+        addIfMatched(bookmark);
+    }
+
+    const allBookmarks = await getAllBookmarksFlat();
+    const blockedDomains = new Set((blocked?.domains || []).map(domain => getRecommendBaseDomainFromHost(domain)).filter(Boolean));
+    if (blockedDomains.size > 0) {
+        for (const bookmark of allBookmarks) {
+            const domain = getRecommendBookmarkDomainLabel(bookmark);
+            if (blockedDomains.has(domain)) {
+                addIfMatched(bookmark, domain);
+            }
+        }
+    }
+
+    for (const folderId of Array.isArray(blocked?.folders) ? blocked.folders : []) {
+        const folderBookmarks = await getBookmarksFromFolder(folderId, true);
+        for (const bookmark of folderBookmarks) {
+            addIfMatched(bookmark);
+        }
+    }
+
+    const matchedBookmarks = Array.from(matchedById.values());
+    if (matchedBookmarks.length === 0) {
+        listEl.insertAdjacentHTML('beforeend', `<div class="add-results-empty recommend-search-empty">${currentLang === 'zh_CN' ? '没有匹配的屏蔽项' : 'No matching blocked items'}</div>`);
+        return;
+    }
+
+    await renderBlockedBookmarkDomainSubgroups(listEl, matchedBookmarks);
+}
+
+function initRecommendSectionSearch() {
+    const configs = [
+        {
+            buttonId: 'postponedSearchBtn',
+            boxId: 'postponedSearchBox',
+            inputId: 'postponedSearchInput',
+            listId: 'postponedList',
+            loadList: loadPostponedList,
+            searchList: renderPostponedSearchResults
+        },
+        {
+            buttonId: 'blockSearchBtn',
+            boxId: 'blockSearchBox',
+            inputId: 'blockSearchInput',
+            loadList: loadBlockedLists,
+            searchList: renderBlockedSearchResults
+        }
+    ];
+
+    configs.forEach((config) => {
+        const button = document.getElementById(config.buttonId);
+        const box = document.getElementById(config.boxId);
+        const input = document.getElementById(config.inputId);
+        if (!button || !box || !input) return;
+
+        const applyFilter = async () => {
+            const keyword = String(input.value || '').trim().toLowerCase();
+            await config.searchList(keyword);
+        };
+
+        button.onclick = async (e) => {
+            e.stopPropagation();
+            const isHidden = box.style.display === 'none';
+            box.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) {
+                box.closest('.collapsible')?.classList.remove('collapsed');
+                input.focus();
+                await applyFilter();
+            } else {
+                input.value = '';
+                await config.loadList();
+            }
+        };
+
+        let timer = null;
+        input.addEventListener('input', () => {
+            clearTimeout(timer);
+            timer = setTimeout(applyFilter, 200);
+        });
+    });
+
+    document.addEventListener('click', async (e) => {
+        for (const config of configs) {
+            const button = document.getElementById(config.buttonId);
+            const box = document.getElementById(config.boxId);
+            const input = document.getElementById(config.inputId);
+            if (!button || !box || !input || box.style.display === 'none') continue;
+            if (box.contains(e.target) || button.contains(e.target)) continue;
+            box.style.display = 'none';
+            input.value = '';
+            document.querySelectorAll('.recommend-search-empty').forEach(item => item.remove());
+            await config.loadList();
+        }
+    });
+}
 
 function initAddToPostponedModal() {
     const modal = document.getElementById('addToPostponedModal');
@@ -30266,6 +30729,7 @@ function initAddToPostponedModal() {
         e.stopPropagation();
         resetAddPostponedModal();
         modal.classList.add('show');
+        loadAddPostponedBookmarkTree();
     };
 
     // 关闭弹窗
@@ -30323,7 +30787,9 @@ function initAddToPostponedModal() {
     // 标签切换时加载域名列表
     tabs?.forEach(tab => {
         tab.addEventListener('click', async () => {
-            if (tab.dataset.tab === 'domain') {
+            if (tab.dataset.tab === 'tree') {
+                await loadAddPostponedBookmarkTree();
+            } else if (tab.dataset.tab === 'domain') {
                 await loadDomainList();
             }
         });
@@ -30346,16 +30812,273 @@ function initAddToPostponedModal() {
     });
 }
 
+function initAddToBlockModal() {
+    const modal = document.getElementById('addToBlockModal');
+    const addBtn = document.getElementById('blockAddBtn');
+    const closeBtn = document.getElementById('addBlockModalClose');
+    const cancelBtn = document.getElementById('addBlockCancelBtn');
+    const confirmBtn = document.getElementById('addBlockConfirmBtn');
+    const tabs = modal?.querySelectorAll('.add-postponed-tab');
+    const panels = modal?.querySelectorAll('.add-postponed-panel');
+    if (!modal || !addBtn) return;
+
+    const hideModal = () => modal.classList.remove('show');
+    const updateAddBlockFooterSelection = () => {
+        const activePanel = modal.querySelector('.add-postponed-panel.active');
+        const panelType = activePanel?.dataset?.panel || 'tree';
+        const footerSelectedName = getAddBlockDomEl('addBlockFooterSelectedName');
+        if (!footerSelectedName) return;
+        if (panelType === 'search') {
+            footerSelectedName.textContent = String(addBlockUnifiedSearchSelected.size || 0);
+            return;
+        }
+        if (panelType === 'domain') {
+            const count = addBlockUnifiedDomainSelected.size || 0;
+            footerSelectedName.textContent = count > 0
+                ? `${count} ${currentLang === 'zh_CN' ? '个域名' : 'domains'}`
+                : '-';
+            return;
+        }
+        const treeSelected = getAddBlockDomEl('addBlockTreeSelectedName');
+        footerSelectedName.textContent = treeSelected?.textContent || '-';
+    };
+
+    function resetAddToBlockModal() {
+        const isZh = currentLang === 'zh_CN';
+        addBlockUnifiedTreeState = null;
+        addBlockUnifiedSearchSelected.clear();
+        addBlockUnifiedDomainSelected.clear();
+        addBlockUnifiedDomainData = [];
+
+        const treeSelected = getAddBlockDomEl('addBlockTreeSelectedName');
+        if (treeSelected) treeSelected.textContent = '-';
+        const footerSelectedName = getAddBlockDomEl('addBlockFooterSelectedName');
+        if (footerSelectedName) footerSelectedName.textContent = '-';
+        const treeList = getAddBlockDomEl('addBlockTreeList');
+        if (treeList) treeList.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树中...' : 'Loading bookmark tree...'}</div>`;
+
+        const searchInput = getAddBlockDomEl('addBlockSearchInput');
+        const searchResults = getAddBlockDomEl('addBlockSearchResults');
+        const searchCount = getAddBlockDomEl('addBlockSearchSelectedCount');
+        if (searchInput) searchInput.value = '';
+        if (searchResults) searchResults.innerHTML = `<div class="add-results-empty">${isZh ? '输入关键词搜索书签' : 'Enter keyword to search bookmarks'}</div>`;
+        if (searchCount) searchCount.textContent = '0';
+
+        const domainSearch = getAddBlockDomEl('addBlockUnifiedDomainSearchInput');
+        const domainList = getAddBlockDomEl('addBlockUnifiedDomainList');
+        const domainCount = getAddBlockDomEl('addBlockUnifiedDomainSelectedCount');
+        if (domainSearch) domainSearch.value = '';
+        if (domainList) domainList.innerHTML = `<div class="add-results-empty">${isZh ? '切换到此标签加载域名' : 'Switch to this tab to load domains'}</div>`;
+        if (domainCount) domainCount.textContent = '0';
+
+        tabs?.forEach((t, i) => t.classList.toggle('active', i === 0));
+        panels?.forEach((p, i) => p.classList.toggle('active', i === 0));
+    }
+
+    addBtn.onclick = (e) => {
+        if (e) e.stopPropagation();
+        resetAddToBlockModal();
+        modal.classList.add('show');
+        loadAddBlockBookmarkTree();
+    };
+
+    closeBtn?.addEventListener('click', hideModal);
+    cancelBtn?.addEventListener('click', hideModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) hideModal();
+    });
+
+    tabs?.forEach(tab => {
+        tab.addEventListener('click', async () => {
+            const tabName = tab.dataset.tab;
+            tabs.forEach(t => t.classList.remove('active'));
+            panels?.forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            modal.querySelector(`.add-postponed-panel[data-panel="${tabName}"]`)?.classList.add('active');
+
+            if (tabName === 'tree') await loadAddBlockBookmarkTree();
+            if (tabName === 'domain') await loadDomainListForAddBlock();
+            updateAddBlockFooterSelection();
+        });
+    });
+
+    const searchInput = getAddBlockDomEl('addBlockSearchInput');
+    let searchTimer = null;
+    searchInput?.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            searchBookmarksForAddBlock(searchInput.value);
+        }, 300);
+    });
+    modal.addEventListener('click', (e) => {
+        if (e.target.closest('.add-bookmark-tree-list, #addBlockSearchResults, #addBlockUnifiedDomainList, .add-postponed-tab')) {
+            setTimeout(updateAddBlockFooterSelection, 0);
+        }
+    });
+
+    const domainSearchInput = getAddBlockDomEl('addBlockUnifiedDomainSearchInput');
+    let domainSearchTimer = null;
+    domainSearchInput?.addEventListener('input', () => {
+        clearTimeout(domainSearchTimer);
+        domainSearchTimer = setTimeout(() => {
+            filterDomainListForAddBlock(domainSearchInput.value);
+        }, 200);
+    });
+
+    confirmBtn?.addEventListener('click', async () => {
+        const activePanel = modal.querySelector('.add-postponed-panel.active');
+        const panelType = activePanel?.dataset?.panel || 'tree';
+        const blocked = await getBlockedBookmarks();
+        const postponed = await getPostponedBookmarks();
+        const postponedIds = new Set(postponed.map(item => String(item?.bookmarkId || '').trim()).filter(Boolean));
+        const scoreFolderUpdates = [];
+        const scoreDomainUpdates = [];
+        const scoreBookmarkUpdates = [];
+        let blockedChanged = false;
+        let skippedPostponedCount = 0;
+
+        const addBlockedBookmarkId = (id) => {
+            const safeId = String(id || '').trim();
+            if (!safeId) return false;
+            if (postponedIds.has(safeId)) {
+                skippedPostponedCount += 1;
+                return false;
+            }
+            if (!blocked.bookmarks.includes(safeId)) {
+                blocked.bookmarks.push(safeId);
+                scoreBookmarkUpdates.push(safeId);
+                blockedChanged = true;
+                return true;
+            }
+            return false;
+        };
+
+        if (panelType === 'tree') {
+            if (!addBlockUnifiedTreeState || !(addBlockUnifiedTreeState.selectedBookmarkIds instanceof Set)) {
+                return;
+            }
+            const toggledKeys = addBlockUnifiedTreeState.userToggledKeys instanceof Set
+                ? addBlockUnifiedTreeState.userToggledKeys
+                : new Set();
+
+            for (const key of toggledKeys) {
+                const node = addBlockUnifiedTreeState.nodeMap.get(key);
+                if (node?.kind !== 'folder' || !node.id) continue;
+                const folderId = String(node.id);
+                const isChecked = addBlockUnifiedTreeState.checkedKeys.has(key) && !addBlockUnifiedTreeState.indeterminateKeys.has(key);
+                if (isChecked) {
+                    const subtreeBookmarkIds = collectAddBlockTreeBookmarkIds(key, addBlockUnifiedTreeState);
+                    const postponedInFolder = subtreeBookmarkIds.filter(id => postponedIds.has(String(id || '').trim()));
+                    if (postponedInFolder.length > 0) {
+                        skippedPostponedCount += postponedInFolder.length;
+                        subtreeBookmarkIds
+                            .filter(id => !postponedIds.has(String(id || '').trim()))
+                            .forEach(addBlockedBookmarkId);
+                    } else if (!blocked.folders.includes(folderId)) {
+                        blocked.folders.push(folderId);
+                        scoreFolderUpdates.push(folderId);
+                        blockedChanged = true;
+                    }
+                }
+            }
+
+            for (const key of toggledKeys) {
+                const node = addBlockUnifiedTreeState.nodeMap.get(key);
+                if (node?.kind !== 'bookmark' || !node.id) continue;
+                const bookmarkId = String(node.id);
+                const isChecked = addBlockUnifiedTreeState.checkedKeys.has(key);
+                if (isChecked) {
+                    addBlockedBookmarkId(bookmarkId);
+                }
+            }
+        } else if (panelType === 'search') {
+            for (const id of addBlockUnifiedSearchSelected) {
+                addBlockedBookmarkId(id);
+            }
+        } else if (panelType === 'domain') {
+            let bookmarksByDomain = null;
+            for (const domain of addBlockUnifiedDomainSelected) {
+                const normalized = getRecommendBaseDomainFromHost(domain);
+                if (!normalized) continue;
+
+                if (!bookmarksByDomain) {
+                    bookmarksByDomain = new Map();
+                    try {
+                        const allBookmarks = await getAllBookmarksFlat();
+                        for (const bookmark of allBookmarks) {
+                            if (!bookmark?.url) continue;
+                            try {
+                                const host = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
+                                if (!host) continue;
+                                if (!bookmarksByDomain.has(host)) bookmarksByDomain.set(host, []);
+                                bookmarksByDomain.get(host).push(String(bookmark.id || '').trim());
+                            } catch (_) {
+                            }
+                        }
+                    } catch (_) {
+                        bookmarksByDomain = new Map();
+                    }
+                }
+
+                const domainBookmarkIds = (bookmarksByDomain.get(normalized) || []).filter(Boolean);
+                const postponedInDomain = domainBookmarkIds.filter(id => postponedIds.has(id));
+                if (postponedInDomain.length > 0) {
+                    skippedPostponedCount += postponedInDomain.length;
+                    domainBookmarkIds
+                        .filter(id => !postponedIds.has(id))
+                        .forEach(addBlockedBookmarkId);
+                } else if (!blocked.domains.includes(normalized)) {
+                    blocked.domains.push(normalized);
+                    scoreDomainUpdates.push(normalized);
+                    blockedChanged = true;
+                }
+            }
+        }
+
+        if (blockedChanged) {
+            await saveBlockedBookmarks(blocked);
+        }
+        if (scoreBookmarkUpdates.length > 0) {
+            await requestRecommendScoreUpdatesByIds(scoreBookmarkUpdates, { chunkSize: 200 });
+        }
+        for (const folderId of scoreFolderUpdates) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderId });
+        }
+        for (const domain of scoreDomainUpdates) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain });
+        }
+
+        hideModal();
+        await loadBlockedLists();
+        await refreshRecommendCards();
+        if (skippedPostponedCount > 0) {
+            try {
+                showToast(currentLang === 'en'
+                    ? `Skipped ${skippedPostponedCount} bookmark(s) already in review`
+                    : `已跳过 ${skippedPostponedCount} 个待复习书签`);
+            } catch (_) {
+            }
+        }
+    });
+}
+
 function resetAddPostponedModal() {
     addPostponedSelectedFolder = null;
     addPostponedSearchSelected.clear();
     addPostponedDomainSelected.clear();
+    addPostponedTreeState = null;
 
     const isZh = currentLang === 'zh_CN';
 
     // 重置文件夹选择
     const folderName = document.getElementById('addFolderSelectedName');
     if (folderName) folderName.textContent = isZh ? '点击选择文件夹' : 'Click to select folder';
+    const treeSelectedName = document.getElementById('addTreeSelectedName');
+    if (treeSelectedName) treeSelectedName.textContent = '-';
+    const treeList = document.getElementById('addBookmarkTreeList');
+    if (treeList) treeList.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树中...' : 'Loading bookmark tree...'}</div>`;
+    const folderIncludeSubfolders = document.getElementById('addFolderIncludeSubfolders');
+    if (folderIncludeSubfolders) folderIncludeSubfolders.checked = true;
 
     // 重置"全部"复选框
     const selectAllCheckbox = document.getElementById('addFolderSelectAll');
@@ -30431,15 +31154,20 @@ function showAddFolderPicker() {
     firstRow?.insertAdjacentElement('afterend', treeContainer);
 }
 
-function renderFolderTree(nodes, level = 0) {
+function renderFolderTree(nodes, level = 0, unitState = null) {
     const isZh = currentLang === 'zh_CN';
+    const locale = isZh ? 'zh-CN' : 'en-US';
+    const sharedUnitState = unitState || { firstRowRendered: false };
 
-    function countBookmarks(node) {
+    function countSubpaths(node) {
+        if (!node || !Array.isArray(node.children)) return 0;
         let count = 0;
-        if (node.url) count = 1;
-        if (node.children) {
-            for (const child of node.children) {
-                count += countBookmarks(child);
+        for (const child of node.children) {
+            if (!child) continue;
+            if (child.url) {
+                count += 1;
+            } else {
+                count += 1 + countSubpaths(child);
             }
         }
         return count;
@@ -30449,20 +31177,575 @@ function renderFolderTree(nodes, level = 0) {
     for (const node of nodes) {
         if (!node.url) { // 只显示文件夹
             const hasChildren = node.children?.some(c => !c.url);
-            const bookmarkCount = countBookmarks(node);
+            const subpathCount = countSubpaths(node);
+            const showUnitLabel = sharedUnitState.firstRowRendered !== true;
+            if (showUnitLabel) sharedUnitState.firstRowRendered = true;
+            const countText = showUnitLabel
+                ? `${subpathCount.toLocaleString(locale)}（${isZh ? '子路径数量' : 'sub-paths'}）`
+                : `${subpathCount.toLocaleString(locale)}`;
             html += `<div class="folder-tree-node">`;
             html += `<div class="add-folder-tree-item" data-id="${node.id}" data-title="${escapeHtml(node.title || '未命名')}">
                 <i class="fas fa-folder"></i>
-                <span>${escapeHtml(node.title || (isZh ? '未命名' : 'Untitled'))}</span>
-                <span class="folder-count">${bookmarkCount}</span>
+                <span class="add-folder-tree-title">${escapeHtml(node.title || (isZh ? '未命名' : 'Untitled'))}</span>
+                <span class="folder-count">${countText}</span>
             </div>`;
             if (hasChildren) {
-                html += `<div class="folder-tree-children">${renderFolderTree(node.children, level + 1)}</div>`;
+                html += `<div class="folder-tree-children">${renderFolderTree(node.children, level + 1, sharedUnitState)}</div>`;
             }
             html += `</div>`;
         }
     }
     return html;
+}
+
+async function getAddPostponedTreeMetricMaps() {
+    const clickByUrl = new Map();
+    const wakeByBookmarkId = new Map();
+    const wakeByUrl = new Map();
+    const timeByBookmarkId = new Map();
+    const timeByUrl = new Map();
+
+    try {
+        const stats = await ensureBrowsingClickRankingStats();
+        const clickItems = getBrowsingRankingItemsForRangeFromStats(stats, 'all');
+        clickItems.forEach((item) => {
+            const url = String(item?.url || '').trim();
+            if (!url) return;
+            const count = Math.max(0, Number(item?.allCount || 0) || 0);
+            if (count <= 0) return;
+            clickByUrl.set(url, Math.max(clickByUrl.get(url) || 0, count));
+        });
+    } catch (_) {
+    }
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({ action: 'getTrackingStats' });
+        const source = response?.success && response?.stats && typeof response.stats === 'object'
+            ? response.stats
+            : {};
+        for (const rawStat of Object.values(source)) {
+            if (!rawStat || typeof rawStat !== 'object') continue;
+            const totalMs = Math.max(0, Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0);
+            const wakeCount = Math.max(0, Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0);
+            if (totalMs <= 0 && wakeCount <= 0) continue;
+            const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId).trim() : '';
+            const url = String(rawStat?.url || '').trim();
+            if (bookmarkId) {
+                timeByBookmarkId.set(bookmarkId, (timeByBookmarkId.get(bookmarkId) || 0) + totalMs);
+                wakeByBookmarkId.set(bookmarkId, (wakeByBookmarkId.get(bookmarkId) || 0) + wakeCount);
+            }
+            if (url) {
+                timeByUrl.set(url, (timeByUrl.get(url) || 0) + totalMs);
+                wakeByUrl.set(url, (wakeByUrl.get(url) || 0) + wakeCount);
+            }
+        }
+    } catch (_) {
+    }
+
+    return { clickByUrl, wakeByBookmarkId, wakeByUrl, timeByBookmarkId, timeByUrl };
+}
+
+function buildAddPostponedTreeState(tree, metricMaps) {
+    const isZh = currentLang === 'zh_CN';
+    const unnamedFolder = i18n.unnamedFolderLabel ? i18n.unnamedFolderLabel[currentLang] : (isZh ? '未命名文件夹' : 'Untitled folder');
+    const clickByUrl = metricMaps?.clickByUrl instanceof Map ? metricMaps.clickByUrl : new Map();
+    const wakeByBookmarkId = metricMaps?.wakeByBookmarkId instanceof Map ? metricMaps.wakeByBookmarkId : new Map();
+    const wakeByUrl = metricMaps?.wakeByUrl instanceof Map ? metricMaps.wakeByUrl : new Map();
+    const timeByBookmarkId = metricMaps?.timeByBookmarkId instanceof Map ? metricMaps.timeByBookmarkId : new Map();
+    const timeByUrl = metricMaps?.timeByUrl instanceof Map ? metricMaps.timeByUrl : new Map();
+
+    const rootNodes = Array.isArray(tree) ? (tree[0]?.children || []) : [];
+    const nodeMap = new Map();
+    const rootNodeKeys = [];
+
+    function walk(node, parentId = '', parentPath = []) {
+        if (!node || node.url || node.id == null) return null;
+        const id = String(node.id).trim();
+        if (!id) return null;
+        const key = `f:${id}`;
+
+        const title = String(node.title || '').trim() || unnamedFolder;
+        const path = [...parentPath, title];
+
+        let pathCount = 0;
+        let bookmarkCount = 0;
+        let clickCount = 0;
+        let wakeCount = 0;
+        let totalTimeMs = 0;
+        const childKeys = [];
+
+        const children = Array.isArray(node.children) ? node.children : [];
+        children.forEach((child) => {
+            if (!child) return;
+            if (child.url) {
+                const childId = child.id != null ? String(child.id).trim() : '';
+                const childUrl = String(child.url || '').trim();
+                const clickValue = childUrl ? (clickByUrl.get(childUrl) || 0) : 0;
+                const wakeRaw = childId
+                    ? (wakeByBookmarkId.get(childId) || (childUrl ? (wakeByUrl.get(childUrl) || 0) : 0))
+                    : (childUrl ? (wakeByUrl.get(childUrl) || 0) : 0);
+                const wakeValue = wakeRaw > 0 ? wakeRaw : clickValue;
+                const timeValue = childId
+                    ? (timeByBookmarkId.get(childId) || (childUrl ? (timeByUrl.get(childUrl) || 0) : 0))
+                    : (childUrl ? (timeByUrl.get(childUrl) || 0) : 0);
+                const bookmarkKey = `b:${childId || childUrl || `${path.join('/')}/${child.title || child.url}`}`;
+                let host = '';
+                if (childUrl) {
+                    try {
+                        host = String(new URL(childUrl).hostname || '').trim();
+                    } catch (_) {
+                    }
+                }
+                nodeMap.set(bookmarkKey, {
+                    kind: 'bookmark',
+                    key: bookmarkKey,
+                    id: childId,
+                    title: String(child.title || child.url || '').trim() || childUrl,
+                    url: childUrl,
+                    host,
+                    parentKey: key,
+                    clickCount: Math.max(0, Number(clickValue) || 0),
+                    wakeCount: Math.max(0, Number(wakeValue) || 0),
+                    timeMs: Math.max(0, Number(timeValue) || 0)
+                });
+                childKeys.push(bookmarkKey);
+                pathCount += 1;
+                bookmarkCount += 1;
+                clickCount += Math.max(0, Number(clickValue) || 0);
+                wakeCount += Math.max(0, Number(wakeValue) || 0);
+                totalTimeMs += Math.max(0, Number(timeValue) || 0);
+                return;
+            }
+
+            const childMeta = walk(child, id, path);
+            if (!childMeta) return;
+            childKeys.push(childMeta.key);
+            pathCount += 1 + childMeta.pathCount;
+            bookmarkCount += childMeta.bookmarkCount;
+            clickCount += childMeta.clickCount;
+            wakeCount += childMeta.wakeCount;
+            totalTimeMs += childMeta.totalTimeMs;
+        });
+
+        const meta = {
+            kind: 'folder',
+            key,
+            id,
+            parentId,
+            title,
+            path,
+            pathText: path.join(' / '),
+            childKeys,
+            pathCount,
+            bookmarkCount,
+            clickCount,
+            wakeCount,
+            totalTimeMs
+        };
+        nodeMap.set(key, meta);
+        return meta;
+    }
+
+    rootNodes.forEach((node) => {
+        const meta = walk(node, '', []);
+        if (meta) rootNodeKeys.push(meta.key);
+    });
+
+    return {
+        nodeMap,
+        rootNodeKeys,
+        checkedKeys: new Set(),
+        indeterminateKeys: new Set(),
+        selectedBookmarkIds: new Set(),
+        userToggledKeys: new Set(),
+        _unitInjected: false,
+        listId: 'addBookmarkTreeList',
+        selectedNameId: 'addTreeSelectedName',
+        bindFolderSelection: true
+    };
+}
+
+function updateAddPostponedTreeSelectionSummary(state) {
+    const selectedNameId = String(state?.selectedNameId || 'addTreeSelectedName');
+    const selectedName = document.getElementById(selectedNameId);
+    if (!selectedName) return;
+
+    const bookmarkCount = state?.selectedBookmarkIds instanceof Set ? state.selectedBookmarkIds.size : 0;
+    let folderCount = 0;
+    if (state?.checkedKeys instanceof Set && state?.nodeMap instanceof Map) {
+        for (const key of state.checkedKeys) {
+            const node = state.nodeMap.get(key);
+            if (node?.kind === 'folder' && !state.indeterminateKeys.has(key)) {
+                folderCount += 1;
+            }
+        }
+    }
+
+    if (bookmarkCount <= 0 && folderCount <= 0) {
+        selectedName.textContent = '-';
+        return;
+    }
+
+    const isZh = currentLang === 'zh_CN';
+    selectedName.textContent = isZh
+        ? `${bookmarkCount}个书签 / ${folderCount}个文件夹`
+        : `${bookmarkCount} bookmarks / ${folderCount} folders`;
+}
+
+function setAddPostponedTreeSubtreeChecked(nodeKey, checked, state) {
+    const node = state?.nodeMap?.get(nodeKey);
+    if (!node) return;
+
+    if (checked) {
+        state.checkedKeys.add(nodeKey);
+        state.indeterminateKeys.delete(nodeKey);
+    } else {
+        state.checkedKeys.delete(nodeKey);
+        state.indeterminateKeys.delete(nodeKey);
+    }
+
+    if (node.kind === 'bookmark') {
+        if (node.id) {
+            if (checked) state.selectedBookmarkIds.add(node.id);
+            else state.selectedBookmarkIds.delete(node.id);
+        }
+        return;
+    }
+
+    const childKeys = Array.isArray(node.childKeys) ? node.childKeys : [];
+    childKeys.forEach((childKey) => {
+        setAddPostponedTreeSubtreeChecked(childKey, checked, state);
+    });
+}
+
+function refreshAddPostponedTreeAncestorChecked(nodeKey, state) {
+    const getParentKey = (key) => {
+        const node = state?.nodeMap?.get(key);
+        if (!node || node.kind !== 'folder') return '';
+        return node.parentId ? `f:${node.parentId}` : '';
+    };
+
+    let currentKey = nodeKey;
+    let parentKey = getParentKey(currentKey);
+    while (parentKey) {
+        const parent = state.nodeMap.get(parentKey);
+        if (!parent || parent.kind !== 'folder') break;
+        const childKeys = Array.isArray(parent.childKeys) ? parent.childKeys : [];
+        let allChecked = childKeys.length > 0;
+        let anyChecked = false;
+        let anyIndeterminate = false;
+
+        childKeys.forEach((childKey) => {
+            const checked = state.checkedKeys.has(childKey);
+            const indeterminate = state.indeterminateKeys.has(childKey);
+            if (checked) anyChecked = true;
+            if (indeterminate) anyIndeterminate = true;
+            if (!checked || indeterminate) allChecked = false;
+        });
+
+        if (allChecked) {
+            state.checkedKeys.add(parentKey);
+            state.indeterminateKeys.delete(parentKey);
+        } else if (anyChecked || anyIndeterminate) {
+            state.checkedKeys.delete(parentKey);
+            state.indeterminateKeys.add(parentKey);
+        } else {
+            state.checkedKeys.delete(parentKey);
+            state.indeterminateKeys.delete(parentKey);
+        }
+
+        currentKey = parentKey;
+        parentKey = getParentKey(currentKey);
+    }
+}
+
+function syncVisibleAddPostponedTreeCheckboxes(state) {
+    const listId = String(state?.listId || 'addBookmarkTreeList');
+    const list = document.getElementById(listId);
+    if (!list) return;
+    list.querySelectorAll('.add-tree-checkbox[data-node-key]').forEach((input) => {
+        const nodeKey = String(input.dataset.nodeKey || '').trim();
+        if (!nodeKey) return;
+        const checked = state.checkedKeys.has(nodeKey);
+        const indeterminate = state.indeterminateKeys.has(nodeKey);
+        input.checked = checked;
+        input.indeterminate = indeterminate;
+        const row = input.closest('.add-folder-tree-item');
+        if (row) {
+            row.classList.toggle('checked', checked || indeterminate);
+        }
+    });
+}
+
+function toggleAddPostponedTreeNodeExpand(wrapper, forceExpand = null) {
+    if (!wrapper) return;
+    const children = wrapper.querySelector(':scope > .add-folder-tree-children');
+    const toggle = wrapper.querySelector(':scope > .add-folder-tree-item .add-folder-tree-toggle');
+    const icon = toggle?.querySelector('i');
+    if (!children || !toggle || toggle.disabled) return;
+
+    const shouldExpand = forceExpand == null ? children.hidden : !!forceExpand;
+    children.hidden = !shouldExpand;
+    if (icon) {
+        icon.classList.toggle('fa-chevron-right', !shouldExpand);
+        icon.classList.toggle('fa-chevron-down', shouldExpand);
+    }
+}
+
+function formatAddPostponedTreeHours(timeMs, locale) {
+    const safeMs = Math.max(0, Number(timeMs || 0) || 0);
+    const roundedHours = Math.round((safeMs / (1000 * 60 * 60)) * 10) / 10;
+    if (roundedHours === 0) return '0';
+    return roundedHours.toLocaleString(locale, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1
+    });
+}
+
+function createAddPostponedTreeNode(nodeKey, state) {
+    const node = state?.nodeMap?.get(nodeKey);
+    if (!node) return null;
+
+    const isZh = currentLang === 'zh_CN';
+    const locale = isZh ? 'zh-CN' : 'en-US';
+    const isFolder = node.kind === 'folder';
+    const childKeys = isFolder && Array.isArray(node.childKeys) ? node.childKeys : [];
+    const hasChildren = isFolder && childKeys.length > 0;
+    const timeMs = isFolder
+        ? Math.max(0, Number(node.totalTimeMs || 0) || 0)
+        : Math.max(0, Number(node.timeMs || 0) || 0);
+    const timeHoursText = formatAddPostponedTreeHours(timeMs, locale);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'folder-tree-node add-folder-tree-node';
+    if (hasChildren) {
+        wrapper.classList.add('has-children');
+    }
+    wrapper.dataset.nodeKey = nodeKey;
+
+    const row = document.createElement('div');
+    row.className = `add-folder-tree-item${isFolder ? ' is-folder' : ' is-bookmark'}`;
+    row.dataset.nodeKey = nodeKey;
+    row.dataset.id = node.id || '';
+    row.dataset.title = node.title || '';
+    row.title = node.pathText || node.title;
+    const isFirstRow = isFolder && state && state._unitInjected !== true;
+    if (isFirstRow && state) {
+        state._unitInjected = true;
+    }
+    const clickUnitTail = isFirstRow
+        ? `（${isZh ? '点击次数' : 'clicks'}）`
+        : '';
+    const wakeUnitTail = isFirstRow
+        ? `（${isZh ? '唤醒次数' : 'wake-count'}）`
+        : '';
+    const timeUnitTail = isFirstRow
+        ? `（${isZh ? '时间捕捉--小时' : 'time-tracking--hours'}）`
+        : '';
+
+    const spacerOrToggle = hasChildren
+        ? `<button class="add-folder-tree-toggle" type="button" aria-label="${isZh ? '展开文件夹' : 'Expand folder'}"><i class="fas fa-chevron-right"></i></button>`
+        : `<span class="add-folder-tree-toggle-spacer"></span>`;
+
+    const iconHtml = isFolder
+        ? `<i class="fas fa-folder add-tree-folder-icon"></i>`
+        : `<img class="add-bookmark-favicon add-tree-bookmark-favicon" data-bookmark-url="${escapeHtml(node.url || '')}" src="${getFaviconUrl(node.url)}" alt="">`;
+
+    row.innerHTML = `
+        ${spacerOrToggle}
+        <input type="checkbox" class="add-tree-checkbox" data-node-key="${escapeHtml(nodeKey)}">
+        ${iconHtml}
+        <span class="add-folder-tree-title">${escapeHtml(node.title || '')}</span>
+        <span class="add-folder-tree-metrics ${isFolder ? '' : 'bookmark-metrics'}">
+            ${isFolder
+                ? `
+            <span class="folder-count" title="${isZh ? '点击次数' : 'Click count'}">${Math.max(0, Number(node.clickCount || 0)).toLocaleString(locale)}${clickUnitTail}</span>
+            <span class="add-folder-tree-clicks" title="${isZh ? '唤醒次数' : 'Wake count'}">${Math.max(0, Number(node.wakeCount || 0)).toLocaleString(locale)}${wakeUnitTail}</span>
+            <span class="add-folder-tree-time" title="${isZh ? '时间捕捉（小时）' : 'Time tracking (hours)'}">${timeHoursText}${timeUnitTail}</span>
+            `
+                : `
+            <span class="folder-count">${Math.max(0, Number(node.clickCount || 0)).toLocaleString(locale)}</span>
+            <span class="add-folder-tree-clicks">${Math.max(0, Number(node.wakeCount || 0)).toLocaleString(locale)}</span>
+            <span class="add-folder-tree-time">${timeHoursText}</span>
+            `}
+        </span>
+    `;
+    wrapper.appendChild(row);
+
+    const children = document.createElement('div');
+    children.className = 'folder-tree-children add-folder-tree-children';
+    children.hidden = true;
+    wrapper.appendChild(children);
+
+    const checkbox = row.querySelector('.add-tree-checkbox');
+    if (checkbox) {
+        checkbox.addEventListener('click', (event) => {
+            event.stopPropagation();
+        });
+        checkbox.addEventListener('change', () => {
+            if (state?.userToggledKeys instanceof Set) {
+                state.userToggledKeys.add(nodeKey);
+            }
+            const checked = checkbox.checked;
+            setAddPostponedTreeSubtreeChecked(nodeKey, checked, state);
+            refreshAddPostponedTreeAncestorChecked(nodeKey, state);
+            syncVisibleAddPostponedTreeCheckboxes(state);
+            updateAddPostponedTreeSelectionSummary(state);
+
+            const bindFolderSelection = state?.bindFolderSelection !== false;
+            if (bindFolderSelection && isFolder && checked) {
+                addPostponedSelectedFolder = {
+                    id: node.id,
+                    title: node.title,
+                    path: node.pathText
+                };
+                const folderName = document.getElementById('addFolderSelectedName');
+                if (folderName) folderName.textContent = node.pathText || node.title;
+            }
+        });
+    }
+
+    const toggle = row.querySelector('.add-folder-tree-toggle');
+    if (toggle && isFolder) {
+        toggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (children.dataset.rendered !== 'true') {
+                const fragment = document.createDocumentFragment();
+                childKeys.forEach((childKey) => {
+                    const childNode = createAddPostponedTreeNode(childKey, state);
+                    if (childNode) fragment.appendChild(childNode);
+                });
+                children.appendChild(fragment);
+                children.dataset.rendered = 'true';
+                syncVisibleAddPostponedTreeCheckboxes(state);
+            }
+            toggleAddPostponedTreeNodeExpand(wrapper);
+        });
+    }
+
+    row.addEventListener('click', (event) => {
+        if (event.target.closest('.add-folder-tree-toggle') || event.target.closest('.add-tree-checkbox')) {
+            return;
+        }
+
+        const bindFolderSelection = state?.bindFolderSelection !== false;
+        if (bindFolderSelection && isFolder) {
+            addPostponedSelectedFolder = {
+                id: node.id,
+                title: node.title,
+                path: node.pathText
+            };
+            const folderName = document.getElementById('addFolderSelectedName');
+            if (folderName) folderName.textContent = node.pathText || node.title;
+        }
+
+        if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    });
+
+    if (checkbox) {
+        const checked = state.checkedKeys.has(nodeKey);
+        const indeterminate = state.indeterminateKeys.has(nodeKey);
+        checkbox.checked = checked;
+        checkbox.indeterminate = indeterminate;
+        row.classList.toggle('checked', checked || indeterminate);
+    }
+
+    return wrapper;
+}
+
+async function loadAddPostponedBookmarkTree() {
+    const listEl = document.getElementById('addBookmarkTreeList');
+    if (!listEl) return;
+
+    const isZh = currentLang === 'zh_CN';
+    listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树中...' : 'Loading bookmark tree...'}</div>`;
+
+    try {
+        const [tree, metricMaps] = await Promise.all([
+            new Promise((resolve, reject) => {
+                browserAPI.bookmarks.getTree((result) => {
+                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                        reject(browserAPI.runtime.lastError);
+                        return;
+                    }
+                    resolve(Array.isArray(result) ? result : []);
+                });
+            }),
+            getAddPostponedTreeMetricMaps()
+        ]);
+
+        const state = buildAddPostponedTreeState(tree, metricMaps);
+        addPostponedTreeState = state;
+
+        if (!Array.isArray(state.rootNodeKeys) || state.rootNodeKeys.length === 0) {
+            listEl.innerHTML = `<div class="add-results-empty">${isZh ? '未找到可选文件夹' : 'No folders available'}</div>`;
+            return;
+        }
+
+        listEl.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        state.rootNodeKeys.forEach((nodeKey) => {
+            const node = createAddPostponedTreeNode(nodeKey, state);
+            if (node) fragment.appendChild(node);
+        });
+        listEl.appendChild(fragment);
+        updateAddPostponedTreeSelectionSummary(state);
+    } catch (error) {
+        console.warn('[添加到待复习] 加载书签树失败:', error);
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树失败' : 'Failed to load bookmark tree'}</div>`;
+    }
+}
+
+async function loadAddBlockBookmarkTree() {
+    const listEl = getAddBlockDomEl('addBlockTreeList');
+    if (!listEl) return;
+
+    const isZh = currentLang === 'zh_CN';
+    listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树中...' : 'Loading bookmark tree...'}</div>`;
+
+    try {
+        const [tree, metricMaps, blocked] = await Promise.all([
+            new Promise((resolve, reject) => {
+                browserAPI.bookmarks.getTree((result) => {
+                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                        reject(browserAPI.runtime.lastError);
+                        return;
+                    }
+                    resolve(Array.isArray(result) ? result : []);
+                });
+            }),
+            getAddPostponedTreeMetricMaps(),
+            getBlockedBookmarks()
+        ]);
+
+        const state = buildAddPostponedTreeState(tree, metricMaps);
+        state.listId = 'addBlockTreeList';
+        state.selectedNameId = 'addBlockTreeSelectedName';
+        state.bindFolderSelection = false;
+        addBlockUnifiedTreeState = state;
+
+        // 不再自动预勾选已屏蔽项，避免“确认即全量重写屏蔽”导致推荐池被误清空。
+
+        if (!Array.isArray(state.rootNodeKeys) || state.rootNodeKeys.length === 0) {
+            listEl.innerHTML = `<div class="add-results-empty">${isZh ? '未找到可选文件夹' : 'No folders available'}</div>`;
+            return;
+        }
+
+        listEl.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        state.rootNodeKeys.forEach((nodeKey) => {
+            const node = createAddPostponedTreeNode(nodeKey, state);
+            if (node) fragment.appendChild(node);
+        });
+        listEl.appendChild(fragment);
+        updateAddPostponedTreeSelectionSummary(state);
+    } catch (error) {
+        console.warn('[添加到屏蔽] 加载书签树失败:', error);
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树失败' : 'Failed to load bookmark tree'}</div>`;
+    }
 }
 
 // 搜索书签
@@ -30538,7 +31821,8 @@ async function loadDomainList() {
             if (!b.url) continue;
             try {
                 const url = new URL(b.url);
-                const domain = url.hostname;
+                const domain = getRecommendBaseDomainFromHost(url.hostname);
+                if (!domain) continue;
                 if (!domainMap.has(domain)) {
                     domainMap.set(domain, { count: 0, bookmarkIds: [] });
                 }
@@ -30549,9 +31833,9 @@ async function loadDomainList() {
             }
         }
 
-        // 按数量排序并保存
+        // 按域名字母顺序排序（A-Z）
         addPostponedDomainData = Array.from(domainMap.entries())
-            .sort((a, b) => b[1].count - a[1].count);
+            .sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
 
         renderDomainList(addPostponedDomainData);
     } catch (e) {
@@ -30620,6 +31904,150 @@ function renderDomainList(domains) {
     });
 }
 
+async function searchBookmarksForAddBlock(keyword) {
+    const resultsEl = getAddBlockDomEl('addBlockSearchResults');
+    const countEl = getAddBlockDomEl('addBlockSearchSelectedCount');
+    if (!resultsEl) return;
+
+    if (!keyword.trim()) {
+        resultsEl.innerHTML = `<div class="add-results-empty">${currentLang === 'zh_CN' ? '输入关键词搜索书签' : 'Enter keyword to search bookmarks'}</div>`;
+        return;
+    }
+
+    try {
+        const blocked = await getBlockedBookmarks();
+        const blockedSet = new Set((blocked?.bookmarks || []).map(id => String(id || '').trim()).filter(Boolean));
+        const results = await browserAPI.bookmarks.search(keyword);
+        const bookmarks = results.filter(b => b.url && !blockedSet.has(String(b.id || '').trim())).slice(0, 50);
+
+        if (bookmarks.length === 0) {
+            resultsEl.innerHTML = `<div class="add-results-empty">${currentLang === 'zh_CN' ? '未找到匹配的书签' : 'No bookmarks found'}</div>`;
+            return;
+        }
+
+        resultsEl.innerHTML = bookmarks.map(b => `
+            <div class="add-result-item ${addBlockUnifiedSearchSelected.has(b.id) ? 'selected' : ''}" data-id="${b.id}">
+                <input type="checkbox" class="add-result-checkbox" ${addBlockUnifiedSearchSelected.has(b.id) ? 'checked' : ''}>
+                <img class="add-result-favicon" data-bookmark-url="${escapeHtml(b.url || '')}" src="${getFaviconUrl(b.url)}">
+                <div class="add-result-info">
+                    <div class="add-result-title">${escapeHtml(b.title || b.url)}</div>
+                    <div class="add-result-url">${escapeHtml(b.url)}</div>
+                </div>
+            </div>
+        `).join('');
+
+        resultsEl.querySelectorAll('.add-result-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const id = item.dataset.id;
+                const checkbox = item.querySelector('.add-result-checkbox');
+                if (addBlockUnifiedSearchSelected.has(id)) {
+                    addBlockUnifiedSearchSelected.delete(id);
+                    item.classList.remove('selected');
+                    checkbox.checked = false;
+                } else {
+                    addBlockUnifiedSearchSelected.add(id);
+                    item.classList.add('selected');
+                    checkbox.checked = true;
+                }
+                if (countEl) countEl.textContent = addBlockUnifiedSearchSelected.size;
+            });
+        });
+    } catch (e) {
+        console.error('[添加到屏蔽] 搜索失败:', e);
+    }
+}
+
+async function loadDomainListForAddBlock() {
+    const listEl = getAddBlockDomEl('addBlockUnifiedDomainList');
+    const countEl = getAddBlockDomEl('addBlockUnifiedDomainSelectedCount');
+    const searchInput = getAddBlockDomEl('addBlockUnifiedDomainSearchInput');
+    if (!listEl) return;
+
+    const isZh = currentLang === 'zh_CN';
+    listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载中...' : 'Loading...'}</div>`;
+    if (searchInput) searchInput.value = '';
+    if (countEl) countEl.textContent = '0';
+
+    try {
+        const [allBookmarks, blocked] = await Promise.all([getAllBookmarksFlat(), getBlockedBookmarks()]);
+        const blockedDomains = new Set((blocked?.domains || []).map(d => getRecommendBaseDomainFromHost(d)).filter(Boolean));
+        const domainMap = new Map();
+        for (const b of allBookmarks) {
+            if (!b.url) continue;
+            try {
+                const url = new URL(b.url);
+                const domain = getRecommendBaseDomainFromHost(url.hostname);
+                if (!domain || blockedDomains.has(domain)) continue;
+                if (!domainMap.has(domain)) {
+                    domainMap.set(domain, { count: 0 });
+                }
+                domainMap.get(domain).count++;
+            } catch {
+            }
+        }
+
+        addBlockUnifiedDomainData = Array.from(domainMap.entries())
+            .sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
+
+        renderDomainListForAddBlock(addBlockUnifiedDomainData);
+    } catch (e) {
+        console.error('[添加到屏蔽] 加载域名列表失败:', e);
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载失败' : 'Failed to load'}</div>`;
+    }
+}
+
+function filterDomainListForAddBlock(keyword) {
+    if (!keyword.trim()) {
+        renderDomainListForAddBlock(addBlockUnifiedDomainData);
+        return;
+    }
+    const keywordLower = keyword.toLowerCase();
+    const filtered = addBlockUnifiedDomainData.filter(([domain]) =>
+        domain.toLowerCase().includes(keywordLower)
+    );
+    renderDomainListForAddBlock(filtered);
+}
+
+function renderDomainListForAddBlock(domains) {
+    const listEl = getAddBlockDomEl('addBlockUnifiedDomainList');
+    const countEl = getAddBlockDomEl('addBlockUnifiedDomainSelectedCount');
+    if (!listEl) return;
+    const isZh = currentLang === 'zh_CN';
+
+    if (domains.length === 0) {
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '没有找到匹配的域名' : 'No matching domains'}</div>`;
+        return;
+    }
+
+    const displayDomains = domains.slice(0, 100);
+    listEl.innerHTML = displayDomains.map(([domain, data]) => `
+        <div class="add-domain-item ${addBlockUnifiedDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
+            <input type="checkbox" ${addBlockUnifiedDomainSelected.has(domain) ? 'checked' : ''}>
+            <div class="add-domain-info">
+                <div class="add-domain-name">${escapeHtml(domain)}</div>
+                <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
+            </div>
+        </div>
+    `).join('');
+
+    listEl.querySelectorAll('.add-domain-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const domain = item.dataset.domain;
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            if (addBlockUnifiedDomainSelected.has(domain)) {
+                addBlockUnifiedDomainSelected.delete(domain);
+                item.classList.remove('selected');
+                checkbox.checked = false;
+            } else {
+                addBlockUnifiedDomainSelected.add(domain);
+                item.classList.add('selected');
+                checkbox.checked = true;
+            }
+            if (countEl) countEl.textContent = addBlockUnifiedDomainSelected.size;
+        });
+    });
+}
+
 function normalizeRuntimeBookmarkEntry(entry) {
     if (!entry || !entry.url) return null;
 
@@ -30678,7 +32106,17 @@ async function confirmAddToPostponed() {
     let bookmarkIds = [];
     const isZh = currentLang === 'zh_CN';
 
-    if (panelType === 'folder') {
+    if (panelType === 'tree') {
+        if (!addPostponedTreeState || !(addPostponedTreeState.selectedBookmarkIds instanceof Set) || addPostponedTreeState.selectedBookmarkIds.size === 0) {
+            alert(isZh ? '请先在书签树中勾选至少一个文件夹或书签' : 'Please check at least one folder or bookmark in bookmark tree');
+            return;
+        }
+        bookmarkIds = Array.from(addPostponedTreeState.selectedBookmarkIds);
+        if (bookmarkIds.length === 0) {
+            alert(isZh ? '勾选项中没有可添加的书签' : 'No bookmarks found in checked items');
+            return;
+        }
+    } else if (panelType === 'folder') {
         // 从文件夹抽取
         if (!addPostponedSelectedFolder) {
             alert(isZh ? '请先选择一个文件夹' : 'Please select a folder first');
@@ -30726,7 +32164,7 @@ async function confirmAddToPostponed() {
             if (!b.url) continue;
             try {
                 const url = new URL(b.url);
-                if (selectedDomains.includes(url.hostname)) {
+                if (selectedDomains.includes(getRecommendBaseDomainFromHost(url.hostname))) {
                     bookmarkIds.push(b.id);
                 }
             } catch {
@@ -30743,6 +32181,18 @@ async function confirmAddToPostponed() {
         return;
     }
 
+    const blocked = await getBlockedBookmarks();
+    const filtered = await filterBookmarkIdsAllowedByBlockedState(bookmarkIds, blocked);
+    bookmarkIds = filtered.allowedIds;
+    if (bookmarkIds.length === 0) {
+        const msg = isZh
+            ? '所选书签都已被屏蔽，未加入待复习'
+            : 'All selected bookmarks are blocked, nothing was added';
+        try { showToast(msg); } catch (_) { alert(msg); }
+        return;
+    }
+    await clearFlippedForBookmarkIds(bookmarkIds);
+
     // 添加到待复习队列（手动添加的书签会获得优先级提升）
     const postponed = await getPostponedBookmarks();
     const now = Date.now();
@@ -30755,11 +32205,18 @@ async function confirmAddToPostponed() {
 
     // 生成分组信息
     let groupInfo = null;
-    if (panelType === 'folder' && addPostponedSelectedFolder) {
+    if (panelType === 'tree') {
+        groupInfo = {
+            type: 'folder',
+            id: `folder_tree_${now}`,
+            name: isZh ? '顺序刷新' : 'Refresh in order',
+            compactLabel: true
+        };
+    } else if (panelType === 'folder' && addPostponedSelectedFolder) {
         groupInfo = {
             type: 'folder',
             id: `folder_${addPostponedSelectedFolder.id}_${now}`,
-            name: addPostponedSelectedFolder.title,
+            name: addPostponedSelectedFolder.path || addPostponedSelectedFolder.title,
             folderId: addPostponedSelectedFolder.id
         };
     } else if (panelType === 'domain') {
@@ -30784,7 +32241,8 @@ async function confirmAddToPostponed() {
                 manuallyAdded: true, // 标记为手动添加，用于优先级提升
                 groupId: groupInfo?.id || null,
                 groupType: groupInfo?.type || 'single',
-                groupName: groupInfo?.name || null
+                groupName: groupInfo?.name || null,
+                groupCompactLabel: groupInfo?.compactLabel === true
             });
             addedCount++;
             scoreNeedsUpdateIds.push(id);
@@ -30796,6 +32254,7 @@ async function confirmAddToPostponed() {
             existing.groupId = groupInfo?.id || null;
             existing.groupType = groupInfo?.type || 'single';
             existing.groupName = groupInfo?.name || null;
+            existing.groupCompactLabel = groupInfo?.compactLabel === true;
             scoreNeedsUpdateIds.push(id);
         }
     }
@@ -30825,9 +32284,10 @@ async function confirmAddToPostponed() {
     await refreshRecommendCards(true); // 强制刷新推荐卡片
 
     // 显示成功提示
+    const skippedBlockedCount = Array.isArray(filtered.blockedIds) ? filtered.blockedIds.length : 0;
     const msg = isZh
-        ? `已添加 ${bookmarkIds.length} 个书签到待复习`
-        : `Added ${bookmarkIds.length} bookmark(s) to review`;
+        ? `已添加 ${bookmarkIds.length} 个书签到待复习${skippedBlockedCount > 0 ? `，跳过 ${skippedBlockedCount} 个已屏蔽书签` : ''}`
+        : `Added ${bookmarkIds.length} bookmark(s) to review${skippedBlockedCount > 0 ? `, skipped ${skippedBlockedCount} blocked` : ''}`;
 
     // 使用临时提示而不是 alert
     showToast(msg);
@@ -31061,6 +32521,48 @@ async function checkAndIncrementOpenCount(options = {}) {
     }
 }
 
+const RECOMMEND_LAZY_BATCH_SIZE = 20;
+
+async function renderRecommendLazyBatch(container, entries, renderEntry, options = {}) {
+    if (!container || !Array.isArray(entries) || typeof renderEntry !== 'function') return;
+    const batchSize = Math.max(1, Number(options.batchSize || RECOMMEND_LAZY_BATCH_SIZE) || RECOMMEND_LAZY_BATCH_SIZE);
+    const isZh = currentLang === 'zh_CN';
+    let renderedCount = 0;
+    let isRendering = false;
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = `recommend-lazy-more ${options.className || ''}`.trim();
+
+    const updateButton = () => {
+        const remaining = Math.max(0, entries.length - renderedCount);
+        moreBtn.textContent = isZh
+            ? `加载更多 (${Math.min(batchSize, remaining)}/${remaining})`
+            : `Load more (${Math.min(batchSize, remaining)}/${remaining})`;
+        moreBtn.style.display = remaining > 0 ? 'block' : 'none';
+    };
+
+    const renderNext = async () => {
+        if (isRendering) return;
+        isRendering = true;
+        if (moreBtn.parentNode === container) moreBtn.remove();
+        const nextEntries = entries.slice(renderedCount, renderedCount + batchSize);
+        renderedCount += nextEntries.length;
+        for (const entry of nextEntries) {
+            try {
+                await renderEntry(entry);
+            } catch (e) {
+                console.warn('[推荐列表] 分批渲染条目失败:', e);
+            }
+        }
+        updateButton();
+        if (renderedCount < entries.length) container.appendChild(moreBtn);
+        isRendering = false;
+    };
+
+    moreBtn.onclick = renderNext;
+    await renderNext();
+}
+
 // 加载待复习队列
 async function loadPostponedList() {
     const listEl = document.getElementById('postponedList');
@@ -31110,7 +32612,7 @@ async function loadPostponedList() {
         updatePostponedCollapse(activePostponed.length);
 
         // 清空列表（保留空状态元素）
-        const items = listEl.querySelectorAll('.postponed-item, .postponed-group');
+        const items = listEl.querySelectorAll('.postponed-item, .postponed-group, .recommend-lazy-more');
         items.forEach(item => item.remove());
 
         if (activePostponed.length === 0) {
@@ -31120,17 +32622,20 @@ async function loadPostponedList() {
 
         if (emptyEl) emptyEl.style.display = 'none';
 
+        const sortedPostponed = sortPostponedByReviewOrder(activePostponed);
+
         // 按分组整理书签
         const groups = new Map(); // groupId -> items[]
         const singles = []; // 没有分组的单个书签
         const delayedItems = []; // 通过卡片⏰按钮添加的延迟书签
 
-        for (const p of activePostponed) {
+        for (const p of sortedPostponed) {
             if (p.groupId && p.manuallyAdded) {
                 if (!groups.has(p.groupId)) {
                     groups.set(p.groupId, {
                         type: p.groupType,
                         name: p.groupName,
+                        compactLabel: p.groupCompactLabel === true || p.groupName === '顺序刷新' || p.groupName === 'Refresh in order',
                         items: []
                     });
                 }
@@ -31142,20 +32647,18 @@ async function loadPostponedList() {
             }
         }
 
-        // 渲染分组
-        for (const [groupId, group] of groups) {
-            await renderPostponedGroup(listEl, groupId, group);
-        }
-
-        // 渲染单个书签
-        for (const p of singles) {
-            await renderPostponedItem(listEl, p);
-        }
-
-        // 渲染延迟书签
-        for (const p of delayedItems) {
-            await renderPostponedItem(listEl, p);
-        }
+        const renderEntries = [
+            ...Array.from(groups.entries()).map(([groupId, group]) => ({ type: 'group', groupId, group })),
+            ...singles.map(p => ({ type: 'item', item: p })),
+            ...delayedItems.map(p => ({ type: 'item', item: p }))
+        ];
+        await renderRecommendLazyBatch(listEl, renderEntries, async (entry) => {
+            if (entry.type === 'group') {
+                await renderPostponedGroup(listEl, entry.groupId, entry.group);
+            } else {
+                await renderPostponedItem(listEl, entry.item);
+            }
+        });
 
     } catch (e) {
         console.error('[待复习] 加载待复习列表失败:', e);
@@ -31173,14 +32676,21 @@ async function renderPostponedGroup(container, groupId, group) {
     const groupEl = document.createElement('div');
     groupEl.className = 'postponed-group';
     groupEl.dataset.groupId = groupId;
+    const groupIcon = group.compactLabel
+        ? ''
+        : `<i class="fas ${icon} postponed-group-icon"></i>`;
+    const groupBadges = group.compactLabel
+        ? ''
+        : `
+                <span class="postponed-group-count">${group.items.length}</span>
+                <span class="postponed-group-type">${typeLabel}</span>`;
 
     groupEl.innerHTML = `
         <div class="postponed-group-header">
             <div class="postponed-group-info">
-                <i class="fas ${icon} postponed-group-icon"></i>
+                ${groupIcon}
                 <span class="postponed-group-name">${escapeHtml(group.name)}</span>
-                <span class="postponed-group-count">${group.items.length}</span>
-                <span class="postponed-group-type">${typeLabel}</span>
+                ${groupBadges}
             </div>
             <div class="postponed-group-actions">
                 <button class="postponed-group-btn expand" title="${isZh ? '展开' : 'Expand'}">
@@ -31217,11 +32727,9 @@ async function renderPostponedGroup(container, groupId, group) {
             expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
             expandBtn.title = isZh ? '展开' : 'Expand';
         } else {
-            // 首次展开时渲染子项
+            // 首次展开时按 20 条一批渲染，避免大分组一次性卡顿
             if (itemsContainer.children.length === 0) {
-                for (const p of group.items) {
-                    await renderPostponedItem(itemsContainer, p, true);
-                }
+                await renderRecommendLazyBatch(itemsContainer, group.items, (p) => renderPostponedItem(itemsContainer, p, true));
             }
             itemsContainer.style.display = 'block';
             expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
@@ -31335,184 +32843,791 @@ function formatPostponeTime(timestamp) {
 // 加载屏蔽列表
 async function loadBlockedLists() {
     const blocked = await getBlockedBookmarks();
-
-    // 加载已屏蔽书签
-    await loadBlockedBookmarksList(blocked.bookmarks);
-
-    // 加载已屏蔽文件夹
-    await loadBlockedFoldersList(blocked.folders);
-
-    // 加载已屏蔽域名
-    await loadBlockedDomainsList(blocked.domains);
+    await loadBlockedUnifiedList(blocked);
 }
 
-// 加载已屏蔽书签列表（相同标题合并显示）
-async function loadBlockedBookmarksList(bookmarkIds) {
-    const listEl = document.getElementById('blockedBookmarksList');
+async function loadBlockedUnifiedList(blocked) {
+    const listEl = document.getElementById('blockedUnifiedList');
+    const emptyEl = document.getElementById('blockedUnifiedEmpty');
+    if (!listEl) return;
+
+    const items = listEl.querySelectorAll('.block-item, .block-group, .recommend-lazy-more');
+    items.forEach(item => item.remove());
+
+    const bookmarks = Array.isArray(blocked?.bookmarks) ? blocked.bookmarks : [];
+    const folders = Array.isArray(blocked?.folders) ? blocked.folders : [];
+    const domains = Array.isArray(blocked?.domains) ? blocked.domains : [];
+    if (bookmarks.length + folders.length + domains.length === 0) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    await loadBlockedDomainUnifiedGroups(bookmarks, domains, listEl);
+    await loadBlockedFoldersList(folders, listEl);
+}
+
+async function loadBlockedDomainUnifiedGroups(bookmarkIds = [], domains = [], container = null) {
+    const listEl = container || document.getElementById('blockedUnifiedList');
+    if (!listEl) return;
+
+    const normalizedDomains = Array.from(new Set(
+        (Array.isArray(domains) ? domains : [])
+            .map(domain => normalizeRecommendDomainHost(domain))
+            .filter(Boolean)
+    ));
+    const displayDomainSet = new Set(normalizedDomains.map(domain => getRecommendBaseDomainFromHost(domain)));
+    const groups = new Map();
+
+    const ensureGroup = (domain, blockedDomain = '') => {
+        const key = getRecommendBaseDomainFromHost(domain) || (currentLang === 'zh_CN' ? '无域名' : 'No domain');
+        if (!groups.has(key)) {
+            groups.set(key, {
+                domain: key,
+                domainBlocked: false,
+                blockedDomains: new Set(),
+                bookmarks: new Map(),
+                directBlockedIds: new Set()
+            });
+        }
+        const group = groups.get(key);
+        const safeBlockedDomain = normalizeRecommendDomainHost(blockedDomain);
+        if (safeBlockedDomain) {
+            group.domainBlocked = true;
+            group.blockedDomains.add(safeBlockedDomain);
+        }
+        return group;
+    };
+
+    for (const domain of normalizedDomains) {
+        ensureGroup(domain, domain);
+    }
+
+    const allBookmarks = displayDomainSet.size > 0 ? await getAllBookmarksFlat() : [];
+    if (displayDomainSet.size > 0) {
+        for (const bookmark of allBookmarks) {
+            if (!bookmark?.url) continue;
+            try {
+                const domain = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
+                if (!displayDomainSet.has(domain)) continue;
+                const group = ensureGroup(domain);
+                const id = String(bookmark.id || '').trim();
+                if (id) group.bookmarks.set(id, bookmark);
+            } catch (_) {
+            }
+        }
+    }
+
+    for (const bookmarkId of Array.isArray(bookmarkIds) ? bookmarkIds : []) {
+        try {
+            const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get(bookmarkId, resolve));
+            if (!bookmarks || bookmarks.length === 0) continue;
+            const bookmark = bookmarks[0];
+            let domain = currentLang === 'zh_CN' ? '无域名' : 'No domain';
+            if (bookmark.url) {
+                try {
+                    domain = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || domain) || domain;
+                } catch (_) {
+                }
+            }
+            const group = ensureGroup(domain);
+            const id = String(bookmarkId || '').trim();
+            if (id) {
+                group.directBlockedIds.add(id);
+                group.bookmarks.set(id, bookmark);
+            }
+        } catch (_) {
+        }
+    }
+
+    const sortedGroups = Array.from(groups.values())
+        .filter(group => group.domainBlocked || group.directBlockedIds.size > 0 || group.bookmarks.size > 0)
+        .sort((a, b) => String(a.domain || '').localeCompare(String(b.domain || ''), 'en', { sensitivity: 'base' }));
+
+    for (const group of sortedGroups) {
+        renderBlockedDomainUnifiedGroup(listEl, group);
+    }
+}
+
+function renderBlockedDomainUnifiedGroup(container, group) {
+    const isZh = currentLang === 'zh_CN';
+    const bookmarks = Array.from(group.bookmarks.values()).sort((a, b) => {
+        const aTitle = String(a?.title || a?.url || '').toLowerCase();
+        const bTitle = String(b?.title || b?.url || '').toLowerCase();
+        return aTitle.localeCompare(bTitle, 'en', { sensitivity: 'base' });
+    });
+    const groupEl = document.createElement('div');
+    groupEl.className = 'block-group';
+    groupEl.dataset.groupKind = group.domainBlocked ? 'domain' : 'bookmark-domain';
+    groupEl.dataset.domain = String(group.domain || '');
+    const iconClass = group.domainBlocked ? 'fa-globe' : 'fa-bookmark';
+    groupEl.innerHTML = `
+        <div class="block-group-header">
+            <div class="block-group-info">
+                <i class="fas ${iconClass} block-item-icon" style="font-size: 17px; color: var(--accent-primary);"></i>
+                <span class="block-group-name">${escapeHtml(group.domain)}</span>
+            </div>
+            <div class="block-group-actions">
+                <button class="block-group-btn expand" title="${isZh ? '展开' : 'Expand'}"><i class="fas fa-chevron-down"></i></button>
+                <button class="block-group-btn cancel" title="${isZh ? '恢复全部' : 'Restore all'}"><i class="fas fa-times"></i></button>
+            </div>
+        </div>
+        <div class="block-group-items" style="display:none;"></div>
+    `;
+
+    const header = groupEl.querySelector('.block-group-header');
+    const itemsContainer = groupEl.querySelector('.block-group-items');
+    const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+    const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+
+    async function toggleExpand() {
+        const expanded = itemsContainer.style.display !== 'none';
+        if (expanded) {
+            itemsContainer.style.display = 'none';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+            return;
+        }
+        if (itemsContainer.children.length === 0) {
+            if (bookmarks.length === 0) {
+                itemsContainer.innerHTML = `<div class="add-results-empty">${isZh ? '没有可展开的书签' : 'No bookmarks to show'}</div>`;
+            } else {
+                await renderRecommendLazyBatch(itemsContainer, bookmarks, (bookmark) => {
+                    const id = String(bookmark?.id || '').trim();
+                    const canRestoreBookmark = id && group.directBlockedIds.has(id);
+                    const item = document.createElement('div');
+                    item.className = 'block-item group-child';
+                    item.innerHTML = `
+                        <img class="block-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
+                        <div class="block-item-info"><div class="block-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div></div>
+                        ${canRestoreBookmark ? `<button class="block-item-btn">${isZh ? '恢复' : 'Restore'}</button>` : ''}
+                    `;
+                    const btn = item.querySelector('.block-item-btn');
+                    if (btn) {
+                        btn.onclick = async (e) => {
+                            e.stopPropagation();
+                            await unblockBookmark(id);
+                            await loadBlockedLists();
+                            await refreshRecommendCards();
+                        };
+                    }
+                    itemsContainer.appendChild(item);
+                });
+            }
+        }
+        itemsContainer.style.display = 'block';
+        expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+    }
+
+    header.onclick = (e) => {
+        if (e.target.closest('.block-group-btn')) return;
+        toggleExpand();
+    };
+    expandBtn.onclick = (e) => {
+        e.stopPropagation();
+        toggleExpand();
+    };
+    cancelBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (group.domainBlocked) {
+            for (const domain of group.blockedDomains || []) {
+                await unblockDomain(domain);
+            }
+        }
+        for (const id of group.directBlockedIds) {
+            await unblockBookmark(id);
+        }
+        await loadBlockedLists();
+        await refreshRecommendCards();
+    };
+
+    container.appendChild(groupEl);
+}
+
+function getRecommendBookmarkDomainLabel(bookmark) {
+    const fallback = currentLang === 'zh_CN' ? '无域名' : 'No domain';
+    if (!bookmark?.url) return fallback;
+    try {
+        return getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '') || fallback;
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function normalizeRecommendDomainHost(domain) {
+    return String(domain || '').trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+}
+
+function getRecommendBaseDomainFromHost(hostname) {
+    const safeHost = normalizeRecommendDomainHost(hostname);
+    if (!safeHost) return '';
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(safeHost)) return safeHost;
+    const parts = safeHost.split('.').filter(Boolean);
+    if (parts.length <= 2) return safeHost;
+    const last = parts[parts.length - 1];
+    const secondLast = parts[parts.length - 2];
+    const commonSecondLevelSuffixes = new Set(['com', 'net', 'org', 'gov', 'edu', 'ac', 'co']);
+    const keepCount = last.length === 2 && commonSecondLevelSuffixes.has(secondLast) && parts.length >= 3 ? 3 : 2;
+    return parts.slice(-keepCount).join('.');
+}
+
+function renderBlockedBookmarkPreviewItem(container, bookmark, options = {}) {
+    if (!container || !bookmark) return;
+    const isZh = currentLang === 'zh_CN';
+    const bookmarkId = String(bookmark?.id || '').trim();
+    const showDelete = options.showDelete !== false && bookmarkId;
+    const item = document.createElement('div');
+    item.className = 'block-item group-child';
+    item.innerHTML = `
+        <img class="block-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
+        <div class="block-item-info"><div class="block-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div></div>
+        ${showDelete ? `<button class="block-item-btn">${isZh ? '删除' : 'Remove'}</button>` : ''}
+    `;
+    const btn = item.querySelector('.block-item-btn');
+    if (btn) {
+        btn.onclick = async (e) => {
+            e.stopPropagation();
+            await unblockBookmark(bookmarkId);
+            await loadBlockedLists();
+            await refreshRecommendCards();
+        };
+    }
+    container.appendChild(item);
+}
+
+async function renderBlockedBookmarkDomainSubgroups(container, bookmarks = []) {
+    if (!container) return;
+    const isZh = currentLang === 'zh_CN';
+    const byDomain = new Map();
+    for (const bookmark of Array.isArray(bookmarks) ? bookmarks : []) {
+        const domain = getRecommendBookmarkDomainLabel(bookmark);
+        if (!byDomain.has(domain)) byDomain.set(domain, []);
+        byDomain.get(domain).push(bookmark);
+    }
+
+    const sortedGroups = Array.from(byDomain.entries()).sort((a, b) =>
+        String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' })
+    );
+
+    await renderRecommendLazyBatch(container, sortedGroups, ([domain, groupItems]) => {
+        const sortedItems = [...groupItems].sort((a, b) => {
+            const aTitle = String(a?.title || a?.url || '').toLowerCase();
+            const bTitle = String(b?.title || b?.url || '').toLowerCase();
+            return aTitle.localeCompare(bTitle, 'en', { sensitivity: 'base' });
+        });
+        const groupEl = document.createElement('div');
+        groupEl.className = 'block-group block-domain-subgroup';
+        groupEl.dataset.groupKind = 'bookmark-domain-child';
+        groupEl.dataset.domain = String(domain || '');
+        groupEl.innerHTML = `
+            <div class="block-group-header">
+                <div class="block-group-info">
+                    <i class="fas fa-globe block-item-icon" style="font-size: 15px; color: var(--accent-primary);"></i>
+                    <span class="block-group-name">${escapeHtml(domain)}</span>
+                </div>
+                <div class="block-group-actions">
+                    <button class="block-group-btn expand" title="${isZh ? '展开' : 'Expand'}"><i class="fas fa-chevron-down"></i></button>
+                    <button class="block-group-btn cancel" title="${isZh ? '取消屏蔽' : 'Unblock'}"><i class="fas fa-times"></i></button>
+                </div>
+            </div>
+            <div class="block-group-items" style="display:none;"></div>
+        `;
+
+        const header = groupEl.querySelector('.block-group-header');
+        const itemsContainer = groupEl.querySelector('.block-group-items');
+        const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+        const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+        const toggleExpand = async () => {
+            const expanded = itemsContainer.style.display !== 'none';
+            if (expanded) {
+                itemsContainer.style.display = 'none';
+                expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                return;
+            }
+            if (itemsContainer.children.length === 0) {
+                await renderRecommendLazyBatch(itemsContainer, sortedItems, (bookmark) => renderBlockedBookmarkPreviewItem(itemsContainer, bookmark));
+            }
+            itemsContainer.style.display = 'block';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+        };
+        header.onclick = (e) => {
+            if (e.target.closest('.block-group-btn')) return;
+            toggleExpand();
+        };
+        expandBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleExpand();
+        };
+        cancelBtn.onclick = async (e) => {
+            e.stopPropagation();
+            const directIds = sortedItems.map(bookmark => String(bookmark?.id || '').trim()).filter(Boolean);
+            for (const id of directIds) {
+                await unblockBookmark(id);
+            }
+            await unblockDomain(domain);
+            await loadBlockedLists();
+            await refreshRecommendCards();
+        };
+        container.appendChild(groupEl);
+    });
+}
+
+async function loadBlockedBookmarkDomainsList(bookmarkIds, container = null) {
+    const listEl = container || document.getElementById('blockedBookmarksList');
     const countEl = document.getElementById('blockedBookmarksCount');
     const emptyEl = document.getElementById('blockedBookmarksEmpty');
     if (!listEl) return;
+    const isUnifiedContainer = Boolean(container);
+
+    if (countEl) countEl.textContent = bookmarkIds.length;
+
+    if (!isUnifiedContainer) {
+        const items = listEl.querySelectorAll('.block-item, .block-group, .recommend-lazy-more');
+        items.forEach(item => item.remove());
+    }
+
+    if (bookmarkIds.length === 0) {
+        if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'none';
+
+    const byDomain = new Map();
+    for (const bookmarkId of bookmarkIds) {
+        try {
+            const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get(bookmarkId, resolve));
+            if (!bookmarks || bookmarks.length === 0) continue;
+            const bookmark = bookmarks[0];
+            let domain = currentLang === 'zh_CN' ? '无域名' : 'No domain';
+            if (bookmark.url) {
+                try {
+                    domain = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || domain) || domain;
+                } catch (_) {
+                }
+            }
+            if (!byDomain.has(domain)) byDomain.set(domain, []);
+            byDomain.get(domain).push({ bookmarkId: String(bookmarkId), bookmark });
+        } catch (_) {
+        }
+    }
+
+    const sortedGroups = Array.from(byDomain.entries())
+        .sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
+    for (const [domain, group] of sortedGroups) {
+        await renderBlockedBookmarkDomainGroup(listEl, domain, group);
+    }
+}
+
+async function renderBlockedBookmarkDomainGroup(container, domain, group) {
+    const isZh = currentLang === 'zh_CN';
+    const groupEl = document.createElement('div');
+    groupEl.className = 'block-group';
+    groupEl.dataset.groupKind = 'bookmark-domain';
+    groupEl.dataset.domain = String(domain || '');
+    groupEl.innerHTML = `
+        <div class="block-group-header">
+            <div class="block-group-info">
+                <i class="fas fa-bookmark block-item-icon" style="font-size: 17px; color: var(--accent-primary);"></i>
+                <span class="block-group-name">${escapeHtml(domain)}</span>
+            </div>
+            <div class="block-group-actions">
+                <button class="block-group-btn expand" title="${isZh ? '展开' : 'Expand'}"><i class="fas fa-chevron-down"></i></button>
+                <button class="block-group-btn cancel" title="${isZh ? '恢复全部' : 'Restore all'}"><i class="fas fa-times"></i></button>
+            </div>
+        </div>
+        <div class="block-group-items" style="display:none;"></div>
+    `;
+
+    const header = groupEl.querySelector('.block-group-header');
+    const itemsContainer = groupEl.querySelector('.block-group-items');
+    const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+    const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+
+    async function toggleExpand() {
+        const expanded = itemsContainer.style.display !== 'none';
+        if (expanded) {
+            itemsContainer.style.display = 'none';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+            return;
+        }
+        if (itemsContainer.children.length === 0) {
+            const sorted = [...group].sort((a, b) => {
+                const aTitle = String(a?.bookmark?.title || a?.bookmark?.url || '').toLowerCase();
+                const bTitle = String(b?.bookmark?.title || b?.bookmark?.url || '').toLowerCase();
+                return aTitle.localeCompare(bTitle, 'en', { sensitivity: 'base' });
+            });
+            await renderRecommendLazyBatch(itemsContainer, sorted, (entry) => renderBlockedBookmarkItem(itemsContainer, { bookmarkId: entry.bookmarkId }, true));
+        }
+        itemsContainer.style.display = 'block';
+        expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+    }
+
+    header.onclick = (e) => {
+        if (e.target.closest('.block-group-btn')) return;
+        toggleExpand();
+    };
+    expandBtn.onclick = (e) => {
+        e.stopPropagation();
+        toggleExpand();
+    };
+    cancelBtn.onclick = async (e) => {
+        e.stopPropagation();
+        for (const entry of group) {
+            await unblockBookmark(entry.bookmarkId);
+        }
+        await loadBlockedLists();
+        await refreshRecommendCards();
+    };
+
+    container.appendChild(groupEl);
+}
+
+// 加载已屏蔽书签列表（相同标题合并显示）
+async function loadBlockedBookmarksList(bookmarkIds, container = null) {
+    const listEl = container || document.getElementById('blockedBookmarksList');
+    const countEl = document.getElementById('blockedBookmarksCount');
+    const emptyEl = document.getElementById('blockedBookmarksEmpty');
+    if (!listEl) return;
+    const isUnifiedContainer = Boolean(container);
 
     // 更新计数
     if (countEl) countEl.textContent = bookmarkIds.length;
 
     // 清空列表
-    const items = listEl.querySelectorAll('.block-item, .block-group');
-    items.forEach(item => item.remove());
+    if (!isUnifiedContainer) {
+        const items = listEl.querySelectorAll('.block-item, .block-group, .recommend-lazy-more');
+        items.forEach(item => item.remove());
+    }
 
     if (bookmarkIds.length === 0) {
-        if (emptyEl) emptyEl.style.display = 'block';
+        if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'block';
         return;
     }
 
-    if (emptyEl) emptyEl.style.display = 'none';
+    if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'none';
 
-    // 获取所有书签信息并按标题分组
-    const titleGroups = new Map(); // title -> [{id, bookmark}]
-
-    for (const id of bookmarkIds) {
+    const blockedByTitle = new Map(); // title -> [{ bookmarkId, bookmark }]
+    for (const bookmarkId of bookmarkIds) {
         try {
-            const bookmarks = await new Promise(resolve => {
-                browserAPI.bookmarks.get(id, resolve);
-            });
+            const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get(bookmarkId, resolve));
             if (!bookmarks || bookmarks.length === 0) continue;
             const bookmark = bookmarks[0];
-            const title = bookmark.title || bookmark.url;
-
-            if (!titleGroups.has(title)) {
-                titleGroups.set(title, []);
-            }
-            titleGroups.get(title).push({ id, bookmark });
-        } catch (e) {
-            // 书签可能已被删除
+            const title = String(bookmark.title || bookmark.url || '').trim() || (currentLang === 'zh_CN' ? '未命名书签' : 'Untitled bookmark');
+            if (!blockedByTitle.has(title)) blockedByTitle.set(title, []);
+            blockedByTitle.get(title).push({ bookmarkId: String(bookmarkId), bookmark });
+        } catch (_) {
         }
     }
 
     const isZh = currentLang === 'zh_CN';
+    for (const [title, group] of blockedByTitle.entries()) {
+        if (!Array.isArray(group) || group.length === 0) continue;
+        if (group.length === 1) {
+            const payload = { bookmarkId: group[0].bookmarkId };
+            await renderBlockedBookmarkItem(listEl, payload, false);
+            continue;
+        }
+        await renderBlockedBookmarkGroup(listEl, title, group);
+    }
 
-    // 渲染分组
-    for (const [title, group] of titleGroups) {
-        const firstBookmark = group[0].bookmark;
-        const count = group.length;
-        const allIds = group.map(g => g.id);
+    listEl.querySelectorAll('.block-group[data-group-kind="domain"]').forEach((groupEl) => {
+        listEl.appendChild(groupEl);
+    });
+}
 
-        const item = document.createElement('div');
-        item.className = 'block-item';
-
-        const countBadge = count > 1
-            ? `<span class="block-item-count">${count}</span>`
-            : '';
-
-        item.innerHTML = `
-            <img class="block-item-icon" data-bookmark-url="${escapeHtml(firstBookmark.url || '')}" src="${getFaviconUrl(firstBookmark.url)}" alt="">
-            <div class="block-item-info">
-                <div class="block-item-title">${escapeHtml(title)}</div>
+async function renderBlockedBookmarkGroup(container, title, group) {
+    const isZh = currentLang === 'zh_CN';
+    const groupEl = document.createElement('div');
+    groupEl.className = 'block-group';
+    groupEl.dataset.groupKind = 'bookmark';
+    const first = group[0]?.bookmark || {};
+    groupEl.innerHTML = `
+        <div class="block-group-header">
+            <div class="block-group-info">
+                <img class="block-item-icon" data-bookmark-url="${escapeHtml(first.url || '')}" src="${getFaviconUrl(first.url)}" alt="">
+                <span class="block-group-name">${escapeHtml(title)}</span>
             </div>
-            ${countBadge}
-            <button class="block-item-btn">${isZh ? '恢复' : 'Restore'}</button>
-        `;
+            <div class="block-group-actions">
+                <button class="block-group-btn expand" title="${isZh ? '展开' : 'Expand'}"><i class="fas fa-chevron-down"></i></button>
+                <button class="block-group-btn cancel" title="${isZh ? '恢复全部' : 'Restore all'}"><i class="fas fa-times"></i></button>
+            </div>
+        </div>
+        <div class="block-group-items" style="display:none;"></div>
+    `;
 
+    const header = groupEl.querySelector('.block-group-header');
+    const itemsContainer = groupEl.querySelector('.block-group-items');
+    const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+    const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+
+    async function toggleExpand() {
+        const expanded = itemsContainer.style.display !== 'none';
+        if (expanded) {
+            itemsContainer.style.display = 'none';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+            return;
+        }
+        if (itemsContainer.children.length === 0) {
+            await renderRecommendLazyBatch(itemsContainer, group, (entry) => renderBlockedBookmarkItem(itemsContainer, { bookmarkId: entry.bookmarkId }, true));
+        }
+        itemsContainer.style.display = 'block';
+        expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+    }
+
+    header.onclick = (e) => {
+        if (e.target.closest('.block-group-btn')) return;
+        toggleExpand();
+    };
+    expandBtn.onclick = (e) => {
+        e.stopPropagation();
+        toggleExpand();
+    };
+    cancelBtn.onclick = async (e) => {
+        e.stopPropagation();
+        for (const entry of group) {
+            await unblockBookmark(entry.bookmarkId);
+        }
+        await loadBlockedLists();
+        await refreshRecommendCards();
+    };
+
+    container.appendChild(groupEl);
+}
+
+async function renderBlockedBookmarkItem(container, payload, isGroupChild = false) {
+    const bookmarkId = String(payload?.bookmarkId || '').trim();
+    if (!bookmarkId) return;
+    try {
+        const bookmarks = await new Promise(resolve => browserAPI.bookmarks.get(bookmarkId, resolve));
+        if (!bookmarks || bookmarks.length === 0) return;
+        const bookmark = bookmarks[0];
+        const item = document.createElement('div');
+        item.className = 'block-item' + (isGroupChild ? ' group-child' : '');
+        item.innerHTML = `
+            <img class="block-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
+            <div class="block-item-info">
+                <div class="block-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
+            </div>
+            <button class="block-item-btn">${currentLang === 'en' ? 'Restore' : '恢复'}</button>
+        `;
         const btn = item.querySelector('.block-item-btn');
         btn.onclick = async () => {
-            // 恢复所有同标题的书签
-            for (const id of allIds) {
-                await unblockBookmark(id);
+            await unblockBookmark(bookmarkId);
+            await loadBlockedLists();
+            await refreshRecommendCards();
+        };
+        container.appendChild(item);
+    } catch (_) {
+    }
+}
+
+// 加载已屏蔽文件夹列表
+async function loadBlockedFoldersList(folderIds, container = null) {
+    const listEl = container || document.getElementById('blockedFoldersList');
+    const countEl = document.getElementById('blockedFoldersCount');
+    const emptyEl = document.getElementById('blockedFoldersEmpty');
+    if (!listEl) return;
+    const isUnifiedContainer = Boolean(container);
+
+    if (countEl) countEl.textContent = folderIds.length;
+
+    if (!isUnifiedContainer) {
+        const items = listEl.querySelectorAll('.block-item, .block-group, .recommend-lazy-more');
+        items.forEach(item => item.remove());
+    }
+
+    if (folderIds.length === 0) {
+        if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+
+    if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'none';
+
+    const sortedFolderIds = [];
+    for (const id of folderIds) {
+        try {
+            const folders = await new Promise(resolve => browserAPI.bookmarks.get(id, resolve));
+            const folder = Array.isArray(folders) ? folders[0] : null;
+            sortedFolderIds.push({
+                id,
+                title: String(folder?.title || id || '').toLowerCase()
+            });
+        } catch (_) {
+            sortedFolderIds.push({ id, title: String(id || '').toLowerCase() });
+        }
+    }
+    sortedFolderIds.sort((a, b) => a.title.localeCompare(b.title, 'en', { sensitivity: 'base' }));
+
+    for (const item of sortedFolderIds) {
+        await renderBlockedFolderGroup(listEl, item.id);
+    }
+}
+
+async function renderBlockedFolderGroup(container, folderId) {
+    const isZh = currentLang === 'zh_CN';
+    try {
+        const folders = await new Promise(resolve => browserAPI.bookmarks.get(folderId, resolve));
+        if (!folders || folders.length === 0) return;
+        const folder = folders[0];
+        const bookmarkItems = await getBookmarksFromFolder(folderId, true);
+        const groupEl = document.createElement('div');
+        groupEl.className = 'block-group';
+        groupEl.dataset.folderId = String(folderId);
+        groupEl.dataset.groupKind = 'folder';
+        groupEl.innerHTML = `
+            <div class="block-group-header">
+                <div class="block-group-info">
+                    <i class="fas fa-globe block-item-icon" style="font-size: 18px; color: var(--accent-primary);"></i>
+                    <span class="block-group-name">A-Z</span>
+                </div>
+                <div class="block-group-actions">
+                    <button class="block-group-btn expand" title="${isZh ? '展开' : 'Expand'}"><i class="fas fa-chevron-down"></i></button>
+                    <button class="block-group-btn cancel" title="${isZh ? '恢复' : 'Restore'}"><i class="fas fa-times"></i></button>
+                </div>
+            </div>
+            <div class="block-group-items" style="display:none;"></div>
+        `;
+
+        const itemsContainer = groupEl.querySelector('.block-group-items');
+        const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+        const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+        const header = groupEl.querySelector('.block-group-header');
+
+        async function toggleExpand() {
+            const expanded = itemsContainer.style.display !== 'none';
+            if (expanded) {
+                itemsContainer.style.display = 'none';
+                expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                return;
+            }
+            if (itemsContainer.children.length === 0) {
+                await renderBlockedBookmarkDomainSubgroups(itemsContainer, bookmarkItems);
+            }
+            itemsContainer.style.display = 'block';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+        }
+
+        header.onclick = (e) => {
+            if (e.target.closest('.block-group-btn')) return;
+            toggleExpand();
+        };
+        expandBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleExpand();
+        };
+        cancelBtn.onclick = async (e) => {
+            e.stopPropagation();
+            await unblockFolder(folderId);
+            await loadBlockedLists();
+            await refreshRecommendCards();
+        };
+
+        container.appendChild(groupEl);
+    } catch (_) {
+    }
+}
+
+// 加载已屏蔽域名列表
+async function loadBlockedDomainsList(domains, container = null) {
+    const listEl = container || document.getElementById('blockedDomainsList');
+    const countEl = document.getElementById('blockedDomainsCount');
+    const emptyEl = document.getElementById('blockedDomainsEmpty');
+    if (!listEl) return;
+    const isUnifiedContainer = Boolean(container);
+
+    if (countEl) countEl.textContent = domains.length;
+
+    if (!isUnifiedContainer) {
+        const items = listEl.querySelectorAll('.block-item, .block-group, .recommend-lazy-more');
+        items.forEach(item => item.remove());
+    }
+
+    if (domains.length === 0) {
+        if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+
+    if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'none';
+
+    const allBookmarks = await getAllBookmarksFlat();
+    const domainGroups = new Map();
+    for (const domain of domains) {
+        const displayDomain = getRecommendBaseDomainFromHost(domain);
+        if (!displayDomain) continue;
+        if (!domainGroups.has(displayDomain)) domainGroups.set(displayDomain, []);
+        domainGroups.get(displayDomain).push(normalizeRecommendDomainHost(domain));
+    }
+    const sortedDomains = Array.from(domainGroups.keys()).sort((a, b) =>
+        String(a || '').localeCompare(String(b || ''), 'en', { sensitivity: 'base' })
+    );
+    for (const domain of sortedDomains) {
+        const blockedDomains = domainGroups.get(domain) || [];
+        const groupItems = [];
+        for (const b of allBookmarks) {
+            if (!b.url) continue;
+            try {
+                const host = getRecommendBaseDomainFromHost(new URL(b.url).hostname || '');
+                if (host === domain) {
+                    groupItems.push(b);
+                }
+            } catch (_) {
+            }
+        }
+
+        const groupEl = document.createElement('div');
+        groupEl.className = 'block-group';
+        groupEl.dataset.domain = domain;
+        groupEl.dataset.groupKind = 'domain';
+        groupEl.innerHTML = `
+            <div class="block-group-header">
+                <div class="block-group-info">
+                    <i class="fas fa-globe block-item-icon" style="font-size: 18px; color: var(--accent-primary);"></i>
+                    <span class="block-group-name">${escapeHtml(domain)}</span>
+                </div>
+                <div class="block-group-actions">
+                    <button class="block-group-btn expand" title="${currentLang === 'en' ? 'Expand' : '展开'}"><i class="fas fa-chevron-down"></i></button>
+                    <button class="block-group-btn cancel" title="${currentLang === 'en' ? 'Restore' : '恢复'}"><i class="fas fa-times"></i></button>
+                </div>
+            </div>
+            <div class="block-group-items" style="display:none;"></div>
+        `;
+
+        const itemsContainer = groupEl.querySelector('.block-group-items');
+        const expandBtn = groupEl.querySelector('.block-group-btn.expand');
+        const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+        const header = groupEl.querySelector('.block-group-header');
+
+        async function toggleExpand() {
+            const expanded = itemsContainer.style.display !== 'none';
+            if (expanded) {
+                itemsContainer.style.display = 'none';
+                expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                return;
+            }
+            if (itemsContainer.children.length === 0) {
+                await renderRecommendLazyBatch(itemsContainer, groupItems, (bookmark) => renderBlockedBookmarkPreviewItem(itemsContainer, bookmark));
+            }
+            itemsContainer.style.display = 'block';
+            expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+        }
+
+        header.onclick = (e) => {
+            if (e.target.closest('.block-group-btn')) return;
+            toggleExpand();
+        };
+        expandBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleExpand();
+        };
+        cancelBtn.onclick = async (e) => {
+            e.stopPropagation();
+            for (const blockedDomain of blockedDomains) {
+                await unblockDomain(blockedDomain);
             }
             await loadBlockedLists();
             await refreshRecommendCards();
         };
 
-        listEl.appendChild(item);
-    }
-}
-
-// 加载已屏蔽文件夹列表
-async function loadBlockedFoldersList(folderIds) {
-    const listEl = document.getElementById('blockedFoldersList');
-    const countEl = document.getElementById('blockedFoldersCount');
-    const emptyEl = document.getElementById('blockedFoldersEmpty');
-    if (!listEl) return;
-
-    if (countEl) countEl.textContent = folderIds.length;
-
-    const items = listEl.querySelectorAll('.block-item');
-    items.forEach(item => item.remove());
-
-    if (folderIds.length === 0) {
-        if (emptyEl) emptyEl.style.display = 'block';
-        return;
-    }
-
-    if (emptyEl) emptyEl.style.display = 'none';
-
-    for (const id of folderIds) {
-        try {
-            const folders = await new Promise(resolve => {
-                browserAPI.bookmarks.get(id, resolve);
-            });
-            if (!folders || folders.length === 0) continue;
-            const folder = folders[0];
-
-            const item = document.createElement('div');
-            item.className = 'block-item';
-            item.innerHTML = `
-                <i class="fas fa-folder block-item-icon" style="font-size: 18px; color: var(--warning);"></i>
-                <div class="block-item-info">
-                    <div class="block-item-title">${escapeHtml(folder.title)}</div>
-                </div>
-                <button class="block-item-btn" data-id="${id}">${currentLang === 'en' ? 'Restore' : '恢复'}</button>
-            `;
-
-            const btn = item.querySelector('.block-item-btn');
-            btn.onclick = async () => {
-                await unblockFolder(id);
-                await loadBlockedLists();
-                await refreshRecommendCards();
-            };
-
-            listEl.appendChild(item);
-        } catch (e) { }
-    }
-}
-
-// 加载已屏蔽域名列表
-async function loadBlockedDomainsList(domains) {
-    const listEl = document.getElementById('blockedDomainsList');
-    const countEl = document.getElementById('blockedDomainsCount');
-    const emptyEl = document.getElementById('blockedDomainsEmpty');
-    if (!listEl) return;
-
-    if (countEl) countEl.textContent = domains.length;
-
-    const items = listEl.querySelectorAll('.block-item');
-    items.forEach(item => item.remove());
-
-    if (domains.length === 0) {
-        if (emptyEl) emptyEl.style.display = 'block';
-        return;
-    }
-
-    if (emptyEl) emptyEl.style.display = 'none';
-
-    for (const domain of domains) {
-        const item = document.createElement('div');
-        item.className = 'block-item';
-        item.innerHTML = `
-            <i class="fas fa-globe block-item-icon" style="font-size: 18px; color: var(--accent-primary);"></i>
-            <div class="block-item-info">
-                <div class="block-item-title">${escapeHtml(domain)}</div>
-            </div>
-            <button class="block-item-btn" data-domain="${domain}">${currentLang === 'en' ? 'Restore' : '恢复'}</button>
-        `;
-
-        const btn = item.querySelector('.block-item-btn');
-        btn.onclick = async () => {
-            await unblockDomain(domain);
-            await loadBlockedLists();
-            await refreshRecommendCards();
-        };
-
-        listEl.appendChild(item);
+        listEl.appendChild(groupEl);
     }
 }
 
@@ -31545,7 +33660,7 @@ async function unblockFolder(folderId) {
 // 屏蔽/恢复域名
 async function blockDomain(domain) {
     try {
-        const normalized = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+        const normalized = getRecommendBaseDomainFromHost(domain);
         if (!normalized) return false;
 
         const blocked = await getBlockedBookmarks();
@@ -31561,7 +33676,7 @@ async function blockDomain(domain) {
 
 async function unblockDomain(domain) {
     try {
-        const normalized = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+        const normalized = getRecommendBaseDomainFromHost(domain);
         if (!normalized) return false;
 
         const blocked = await getBlockedBookmarks();
@@ -32100,7 +34215,7 @@ async function refreshRecommendCards(force = false) {
                             const bookmark = recommendCards[index];
                             updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
                         } else {
-                            setCardEmpty(card);
+                            hideUnusedRecommendCardSlot(card);
                         }
                     });
 
@@ -32115,6 +34230,20 @@ async function refreshRecommendCards(force = false) {
         // 统一使用后台选卡路径，和快捷复习共享同一套轮转/游标/过滤逻辑
         const backendRound = await selectRecommendCardsRoundShared(force || needsVersionedRound);
         if (backendRound && Array.isArray(backendRound.cards)) {
+            const backendReady = backendRound.success !== false
+                && backendRound.ready !== false
+                && backendRound.repairing !== true;
+            if (!backendReady && backendRound.cards.length === 0) {
+                // 后台仍在修复/准备阶段时，不覆盖当前轮次为“空”，避免误判成“全部已翻阅”。
+                if ((!recommendCards || recommendCards.length === 0) && cards.length > 0) {
+                    setRecommendCardsRowEmptyMessage(
+                        cards,
+                        currentLang === 'en' ? 'Recommendations are preparing...' : '推荐准备中...'
+                    );
+                }
+                return;
+            }
+
             const backendCurrentCards = backendRound.currentCards && typeof backendRound.currentCards === 'object'
                 ? backendRound.currentCards
                 : null;
@@ -32138,13 +34267,10 @@ async function refreshRecommendCards(force = false) {
             if (normalizedCards.length === 0) {
                 await saveHistoryCurrentCards([], []);
                 clearRecommendCardsSnapshot();
-                cards.forEach((card) => {
-                    card.classList.add('empty');
-                    card.querySelector('.card-title').textContent =
-                        currentLang === 'en' ? 'All bookmarks reviewed!' : '所有书签都已翻阅！';
-                    card.querySelector('.card-priority').textContent = '';
-                    card.onclick = null;
-                });
+                setRecommendCardsRowEmptyMessage(
+                    cards,
+                    currentLang === 'en' ? 'No recommendable bookmarks' : '暂无可推荐书签'
+                );
                 await syncRefreshSettingsAfterForce();
                 return;
             }
@@ -32170,7 +34296,7 @@ async function refreshRecommendCards(force = false) {
                     const bookmark = recommendCards[index];
                     updateCardDisplay(card, bookmark, backendFlippedSet.has(String(bookmark?.id || '')));
                 } else {
-                    setCardEmpty(card);
+                    hideUnusedRecommendCardSlot(card);
                 }
             });
 
@@ -32189,11 +34315,10 @@ async function refreshRecommendCards(force = false) {
 
     } catch (error) {
         console.error('[书签推荐] 刷新卡片失败:', error);
-        cards.forEach(card => {
-            card.classList.add('empty');
-            card.querySelector('.card-title').textContent =
-                currentLang === 'en' ? 'Load failed' : '加载失败';
-        });
+        setRecommendCardsRowEmptyMessage(
+            cards,
+            currentLang === 'en' ? 'Load failed' : '加载失败'
+        );
     }
 }
 

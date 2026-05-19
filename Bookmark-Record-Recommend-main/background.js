@@ -523,10 +523,7 @@ function buildQuickReviewPriorityPools(sortedPool = [], options = {}) {
 function getQuickReviewDomainKey(bookmark) {
   if (!bookmark?.url) return '';
   try {
-    return String(new URL(bookmark.url).hostname || '')
-      .trim()
-      .toLowerCase()
-      .replace(/^www\./, '');
+    return getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
   } catch {
     return '';
   }
@@ -676,6 +673,24 @@ function buildRecommendBatchFromPoolForQuickReview(pool = [], startIndex = 0, ba
       selectedIds.add(id);
       batch.push(item);
     }
+  }
+
+  return batch;
+}
+
+function buildSequentialRecommendBatchFromPool(pool = [], startIndex = 0, batchSize = QUICK_REVIEW_RECOMMEND_BATCH_SIZE) {
+  if (!Array.isArray(pool) || pool.length === 0) return [];
+  const size = Math.min(Math.max(1, Math.floor(Number(batchSize) || QUICK_REVIEW_RECOMMEND_BATCH_SIZE)), pool.length);
+  const safeStart = ((Math.floor(Number(startIndex) || 0) % pool.length) + pool.length) % pool.length;
+  const batch = [];
+  const seenIds = new Set();
+
+  for (let step = 0; step < pool.length && batch.length < size; step += 1) {
+    const item = pool[(safeStart + step) % pool.length];
+    const id = String(item?.id || '').trim();
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    batch.push(item);
   }
 
   return batch;
@@ -1027,10 +1042,7 @@ function isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet) {
   if (!blockedDomainSet || blockedDomainSet.size === 0) return false;
   if (!bookmark?.url) return false;
   try {
-    const hostname = String(new URL(bookmark.url).hostname || '')
-      .trim()
-      .toLowerCase()
-      .replace(/^www\./, '');
+    const hostname = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
     return blockedDomainSet.has(hostname);
   } catch {
     return false;
@@ -1052,6 +1064,39 @@ async function selectQuickReviewCardsRoundState(options = {}) {
       scoresReadyChecked: scoresReadyResult != null,
       scoresReadyResult
     });
+  });
+}
+
+async function removeFlippedBookmarksStateByIds(ids = [], options = {}) {
+  const safeIds = normalizeBookmarkIdList(ids || []);
+  if (safeIds.length === 0) {
+    return { success: true, removed: 0, flippedIds: [] };
+  }
+
+  if (options?.unlocked === true) {
+    try {
+      const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
+      const current = Array.isArray(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY])
+        ? result[FLIPPED_BOOKMARKS_STORAGE_KEY]
+        : [];
+      const currentNormalized = normalizeBookmarkIdList(current);
+      const removeSet = new Set(safeIds);
+      const next = currentNormalized.filter(id => !removeSet.has(id));
+      if (next.length !== currentNormalized.length) {
+        await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: next });
+      }
+      return {
+        success: true,
+        removed: Math.max(0, currentNormalized.length - next.length),
+        flippedIds: next
+      };
+    } catch (error) {
+      return { success: false, removed: 0, error: error?.message || String(error), flippedIds: [] };
+    }
+  }
+
+  return runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, async () => {
+    return removeFlippedBookmarksStateByIds(safeIds, { unlocked: true });
   });
 }
 
@@ -1114,7 +1159,7 @@ async function selectQuickReviewCardsRoundStateUnlocked(options = {}) {
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
   const blockedDomainSet = new Set(
     (Array.isArray(blocked?.domains) ? blocked.domains : [])
-      .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+      .map(normalizeBlockedDomain)
       .filter(Boolean)
   );
 
@@ -1174,7 +1219,12 @@ async function selectQuickReviewCardsRoundStateUnlocked(options = {}) {
   const currentAllFlipped = currentCardIds.length > 0
     && currentCardIds.every(id => currentFlippedSet.has(id));
 
-  const forceDueBatch = activeForceDuePool.slice(0, batchSize);
+  const forceDueStartIndex = force && activeForceDuePool.length > 0 && currentCardIds.length > 0
+    ? deriveRecommendStartIndexFromCurrentForQuickReview(activeForceDuePool, currentCardIds, 0)
+    : 0;
+  const forceDueBatch = force
+    ? buildSequentialRecommendBatchFromPool(activeForceDuePool, forceDueStartIndex, batchSize)
+    : activeForceDuePool.slice(0, batchSize);
   const normalSlots = Math.max(0, batchSize - forceDueBatch.length);
   const expectedNormalBatchLen = normalSlots > 0 ? Math.min(normalSlots, normalPool.length) : 0;
 
@@ -1184,7 +1234,9 @@ async function selectQuickReviewCardsRoundStateUnlocked(options = {}) {
   if (normalPool.length > 0) {
     if (shouldRotateByCurrent) {
       const storedCursor = await getRecommendPoolCursorValueForQuickReview(normalPool.length);
-      startIndex = deriveRecommendStartIndexFromCurrentForQuickReview(normalPool, currentNormalCardIds, storedCursor);
+      startIndex = force
+        ? storedCursor
+        : deriveRecommendStartIndexFromCurrentForQuickReview(normalPool, currentNormalCardIds, storedCursor);
     } else {
       const cursorMeta = await consumeRecommendPoolCursorState(normalPool.length, expectedNormalBatchLen, { unlocked: true });
       startIndex = Number.isFinite(Number(cursorMeta?.cursorBefore))
@@ -1276,7 +1328,7 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
   const blockedDomainSet = new Set(
     (Array.isArray(blocked?.domains) ? blocked.domains : [])
-      .map(domain => String(domain || '').trim().toLowerCase().replace(/^www\./, ''))
+      .map(normalizeBlockedDomain)
       .filter(Boolean)
   );
 
@@ -2863,6 +2915,20 @@ async function setRecommendPostponedState(postponed, options = {}) {
     }
 
     const next = normalizeRecommendPostponedList(postponed);
+    const currentById = new Map(current.postponed.map(item => [String(item?.bookmarkId || '').trim(), item]));
+    const addedBookmarkIds = normalizeBookmarkIdList(
+      next
+        .filter(item => {
+          const bookmarkId = String(item?.bookmarkId || '').trim();
+          if (!bookmarkId) return false;
+          const previous = currentById.get(bookmarkId);
+          return !previous || (item?.manuallyAdded === true && previous?.manuallyAdded !== true);
+        })
+        .map(item => item?.bookmarkId)
+    );
+    if (addedBookmarkIds.length > 0) {
+      await removeFlippedBookmarksStateByIds(addedBookmarkIds, { unlocked: true });
+    }
     const nextVersion = buildNextRecommendStateVersion(current.version);
     await browserAPI.storage.local.set({
       [RECOMMEND_POSTPONED_STORAGE_KEY]: next,
@@ -3797,10 +3863,20 @@ async function getSameTitleBookmarkIdsForBlock(bookmarkId) {
 }
 
 async function setRecommendBlockedBookmarksState(bookmarkIds = []) {
-  const ids = normalizeBookmarkIdList(bookmarkIds);
-  if (ids.length === 0) return { success: false, blocked: normalizeRecommendBlockedState(null) };
+  const requestedIds = normalizeBookmarkIdList(bookmarkIds);
+  if (requestedIds.length === 0) return { success: false, blocked: normalizeRecommendBlockedState(null) };
 
-  const blocked = await getRecommendBlockedState();
+  const [blocked, postponedSnapshot] = await Promise.all([
+    getRecommendBlockedState(),
+    getRecommendPostponedStateSnapshot()
+  ]);
+  const postponedSet = new Set(
+    normalizeRecommendPostponedList(postponedSnapshot.postponed)
+      .map(item => String(item?.bookmarkId || '').trim())
+      .filter(Boolean)
+  );
+  const ids = requestedIds.filter(id => !postponedSet.has(id));
+  const skippedPostponedIds = requestedIds.filter(id => postponedSet.has(id));
   const bookmarkSet = new Set(normalizeBookmarkIdList(blocked.bookmarks || []));
   ids.forEach(id => bookmarkSet.add(id));
   const nextBlocked = normalizeRecommendBlockedState({
@@ -3809,8 +3885,22 @@ async function setRecommendBlockedBookmarksState(bookmarkIds = []) {
     version: buildNextRecommendStateVersion(blocked.version)
   });
 
+  if (ids.length === 0) {
+    return {
+      success: true,
+      blocked,
+      blockedBookmarkIds: [],
+      skippedPostponedIds
+    };
+  }
+
   await browserAPI.storage.local.set({ [RECOMMEND_BLOCKED_STORAGE_KEY]: nextBlocked });
-  return { success: true, blocked: nextBlocked, blockedBookmarkIds: ids };
+  return {
+    success: true,
+    blocked: nextBlocked,
+    blockedBookmarkIds: ids,
+    skippedPostponedIds
+  };
 }
 
 async function updateHistoryCurrentCardDataState(cardData = [], expectedVersion = null) {
@@ -4685,7 +4775,24 @@ async function getFormulaConfig() {
 
 function normalizeBlockedDomain(domain) {
   if (!domain) return '';
-  return String(domain).toLowerCase().replace(/^www\./, '');
+  return getRecommendBaseDomainFromHost(domain);
+}
+
+function normalizeRecommendDomainHost(domain) {
+  return String(domain || '').trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+}
+
+function getRecommendBaseDomainFromHost(hostname) {
+  const safeHost = normalizeRecommendDomainHost(hostname);
+  if (!safeHost) return '';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(safeHost)) return safeHost;
+  const parts = safeHost.split('.').filter(Boolean);
+  if (parts.length <= 2) return safeHost;
+  const last = parts[parts.length - 1];
+  const secondLast = parts[parts.length - 2];
+  const commonSecondLevelSuffixes = new Set(['com', 'net', 'org', 'gov', 'edu', 'ac', 'co']);
+  const keepCount = last.length === 2 && commonSecondLevelSuffixes.has(secondLast) && parts.length >= 3 ? 3 : 2;
+  return parts.slice(-keepCount).join('.');
 }
 
 function normalizeScoreUrlKey(url) {
