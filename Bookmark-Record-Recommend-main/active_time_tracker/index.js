@@ -30,7 +30,16 @@ const CONFIG = {
 
 const normalizeDomain = (domain) => {
     if (!domain || typeof domain !== 'string') return '';
-    return domain.trim().toLowerCase().replace(/^www\./, '');
+    const safeHost = domain.trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+    if (!safeHost) return '';
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(safeHost)) return safeHost;
+    const parts = safeHost.split('.').filter(Boolean);
+    if (parts.length <= 2) return safeHost;
+    const last = parts[parts.length - 1];
+    const secondLast = parts[parts.length - 2];
+    const commonSecondLevelSuffixes = new Set(['com', 'net', 'org', 'gov', 'edu', 'ac', 'co']);
+    const keepCount = last.length === 2 && commonSecondLevelSuffixes.has(secondLast) && parts.length >= 3 ? 3 : 2;
+    return parts.slice(-keepCount).join('.');
 };
 
 function toNonNegativeNumber(value, fallback = 0) {
