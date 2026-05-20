@@ -960,10 +960,10 @@ function buildQuickReviewEligibilityState(postponed = [], reviewData = {}, now =
 
     const postponeUntil = Number(item.postponeUntil || 0);
     const isManual = item.manuallyAdded === true;
-    if (!isManual && postponeUntil > now) {
-      postponedWaitingSet.add(bookmarkId);
-    } else {
+    if (isManual) {
       forceDuePostponedMap.set(bookmarkId, item);
+    } else if (postponeUntil > now) {
+      postponedWaitingSet.add(bookmarkId);
     }
   }
 
@@ -1007,16 +1007,6 @@ function getQuickReviewForceDueInfo(bookmarkId, eligibility, now = Date.now()) {
       forceDue: true,
       forceDueAt: Number.isFinite(postponeUntil) && postponeUntil > 0 ? postponeUntil : now,
       forceDueMovedAt: Number.isFinite(movedAt) ? movedAt : 0
-    };
-  }
-
-  const reviewInfo = eligibility.forceDueReviewMap?.get(id);
-  if (reviewInfo) {
-    const nextReviewAt = normalizeRecommendReviewNextReviewAt(reviewInfo);
-    return {
-      forceDue: true,
-      forceDueAt: nextReviewAt,
-      forceDueMovedAt: 0
     };
   }
 
@@ -1809,6 +1799,7 @@ if (browserAPI?.runtime?.onInstalled) {
     initSidePanel();
     refreshSidePanelOpenWindows().catch(() => {});
     ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    scheduleReviewReminderAlarm().catch(() => {});
     scheduleRecommendStartupSelfHeal('on-installed').catch(() => {});
     triggerRecommendBackgroundRefresh('on-installed', { requireIdle: true });
   });
@@ -1817,6 +1808,7 @@ if (browserAPI?.runtime?.onInstalled) {
 if (browserAPI?.runtime?.onStartup) {
   browserAPI.runtime.onStartup.addListener(() => {
     ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    scheduleReviewReminderAlarm().catch(() => {});
     scheduleRecommendStartupSelfHeal('on-startup').catch(() => {});
     triggerRecommendBackgroundRefresh('on-startup', { requireIdle: true });
   });
@@ -1826,10 +1818,28 @@ initSidePanel();
 registerSidePanelTogglePortListener();
 refreshSidePanelOpenWindows().catch(() => {});
 
+if (browserAPI?.storage?.onChanged) {
+  browserAPI.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes) return;
+    if (
+      Object.prototype.hasOwnProperty.call(changes, RECOMMEND_POSTPONED_STORAGE_KEY) ||
+      Object.prototype.hasOwnProperty.call(changes, RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY)
+    ) {
+      scheduleReviewReminderAlarm().catch(() => {});
+    }
+  });
+}
+
 if (browserAPI?.alarms?.onAlarm) {
   browserAPI.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm || alarm.name !== RECOMMEND_BACKGROUND_REFRESH_ALARM) return;
-    triggerRecommendBackgroundRefresh('alarm', { requireIdle: true });
+    if (!alarm) return;
+    if (alarm.name === RECOMMEND_BACKGROUND_REFRESH_ALARM) {
+      triggerRecommendBackgroundRefresh('alarm', { requireIdle: true });
+      return;
+    }
+    if (alarm.name === RECOMMEND_REVIEW_REMINDER_ALARM) {
+      showReviewReminderPopupIfDue('alarm').catch(() => {});
+    }
   });
 }
 
@@ -2528,6 +2538,8 @@ let pendingRemovedFolderIds = new Set();
 let pendingMovedBookmarkIds = new Set();
 let recommendBackgroundRefreshInProgress = false;
 let recommendBackgroundRefreshLastAttemptAt = 0;
+let reviewReminderPopupInProgress = false;
+let activeReviewReminderPopup = null;
 let ensureRecommendBackgroundRefreshAlarmPromise = null;
 let ensureRecommendBackgroundRefreshAlarmLastCheckAt = 0;
 let bookmarkMutationFlushTimer = null;
@@ -2589,6 +2601,25 @@ const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
 const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_STATE_MUTATION_CHANNEL = 'recommend_state_mutation_v1';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
+const RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY = 'recommendReviewReminderPopupEnabled';
+const RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY = 'recommendReviewReminderNotified';
+const RECOMMEND_REVIEW_REMINDER_ALARM = 'bb_recommend_review_reminder_v1';
+const RECOMMEND_REVIEW_REMINDER_POPUP_PATH = 'review_reminder/review_reminder_popup.html';
+const RECOMMEND_REVIEW_REMINDER_POPUP_WIDTH = 720;
+const RECOMMEND_REVIEW_REMINDER_POPUP_MIN_HEIGHT = 420;
+const RECOMMEND_REVIEW_REMINDER_POPUP_MAX_HEIGHT = 780;
+const RECOMMEND_REVIEW_REMINDER_POPUP_BASE_HEIGHT = 250;
+const RECOMMEND_REVIEW_REMINDER_POPUP_ROW_HEIGHT = 160;
+const RECOMMEND_REVIEW_REMINDER_MAX_ITEMS = 12;
+const RECOMMEND_REVIEW_REMINDER_OVERDUE_DELAY_MS = 5 * 1000;
+const RECOMMEND_REVIEW_REMINDER_POPUP_RETRY_DELAY_MS = 60 * 1000;
+const RECOMMEND_REVIEW_REMINDER_BATCH_HOUR_MS = 60 * 60 * 1000;
+const RECOMMEND_REVIEW_REMINDER_PRESET_DELAYS = {
+  '1h': 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+  '3d': 3 * 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000
+};
 const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
 const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
 const RECOMMEND_POOL_CURSOR_STORAGE_KEY = 'bb_recommend_pool_cursor_v1';
@@ -2608,6 +2639,7 @@ const DEFAULT_REFRESH_SETTINGS = {
 };
 
 ensureRecommendBackgroundRefreshAlarm().catch(() => {});
+scheduleReviewReminderAlarm().catch(() => {});
 scheduleRecommendStartupSelfHeal('worker-boot').catch(() => {});
 
 // Tracking cold-start fairness
@@ -2865,6 +2897,517 @@ function normalizeRecommendPostponedList(list) {
   }
 
   return Array.from(byBookmarkId.values());
+}
+
+function buildReviewReminderNotificationKey(item) {
+  const bookmarkId = String(item?.bookmarkId || '').trim();
+  const postponeUntil = Math.max(0, Math.floor(Number(item?.postponeUntil || 0)));
+  return bookmarkId && postponeUntil > 0 ? `${bookmarkId}:${postponeUntil}` : '';
+}
+
+function normalizeReviewReminderPresetKey(value, delayMs = null) {
+  const key = String(value || '').trim();
+  if (Object.prototype.hasOwnProperty.call(RECOMMEND_REVIEW_REMINDER_PRESET_DELAYS, key)) {
+    return key;
+  }
+
+  const delay = Math.floor(Number(delayMs || 0));
+  for (const [presetKey, presetDelay] of Object.entries(RECOMMEND_REVIEW_REMINDER_PRESET_DELAYS)) {
+    if (delay === presetDelay) return presetKey;
+  }
+  return '';
+}
+
+function getReviewReminderBatchHour(postponeUntil) {
+  const time = Number(postponeUntil || 0);
+  if (!Number.isFinite(time) || time <= 0) return 0;
+  return Math.floor(time / RECOMMEND_REVIEW_REMINDER_BATCH_HOUR_MS);
+}
+
+function buildReviewReminderPresetBatchKey(item) {
+  const presetKey = normalizeReviewReminderPresetKey(item?.postponePresetKey);
+  const batchHour = Math.floor(Number(item?.reminderBatchHour || 0));
+  if (!presetKey || !Number.isFinite(batchHour) || batchHour <= 0) return '';
+  return `preset:${batchHour}`;
+}
+
+function normalizeReviewReminderNotifiedState(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const result = {};
+  for (const [key, notifiedAt] of Object.entries(source)) {
+    const normalizedKey = String(key || '').trim();
+    const time = Number(notifiedAt || 0);
+    if (!normalizedKey || !Number.isFinite(time) || time <= 0) continue;
+    result[normalizedKey] = Math.floor(time);
+  }
+  return result;
+}
+
+function normalizeReviewReminderKeys(keys = [], singleKey = '') {
+  const merged = [];
+  if (Array.isArray(keys)) {
+    merged.push(...keys);
+  } else {
+    merged.push(keys);
+  }
+  if (singleKey != null && singleKey !== '') {
+    merged.push(singleKey);
+  }
+  return Array.from(new Set(
+    merged
+      .map(key => String(key || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function getReviewReminderPopupHeight(itemCount = 0) {
+  const safeCount = Math.max(1, Number(itemCount) || 0);
+  const rows = Math.max(1, Math.ceil(safeCount / 4));
+  const rawHeight = RECOMMEND_REVIEW_REMINDER_POPUP_BASE_HEIGHT
+    + rows * RECOMMEND_REVIEW_REMINDER_POPUP_ROW_HEIGHT;
+  return Math.max(
+    RECOMMEND_REVIEW_REMINDER_POPUP_MIN_HEIGHT,
+    Math.min(RECOMMEND_REVIEW_REMINDER_POPUP_MAX_HEIGHT, rawHeight)
+  );
+}
+
+async function getReviewReminderPopupEnabledState() {
+  try {
+    const result = await browserAPI.storage.local.get([RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY]);
+    return result?.[RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY] !== false;
+  } catch (_) {
+    return true;
+  }
+}
+
+function isReviewReminderCandidate(item, now = Date.now()) {
+  if (!item || item.manuallyAdded === true) return false;
+  const bookmarkId = String(item.bookmarkId || '').trim();
+  const postponeUntil = Number(item.postponeUntil || 0);
+  return Boolean(bookmarkId) && Number.isFinite(postponeUntil) && postponeUntil > 0 && postponeUntil <= now;
+}
+
+async function getReviewReminderCandidates(options = {}) {
+  const now = Number(options.now || Date.now());
+  const batchKeys = new Set(
+    Array.isArray(options.batchKeys)
+      ? options.batchKeys.map(key => String(key || '').trim()).filter(Boolean)
+      : []
+  );
+  const onlyKeys = new Set(
+    Array.isArray(options.keys)
+      ? options.keys.map(key => String(key || '').trim()).filter(Boolean)
+      : []
+  );
+  const [postponed, notifiedResult] = await Promise.all([
+    getRecommendPostponedList(),
+    browserAPI.storage.local.get([RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY])
+  ]);
+  const notified = normalizeReviewReminderNotifiedState(
+    notifiedResult?.[RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY]
+  );
+  const candidates = [];
+
+  for (const item of normalizeRecommendPostponedList(postponed)) {
+    const key = buildReviewReminderNotificationKey(item);
+    if (!key) continue;
+    const isDue = isReviewReminderCandidate(item, now);
+    const isRequestedKey = onlyKeys.size > 0 && onlyKeys.has(key);
+    const isSamePresetBatch = batchKeys.size > 0 && batchKeys.has(buildReviewReminderPresetBatchKey(item));
+    if (!isDue && !isRequestedKey && !isSamePresetBatch) continue;
+    if (onlyKeys.size > 0 && !onlyKeys.has(key)) continue;
+    if (options.onlyUnnotified === true && notified[key]) continue;
+    candidates.push({ ...item, reminderKey: key });
+  }
+
+  candidates.sort((a, b) => Number(a.postponeUntil || 0) - Number(b.postponeUntil || 0));
+  return {
+    candidates: candidates.slice(0, Math.max(1, Number(options.limit) || RECOMMEND_REVIEW_REMINDER_MAX_ITEMS)),
+    notified
+  };
+}
+
+async function buildReviewReminderPopupItems(candidates = []) {
+  const items = [];
+  let scoreCache = {};
+  let historyStats = new Map();
+  let formulaConfig = null;
+  let trackingData = null;
+  let postponedList = [];
+  let reviewData = {};
+  try {
+    const [scores, history, config, tracking, postponed, review] = await Promise.all([
+      getScoresCache(),
+      getHistoryStatsForScoreDebug(),
+      getFormulaConfig(),
+      getTrackingDataForScore(),
+      getPostponedBookmarksForScore(),
+      getReviewDataForScore()
+    ]);
+    scoreCache = scores;
+    historyStats = history;
+    formulaConfig = config;
+    trackingData = tracking;
+    postponedList = Array.isArray(postponed) ? postponed : [];
+    reviewData = review && typeof review === 'object' ? review : {};
+  } catch (_) {
+    scoreCache = {};
+    historyStats = new Map();
+    formulaConfig = {
+      weights: {
+        freshness: 0.15,
+        coldness: 0.15,
+        shallowRead: 0.30,
+        forgetting: 0.20,
+        laterReview: 0.20
+      },
+      thresholds: {
+        freshness: 7,
+        coldness: 5,
+        shallowRead: 30,
+        forgetting: 7
+      },
+      trackingEnabled: true
+    };
+    trackingData = { byUrl: new Map(), byTitle: new Map(), byBookmarkId: new Map(), totalMs: 0, totalCount: 0 };
+    postponedList = [];
+    reviewData = {};
+  }
+
+  for (const candidate of candidates) {
+    const bookmark = await getBookmarkNodeByIdForScore(candidate.bookmarkId);
+    if (!bookmark?.url) continue;
+    const bookmarkForScore = {
+      id: String(candidate.bookmarkId || '').trim(),
+      title: bookmark.title || bookmark.url || '',
+      url: bookmark.url || '',
+      dateAdded: Number(bookmark.dateAdded || 0),
+      parentId: bookmark.parentId || ''
+    };
+    const cached = scoreCache && typeof scoreCache === 'object'
+      ? scoreCache[String(candidate.bookmarkId || '').trim()]
+      : null;
+    const priority = Number(cached?.S);
+    const computed = Number.isFinite(priority)
+      ? priority
+      : Number(calculateBookmarkScore(
+        bookmarkForScore,
+        historyStats,
+        trackingData,
+        formulaConfig,
+        postponedList,
+        reviewData
+      )?.S);
+    items.push({
+      reminderKey: candidate.reminderKey || buildReviewReminderNotificationKey(candidate),
+      bookmarkId: String(candidate.bookmarkId || '').trim(),
+      title: bookmark.title || bookmark.url || '',
+      url: bookmark.url || '',
+      postponeUntil: Number(candidate.postponeUntil || 0),
+      groupName: candidate.groupName || '',
+      priority: Number.isFinite(priority) ? priority : (Number.isFinite(computed) ? computed : null)
+    });
+  }
+  return items;
+}
+
+async function markReviewReminderNotified(keys = []) {
+  const normalizedKeys = Array.from(new Set(
+    (Array.isArray(keys) ? keys : [])
+      .map(key => String(key || '').trim())
+      .filter(Boolean)
+  ));
+  if (normalizedKeys.length === 0) return;
+
+  const [postponed, result] = await Promise.all([
+    getRecommendPostponedList(),
+    browserAPI.storage.local.get([RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY])
+  ]);
+  const activeKeys = new Set(
+    normalizeRecommendPostponedList(postponed)
+      .map(item => buildReviewReminderNotificationKey(item))
+      .filter(Boolean)
+  );
+  const notified = normalizeReviewReminderNotifiedState(
+    result?.[RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY]
+  );
+  const now = Date.now();
+
+  for (const key of Object.keys(notified)) {
+    if (!activeKeys.has(key)) delete notified[key];
+  }
+  for (const key of normalizedKeys) {
+    if (!activeKeys.has(key)) continue;
+    notified[key] = now;
+  }
+
+  await browserAPI.storage.local.set({
+    [RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY]: notified
+  });
+}
+
+async function isReviewReminderPopupWindowOpen() {
+  if (!browserAPI?.windows?.getAll || !browserAPI?.runtime?.getURL) return false;
+  const popupUrlPrefix = browserAPI.runtime.getURL(RECOMMEND_REVIEW_REMINDER_POPUP_PATH);
+  return new Promise((resolve) => {
+    try {
+      browserAPI.windows.getAll({ populate: true, windowTypes: ['popup'] }, (windowsList) => {
+        if (browserAPI.runtime?.lastError) {
+          resolve(false);
+          return;
+        }
+        const windows = Array.isArray(windowsList) ? windowsList : [];
+        const hasOpenPopup = windows.some((win) => {
+          if (!Array.isArray(win?.tabs) || win.tabs.length === 0) return false;
+          return win.tabs.some(tab => String(tab?.url || '').startsWith(popupUrlPrefix));
+        });
+        resolve(hasOpenPopup);
+      });
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+
+function registerActiveReviewReminderPopup(windowInfo, items = []) {
+  const windowId = Number(windowInfo?.id);
+  if (!Number.isFinite(windowId)) return;
+  const pendingItems = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const bookmarkId = String(item?.bookmarkId || '').trim();
+    if (!bookmarkId) continue;
+    pendingItems.set(bookmarkId, {
+      bookmarkId,
+      keys: normalizeReviewReminderKeys(item?.reminderKey),
+      title: item?.title || '',
+      url: item?.url || ''
+    });
+  }
+  activeReviewReminderPopup = {
+    windowId,
+    pendingItems,
+    createdAt: Date.now()
+  };
+}
+
+function clearActiveReviewReminderPopupItem(bookmarkId) {
+  const id = String(bookmarkId || '').trim();
+  if (!id || !activeReviewReminderPopup?.pendingItems) return;
+  activeReviewReminderPopup.pendingItems.delete(id);
+}
+
+function clearActiveReviewReminderPopup() {
+  activeReviewReminderPopup = null;
+}
+
+async function skipActiveReviewReminderPopupOnClose(windowId) {
+  const normalizedWindowId = Number(windowId);
+  const popup = activeReviewReminderPopup;
+  if (!popup || Number(popup.windowId) !== normalizedWindowId) return;
+
+  const pendingItems = Array.from(popup.pendingItems?.values?.() || []);
+  clearActiveReviewReminderPopup();
+  if (pendingItems.length === 0) {
+    await scheduleReviewReminderAlarm();
+    return;
+  }
+
+  for (const item of pendingItems) {
+    try {
+      const result = await executeRecommendCardActionFromReminderPopup('skip', item.bookmarkId, {
+        timestamp: Date.now(),
+        source: 'review_reminder_popup_window_close'
+      });
+      if (result?.success !== false && Array.isArray(item.keys) && item.keys.length > 0) {
+        await markReviewReminderNotified(item.keys);
+      }
+    } catch (error) {
+      console.warn('[待复习提醒] 关闭弹窗时跳过失败:', error);
+    }
+  }
+  await scheduleReviewReminderAlarm();
+}
+
+if (browserAPI?.windows?.onRemoved?.addListener) {
+  browserAPI.windows.onRemoved.addListener((windowId) => {
+    skipActiveReviewReminderPopupOnClose(windowId).catch((error) => {
+      console.warn('[待复习提醒] 处理弹窗关闭失败:', error);
+    });
+  });
+}
+
+async function executeRecommendCardActionFromReminderPopup(actionType, bookmarkId, options = {}) {
+  const normalizedAction = String(actionType || '').trim();
+  const normalizedBookmarkId = String(bookmarkId || '').trim();
+  if (!normalizedAction || !normalizedBookmarkId) {
+    return { success: false, reason: 'invalid_action' };
+  }
+
+  const message = {
+    recommendAction: normalizedAction,
+    bookmarkId: normalizedBookmarkId,
+    expectedVersion: options.expectedVersion,
+    source: options.source || 'review_reminder_popup',
+    delayMs: options.delayMs,
+    postponeUntil: options.postponeUntil,
+    postponePresetKey: options.postponePresetKey,
+    scope: options.scope,
+    timestamp: Number(options.timestamp || Date.now())
+  };
+
+  let result = await executeRecommendCardActionState(message);
+  if (result?.success === false && result?.reason === 'missing_current_cards_version') {
+    const currentCards = await getHistoryCurrentCardsStateForAction();
+    const currentIds = new Set(normalizeBookmarkIdList(currentCards?.cardIds || []));
+    const currentVersion = Number(currentCards?.version || 0);
+    if (currentIds.has(normalizedBookmarkId) && Number.isFinite(currentVersion) && currentVersion > 0) {
+      result = await executeRecommendCardActionState({
+        ...message,
+        expectedVersion: Math.floor(currentVersion)
+      });
+    }
+  }
+
+  return result;
+}
+
+async function scheduleReviewReminderAlarm(options = {}) {
+  if (!browserAPI?.alarms?.create || !browserAPI?.alarms?.clear) {
+    return { success: false, skipped: 'alarms-api-unavailable' };
+  }
+
+  const enabled = await getReviewReminderPopupEnabledState();
+  if (!enabled) {
+    await new Promise(resolve => browserAPI.alarms.clear(RECOMMEND_REVIEW_REMINDER_ALARM, () => resolve()));
+    return { success: true, enabled: false, cleared: true };
+  }
+
+  const popupOpen = options.skipPopupOpenCheck === true
+    ? false
+    : await isReviewReminderPopupWindowOpen();
+
+  const [postponedRaw, notifiedResult] = await Promise.all([
+    getRecommendPostponedList(),
+    browserAPI.storage.local.get([RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY])
+  ]);
+  const postponed = normalizeRecommendPostponedList(postponedRaw);
+  const notified = normalizeReviewReminderNotifiedState(
+    notifiedResult?.[RECOMMEND_REVIEW_REMINDER_NOTIFIED_STORAGE_KEY]
+  );
+  const now = Date.now();
+  let nextDueAt = 0;
+  for (const item of postponed) {
+    if (!item || item.manuallyAdded === true) continue;
+    const postponeUntil = Number(item.postponeUntil || 0);
+    if (!Number.isFinite(postponeUntil) || postponeUntil <= 0) continue;
+    const key = buildReviewReminderNotificationKey(item);
+    if (key && notified[key]) continue;
+    if (postponeUntil <= now) {
+      nextDueAt = now + RECOMMEND_REVIEW_REMINDER_OVERDUE_DELAY_MS;
+      break;
+    }
+    if (!nextDueAt || postponeUntil < nextDueAt) nextDueAt = postponeUntil;
+  }
+
+  if (!nextDueAt) {
+    await new Promise(resolve => browserAPI.alarms.clear(RECOMMEND_REVIEW_REMINDER_ALARM, () => resolve()));
+    return { success: true, enabled: true, scheduled: false };
+  }
+
+  if (popupOpen) {
+    const when = now + RECOMMEND_REVIEW_REMINDER_POPUP_RETRY_DELAY_MS;
+    browserAPI.alarms.create(RECOMMEND_REVIEW_REMINDER_ALARM, { when });
+    return { success: true, enabled: true, scheduled: true, when, reason: 'popup_open_retry' };
+  }
+
+  browserAPI.alarms.create(RECOMMEND_REVIEW_REMINDER_ALARM, {
+    when: Math.max(nextDueAt, now + 1000)
+  });
+  return { success: true, enabled: true, scheduled: true, when: nextDueAt };
+}
+
+async function showReviewReminderPopupIfDue(reason = 'alarm') {
+  if (reviewReminderPopupInProgress) {
+    return { success: true, skipped: 'in-progress' };
+  }
+  reviewReminderPopupInProgress = true;
+  try {
+    if (!await getReviewReminderPopupEnabledState()) {
+      await scheduleReviewReminderAlarm();
+      return { success: false, skipped: 'disabled' };
+    }
+
+    if (await isReviewReminderPopupWindowOpen()) {
+      await scheduleReviewReminderAlarm();
+      return { success: true, shown: false, reason: 'popup_already_open' };
+    }
+
+    const dueResult = await getReviewReminderCandidates({ onlyUnnotified: true });
+    const firstDueCandidate = Array.isArray(dueResult.candidates) ? dueResult.candidates[0] : null;
+    const firstBatchKey = buildReviewReminderPresetBatchKey(firstDueCandidate);
+    const { candidates } = firstBatchKey
+      ? await getReviewReminderCandidates({ onlyUnnotified: true, batchKeys: [firstBatchKey] })
+      : dueResult;
+    const items = await buildReviewReminderPopupItems(candidates);
+    if (items.length === 0) {
+      await scheduleReviewReminderAlarm();
+      return { success: true, shown: false, reason: 'no_due_items' };
+    }
+
+    const keys = items.map(item => item.reminderKey).filter(Boolean);
+    const popupHeight = getReviewReminderPopupHeight(items.length);
+    const params = new URLSearchParams();
+    params.set('keys', keys.join(','));
+    params.set('reason', reason || 'alarm');
+    const url = browserAPI.runtime.getURL(`${RECOMMEND_REVIEW_REMINDER_POPUP_PATH}?${params.toString()}`);
+
+    const windowInfo = await new Promise((resolve, reject) => {
+      try {
+        browserAPI.windows.create({
+          url,
+          type: 'popup',
+          width: RECOMMEND_REVIEW_REMINDER_POPUP_WIDTH,
+          height: popupHeight,
+          focused: true
+        }, (windowInfo) => {
+          const err = browserAPI?.runtime?.lastError;
+          if (err) {
+            reject(new Error(err.message || 'windows_create_failed'));
+            return;
+          }
+          resolve(windowInfo);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+    registerActiveReviewReminderPopup(windowInfo, items);
+
+    await scheduleReviewReminderAlarm();
+    return { success: true, shown: true, count: items.length };
+  } finally {
+    reviewReminderPopupInProgress = false;
+  }
+}
+
+async function getReviewReminderPopupPayload(keys = []) {
+  const normalizedKeys = (Array.isArray(keys) ? keys : [])
+    .map(key => String(key || '').trim())
+    .filter(Boolean);
+  const { candidates } = await getReviewReminderCandidates({
+    keys: normalizedKeys,
+    onlyUnnotified: false,
+    limit: RECOMMEND_REVIEW_REMINDER_MAX_ITEMS
+  });
+  const allItems = await buildReviewReminderPopupItems(candidates);
+  const items = allItems.slice(0, RECOMMEND_REVIEW_REMINDER_MAX_ITEMS);
+  const hasMore = false;
+  return {
+    success: true,
+    items,
+    totalCount: items.length,
+    hasMore
+  };
 }
 
 async function getRecommendBlockedState() {
@@ -3779,6 +4322,8 @@ async function setRecommendPostponedBookmarkState(bookmarkId, options = {}) {
   const postponeUntil = Number.isFinite(explicitUntil) && explicitUntil > 0
     ? Math.floor(explicitUntil)
     : now + Math.max(0, Number.isFinite(delayMs) ? Math.floor(delayMs) : 0);
+  const postponePresetKey = normalizeReviewReminderPresetKey(options.postponePresetKey, delayMs);
+  const reminderBatchHour = postponePresetKey ? getReviewReminderBatchHour(postponeUntil) : 0;
   const manuallyAdded = options.manuallyAdded === true;
   const existing = postponed.find(item => String(item?.bookmarkId || '').trim() === id);
 
@@ -3788,6 +4333,8 @@ async function setRecommendPostponedBookmarkState(bookmarkId, options = {}) {
       ? Number(existing.postponeCount || 0)
       : Number(existing.postponeCount || 0) + 1;
     existing.dueQueueMovedAt = 0;
+    existing.postponePresetKey = postponePresetKey;
+    existing.reminderBatchHour = reminderBatchHour;
     existing.manuallyAdded = existing.manuallyAdded === true || manuallyAdded;
     if (options.groupId != null) existing.groupId = options.groupId;
     if (options.groupType != null) existing.groupType = options.groupType;
@@ -3799,6 +4346,8 @@ async function setRecommendPostponedBookmarkState(bookmarkId, options = {}) {
       postponeUntil,
       postponeCount: manuallyAdded ? 0 : 1,
       dueQueueMovedAt: 0,
+      postponePresetKey,
+      reminderBatchHour,
       manuallyAdded,
       ...(options.groupId != null ? { groupId: options.groupId } : {}),
       ...(options.groupType != null ? { groupType: options.groupType } : {}),
@@ -4214,6 +4763,7 @@ async function executeRecommendCardActionState(message = {}) {
       actionResult = await setRecommendPostponedBookmarkState(bookmarkId, {
         delayMs: message.delayMs,
         postponeUntil: message.postponeUntil,
+        postponePresetKey: message.postponePresetKey,
         manuallyAdded: message.manuallyAdded === true,
         groupId: message.groupId,
         groupType: message.groupType,
@@ -7156,6 +7706,159 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: result?.success !== false, ...(result || {}) });
       } catch (e) {
         sendResponse({ success: false, handled: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'getReviewReminderPopupPayload') {
+    (async () => {
+      try {
+        const result = await getReviewReminderPopupPayload(message.keys || []);
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ success: false, items: [], error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'markReviewReminderNotified') {
+    (async () => {
+      try {
+        const keys = normalizeReviewReminderKeys(message.keys, message.key);
+        if (keys.length === 0) {
+          sendResponse({ success: false, reason: 'missing_keys' });
+          return;
+        }
+        await markReviewReminderNotified(keys);
+        await scheduleReviewReminderAlarm();
+        sendResponse({ success: true, keys });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'dismissEmptyReviewReminderPopup') {
+    (async () => {
+      try {
+        clearActiveReviewReminderPopup();
+        await scheduleReviewReminderAlarm();
+        sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'executeReviewReminderCardAction') {
+    (async () => {
+      try {
+        const bookmarkId = String(message.bookmarkId || '').trim();
+        const recommendAction = String(message.recommendAction || '').trim();
+        const reminderKeys = normalizeReviewReminderKeys(message.keys, message.key);
+        if (!bookmarkId || !recommendAction) {
+          sendResponse({ success: false, reason: 'invalid_action' });
+          return;
+        }
+        const result = await executeRecommendCardActionFromReminderPopup(
+          recommendAction,
+          bookmarkId,
+          {
+            scope: message.scope,
+            delayMs: message.delayMs,
+            postponeUntil: message.postponeUntil,
+            timestamp: message.timestamp,
+            source: 'review_reminder_popup'
+          }
+        );
+        if (result?.success && reminderKeys.length > 0) {
+          await markReviewReminderNotified(reminderKeys);
+        }
+        if (result?.success !== false) {
+          clearActiveReviewReminderPopupItem(bookmarkId);
+        }
+        await scheduleReviewReminderAlarm();
+        sendResponse({
+          success: result?.success !== false,
+          ...(result || {}),
+          reminderKeys
+        });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'openReviewReminderTarget') {
+    (async () => {
+      try {
+        const keys = normalizeReviewReminderKeys(message.keys, message.key);
+        if (message.focusPostponedArchive === true) {
+          try {
+            await browserAPI.storage.local.set({
+              historyRequestedPostponedFocus: {
+                section: 'archive',
+                time: Date.now()
+              }
+            });
+          } catch (_) {}
+        }
+        openView('recommend');
+        if (keys.length > 0) {
+          await markReviewReminderNotified(keys);
+          await scheduleReviewReminderAlarm();
+        }
+        clearActiveReviewReminderPopup();
+        sendResponse({ success: true, keys });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'openReviewReminderBookmark') {
+    (async () => {
+      try {
+        const url = String(message.url || '').trim();
+        const keys = normalizeReviewReminderKeys(message.keys, message.key);
+        if (!url || !/^https?:\/\//i.test(url)) {
+          sendResponse({ success: false, error: 'invalid_url' });
+          return;
+        }
+        const tab = await browserAPI.tabs.create({ url });
+        if (tab?.id != null) {
+          noteAutoBookmarkNavigation({
+            tabId: tab.id,
+            bookmarkUrl: url,
+            bookmarkId: message.bookmarkId || null,
+            bookmarkTitle: message.title || '',
+            timeStamp: Date.now(),
+            source: 'review_reminder_popup'
+          });
+        }
+        const normalizedBookmarkId = String(message.bookmarkId || '').trim();
+        if (normalizedBookmarkId) {
+          await executeRecommendCardActionFromReminderPopup('review', normalizedBookmarkId, {
+            timestamp: Date.now(),
+            source: 'review_reminder_popup'
+          });
+        }
+        if (keys.length > 0) {
+          await markReviewReminderNotified(keys);
+        }
+        if (normalizedBookmarkId) {
+          clearActiveReviewReminderPopupItem(normalizedBookmarkId);
+        }
+        await scheduleReviewReminderAlarm();
+        sendResponse({ success: true, keys });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
       }
     })();
     return true;

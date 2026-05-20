@@ -571,6 +571,7 @@ const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
 const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
+const RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY = 'recommendReviewReminderPopupEnabled';
 const HISTORY_CURRENT_CARDS_STORAGE_KEY = 'historyCurrentCards';
 const QUICK_REVIEW_OPEN_MODE_STORAGE_KEY = 'quickReviewOpenMode';
 const FLIPPED_BOOKMARKS_STORAGE_KEY = 'flippedBookmarks';
@@ -4166,6 +4167,15 @@ const i18n = {pageTitle: {
     },refreshSettingsSave: {
         'zh_CN': '保存',
         'en': 'Save'
+    },settingsReviewReminderText: {
+        'zh_CN': '待复习提醒',
+        'en': 'Review Reminder'
+    },reviewReminderPopupLabel: {
+        'zh_CN': '待复习到期时弹出提醒窗口',
+        'en': 'Show a reminder window when review items are due'
+    },reviewReminderPopupHint: {
+        'zh_CN': '独立提醒窗口会在书签到期后弹出，需要手动关闭。',
+        'en': 'A standalone reminder window opens when bookmarks become due and stays open until closed.'
     },heatmapTitle: {
         'zh_CN': '复习热力图',
         'en': 'Review Heatmap'
@@ -4346,12 +4356,9 @@ const i18n = {pageTitle: {
     },unnamedFolderLabel: {
         'zh_CN': '未命名文件夹',
         'en': 'Untitled folder'
-    },laterRecommendLabel: {
-        'zh_CN': '根据浏览习惯推荐',
-        'en': 'Recommended based on browsing'
-    },laterOrText: {
-        'zh_CN': '或自定义',
-        'en': 'or custom'
+    },laterPresetText: {
+        'zh_CN': '快捷时间',
+        'en': 'Quick Times'
     },laterModalTitle: {
         'zh_CN': '稍后复习',
         'en': 'Review Later'
@@ -4367,6 +4374,15 @@ const i18n = {pageTitle: {
     },laterIn1Week: {
         'zh_CN': '1周后',
         'en': 'In 1 week'
+    },laterCustomTimeLabel: {
+        'zh_CN': '自定义时间',
+        'en': 'Custom time'
+    },laterCustomSubmit: {
+        'zh_CN': '确定',
+        'en': 'Confirm'
+    },laterCustomTimeHint: {
+        'zh_CN': '选择一个未来时间，到期后进入待复习。',
+        'en': 'Choose a future time. It will enter the review queue when due.'
     }
 ,exportTooltip: {
         'zh_CN': '导出书签添加记录',
@@ -5527,6 +5543,12 @@ function applyLanguage() {
     if (refreshAfterDaysUnit) refreshAfterDaysUnit.textContent = i18n.refreshAfterDaysUnit[currentLang];
     const refreshSettingsSaveText = document.getElementById('refreshSettingsSaveText');
     if (refreshSettingsSaveText) refreshSettingsSaveText.textContent = i18n.refreshSettingsSave[currentLang];
+    const settingsReviewReminderText = document.getElementById('settingsReviewReminderText');
+    if (settingsReviewReminderText) settingsReviewReminderText.textContent = i18n.settingsReviewReminderText[currentLang];
+    const reviewReminderPopupLabel = document.getElementById('reviewReminderPopupLabel');
+    if (reviewReminderPopupLabel) reviewReminderPopupLabel.textContent = i18n.reviewReminderPopupLabel[currentLang];
+    const reviewReminderPopupHint = document.getElementById('reviewReminderPopupHint');
+    if (reviewReminderPopupHint) reviewReminderPopupHint.textContent = i18n.reviewReminderPopupHint[currentLang];
 
     const heatmapTitle = document.getElementById('heatmapTitle');
     if (heatmapTitle) heatmapTitle.textContent = i18n.heatmapTitle[currentLang];
@@ -5672,10 +5694,8 @@ function applyLanguage() {
     const selectFolderModalTitle = document.getElementById('selectFolderModalTitle');
     if (selectFolderModalTitle) selectFolderModalTitle.textContent = i18n.selectFolderModalTitle[currentLang];
 
-    const laterRecommendLabel = document.getElementById('laterRecommendLabel');
-    if (laterRecommendLabel) laterRecommendLabel.textContent = i18n.laterRecommendLabel[currentLang];
-    const laterOrText = document.getElementById('laterOrText');
-    if (laterOrText) laterOrText.textContent = i18n.laterOrText[currentLang];
+    const laterPresetText = document.getElementById('laterPresetText');
+    if (laterPresetText) laterPresetText.textContent = i18n.laterPresetText[currentLang];
     const laterModalTitle = document.getElementById('laterModalTitle');
     if (laterModalTitle) laterModalTitle.textContent = i18n.laterModalTitle[currentLang];
     const laterIn1HourText = document.getElementById('laterIn1HourText');
@@ -5686,6 +5706,12 @@ function applyLanguage() {
     if (laterIn3DaysText) laterIn3DaysText.textContent = i18n.laterIn3Days[currentLang];
     const laterIn1WeekText = document.getElementById('laterIn1WeekText');
     if (laterIn1WeekText) laterIn1WeekText.textContent = i18n.laterIn1Week[currentLang];
+    const laterCustomTimeLabel = document.getElementById('laterCustomTimeLabel');
+    if (laterCustomTimeLabel) laterCustomTimeLabel.textContent = i18n.laterCustomTimeLabel[currentLang];
+    const laterCustomSubmitText = document.getElementById('laterCustomSubmitText');
+    if (laterCustomSubmitText) laterCustomSubmitText.textContent = i18n.laterCustomSubmit[currentLang];
+    const laterCustomTimeHint = document.getElementById('laterCustomTimeHint');
+    if (laterCustomTimeHint) laterCustomTimeHint.textContent = i18n.laterCustomTimeHint[currentLang];
     const laterModalClose = document.getElementById('laterModalClose');
     if (laterModalClose) laterModalClose.setAttribute('aria-label', currentLang === 'en' ? 'Close' : '关闭');
     syncLaterModalTexts();
@@ -23527,6 +23553,7 @@ async function renderWidgetsRecommendCards(options = {}) {
                 const snapshotCards = snapshot.cards
                     .map(normalizeRecommendSnapshotCard)
                     .filter(Boolean)
+                    .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
                     .slice(0, 3);
                 if (snapshotCards.length > 0) {
                     recommendCards = snapshotCards;
@@ -23605,6 +23632,7 @@ async function renderWidgetsRecommendCards(options = {}) {
                 recommendCards = snapshot.cards
                     .map(normalizeRecommendSnapshotCard)
                     .filter(Boolean)
+                    .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
                     .slice(0, 3);
 
                 if (recommendCards.length > 0) {
@@ -26440,6 +26468,7 @@ let trackingRefreshInterval = null;
 let rankingRefreshInterval = null;  // 排行榜刷新定时器
 const TRACKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次当前会话，更实时
 const RANKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次排行榜，与正在追踪同步
+let recommendPostponedAuthoritativeIds = null;
 
 // 书签推荐诊断缓存
 const RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
@@ -26683,6 +26712,7 @@ async function dispatchRecommendCardAction(recommendAction, bookmark, options = 
         source: options.source || (recommendSearchPreviewActive ? 'search' : currentView || 'unknown'),
         delayMs: options.delayMs,
         postponeUntil: options.postponeUntil,
+        postponePresetKey: options.postponePresetKey,
         manuallyAdded: options.manuallyAdded === true,
         groupId: options.groupId,
         groupType: options.groupType,
@@ -26777,7 +26807,7 @@ function hydrateRecommendCardsFromCurrentCardsState(state = null) {
     }
 
     const version = getRecommendCurrentCardsVersion(state);
-    return state.cardIds
+    return filterStaleForceDueRecommendCards(state.cardIds
         .map(id => cardDataMap.get(String(id || '').trim()) || null)
         .filter(Boolean)
         .map((bookmark) => {
@@ -26790,7 +26820,7 @@ function hydrateRecommendCardsFromCurrentCardsState(state = null) {
             };
         })
         .filter(Boolean)
-        .slice(0, RECOMMEND_BATCH_SIZE);
+    );
 }
 
 function renderRecommendCurrentCardsStateToRows(currentCards, options = {}) {
@@ -27246,7 +27276,9 @@ function updateCardDisplay(card, bookmark, isFlipped = false) {
         card.appendChild(dueBadge);
     }
 
-    if (bookmark.forceDue) {
+    const showForceDueBadge = bookmark.forceDue === true
+        && isRecommendBookmarkInPostponedState(bookmark.id || bookmark.bookmarkId);
+    if (showForceDueBadge) {
         card.classList.add('force-due');
         dueBadge.textContent = currentLang === 'en' ? 'Due' : '到期';
         dueBadge.style.display = 'inline-flex';
@@ -28268,6 +28300,23 @@ function sortPostponedByReviewOrder(items = []) {
     });
 }
 
+function isPostponedArchiveItem(item, now = Date.now()) {
+    if (!item || item.bookmarkId == null || item.manuallyAdded === true) return false;
+    const postponeUntil = Number(item.postponeUntil || 0);
+    return Number.isFinite(postponeUntil) && postponeUntil > 0 && postponeUntil <= now;
+}
+
+function sortPostponedArchiveOrder(items = []) {
+    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+        const aAnchor = Number(a?.dueQueueMovedAt || a?.postponeUntil || a?.updatedAt || a?.addedAt || a?.createdAt || 0);
+        const bAnchor = Number(b?.dueQueueMovedAt || b?.postponeUntil || b?.updatedAt || b?.addedAt || b?.createdAt || 0);
+        if (aAnchor !== bAnchor) return bAnchor - aAnchor; // 新 -> 旧
+        const aBookmarkId = String(a?.bookmarkId || '');
+        const bBookmarkId = String(b?.bookmarkId || '');
+        return aBookmarkId.localeCompare(bBookmarkId);
+    });
+}
+
 async function ensureRecommendScoresReadyForView(reason = '') {
     try {
         const response = await browserAPI.runtime.sendMessage({
@@ -28396,14 +28445,53 @@ async function unblockBookmark(bookmarkId) {
 }
 
 // 获取稍后复习数据
+function syncRecommendPostponedAuthoritativeIds(postponed = []) {
+    recommendPostponedAuthoritativeIds = new Set(
+        normalizePostponedList(postponed)
+            .filter(item => item && item.bookmarkId != null)
+            .map(item => String(item?.bookmarkId || '').trim())
+            .filter(Boolean)
+    );
+    clearRecommendDueBadgesOutsidePostponedState();
+}
+
+function isRecommendBookmarkInPostponedState(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return false;
+    if (!recommendPostponedAuthoritativeIds) return false;
+    return recommendPostponedAuthoritativeIds.has(id);
+}
+
+function clearRecommendDueBadgesOutsidePostponedState() {
+    if (!recommendPostponedAuthoritativeIds) return;
+    document.querySelectorAll('.recommend-card.force-due').forEach((card) => {
+        const bookmarkId = String(card?.dataset?.bookmarkId || '').trim();
+        if (bookmarkId && recommendPostponedAuthoritativeIds.has(bookmarkId)) return;
+        card.classList.remove('force-due');
+        const dueBadge = card.querySelector('.card-due-badge');
+        if (dueBadge) {
+            dueBadge.textContent = '';
+            dueBadge.style.display = 'none';
+        }
+    });
+}
+
+function filterStaleForceDueRecommendCards(cards = []) {
+    return (Array.isArray(cards) ? cards : [])
+        .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
+        .slice(0, RECOMMEND_BATCH_SIZE);
+}
+
 async function getPostponedBookmarks() {
     try {
         const result = await browserAPI.storage.local.get([
             RECOMMEND_POSTPONED_STORAGE_KEY,
             RECOMMEND_POSTPONED_VERSION_STORAGE_KEY
         ]);
+        const postponed = normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]);
+        syncRecommendPostponedAuthoritativeIds(postponed);
         return attachRecommendListStateVersion(
-            normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]),
+            postponed,
             result[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]
         );
     } catch (e) {
@@ -28504,14 +28592,15 @@ async function schedulePostponedExpiryRefresh(postponedInput = null) {
 }
 
 // 添加稍后复习
-async function postponeBookmark(bookmarkId, delayMs) {
+async function postponeBookmark(bookmarkId, delayMs, options = {}) {
     try {
         const sourceBookmark = currentLaterBookmark && String(currentLaterBookmark.id || '') === String(bookmarkId || '')
             ? currentLaterBookmark
             : { id: bookmarkId };
         return await dispatchRecommendCardAction('postpone', sourceBookmark, {
             source: 'later_modal',
-            delayMs
+            delayMs,
+            postponePresetKey: options.postponePresetKey
         });
     } catch (e) {
         console.error('[稍后] 推迟书签失败:', e);
@@ -28572,51 +28661,13 @@ async function cleanExpiredPostponed() {
 
 // 稍后复习弹窗相关
 let currentLaterBookmark = null;
-let currentLaterRecommendedDays = 3; // P值推荐的天数
 let laterModalActionInFlight = false;
-
-// 根据P值计算推荐间隔天数
-function calculateRecommendedDays(priority, factors) {
-    // P值高 → 更需要复习 → 间隔短
-    // P值低 → 不太需要 → 间隔长
-    const maxDays = 14;
-    const minDays = 1;
-
-    // 使用二次函数使分布更平滑
-    let intervalDays = minDays + (maxDays - minDays) * Math.pow(1 - priority, 1.5);
-
-    // 根据单个因子微调
-    if (factors) {
-        // D(遗忘度)特别高：很久没看了，缩短间隔
-        if (factors.D > 0.8) intervalDays *= 0.7;
-        // T(时间度/浅阅读)特别高：几乎没读过，缩短间隔
-        if (factors.T > 0.9) intervalDays *= 0.8;
-        // C(冷门度)特别高：很少点击，缩短间隔
-        if (factors.C > 0.9) intervalDays *= 0.85;
-    }
-
-    return Math.max(minDays, Math.round(intervalDays));
-}
-
-// 格式化推荐天数显示
-function formatRecommendDays(days) {
-    const isZh = currentLang !== 'en';
-    if (days === 1) {
-        return isZh ? '明天' : 'Tomorrow';
-    } else if (days <= 7) {
-        return isZh ? `${days} 天后` : `${days} days`;
-    } else if (days <= 14) {
-        const weeks = Math.round(days / 7);
-        return isZh ? `${weeks} 周后` : `${weeks} week${weeks > 1 ? 's' : ''}`;
-    } else {
-        return isZh ? `${days} 天后` : `${days} days`;
-    }
-}
+const LATER_CUSTOM_DEFAULT_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
 
 function getLaterModalActionButtons(modal = null) {
     const root = modal || document.getElementById('laterModal');
     if (!root) return [];
-    return Array.from(root.querySelectorAll('#laterModalClose, #laterRecommendBtn, .later-option'));
+    return Array.from(root.querySelectorAll('#laterModalClose, .later-option, #laterCustomSubmitBtn'));
 }
 
 function setLaterModalBusy(isBusy) {
@@ -28629,16 +28680,42 @@ function setLaterModalBusy(isBusy) {
     getLaterModalActionButtons(modal).forEach((button) => {
         button.disabled = laterModalActionInFlight;
     });
+    const customInput = document.getElementById('laterCustomDatetime');
+    if (customInput) customInput.disabled = laterModalActionInFlight;
 }
 
-function syncLaterModalTexts() {
-    const recommendDaysEl = document.getElementById('laterRecommendDays');
-    if (recommendDaysEl) {
-        recommendDaysEl.textContent = formatRecommendDays(currentLaterRecommendedDays);
+function formatDateTimeLocalValue(timestamp) {
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return '';
+    const pad = (value) => String(value).padStart(2, '0');
+    return [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate())
+    ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function syncLaterModalTexts(options = {}) {
+    const customInput = document.getElementById('laterCustomDatetime');
+    if (customInput) {
+        const minValue = formatDateTimeLocalValue(Date.now() + 60 * 1000);
+        customInput.min = minValue;
+        if (options.resetCustomTime === true || !customInput.value) {
+            customInput.value = formatDateTimeLocalValue(Date.now() + LATER_CUSTOM_DEFAULT_DELAY_MS);
+        }
     }
 }
 
-async function submitLaterModalDelay(delayMs) {
+function getLaterCustomDelayMs() {
+    const input = document.getElementById('laterCustomDatetime');
+    const value = String(input?.value || '').trim();
+    if (!value) return NaN;
+    const targetTime = new Date(value).getTime();
+    if (!Number.isFinite(targetTime)) return NaN;
+    return targetTime - Date.now();
+}
+
+async function submitLaterModalDelay(delayMs, options = {}) {
     if (laterModalActionInFlight) return;
 
     const bookmarkId = String(currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || '').trim();
@@ -28663,7 +28740,9 @@ async function submitLaterModalDelay(delayMs) {
 
     setLaterModalBusy(true);
     try {
-        const result = await postponeBookmark(bookmarkId, safeDelay);
+        const result = await postponeBookmark(bookmarkId, safeDelay, {
+            postponePresetKey: options.postponePresetKey
+        });
         if (!result || result.success === false) {
             try {
                 showToast(currentLang === 'en'
@@ -28692,21 +28771,22 @@ function showLaterModal(bookmark) {
     const modal = document.getElementById('laterModal');
     if (!modal) return;
 
-    // 计算P值推荐的间隔
-    if (bookmark.priority !== undefined && bookmark.factors) {
-        currentLaterRecommendedDays = calculateRecommendedDays(bookmark.priority, bookmark.factors);
-    } else {
-        currentLaterRecommendedDays = 3; // 默认3天
-    }
-
     const bookmarkTitleEl = document.getElementById('laterModalBookmarkTitle');
     if (bookmarkTitleEl) {
         const title = String(bookmark?.title || bookmark?.name || bookmark?.url || '').trim();
         bookmarkTitleEl.textContent = title || '--';
         bookmarkTitleEl.title = title || '';
     }
+    const bookmarkUrlEl = document.getElementById('laterModalBookmarkUrl');
+    if (bookmarkUrlEl) {
+        const url = String(bookmark?.url || '').trim();
+        bookmarkUrlEl.textContent = url;
+        bookmarkUrlEl.title = url;
+        bookmarkUrlEl.hidden = !url;
+        bookmarkUrlEl.dataset.url = url;
+    }
 
-    syncLaterModalTexts();
+    syncLaterModalTexts({ resetCustomTime: true });
     setLaterModalBusy(false);
     modal.classList.add('show');
 
@@ -28750,17 +28830,33 @@ function initLaterModal() {
             return;
         }
 
-        const recommendBtn = e.target.closest('#laterRecommendBtn');
-        if (recommendBtn) {
+        const customSubmitBtn = e.target.closest('#laterCustomSubmitBtn');
+        if (customSubmitBtn) {
             e.preventDefault();
-            await submitLaterModalDelay(currentLaterRecommendedDays * 24 * 60 * 60 * 1000);
+            await submitLaterModalDelay(getLaterCustomDelayMs());
+            return;
+        }
+
+        const bookmarkUrlBtn = e.target.closest('#laterModalBookmarkUrl');
+        if (bookmarkUrlBtn) {
+            e.preventDefault();
+            const url = String(bookmarkUrlBtn.dataset.url || '').trim();
+            if (url && typeof window.openBookmarkNewTab === 'function') {
+                await window.openBookmarkNewTab(url, {
+                    title: currentLaterBookmark?.title || currentLaterBookmark?.name || '',
+                    bookmarkId: currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || null,
+                    source: 'later_modal_url'
+                });
+            }
             return;
         }
 
         const option = e.target.closest('.later-option');
         if (option) {
             e.preventDefault();
-            await submitLaterModalDelay(Number(option.dataset.delay));
+            await submitLaterModalDelay(Number(option.dataset.delay), {
+                postponePresetKey: option.dataset.presetKey || ''
+            });
         }
     });
 }
@@ -28819,6 +28915,26 @@ async function saveRefreshSettings(settings) {
     }
 }
 
+async function getReviewReminderPopupEnabled() {
+    try {
+        const result = await browserAPI.storage.local.get(RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY);
+        return result?.[RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY] !== false;
+    } catch (e) {
+        console.error('[待复习提醒] 读取失败:', e);
+        return true;
+    }
+}
+
+async function saveReviewReminderPopupEnabled(enabled) {
+    try {
+        await browserAPI.storage.local.set({
+            [RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY]: enabled === true
+        });
+    } catch (e) {
+        console.error('[待复习提醒] 保存失败:', e);
+    }
+}
+
 // checkAutoRefresh 已移除：S值通过增量更新机制保持最新，不再需要定时全量重算
 // 保留刷新设置UI用于记录上次刷新时间
 
@@ -28868,6 +28984,7 @@ function getRefreshQuickReviewModeFromUI() {
 
 async function loadRefreshSettingsToUI() {
     const settings = await getRefreshSettings();
+    const reminderEnabled = await getReviewReminderPopupEnabled();
 
     // 每N次打开
     const everyNEnabled = document.getElementById('refreshEveryNOpensEnabled');
@@ -28889,6 +29006,9 @@ async function loadRefreshSettingsToUI() {
 
     setRefreshQuickReviewModeButtons(readQuickReviewOpenMode());
     updateQuickReviewShortcutDisplay();
+
+    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
+    if (reminderEnabledInput) reminderEnabledInput.checked = reminderEnabled;
 
     // 更新状态显示
     updateRefreshSettingsStatus(settings);
@@ -28913,6 +29033,8 @@ async function saveRefreshSettingsFromUI() {
     settings.refreshAfterDays = daysEnabled?.checked ? parseInt(daysValue?.value) || 1 : 0;
 
     await saveRefreshSettings(settings);
+    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
+    await saveReviewReminderPopupEnabled(reminderEnabledInput?.checked === true);
     quickReviewOpenMode = writeQuickReviewOpenMode(getRefreshQuickReviewModeFromUI());
     hideRefreshSettingsModal();
 }
@@ -30541,7 +30663,7 @@ async function renderPostponedSearchResults(keyword) {
     const emptyEl = document.getElementById('postponedEmpty');
     if (!listEl) return;
 
-    clearRecommendSectionList(listEl, '.postponed-item, .postponed-group, .recommend-lazy-more, .recommend-search-empty');
+    clearRecommendSectionList(listEl, '.postponed-item, .postponed-group, .postponed-subsection, .recommend-lazy-more, .recommend-search-empty');
     if (emptyEl) emptyEl.style.display = 'none';
 
     const normalizedKeyword = String(keyword || '').trim().toLowerCase();
@@ -30553,7 +30675,7 @@ async function renderPostponedSearchResults(keyword) {
     const postponed = await getPostponedBookmarks();
     const now = Date.now();
     const activePostponed = sortPostponedByReviewOrder(
-        postponed.filter(p => p.manuallyAdded || p.postponeUntil > now)
+        postponed.filter(p => p && p.bookmarkId != null)
     );
 
     const groups = new Map();
@@ -30588,7 +30710,7 @@ async function renderPostponedSearchResults(keyword) {
         ...Array.from(groups.entries()).map(([groupId, group]) => ({ type: 'group', groupId, group })),
         ...singles.map(item => ({ type: 'item', item })),
         ...delayedItems.map(item => ({ type: 'item', item }))
-    ];
+    ].map((entry, index) => ({ ...entry, orderIndex: index + 1 }));
 
     if (renderEntries.length === 0) {
         listEl.insertAdjacentHTML('beforeend', `<div class="add-results-empty recommend-search-empty">${currentLang === 'zh_CN' ? '没有匹配的待复习书签' : 'No matching review bookmarks'}</div>`);
@@ -30597,9 +30719,9 @@ async function renderPostponedSearchResults(keyword) {
 
     await renderRecommendLazyBatch(listEl, renderEntries, async (entry) => {
         if (entry.type === 'group') {
-            await renderPostponedGroup(listEl, entry.groupId, entry.group);
+            await renderPostponedGroup(listEl, entry.groupId, entry.group, entry.orderIndex);
         } else {
-            await renderPostponedItem(listEl, entry.item);
+            await renderPostponedItem(listEl, entry.item, false, entry.orderIndex);
         }
     });
 }
@@ -32707,6 +32829,149 @@ async function checkAndIncrementOpenCount(options = {}) {
 }
 
 const RECOMMEND_LAZY_BATCH_SIZE = 20;
+const RECOMMEND_POSTPONED_SUBSECTION_COLLAPSE_STORAGE_KEY = 'recommendPostponedSubsectionCollapsed';
+
+function getPostponedSubsectionCollapseState() {
+    try {
+        const raw = localStorage.getItem(RECOMMEND_POSTPONED_SUBSECTION_COLLAPSE_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function isPostponedSubsectionCollapsed(sectionKey, fallback = true) {
+    const state = getPostponedSubsectionCollapseState();
+    if (typeof state?.[sectionKey] === 'boolean') return state[sectionKey];
+    return fallback === true;
+}
+
+function setPostponedSubsectionCollapsed(sectionKey, collapsed) {
+    try {
+        const state = getPostponedSubsectionCollapseState();
+        state[sectionKey] = collapsed === true;
+        localStorage.setItem(RECOMMEND_POSTPONED_SUBSECTION_COLLAPSE_STORAGE_KEY, JSON.stringify(state));
+    } catch (_) { }
+}
+
+function applyPostponedSubsectionCollapsed(section, sectionKey, collapsed, persist = true) {
+    if (!section) return;
+    section.classList.toggle('collapsed', collapsed === true);
+    if (persist) setPostponedSubsectionCollapsed(sectionKey, collapsed === true);
+}
+
+function createPostponedSubsection(listEl, sectionKey, title, count, options = {}) {
+    const section = document.createElement('div');
+    section.className = `postponed-subsection postponed-subsection-${sectionKey}`;
+    section.dataset.postponedSection = sectionKey;
+    applyPostponedSubsectionCollapsed(section, sectionKey, options.collapsed === true, false);
+
+    const header = document.createElement('div');
+    header.className = 'postponed-subsection-header';
+    header.setAttribute('role', 'button');
+    header.setAttribute('tabindex', '0');
+    const clearButtonHtml = options.clearable === true
+        ? `<button class="postponed-subsection-clear" type="button">${currentLang === 'en' ? 'Clear' : '一键清除'}</button>`
+        : '';
+    header.innerHTML = `
+        <span class="postponed-subsection-title">${escapeHtml(title)}</span>
+        ${clearButtonHtml}
+        <span class="postponed-subsection-count">${count}</span>
+        <i class="fas fa-chevron-down postponed-subsection-toggle"></i>
+    `;
+
+    const body = document.createElement('div');
+    body.className = 'postponed-subsection-body';
+
+    header.onclick = (event) => {
+        if (event.target.closest('.postponed-subsection-clear')) return;
+        event.stopPropagation();
+        applyPostponedSubsectionCollapsed(section, sectionKey, !section.classList.contains('collapsed'));
+    };
+    header.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (event.target.closest('.postponed-subsection-clear')) return;
+        event.preventDefault();
+        applyPostponedSubsectionCollapsed(section, sectionKey, !section.classList.contains('collapsed'));
+    });
+
+    const clearBtn = header.querySelector('.postponed-subsection-clear');
+    if (clearBtn && typeof options.onClear === 'function') {
+        clearBtn.onclick = async (event) => {
+            event.stopPropagation();
+            clearBtn.disabled = true;
+            try {
+                await options.onClear();
+            } finally {
+                clearBtn.disabled = false;
+            }
+        };
+    }
+
+    section.append(header, body);
+    listEl.appendChild(section);
+    return { section, body };
+}
+
+async function clearPostponedArchiveItems(items = []) {
+    const ids = new Set(
+        (Array.isArray(items) ? items : [])
+            .map(item => String(item?.bookmarkId || '').trim())
+            .filter(Boolean)
+    );
+    if (ids.size === 0) return;
+
+    const postponed = await getPostponedBookmarks();
+    const expectedVersion = getRecommendStateVersion(postponed);
+    const now = Date.now();
+    const nextPostponed = postponed.filter((item) => {
+        const id = String(item?.bookmarkId || '').trim();
+        return !ids.has(id) || !isPostponedArchiveItem(item, now);
+    });
+    attachRecommendListStateVersion(nextPostponed, expectedVersion);
+    const savedPostponed = await savePostponedBookmarks(nextPostponed);
+    await schedulePostponedExpiryRefresh(savedPostponed);
+    await loadPostponedList();
+    await refreshRecommendCards();
+}
+
+function getPostponedSectionTitle(sectionKey) {
+    if (sectionKey === 'archive') {
+        return currentLang === 'en' ? 'Due Archive' : '已到期归档';
+    }
+    return currentLang === 'en' ? 'Current Order' : '当前顺序';
+}
+
+function buildPostponedRenderEntries(items = []) {
+    const groups = new Map();
+    const singles = [];
+    const delayedItems = [];
+
+    for (const p of items) {
+        if (p.groupId && p.manuallyAdded) {
+            if (!groups.has(p.groupId)) {
+                groups.set(p.groupId, {
+                    type: p.groupType,
+                    name: p.groupName,
+                    compactLabel: p.groupCompactLabel === true || p.groupName === '顺序刷新' || p.groupName === 'Refresh in order',
+                    items: []
+                });
+            }
+            groups.get(p.groupId).items.push(p);
+        } else if (p.manuallyAdded && !p.groupId) {
+            singles.push(p);
+        } else {
+            delayedItems.push(p);
+        }
+    }
+
+    return [
+        ...Array.from(groups.entries()).map(([groupId, group]) => ({ type: 'group', groupId, group })),
+        ...singles.map(p => ({ type: 'item', item: p })),
+        ...delayedItems.map(p => ({ type: 'item', item: p }))
+    ].map((entry, index) => ({ ...entry, orderIndex: index + 1 }));
+}
 
 async function renderRecommendLazyBatch(container, entries, renderEntry, options = {}) {
     if (!container || !Array.isArray(entries) || typeof renderEntry !== 'function') return;
@@ -32760,8 +33025,8 @@ async function loadPostponedList() {
         await schedulePostponedExpiryRefresh(postponed);
         const now = Date.now();
 
-        // 过滤：手动添加的 或 未到期的
-        const activePostponed = postponed.filter(p => p.manuallyAdded || p.postponeUntil > now);
+        // 保留所有有效待复习项（到期后也保留，直到用户点击复习/取消）
+        const activePostponed = postponed.filter(p => p && p.bookmarkId != null);
 
         // 更新计数
         if (countEl) countEl.textContent = activePostponed.length;
@@ -32797,7 +33062,7 @@ async function loadPostponedList() {
         updatePostponedCollapse(activePostponed.length);
 
         // 清空列表（保留空状态元素）
-        const items = listEl.querySelectorAll('.postponed-item, .postponed-group, .recommend-lazy-more');
+        const items = listEl.querySelectorAll('.postponed-item, .postponed-group, .postponed-subsection, .recommend-lazy-more');
         items.forEach(item => item.remove());
 
         if (activePostponed.length === 0) {
@@ -32807,51 +33072,77 @@ async function loadPostponedList() {
 
         if (emptyEl) emptyEl.style.display = 'none';
 
-        const sortedPostponed = sortPostponedByReviewOrder(activePostponed);
+        const currentItems = sortPostponedByReviewOrder(
+            activePostponed.filter(p => !isPostponedArchiveItem(p, now))
+        );
+        const archiveItems = sortPostponedArchiveOrder(
+            activePostponed.filter(p => isPostponedArchiveItem(p, now))
+        );
 
-        // 按分组整理书签
-        const groups = new Map(); // groupId -> items[]
-        const singles = []; // 没有分组的单个书签
-        const delayedItems = []; // 通过卡片⏰按钮添加的延迟书签
-
-        for (const p of sortedPostponed) {
-            if (p.groupId && p.manuallyAdded) {
-                if (!groups.has(p.groupId)) {
-                    groups.set(p.groupId, {
-                        type: p.groupType,
-                        name: p.groupName,
-                        compactLabel: p.groupCompactLabel === true || p.groupName === '顺序刷新' || p.groupName === 'Refresh in order',
-                        items: []
-                    });
+        const renderSection = async (sectionKey, items, defaultCollapsed = true) => {
+            const entries = buildPostponedRenderEntries(items);
+            const collapsed = isPostponedSubsectionCollapsed(sectionKey, defaultCollapsed);
+            const { body } = createPostponedSubsection(
+                listEl,
+                sectionKey,
+                getPostponedSectionTitle(sectionKey),
+                items.length,
+                {
+                    collapsed,
+                    clearable: sectionKey === 'archive' && items.length > 0,
+                    onClear: () => clearPostponedArchiveItems(items)
                 }
-                groups.get(p.groupId).items.push(p);
-            } else if (p.manuallyAdded && !p.groupId) {
-                singles.push(p);
-            } else {
-                delayedItems.push(p);
+            );
+            if (entries.length === 0) {
+                body.insertAdjacentHTML('beforeend', `<div class="empty-state-inline postponed-subsection-empty">${currentLang === 'zh_CN' ? '暂无条目' : 'No items'}</div>`);
+                return;
             }
-        }
+            await renderRecommendLazyBatch(body, entries, async (entry) => {
+                if (entry.type === 'group') {
+                    await renderPostponedGroup(body, entry.groupId, entry.group, entry.orderIndex);
+                } else {
+                    await renderPostponedItem(body, entry.item, false, entry.orderIndex);
+                }
+            });
+        };
 
-        const renderEntries = [
-            ...Array.from(groups.entries()).map(([groupId, group]) => ({ type: 'group', groupId, group })),
-            ...singles.map(p => ({ type: 'item', item: p })),
-            ...delayedItems.map(p => ({ type: 'item', item: p }))
-        ];
-        await renderRecommendLazyBatch(listEl, renderEntries, async (entry) => {
-            if (entry.type === 'group') {
-                await renderPostponedGroup(listEl, entry.groupId, entry.group);
-            } else {
-                await renderPostponedItem(listEl, entry.item);
-            }
-        });
+        await renderSection('current', currentItems, true);
+        await renderSection('archive', archiveItems, true);
+        await applyPostponedFocusRequest();
 
     } catch (e) {
         console.error('[待复习] 加载待复习列表失败:', e);
     }
 }
 
+async function applyPostponedFocusRequest() {
+    try {
+        const result = await browserAPI.storage.local.get(['historyRequestedPostponedFocus']);
+        const payload = result?.historyRequestedPostponedFocus || null;
+        const withinWindow = payload && typeof payload.time === 'number'
+            ? (Date.now() - payload.time) < 20000
+            : false;
+        if (!withinWindow || payload?.section !== 'archive') return;
+
+        await browserAPI.storage.local.remove(['historyRequestedPostponedFocus']);
+        const rootSection = document.querySelector('.recommend-postponed-section');
+        const archiveSection = document.querySelector('[data-postponed-section="archive"]');
+        if (rootSection) rootSection.classList.remove('collapsed');
+        if (archiveSection) {
+            applyPostponedSubsectionCollapsed(archiveSection, 'archive', false);
+            setTimeout(() => {
+                try {
+                    archiveSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                } catch (_) {
+                    archiveSection.scrollIntoView();
+                }
+            }, 80);
+        }
+    } catch (_) { }
+}
+
 // 渲染分组
-async function renderPostponedGroup(container, groupId, group) {
+async function renderPostponedGroup(container, groupId, group, orderIndex = null) {
     const isZh = currentLang === 'zh_CN';
     const icon = group.type === 'folder' ? 'fa-folder' : 'fa-globe';
     const typeLabel = group.type === 'folder'
@@ -32875,6 +33166,7 @@ async function renderPostponedGroup(container, groupId, group) {
 
     groupEl.innerHTML = `
         <div class="postponed-group-header">
+            ${Number.isFinite(Number(orderIndex)) ? `<span class="postponed-item-order">${Number(orderIndex)}</span>` : ''}
             <div class="postponed-group-info">
                 ${groupIcon}
                 <span class="postponed-group-name">${escapeHtml(group.name)}</span>
@@ -32917,7 +33209,8 @@ async function renderPostponedGroup(container, groupId, group) {
         } else {
             // 首次展开时按 20 条一批渲染，避免大分组一次性卡顿
             if (itemsContainer.children.length === 0) {
-                await renderRecommendLazyBatch(itemsContainer, group.items, (p) => renderPostponedItem(itemsContainer, p, true));
+                const childEntries = group.items.map((item, index) => ({ item, orderIndex: index + 1 }));
+                await renderRecommendLazyBatch(itemsContainer, childEntries, (entry) => renderPostponedItem(itemsContainer, entry.item, true, entry.orderIndex));
             }
             itemsContainer.style.display = 'block';
             expandBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
@@ -32939,7 +33232,7 @@ async function renderPostponedGroup(container, groupId, group) {
 }
 
 // 渲染单个待复习项
-async function renderPostponedItem(container, p, isGroupChild = false) {
+async function renderPostponedItem(container, p, isGroupChild = false, orderIndex = null) {
     try {
         const bookmarks = await new Promise(resolve => {
             browserAPI.bookmarks.get(p.bookmarkId, resolve);
@@ -32961,6 +33254,7 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
             : formatPostponeTime(p.postponeUntil);
 
         item.innerHTML = `
+            ${Number.isFinite(Number(orderIndex)) ? `<span class="postponed-item-order">${Number(orderIndex)}</span>` : ''}
             <img class="postponed-item-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}" alt="">
             <div class="postponed-item-info">
                 <div class="postponed-item-title">${manualBadge}${escapeHtml(bookmark.title || bookmark.url)}</div>
@@ -33015,6 +33309,9 @@ async function renderPostponedItem(container, p, isGroupChild = false) {
 function formatPostponeTime(timestamp) {
     const now = Date.now();
     const diff = timestamp - now;
+    if (diff <= 0) {
+        return currentLang === 'en' ? 'Due now' : '已到期';
+    }
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(hours / 24);
 
@@ -34447,6 +34744,7 @@ async function refreshRecommendCards(force = false) {
                 backendRound.cards
                     .map(normalizeRecommendSnapshotCard)
                     .filter(Boolean)
+                    .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
                     .slice(0, RECOMMEND_BATCH_SIZE),
                 backendCurrentCards
             );
@@ -39213,6 +39511,7 @@ function handleStorageChange(changes, namespace) {
 
         if (changes[RECOMMEND_POSTPONED_STORAGE_KEY]) {
             const postponed = normalizePostponedList(changes[RECOMMEND_POSTPONED_STORAGE_KEY]?.newValue || []);
+            syncRecommendPostponedAuthoritativeIds(postponed);
             schedulePostponedExpiryRefresh(postponed).catch(() => { });
         }
     }

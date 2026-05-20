@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>待复习提醒</title>
+  <link rel="stylesheet" href="../font-awesome.min.css">
+  <link rel="stylesheet" href="review_reminder_popup.css">
+</head>
+<body>
+  <main class="notification-container">
+    <header class="notification-header">
+      <img class="notification-icon" src="../icons/icon48.png" alt="图标">
+      <div class="notification-heading">
+        <div class="plugin-name" id="pluginName">书签记录与推荐</div>
+        <h1 class="notification-title" id="notificationTitle">待复习提醒</h1>
+      </div>
+      <button class="close-button" id="closeBtn" type="button" aria-label="关闭"></button>
+    </header>
+
+    <section class="cards-section">
+      <div class="cards-header">
+        <span id="itemsTitle">Due Bookmarks</span>
+        <span class="items-count" id="itemsCount">0</span>
+      </div>
+      <div class="cards-list" id="itemsList">
+        <div class="state-message" id="loadingText">正在加载...</div>
+      </div>
+    </section>
+
+    <div class="action-feedback" id="actionFeedback" hidden></div>
+
+    <footer class="notification-buttons">
+      <button class="notification-button primary" id="openReviewBtn" type="button">打开待复习</button>
+    </footer>
+  </main>
+
+  <script src="review_reminder_popup.js"></script>
+</body>
+</html>
