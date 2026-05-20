@@ -29296,15 +29296,21 @@ function renderBlockDomainList(domains) {
         return;
     }
 
-    listEl.innerHTML = displayDomains.map(([domain, data]) => `
+    listEl.innerHTML = displayDomains.map(([domain, data]) => {
+        const domainUrl = getRecommendDomainFaviconUrl(domain);
+        return `
         <div class="add-domain-item ${addBlockDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
             <input type="checkbox" ${addBlockDomainSelected.has(domain) ? 'checked' : ''}>
             <div class="add-domain-info">
-                <div class="add-domain-name">${escapeHtml(domain)}</div>
+                <div class="add-domain-title-row">
+                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
+                    <div class="add-domain-name">${escapeHtml(domain)}</div>
+                </div>
                 <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     listEl.querySelectorAll('.add-domain-item').forEach(item => {
         item.addEventListener('click', () => {
@@ -30059,15 +30065,21 @@ function renderTrackingBlockDomainList(domains) {
         return;
     }
 
-    listEl.innerHTML = displayDomains.map(([domain, data]) => `
+    listEl.innerHTML = displayDomains.map(([domain, data]) => {
+        const domainUrl = getRecommendDomainFaviconUrl(domain);
+        return `
         <div class="add-domain-item ${trackingBlockDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
             <input type="checkbox" ${trackingBlockDomainSelected.has(domain) ? 'checked' : ''}>
             <div class="add-domain-info">
-                <div class="add-domain-name">${escapeHtml(domain)}</div>
+                <div class="add-domain-title-row">
+                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
+                    <div class="add-domain-name">${escapeHtml(domain)}</div>
+                </div>
                 <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     listEl.querySelectorAll('.add-domain-item').forEach(item => {
         item.addEventListener('click', () => {
@@ -30485,11 +30497,13 @@ let addPostponedSelectedFolder = null;
 let addPostponedSearchSelected = new Set();
 let addPostponedDomainSelected = new Set();
 let addPostponedDomainData = []; // 保存完整的域名数据用于过滤
+let addPostponedDomainSort = { key: 'domain', dir: 'asc' };
 let addPostponedTreeState = null;
 
 let addBlockUnifiedSearchSelected = new Set();
 let addBlockUnifiedDomainSelected = new Set();
 let addBlockUnifiedDomainData = [];
+let addBlockUnifiedDomainSort = { key: 'domain', dir: 'asc' };
 let addBlockUnifiedTreeState = null;
 
 function getBlockUnifiedDomRoot(root = document) {
@@ -30748,6 +30762,7 @@ function initAddToPostponedModal() {
             panels?.forEach(p => p.classList.remove('active'));
             tab.classList.add('active');
             modal.querySelector(`.add-postponed-panel[data-panel="${tabName}"]`)?.classList.add('active');
+            updateAddPostponedFooterSelection(tabName);
         });
     });
 
@@ -30849,6 +30864,7 @@ function initAddToBlockModal() {
         addBlockUnifiedSearchSelected.clear();
         addBlockUnifiedDomainSelected.clear();
         addBlockUnifiedDomainData = [];
+        addBlockUnifiedDomainSort = { key: 'domain', dir: 'asc' };
 
         const treeSelected = getAddBlockDomEl('addBlockTreeSelectedName');
         if (treeSelected) treeSelected.textContent = '-';
@@ -31104,6 +31120,7 @@ function resetAddPostponedModal() {
     if (domainList) domainList.innerHTML = `<div class="add-results-empty">${isZh ? '切换到此标签加载域名' : 'Switch to this tab to load domains'}</div>`;
     if (domainCount) domainCount.textContent = '0';
     addPostponedDomainData = [];
+    addPostponedDomainSort = { key: 'domain', dir: 'asc' };
 
     // 重置到第一个标签
     const modal = document.getElementById('addToPostponedModal');
@@ -31392,6 +31409,27 @@ function updateAddPostponedTreeSelectionSummary(state) {
         : `${bookmarkCount} bookmarks / ${folderCount} folders`;
 }
 
+function updateAddPostponedFooterSelection(panelType = null) {
+    const modal = document.getElementById('addToPostponedModal');
+    const selectedName = document.getElementById('addTreeSelectedName');
+    if (!selectedName) return;
+
+    const activePanelType = panelType || modal?.querySelector('.add-postponed-panel.active')?.dataset?.panel || 'tree';
+    const isZh = currentLang === 'zh_CN';
+    if (activePanelType === 'search') {
+        selectedName.textContent = String(addPostponedSearchSelected.size || 0);
+        return;
+    }
+    if (activePanelType === 'domain') {
+        const count = addPostponedDomainSelected.size || 0;
+        selectedName.textContent = count > 0
+            ? `${count} ${isZh ? '个域名' : 'domains'}`
+            : '-';
+        return;
+    }
+    updateAddPostponedTreeSelectionSummary(addPostponedTreeState);
+}
+
 function setAddPostponedTreeSubtreeChecked(nodeKey, checked, state) {
     const node = state?.nodeMap?.get(nodeKey);
     if (!node) return;
@@ -31500,6 +31538,95 @@ function formatAddPostponedTreeHours(timeMs, locale) {
         minimumFractionDigits: 1,
         maximumFractionDigits: 1
     });
+}
+
+function getRecommendDomainFaviconUrl(domain) {
+    const safeDomain = getRecommendBaseDomainFromHost(domain);
+    if (!safeDomain) return '';
+    return `https://${safeDomain}`;
+}
+
+function getAddDomainBookmarkMetric(bookmark, metricMaps) {
+    const clickByUrl = metricMaps?.clickByUrl instanceof Map ? metricMaps.clickByUrl : new Map();
+    const wakeByBookmarkId = metricMaps?.wakeByBookmarkId instanceof Map ? metricMaps.wakeByBookmarkId : new Map();
+    const wakeByUrl = metricMaps?.wakeByUrl instanceof Map ? metricMaps.wakeByUrl : new Map();
+    const timeByBookmarkId = metricMaps?.timeByBookmarkId instanceof Map ? metricMaps.timeByBookmarkId : new Map();
+    const timeByUrl = metricMaps?.timeByUrl instanceof Map ? metricMaps.timeByUrl : new Map();
+    const bookmarkId = bookmark?.id != null ? String(bookmark.id).trim() : '';
+    const url = String(bookmark?.url || '').trim();
+    const clickCount = url ? Math.max(0, Number(clickByUrl.get(url) || 0) || 0) : 0;
+    const wakeRaw = bookmarkId
+        ? (wakeByBookmarkId.get(bookmarkId) || (url ? (wakeByUrl.get(url) || 0) : 0))
+        : (url ? (wakeByUrl.get(url) || 0) : 0);
+    const wakeCount = Math.max(0, Number(wakeRaw > 0 ? wakeRaw : clickCount) || 0);
+    const timeMs = bookmarkId
+        ? (timeByBookmarkId.get(bookmarkId) || (url ? (timeByUrl.get(url) || 0) : 0))
+        : (url ? (timeByUrl.get(url) || 0) : 0);
+
+    return {
+        clickCount,
+        wakeCount,
+        timeMs: Math.max(0, Number(timeMs) || 0)
+    };
+}
+
+function sortAddDomainEntries(domains, sortState) {
+    const entries = Array.isArray(domains) ? [...domains] : [];
+    const key = String(sortState?.key || 'domain');
+    const dir = String(sortState?.dir || 'asc') === 'desc' ? -1 : 1;
+    const getMetric = (data) => {
+        if (key === 'count') return Math.max(0, Number(data?.count || 0) || 0);
+        if (key === 'clicks') return Math.max(0, Number(data?.clickCount || 0) || 0);
+        if (key === 'wakes') return Math.max(0, Number(data?.wakeCount || 0) || 0);
+        if (key === 'time') return Math.max(0, Number(data?.totalTimeMs || 0) || 0);
+        return 0;
+    };
+
+    entries.sort((a, b) => {
+        const domainA = String(a?.[0] || '');
+        const domainB = String(b?.[0] || '');
+        if (key === 'domain') {
+            return domainA.localeCompare(domainB, 'en', { sensitivity: 'base' }) * dir;
+        }
+        const diff = getMetric(a?.[1]) - getMetric(b?.[1]);
+        if (diff !== 0) return diff * dir;
+        return domainA.localeCompare(domainB, 'en', { sensitivity: 'base' });
+    });
+    return entries;
+}
+
+function getAddDomainSortBarHtml(sortState) {
+    const isZh = currentLang === 'zh_CN';
+    const key = String(sortState?.key || 'domain');
+    const dir = String(sortState?.dir || 'asc');
+    const labels = {
+        domain: isZh ? '域名' : 'Domain',
+        count: isZh ? '书签' : 'Bookmarks',
+        clicks: isZh ? '点击' : 'Clicks',
+        wakes: isZh ? '唤醒' : 'Wakes',
+        time: isZh ? '时间(h)' : 'Time(h)'
+    };
+
+    return `
+        <div class="add-domain-sort-bar">
+            ${['domain', 'count', 'clicks', 'wakes', 'time'].map(sortKey => `
+                <button type="button" class="add-domain-sort-btn ${key === sortKey ? 'active' : ''}" data-sort-key="${sortKey}">
+                    <span>${labels[sortKey]}</span>
+                    ${key === sortKey ? `<i class="fas ${dir === 'desc' ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>` : ''}
+                </button>
+            `).join('')}
+        </div>
+    `;
+}
+
+function toggleAddDomainSort(sortState, nextKey) {
+    const safeKey = String(nextKey || 'domain');
+    if (sortState.key === safeKey) {
+        sortState.dir = sortState.dir === 'desc' ? 'asc' : 'desc';
+        return;
+    }
+    sortState.key = safeKey;
+    sortState.dir = safeKey === 'domain' ? 'asc' : 'desc';
 }
 
 function createAddPostponedTreeNode(nodeKey, state) {
@@ -31793,7 +31920,8 @@ async function searchBookmarksForAdd(keyword) {
                     item.classList.add('selected');
                     checkbox.checked = true;
                 }
-                countEl.textContent = addPostponedSearchSelected.size;
+                if (countEl) countEl.textContent = addPostponedSearchSelected.size;
+                updateAddPostponedFooterSelection('search');
             });
         });
     } catch (e) {
@@ -31813,7 +31941,10 @@ async function loadDomainList() {
     if (searchInput) searchInput.value = '';
 
     try {
-        const allBookmarks = await getAllBookmarksFlat();
+        const [allBookmarks, metricMaps] = await Promise.all([
+            getAllBookmarksFlat(),
+            getAddPostponedTreeMetricMaps()
+        ]);
 
         // 统计每个域名的书签数量
         const domainMap = new Map(); // domain -> { count, bookmarkIds }
@@ -31824,18 +31955,21 @@ async function loadDomainList() {
                 const domain = getRecommendBaseDomainFromHost(url.hostname);
                 if (!domain) continue;
                 if (!domainMap.has(domain)) {
-                    domainMap.set(domain, { count: 0, bookmarkIds: [] });
+                    domainMap.set(domain, { count: 0, bookmarkIds: [], clickCount: 0, wakeCount: 0, totalTimeMs: 0 });
                 }
-                domainMap.get(domain).count++;
-                domainMap.get(domain).bookmarkIds.push(b.id);
+                const item = domainMap.get(domain);
+                const metrics = getAddDomainBookmarkMetric(b, metricMaps);
+                item.count++;
+                item.bookmarkIds.push(b.id);
+                item.clickCount += metrics.clickCount;
+                item.wakeCount += metrics.wakeCount;
+                item.totalTimeMs += metrics.timeMs;
             } catch {
                 // 忽略无效URL
             }
         }
 
-        // 按域名字母顺序排序（A-Z）
-        addPostponedDomainData = Array.from(domainMap.entries())
-            .sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
+        addPostponedDomainData = sortAddDomainEntries(Array.from(domainMap.entries()), addPostponedDomainSort);
 
         renderDomainList(addPostponedDomainData);
     } catch (e) {
@@ -31873,17 +32007,38 @@ function renderDomainList(domains) {
     }
 
     // 最多显示100个
-    const displayDomains = domains.slice(0, 100);
+    const displayDomains = sortAddDomainEntries(domains, addPostponedDomainSort).slice(0, 100);
+    const locale = isZh ? 'zh-CN' : 'en-US';
 
-    listEl.innerHTML = displayDomains.map(([domain, data]) => `
+    listEl.innerHTML = `${getAddDomainSortBarHtml(addPostponedDomainSort)}${displayDomains.map(([domain, data]) => {
+        const timeHoursText = formatAddPostponedTreeHours(data?.totalTimeMs || 0, locale);
+        const domainUrl = getRecommendDomainFaviconUrl(domain);
+        return `
         <div class="add-domain-item ${addPostponedDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
             <input type="checkbox" ${addPostponedDomainSelected.has(domain) ? 'checked' : ''}>
             <div class="add-domain-info">
-                <div class="add-domain-name">${escapeHtml(domain)}</div>
+                <div class="add-domain-title-row">
+                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
+                    <div class="add-domain-name">${escapeHtml(domain)}</div>
+                    <div class="add-domain-metrics">
+                        <span title="${isZh ? '点击次数' : 'Click count'}">${Math.max(0, Number(data?.clickCount || 0)).toLocaleString(locale)} ${isZh ? '点击' : 'clicks'}</span>
+                        <span title="${isZh ? '唤醒次数' : 'Wake count'}">${Math.max(0, Number(data?.wakeCount || 0)).toLocaleString(locale)} ${isZh ? '唤醒' : 'wakes'}</span>
+                        <span title="${isZh ? '时间捕捉（小时）' : 'Time tracking (hours)'}">${timeHoursText}h</span>
+                    </div>
+                </div>
                 <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('')}`;
+
+    listEl.querySelectorAll('.add-domain-sort-btn[data-sort-key]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleAddDomainSort(addPostponedDomainSort, btn.dataset.sortKey);
+            renderDomainList(domains);
+        });
+    });
 
     // 绑定点击事件
     listEl.querySelectorAll('.add-domain-item').forEach(item => {
@@ -31899,7 +32054,8 @@ function renderDomainList(domains) {
                 item.classList.add('selected');
                 checkbox.checked = true;
             }
-            countEl.textContent = addPostponedDomainSelected.size;
+            if (countEl) countEl.textContent = addPostponedDomainSelected.size;
+            updateAddPostponedFooterSelection('domain');
         });
     });
 }
@@ -31969,7 +32125,11 @@ async function loadDomainListForAddBlock() {
     if (countEl) countEl.textContent = '0';
 
     try {
-        const [allBookmarks, blocked] = await Promise.all([getAllBookmarksFlat(), getBlockedBookmarks()]);
+        const [allBookmarks, blocked, metricMaps] = await Promise.all([
+            getAllBookmarksFlat(),
+            getBlockedBookmarks(),
+            getAddPostponedTreeMetricMaps()
+        ]);
         const blockedDomains = new Set((blocked?.domains || []).map(d => getRecommendBaseDomainFromHost(d)).filter(Boolean));
         const domainMap = new Map();
         for (const b of allBookmarks) {
@@ -31979,15 +32139,19 @@ async function loadDomainListForAddBlock() {
                 const domain = getRecommendBaseDomainFromHost(url.hostname);
                 if (!domain || blockedDomains.has(domain)) continue;
                 if (!domainMap.has(domain)) {
-                    domainMap.set(domain, { count: 0 });
+                    domainMap.set(domain, { count: 0, clickCount: 0, wakeCount: 0, totalTimeMs: 0 });
                 }
-                domainMap.get(domain).count++;
+                const item = domainMap.get(domain);
+                const metrics = getAddDomainBookmarkMetric(b, metricMaps);
+                item.count++;
+                item.clickCount += metrics.clickCount;
+                item.wakeCount += metrics.wakeCount;
+                item.totalTimeMs += metrics.timeMs;
             } catch {
             }
         }
 
-        addBlockUnifiedDomainData = Array.from(domainMap.entries())
-            .sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
+        addBlockUnifiedDomainData = sortAddDomainEntries(Array.from(domainMap.entries()), addBlockUnifiedDomainSort);
 
         renderDomainListForAddBlock(addBlockUnifiedDomainData);
     } catch (e) {
@@ -32019,16 +32183,37 @@ function renderDomainListForAddBlock(domains) {
         return;
     }
 
-    const displayDomains = domains.slice(0, 100);
-    listEl.innerHTML = displayDomains.map(([domain, data]) => `
+    const displayDomains = sortAddDomainEntries(domains, addBlockUnifiedDomainSort).slice(0, 100);
+    const locale = isZh ? 'zh-CN' : 'en-US';
+    listEl.innerHTML = `${getAddDomainSortBarHtml(addBlockUnifiedDomainSort)}${displayDomains.map(([domain, data]) => {
+        const timeHoursText = formatAddPostponedTreeHours(data?.totalTimeMs || 0, locale);
+        const domainUrl = getRecommendDomainFaviconUrl(domain);
+        return `
         <div class="add-domain-item ${addBlockUnifiedDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
             <input type="checkbox" ${addBlockUnifiedDomainSelected.has(domain) ? 'checked' : ''}>
             <div class="add-domain-info">
-                <div class="add-domain-name">${escapeHtml(domain)}</div>
+                <div class="add-domain-title-row">
+                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
+                    <div class="add-domain-name">${escapeHtml(domain)}</div>
+                    <div class="add-domain-metrics">
+                        <span title="${isZh ? '点击次数' : 'Click count'}">${Math.max(0, Number(data?.clickCount || 0)).toLocaleString(locale)} ${isZh ? '点击' : 'clicks'}</span>
+                        <span title="${isZh ? '唤醒次数' : 'Wake count'}">${Math.max(0, Number(data?.wakeCount || 0)).toLocaleString(locale)} ${isZh ? '唤醒' : 'wakes'}</span>
+                        <span title="${isZh ? '时间捕捉（小时）' : 'Time tracking (hours)'}">${timeHoursText}h</span>
+                    </div>
+                </div>
                 <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('')}`;
+
+    listEl.querySelectorAll('.add-domain-sort-btn[data-sort-key]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleAddDomainSort(addBlockUnifiedDomainSort, btn.dataset.sortKey);
+            renderDomainListForAddBlock(domains);
+        });
+    });
 
     listEl.querySelectorAll('.add-domain-item').forEach(item => {
         item.addEventListener('click', () => {
@@ -32676,8 +32861,11 @@ async function renderPostponedGroup(container, groupId, group) {
     const groupEl = document.createElement('div');
     groupEl.className = 'postponed-group';
     groupEl.dataset.groupId = groupId;
+    const domainFaviconUrl = group.type === 'domain' ? getRecommendDomainFaviconUrl(group.name) : '';
     const groupIcon = group.compactLabel
         ? ''
+        : domainFaviconUrl
+            ? `<img class="postponed-group-icon postponed-group-favicon" data-bookmark-url="${escapeHtml(domainFaviconUrl)}" src="${getFaviconUrl(domainFaviconUrl)}" alt="">`
         : `<i class="fas ${icon} postponed-group-icon"></i>`;
     const groupBadges = group.compactLabel
         ? ''
@@ -32961,10 +33149,14 @@ function renderBlockedDomainUnifiedGroup(container, group) {
     groupEl.dataset.groupKind = group.domainBlocked ? 'domain' : 'bookmark-domain';
     groupEl.dataset.domain = String(group.domain || '');
     const iconClass = group.domainBlocked ? 'fa-globe' : 'fa-bookmark';
+    const domainFaviconUrl = getRecommendDomainFaviconUrl(group.domain);
+    const groupIcon = domainFaviconUrl
+        ? `<img class="block-item-icon block-domain-favicon" data-bookmark-url="${escapeHtml(domainFaviconUrl)}" src="${getFaviconUrl(domainFaviconUrl)}" alt="">`
+        : `<i class="fas ${iconClass} block-item-icon" style="font-size: 17px; color: var(--accent-primary);"></i>`;
     groupEl.innerHTML = `
         <div class="block-group-header">
             <div class="block-group-info">
-                <i class="fas ${iconClass} block-item-icon" style="font-size: 17px; color: var(--accent-primary);"></i>
+                ${groupIcon}
                 <span class="block-group-name">${escapeHtml(group.domain)}</span>
             </div>
             <div class="block-group-actions">
@@ -33118,10 +33310,14 @@ async function renderBlockedBookmarkDomainSubgroups(container, bookmarks = []) {
         groupEl.className = 'block-group block-domain-subgroup';
         groupEl.dataset.groupKind = 'bookmark-domain-child';
         groupEl.dataset.domain = String(domain || '');
+        const domainFaviconUrl = getRecommendDomainFaviconUrl(domain);
+        const groupIcon = domainFaviconUrl
+            ? `<img class="block-item-icon block-domain-favicon" data-bookmark-url="${escapeHtml(domainFaviconUrl)}" src="${getFaviconUrl(domainFaviconUrl)}" alt="">`
+            : `<i class="fas fa-globe block-item-icon" style="font-size: 15px; color: var(--accent-primary);"></i>`;
         groupEl.innerHTML = `
             <div class="block-group-header">
                 <div class="block-group-info">
-                    <i class="fas fa-globe block-item-icon" style="font-size: 15px; color: var(--accent-primary);"></i>
+                    ${groupIcon}
                     <span class="block-group-name">${escapeHtml(domain)}</span>
                 </div>
                 <div class="block-group-actions">
