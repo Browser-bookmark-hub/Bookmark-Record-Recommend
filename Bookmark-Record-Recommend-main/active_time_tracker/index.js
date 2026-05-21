@@ -42,6 +42,64 @@ const normalizeDomain = (domain) => {
     return parts.slice(-keepCount).join('.');
 };
 
+const normalizeDomainHost = (domain) => {
+    if (!domain || typeof domain !== 'string') return '';
+    return domain.trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+};
+
+function normalizeTrackingBlockedDomainEntry(entry, mode = '') {
+    const modeHint = String(mode || '').trim().toLowerCase();
+    const toBase = (value) => {
+        const base = normalizeDomain(value);
+        return base ? `base:${base}` : '';
+    };
+    const toExact = (value) => normalizeDomainHost(value);
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const rawMode = String(entry?.matchMode || entry?.mode || modeHint || 'exact').trim().toLowerCase();
+        const rawDomain = String(entry?.domain || entry?.host || entry?.value || '').trim();
+        if (!rawDomain) return '';
+        return rawMode === 'base' ? toBase(rawDomain) : toExact(rawDomain);
+    }
+
+    const raw = String(entry || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.startsWith('base:')) {
+        return toBase(raw.slice(5));
+    }
+    if (modeHint === 'base') return toBase(raw);
+    return toExact(raw);
+}
+
+function buildTrackingDomainMatchers(domains = []) {
+    const exact = new Set();
+    const base = new Set();
+    for (const entry of Array.isArray(domains) ? domains : []) {
+        const normalized = normalizeTrackingBlockedDomainEntry(entry);
+        if (!normalized) continue;
+        if (normalized.startsWith('base:')) {
+            const domain = normalizeDomainHost(normalized.slice(5));
+            if (domain) base.add(domain);
+        } else {
+            exact.add(normalized);
+        }
+    }
+    return {
+        exact,
+        base,
+        hasRules: exact.size > 0 || base.size > 0
+    };
+}
+
+function isTrackingDomainBlocked(hostname, domainMatchers) {
+    if (!domainMatchers || domainMatchers.hasRules !== true) return false;
+    const exactHost = normalizeDomainHost(hostname);
+    if (!exactHost) return false;
+    if (domainMatchers.exact?.has(exactHost)) return true;
+    const baseHost = normalizeDomain(exactHost);
+    return Boolean(baseHost && domainMatchers.base?.has(baseHost));
+}
+
 function toNonNegativeNumber(value, fallback = 0) {
     const num = Number(value);
     if (!Number.isFinite(num) || num < 0) return fallback;
@@ -287,10 +345,11 @@ function shouldSkipStartForKnownNonBookmark(tabId, url, title) {
 }
 
 function updateTrackingBlockedCache(data) {
+    const domainMatchers = buildTrackingDomainMatchers(data?.domains || []);
     trackingBlockedCache = {
         bookmarks: new Set(data?.bookmarks || []),
         folders: new Set(data?.folders || []),
-        domains: new Set((data?.domains || []).map(normalizeDomain).filter(Boolean))
+        domains: domainMatchers
     };
     trackingBlockedCacheReady = true;
 }
@@ -1453,10 +1512,10 @@ function isTrackingBlockedByCache({ url, bookmarkId }) {
         }
     }
 
-    if (url && trackingBlockedCache.domains.size > 0) {
+    if (url && trackingBlockedCache.domains?.hasRules === true) {
         try {
-            const domain = normalizeDomain(new URL(url).hostname);
-            if (domain && trackingBlockedCache.domains.has(domain)) {
+            const hostname = new URL(url).hostname;
+            if (isTrackingDomainBlocked(hostname, trackingBlockedCache.domains)) {
                 return true;
             }
         } catch { }

@@ -1028,12 +1028,12 @@ function isQuickReviewBookmarkInBlockedFolder(bookmark, blockedFolderSet) {
   return false;
 }
 
-function isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainSet) {
-  if (!blockedDomainSet || blockedDomainSet.size === 0) return false;
+function isQuickReviewBookmarkBlockedDomain(bookmark, blockedDomainMatchers) {
+  if (!blockedDomainMatchers || blockedDomainMatchers.hasRules !== true) return false;
   if (!bookmark?.url) return false;
   try {
-    const hostname = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
-    return blockedDomainSet.has(hostname);
+    const hostname = normalizeRecommendDomainHost(new URL(bookmark.url).hostname || '');
+    return isHostnameBlockedByDomainMatchers(hostname, blockedDomainMatchers);
   } catch {
     return false;
   }
@@ -1147,10 +1147,8 @@ async function selectQuickReviewCardsRoundStateUnlocked(options = {}) {
 
   const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
-  const blockedDomainSet = new Set(
-    (Array.isArray(blocked?.domains) ? blocked.domains : [])
-      .map(normalizeBlockedDomain)
-      .filter(Boolean)
+  const blockedDomainSet = buildBlockedDomainMatchers(
+    Array.isArray(blocked?.domains) ? blocked.domains : []
   );
 
   const now = Date.now();
@@ -1316,10 +1314,8 @@ async function peekQuickReviewPreloadUrlsState(options = {}) {
 
   const blockedBookmarkSet = new Set(normalizeBookmarkIdList(blocked?.bookmarks || []));
   const blockedFolderSet = new Set(normalizeBookmarkIdList(blocked?.folders || []));
-  const blockedDomainSet = new Set(
-    (Array.isArray(blocked?.domains) ? blocked.domains : [])
-      .map(normalizeBlockedDomain)
-      .filter(Boolean)
+  const blockedDomainSet = buildBlockedDomainMatchers(
+    Array.isArray(blocked?.domains) ? blocked.domains : []
   );
 
   const now = Date.now();
@@ -2597,6 +2593,9 @@ const RECOMMEND_BACKGROUND_REFRESH_MAX_STALE_MS = 14 * 24 * 60 * 60 * 1000;
 const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
 const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
+const RECOMMEND_BLOCKED_DOMAIN_MODE_BASE = 'base';
+const RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT = 'exact';
+const RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX = 'base:';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
 const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_STATE_MUTATION_CHANNEL = 'recommend_state_mutation_v1';
@@ -2852,7 +2851,7 @@ function normalizeRecommendBlockedState(blocked) {
 
   const normalizeDomainList = (list) => Array.from(new Set(
     (Array.isArray(list) ? list : [])
-      .map(item => normalizeBlockedDomain(item))
+      .map(item => normalizeBlockedDomainEntry(item))
       .filter(Boolean)
   ));
 
@@ -2862,6 +2861,88 @@ function normalizeRecommendBlockedState(blocked) {
     domains: normalizeDomainList(source.domains),
     version: normalizeRecommendStateVersion(source.version || source.stateVersion)
   };
+}
+
+function normalizeBlockedDomainEntry(entry, options = {}) {
+  const modeHint = String(options?.mode || '').trim().toLowerCase();
+  const toBaseEntry = (value) => {
+    return buildBlockedDomainBaseEntry(value);
+  };
+  const toExactEntry = (value) => normalizeRecommendDomainHost(value);
+
+  if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+    const mode = String(entry?.matchMode || entry?.mode || modeHint || RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT).trim().toLowerCase();
+    const raw = String(entry?.domain || entry?.host || entry?.value || '').trim();
+    if (!raw) return '';
+    return mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE
+      ? toBaseEntry(raw)
+      : toExactEntry(raw);
+  }
+
+  const raw = String(entry || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+    return toBaseEntry(raw.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+  }
+  if (modeHint === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+    return toBaseEntry(raw);
+  }
+  return toExactEntry(raw);
+}
+
+function parseBlockedDomainEntry(entry) {
+  const normalized = normalizeBlockedDomainEntry(entry);
+  if (!normalized) return null;
+
+  if (normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+    const baseDomain = normalizeRecommendDomainHost(normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+    if (!baseDomain) return null;
+    return {
+      entry: `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${baseDomain}`,
+      mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE,
+      baseDomain,
+      exactDomain: '',
+      displayDomain: baseDomain
+    };
+  }
+
+  const exactDomain = normalizeRecommendDomainHost(normalized);
+  if (!exactDomain) return null;
+  return {
+    entry: exactDomain,
+    mode: RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT,
+    baseDomain: getRecommendBaseDomainFromHost(exactDomain),
+    exactDomain,
+    displayDomain: exactDomain
+  };
+}
+
+function buildBlockedDomainMatchers(domains = []) {
+  const exact = new Set();
+  const base = new Set();
+  for (const entry of Array.isArray(domains) ? domains : []) {
+    const parsed = parseBlockedDomainEntry(entry);
+    if (!parsed) continue;
+    if (parsed.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+      base.add(parsed.baseDomain);
+    } else if (parsed.exactDomain) {
+      exact.add(parsed.exactDomain);
+    }
+  }
+  return {
+    exact,
+    base,
+    hasRules: exact.size > 0 || base.size > 0
+  };
+}
+
+function isHostnameBlockedByDomainMatchers(hostname, domainMatchers) {
+  if (!domainMatchers || domainMatchers.hasRules !== true) return false;
+  const safeHost = normalizeRecommendDomainHost(hostname);
+  if (!safeHost) return false;
+  if (domainMatchers.exact?.has(safeHost)) return true;
+  const baseDomain = getRecommendBaseDomainFromHost(safeHost);
+  return Boolean(baseDomain && domainMatchers.base?.has(baseDomain));
 }
 
 function normalizeRecommendPostponedList(list) {
@@ -5332,6 +5413,11 @@ function normalizeRecommendDomainHost(domain) {
   return String(domain || '').trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
 }
 
+function buildBlockedDomainBaseEntry(domain) {
+  const safeBase = getRecommendBaseDomainFromHost(domain);
+  return safeBase ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${safeBase}` : '';
+}
+
 function getRecommendBaseDomainFromHost(hostname) {
   const safeHost = normalizeRecommendDomainHost(hostname);
   if (!safeHost) return '';
@@ -5466,9 +5552,10 @@ async function ensureBookmarkUrlIndex() {
 async function getBlockedDataForScore() {
   const result = await browserAPI.storage.local.get(['recommend_blocked']);
   const blocked = result.recommend_blocked || { bookmarks: [], folders: [], domains: [] };
+  const domainMatchers = buildBlockedDomainMatchers(blocked.domains || []);
   return {
     bookmarks: new Set(blocked.bookmarks || []),
-    domains: new Set((blocked.domains || []).map(normalizeBlockedDomain).filter(Boolean)),
+    domains: domainMatchers,
     folders: new Set(blocked.folders || [])
   };
 }
@@ -5961,10 +6048,10 @@ async function computeAllBookmarkScores(options = {}) {
     ]);
 
     const isBlockedDomain = (bookmark) => {
-      if (blocked.domains.size === 0 || !bookmark.url) return false;
+      if (blocked.domains?.hasRules !== true || !bookmark.url) return false;
       try {
         const url = new URL(bookmark.url);
-        return blocked.domains.has(normalizeBlockedDomain(url.hostname));
+        return isHostnameBlockedByDomainMatchers(url.hostname, blocked.domains);
       } catch {
         return false;
       }
@@ -6268,31 +6355,29 @@ async function getBookmarkIdsByFolderIds(folderIds) {
   return getBookmarkIdsByFolderIdsFromTree(Array.from(folderIdSet), tree);
 }
 
-function collectBookmarkIdsByDomains(nodes, domainSet, output) {
+function collectBookmarkIdsByDomains(nodes, domainMatchers, output) {
   if (!Array.isArray(nodes)) return;
   for (const node of nodes) {
     if (node && node.url) {
       try {
-        const host = normalizeBlockedDomain(new URL(node.url).hostname);
-        if (host && domainSet.has(host)) {
+        const host = normalizeRecommendDomainHost(new URL(node.url).hostname);
+        if (isHostnameBlockedByDomainMatchers(host, domainMatchers)) {
           output.push(String(node.id));
         }
       } catch (_) { }
     }
     if (node && node.children) {
-      collectBookmarkIdsByDomains(node.children, domainSet, output);
+      collectBookmarkIdsByDomains(node.children, domainMatchers, output);
     }
   }
 }
 
 async function getBookmarkIdsByDomains(domains) {
   const ids = [];
-  const domainSet = new Set((domains || [])
-    .map(normalizeBlockedDomain)
-    .filter(Boolean));
-  if (domainSet.size === 0 || !browserAPI?.bookmarks?.getTree) return ids;
+  const domainMatchers = buildBlockedDomainMatchers(domains || []);
+  if (domainMatchers.hasRules !== true || !browserAPI?.bookmarks?.getTree) return ids;
   const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
-  collectBookmarkIdsByDomains(tree, domainSet, ids);
+  collectBookmarkIdsByDomains(tree, domainMatchers, ids);
   return [...new Set(ids)];
 }
 

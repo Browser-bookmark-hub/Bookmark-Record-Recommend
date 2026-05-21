@@ -568,6 +568,9 @@ const RECOMMEND_BATCH_SIZE = 3;
 const RECOMMEND_SKIPPED_STORAGE_KEY = 'recommend_skipped_bookmarks_v1';
 const RECOMMEND_SKIPPED_MAX_ITEMS = 20000;
 const RECOMMEND_BLOCKED_STORAGE_KEY = 'recommend_blocked';
+const RECOMMEND_BLOCKED_DOMAIN_MODE_BASE = 'base';
+const RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT = 'exact';
+const RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX = 'base:';
 const RECOMMEND_POSTPONED_STORAGE_KEY = 'recommend_postponed';
 const RECOMMEND_POSTPONED_VERSION_STORAGE_KEY = 'recommend_postponed_version_v1';
 const RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY = 'recommendRefreshSettings';
@@ -28036,17 +28039,100 @@ function normalizeBlockedListIds(list = []) {
     ));
 }
 
-function normalizeBlockedDomains(domains = []) {
-    const normalizeBlockedDomain = (domain) => {
-        if (!domain) return '';
-        return getRecommendBaseDomainFromHost(domain);
+function normalizeBlockedDomainEntry(entry, options = {}) {
+    const modeHint = String(options?.mode || '').trim().toLowerCase();
+    const toBaseEntry = (value) => {
+        const base = getRecommendBaseDomainFromHost(value);
+        return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
     };
+    const toExactEntry = (value) => normalizeRecommendDomainHost(value);
 
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const mode = String(entry?.matchMode || entry?.mode || modeHint || RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT).trim().toLowerCase();
+        const raw = String(entry?.domain || entry?.host || entry?.value || '').trim();
+        if (!raw) return '';
+        return mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE
+            ? toBaseEntry(raw)
+            : toExactEntry(raw);
+    }
+
+    const raw = String(entry || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+        return toBaseEntry(raw.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+    }
+    if (modeHint === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+        return toBaseEntry(raw);
+    }
+    return toExactEntry(raw);
+}
+
+function normalizeBlockedDomains(domains = []) {
     return Array.from(new Set(
         (Array.isArray(domains) ? domains : [])
-            .map(domain => normalizeBlockedDomain(domain))
+            .map(domain => normalizeBlockedDomainEntry(domain))
             .filter(Boolean)
     ));
+}
+
+function parseBlockedDomainEntry(entry) {
+    const normalized = normalizeBlockedDomainEntry(entry);
+    if (!normalized) return null;
+
+    if (normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+        const baseDomain = normalizeRecommendDomainHost(normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+        if (!baseDomain) return null;
+        return {
+            entry: `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${baseDomain}`,
+            mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE,
+            baseDomain,
+            exactDomain: '',
+            displayDomain: baseDomain
+        };
+    }
+
+    const exactDomain = normalizeRecommendDomainHost(normalized);
+    if (!exactDomain) return null;
+    return {
+        entry: exactDomain,
+        mode: RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT,
+        baseDomain: getRecommendBaseDomainFromHost(exactDomain),
+        exactDomain,
+        displayDomain: exactDomain
+    };
+}
+
+function buildBlockedDomainMatchers(domains = []) {
+    const exact = new Set();
+    const base = new Set();
+    for (const entry of Array.isArray(domains) ? domains : []) {
+        const parsed = parseBlockedDomainEntry(entry);
+        if (!parsed) continue;
+        if (parsed.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+            base.add(parsed.baseDomain);
+        } else if (parsed.exactDomain) {
+            exact.add(parsed.exactDomain);
+        }
+    }
+    return {
+        exact,
+        base,
+        hasRules: exact.size > 0 || base.size > 0
+    };
+}
+
+function isHostnameBlockedByDomainMatchers(hostname, matchers) {
+    if (!matchers || matchers.hasRules !== true) return false;
+    const exactHost = normalizeRecommendDomainHost(hostname);
+    if (!exactHost) return false;
+    if (matchers.exact?.has(exactHost)) return true;
+    const baseHost = getRecommendBaseDomainFromHost(exactHost);
+    return Boolean(baseHost && matchers.base?.has(baseHost));
+}
+
+function buildBlockedDomainBaseEntry(domain) {
+    const base = getRecommendBaseDomainFromHost(domain);
+    return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
 }
 
 function normalizeRecommendStateVersion(value) {
@@ -28207,14 +28293,14 @@ async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedI
     const blocked = normalizeBlockedState(blockedInput);
     const blockedBookmarkIds = new Set(blocked.bookmarks);
     const blockedFolderIds = new Set(blocked.folders);
-    const blockedDomains = new Set(blocked.domains);
+    const blockedDomainMatchers = buildBlockedDomainMatchers(blocked.domains);
 
-    if (blockedBookmarkIds.size === 0 && blockedFolderIds.size === 0 && blockedDomains.size === 0) {
+    if (blockedBookmarkIds.size === 0 && blockedFolderIds.size === 0 && blockedDomainMatchers.hasRules !== true) {
         return { allowedIds: ids, blockedIds: [] };
     }
 
     let bookmarkById = new Map();
-    if (blockedFolderIds.size > 0 || blockedDomains.size > 0) {
+    if (blockedFolderIds.size > 0 || blockedDomainMatchers.hasRules === true) {
         try {
             const all = await getAllBookmarksFlat();
             bookmarkById = new Map(
@@ -28253,10 +28339,10 @@ async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedI
         }
 
         let domainBlocked = false;
-        if (bookmark?.url && blockedDomains.size > 0) {
+        if (bookmark?.url && blockedDomainMatchers.hasRules === true) {
             try {
-                const domain = getRecommendBaseDomainFromHost(new URL(bookmark.url).hostname || '');
-                domainBlocked = blockedDomains.has(domain);
+                const domainHost = new URL(bookmark.url).hostname || '';
+                domainBlocked = isHostnameBlockedByDomainMatchers(domainHost, blockedDomainMatchers);
             } catch (_) {
                 domainBlocked = false;
             }
@@ -29304,7 +29390,7 @@ function initAddDomainModal() {
             const inputVal = searchInputInsideModal ? searchInputInsideModal.value.trim() : '';
             if (inputVal && !addBlockDomainSelected.has(inputVal)) {
                 if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(getRecommendBaseDomainFromHost(inputVal));
+                    selectedDomains.push(buildBlockedDomainBaseEntry(inputVal));
                 }
             }
 
@@ -29370,9 +29456,13 @@ async function loadBlockDomainList() {
     try {
         const allBookmarks = await getAllBookmarksFlat();
         const blocked = await getBlockedBookmarks();
-        const blockedDomains = new Set((blocked.domains || [])
-            .map(d => getRecommendBaseDomainFromHost(d))
-            .filter(Boolean));
+        const blockedDomains = new Set(
+            (blocked.domains || [])
+                .map(d => parseBlockedDomainEntry(d))
+                .filter(entry => entry?.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE)
+                .map(entry => entry.entry)
+                .filter(Boolean)
+        );
 
         const domainMap = new Map();
         for (const b of allBookmarks) {
@@ -29389,7 +29479,7 @@ async function loadBlockDomainList() {
 
         const validDomains = [];
         for (const [domain, data] of domainMap.entries()) {
-            if (!blockedDomains.has(domain)) {
+            if (!blockedDomains.has(buildBlockedDomainBaseEntry(domain))) {
                 validDomains.push([domain, data]);
             }
         }
@@ -29591,6 +29681,72 @@ function normalizeTrackingDomain(domain) {
     return getRecommendBaseDomainFromHost(domain);
 }
 
+function normalizeTrackingDomainHost(domain) {
+    return normalizeRecommendDomainHost(domain);
+}
+
+function normalizeTrackingBlockedDomainEntry(entry, options = {}) {
+    const modeHint = String(options?.mode || '').trim().toLowerCase();
+    const toBaseEntry = (value) => {
+        const base = normalizeTrackingDomain(value);
+        return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
+    };
+    const toExactEntry = (value) => normalizeTrackingDomainHost(value);
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const mode = String(entry?.matchMode || entry?.mode || modeHint || RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT).trim().toLowerCase();
+        const raw = String(entry?.domain || entry?.host || entry?.value || '').trim();
+        if (!raw) return '';
+        return mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE
+            ? toBaseEntry(raw)
+            : toExactEntry(raw);
+    }
+
+    const raw = String(entry || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+        return toBaseEntry(raw.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+    }
+    if (modeHint === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+        return toBaseEntry(raw);
+    }
+    return toExactEntry(raw);
+}
+
+function buildTrackingBlockedDomainMatchers(domains = []) {
+    const exact = new Set();
+    const base = new Set();
+    for (const entry of Array.isArray(domains) ? domains : []) {
+        const normalized = normalizeTrackingBlockedDomainEntry(entry);
+        if (!normalized) continue;
+        if (normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+            const baseDomain = normalizeTrackingDomainHost(normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+            if (baseDomain) base.add(baseDomain);
+        } else {
+            exact.add(normalized);
+        }
+    }
+    return {
+        exact,
+        base,
+        hasRules: exact.size > 0 || base.size > 0
+    };
+}
+
+function isTrackingHostnameBlocked(hostname, matchers) {
+    if (!matchers || matchers.hasRules !== true) return false;
+    const exactHost = normalizeTrackingDomainHost(hostname);
+    if (!exactHost) return false;
+    if (matchers.exact?.has(exactHost)) return true;
+    const baseHost = normalizeTrackingDomain(exactHost);
+    return Boolean(baseHost && matchers.base?.has(baseHost));
+}
+
+function buildTrackingBlockedDomainBaseEntry(domain) {
+    const base = normalizeTrackingDomain(domain);
+    return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
+}
+
 function normalizeTrackingUrl(url) {
     if (!url || typeof url !== 'string') return null;
     try {
@@ -29661,7 +29817,7 @@ async function getTrackingBlockedSets() {
     return {
         bookmarks: new Set(blocked.bookmarks || []),
         folders: new Set(blocked.folders || []),
-        domains: new Set((blocked.domains || []).map(normalizeTrackingDomain).filter(Boolean))
+        domains: buildTrackingBlockedDomainMatchers(blocked.domains || [])
     };
 }
 
@@ -29683,10 +29839,10 @@ async function isTrackingItemBlocked(item, blockedSets, cache) {
         return true;
     }
 
-    if (item.url && blockedSets.domains.size > 0) {
+    if (item.url && blockedSets.domains?.hasRules === true) {
         try {
-            const domain = normalizeTrackingDomain(new URL(item.url).hostname);
-            if (domain && blockedSets.domains.has(domain)) {
+            const hostname = new URL(item.url).hostname;
+            if (isTrackingHostnameBlocked(hostname, blockedSets.domains)) {
                 return true;
             }
         } catch { }
@@ -29708,7 +29864,7 @@ async function isTrackingItemBlocked(item, blockedSets, cache) {
 // 检查书签是否被时间追踪屏蔽
 async function isTrackingBlocked(bookmark) {
     const blocked = await getTrackingBlocked();
-    const blockedDomains = new Set((blocked.domains || []).map(normalizeTrackingDomain).filter(Boolean));
+    const blockedDomains = buildTrackingBlockedDomainMatchers(blocked.domains || []);
 
     // 检查书签ID
     if (blocked.bookmarks.includes(bookmark.id)) {
@@ -29729,7 +29885,7 @@ async function isTrackingBlocked(bookmark) {
     if (bookmark.url) {
         try {
             const url = new URL(bookmark.url);
-            if (blockedDomains.has(normalizeTrackingDomain(url.hostname))) {
+            if (isTrackingHostnameBlocked(url.hostname, blockedDomains)) {
                 return true;
             }
         } catch { }
@@ -29792,7 +29948,7 @@ async function unblockTrackingFolder(folderId) {
 async function blockTrackingDomain(domain) {
     try {
         const blocked = await getTrackingBlocked();
-        const normalized = normalizeTrackingDomain(domain);
+        const normalized = buildTrackingBlockedDomainBaseEntry(domain);
         if (!normalized) return false;
         if (!blocked.domains.includes(normalized)) {
             blocked.domains.push(normalized);
@@ -29807,8 +29963,23 @@ async function blockTrackingDomain(domain) {
 async function unblockTrackingDomain(domain) {
     try {
         const blocked = await getTrackingBlocked();
-        const normalized = normalizeTrackingDomain(domain);
-        blocked.domains = blocked.domains.filter(d => d !== normalized);
+        const normalizedRaw = normalizeTrackingBlockedDomainEntry(domain);
+        if (!normalizedRaw) return false;
+
+        const removeSet = new Set([normalizedRaw]);
+        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
+        if (!isExplicitBase) {
+            const hasExactRule = (Array.isArray(blocked.domains) ? blocked.domains : [])
+                .some(entry => normalizeTrackingBlockedDomainEntry(entry) === normalizedRaw);
+            if (!hasExactRule) {
+                const normalizedBase = normalizeTrackingBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+                if (normalizedBase) removeSet.add(normalizedBase);
+            }
+        }
+        blocked.domains = blocked.domains.filter((entry) => {
+            const normalized = normalizeTrackingBlockedDomainEntry(entry);
+            return !normalized || !removeSet.has(normalized);
+        });
         await browserAPI.storage.local.set({ timetracking_blocked: blocked });
         return true;
     } catch (e) {
@@ -30005,19 +30176,24 @@ async function loadTrackingBlockedDomainsList(domains) {
     const isZh = currentLang === 'zh_CN';
 
     for (const domain of domains) {
+        const normalized = normalizeTrackingBlockedDomainEntry(domain);
+        if (!normalized) continue;
+        const displayDomain = normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)
+            ? normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length)
+            : normalized;
         const item = document.createElement('div');
         item.className = 'block-item';
         item.innerHTML = `
             <i class="fas fa-globe block-item-icon" style="font-size: 18px; color: var(--accent-primary);"></i>
             <div class="block-item-info">
-                <div class="block-item-title">${escapeHtml(domain)}</div>
+                <div class="block-item-title">${escapeHtml(displayDomain)}</div>
             </div>
-            <button class="block-item-btn" data-domain="${domain}">${isZh ? '恢复' : 'Restore'}</button>
+            <button class="block-item-btn" data-domain="${escapeHtml(normalized)}">${isZh ? '恢复' : 'Restore'}</button>
         `;
 
         const btn = item.querySelector('.block-item-btn');
         btn.onclick = async () => {
-            await unblockTrackingDomain(domain);
+            await unblockTrackingDomain(normalized);
             await loadTrackingBlockedLists();
         };
 
@@ -30141,7 +30317,12 @@ async function loadTrackingBlockDomainList() {
     try {
         const allBookmarks = await getAllBookmarksFlat();
         const blocked = await getTrackingBlocked();
-        const blockedDomains = new Set((blocked.domains || []).map(normalizeTrackingDomain).filter(Boolean));
+        const blockedDomains = new Set(
+            (blocked.domains || [])
+                .map(d => normalizeTrackingBlockedDomainEntry(d))
+                .filter(entry => String(entry || '').startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX))
+                .filter(Boolean)
+        );
 
         const domainMap = new Map();
         for (const b of allBookmarks) {
@@ -30159,7 +30340,7 @@ async function loadTrackingBlockDomainList() {
 
         const validDomains = [];
         for (const [domain, data] of domainMap.entries()) {
-            if (!blockedDomains.has(domain)) {
+            if (!blockedDomains.has(buildTrackingBlockedDomainBaseEntry(domain))) {
                 validDomains.push([domain, data]);
             }
         }
@@ -30284,7 +30465,7 @@ function initAddTrackingBlockDomainModal() {
             const inputVal = searchInput ? searchInput.value.trim() : '';
             if (inputVal && !trackingBlockDomainSelected.has(inputVal)) {
                 if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(normalizeTrackingDomain(inputVal));
+                    selectedDomains.push(buildTrackingBlockedDomainBaseEntry(inputVal));
                 }
             }
 
@@ -30757,12 +30938,16 @@ async function renderBlockedSearchResults(keyword) {
     }
 
     const allBookmarks = await getAllBookmarksFlat();
-    const blockedDomains = new Set((blocked?.domains || []).map(domain => getRecommendBaseDomainFromHost(domain)).filter(Boolean));
-    if (blockedDomains.size > 0) {
+    const blockedDomainMatchers = buildBlockedDomainMatchers(blocked?.domains || []);
+    if (blockedDomainMatchers.hasRules === true) {
         for (const bookmark of allBookmarks) {
-            const domain = getRecommendBookmarkDomainLabel(bookmark);
-            if (blockedDomains.has(domain)) {
-                addIfMatched(bookmark, domain);
+            if (!bookmark?.url) continue;
+            try {
+                const url = new URL(bookmark.url);
+                if (!isHostnameBlockedByDomainMatchers(url.hostname, blockedDomainMatchers)) continue;
+                const domainLabel = getRecommendBookmarkDomainLabel(bookmark);
+                addIfMatched(bookmark, domainLabel);
+            } catch (_) {
             }
         }
     }
@@ -31136,8 +31321,12 @@ function initAddToBlockModal() {
         } else if (panelType === 'domain') {
             let bookmarksByDomain = null;
             for (const domain of addBlockUnifiedDomainSelected) {
-                const normalized = getRecommendBaseDomainFromHost(domain);
+                const normalized = buildBlockedDomainBaseEntry(domain);
                 if (!normalized) continue;
+                const normalizedBaseDomain = normalizeRecommendDomainHost(
+                    normalized.replace(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX, '')
+                );
+                if (!normalizedBaseDomain) continue;
 
                 if (!bookmarksByDomain) {
                     bookmarksByDomain = new Map();
@@ -31158,7 +31347,7 @@ function initAddToBlockModal() {
                     }
                 }
 
-                const domainBookmarkIds = (bookmarksByDomain.get(normalized) || []).filter(Boolean);
+                const domainBookmarkIds = (bookmarksByDomain.get(normalizedBaseDomain) || []).filter(Boolean);
                 const postponedInDomain = domainBookmarkIds.filter(id => postponedIds.has(id));
                 if (postponedInDomain.length > 0) {
                     skippedPostponedCount += postponedInDomain.length;
@@ -31663,7 +31852,9 @@ function formatAddPostponedTreeHours(timeMs, locale) {
 }
 
 function getRecommendDomainFaviconUrl(domain) {
-    const safeDomain = getRecommendBaseDomainFromHost(domain);
+    const safeDomain = getRecommendBaseDomainFromHost(
+        String(domain || '').replace(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX, '')
+    );
     if (!safeDomain) return '';
     return `https://${safeDomain}`;
 }
@@ -32252,14 +32443,14 @@ async function loadDomainListForAddBlock() {
             getBlockedBookmarks(),
             getAddPostponedTreeMetricMaps()
         ]);
-        const blockedDomains = new Set((blocked?.domains || []).map(d => getRecommendBaseDomainFromHost(d)).filter(Boolean));
+        const blockedDomainMatchers = buildBlockedDomainMatchers(blocked?.domains || []);
         const domainMap = new Map();
         for (const b of allBookmarks) {
             if (!b.url) continue;
             try {
                 const url = new URL(b.url);
                 const domain = getRecommendBaseDomainFromHost(url.hostname);
-                if (!domain || blockedDomains.has(domain)) continue;
+                if (!domain || isHostnameBlockedByDomainMatchers(url.hostname, blockedDomainMatchers)) continue;
                 if (!domainMap.has(domain)) {
                     domainMap.set(domain, { count: 0, clickCount: 0, wakeCount: 0, totalTimeMs: 0 });
                 }
@@ -33356,21 +33547,24 @@ async function loadBlockedDomainUnifiedGroups(bookmarkIds = [], domains = [], co
     const listEl = container || document.getElementById('blockedUnifiedList');
     if (!listEl) return;
 
-    const normalizedDomains = Array.from(new Set(
+    const parsedDomains = Array.from(new Set(
         (Array.isArray(domains) ? domains : [])
-            .map(domain => normalizeRecommendDomainHost(domain))
+            .map(domain => parseBlockedDomainEntry(domain))
             .filter(Boolean)
-    ));
-    const displayDomainSet = new Set(normalizedDomains.map(domain => getRecommendBaseDomainFromHost(domain)));
+            .map(entry => entry.entry)
+    )).map(entry => parseBlockedDomainEntry(entry)).filter(Boolean);
+    const displayDomainSet = new Set(parsedDomains.map(entry => entry.baseDomain).filter(Boolean));
     const groups = new Map();
 
-    const ensureGroup = (domain, blockedDomain = '') => {
+    const ensureGroup = (domain, blockedDomain = '', blockedMode = '') => {
         const key = getRecommendBaseDomainFromHost(domain) || (currentLang === 'zh_CN' ? '无域名' : 'No domain');
         if (!groups.has(key)) {
             groups.set(key, {
                 domain: key,
                 domainBlocked: false,
                 blockedDomains: new Set(),
+                blockedBaseDomains: new Set(),
+                blockedExactDomains: new Set(),
                 bookmarks: new Map(),
                 directBlockedIds: new Set()
             });
@@ -33380,12 +33574,18 @@ async function loadBlockedDomainUnifiedGroups(bookmarkIds = [], domains = [], co
         if (safeBlockedDomain) {
             group.domainBlocked = true;
             group.blockedDomains.add(safeBlockedDomain);
+            if (blockedMode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+                group.blockedBaseDomains.add(safeBlockedDomain);
+            }
+            if (blockedMode === RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT) {
+                group.blockedExactDomains.add(safeBlockedDomain);
+            }
         }
         return group;
     };
 
-    for (const domain of normalizedDomains) {
-        ensureGroup(domain, domain);
+    for (const entry of parsedDomains) {
+        ensureGroup(entry.baseDomain || entry.displayDomain, entry.displayDomain, entry.mode);
     }
 
     const allBookmarks = displayDomainSet.size > 0 ? await getAllBookmarksFlat() : [];
@@ -33468,6 +33668,12 @@ function renderBlockedDomainUnifiedGroup(container, group) {
     const itemsContainer = groupEl.querySelector('.block-group-items');
     const expandBtn = groupEl.querySelector('.block-group-btn.expand');
     const cancelBtn = groupEl.querySelector('.block-group-btn.cancel');
+    const exactDomainHint = (group.blockedExactDomains instanceof Set && group.blockedExactDomains.size > 0)
+        ? Array.from(group.blockedExactDomains).join(', ')
+        : '';
+    if (exactDomainHint) {
+        groupEl.title = `${isZh ? '精确域名屏蔽' : 'Exact-domain blocked'}: ${exactDomainHint}`;
+    }
 
     async function toggleExpand() {
         const expanded = itemsContainer.style.display !== 'none';
@@ -33518,8 +33724,13 @@ function renderBlockedDomainUnifiedGroup(container, group) {
     cancelBtn.onclick = async (e) => {
         e.stopPropagation();
         if (group.domainBlocked) {
-            for (const domain of group.blockedDomains || []) {
+            const exactBlockedSet = group.blockedExactDomains instanceof Set ? group.blockedExactDomains : new Set();
+            const baseBlockedSet = group.blockedBaseDomains instanceof Set ? group.blockedBaseDomains : new Set();
+            for (const domain of exactBlockedSet) {
                 await unblockDomain(domain);
+            }
+            for (const domain of baseBlockedSet) {
+                await unblockDomain(`${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${domain}`);
             }
         }
         for (const id of group.directBlockedIds) {
@@ -34042,6 +34253,7 @@ async function loadBlockedDomainsList(domains, container = null) {
     if (!isUnifiedContainer && emptyEl) emptyEl.style.display = 'none';
 
     const allBookmarks = await getAllBookmarksFlat();
+    const domainMatchers = buildBlockedDomainMatchers(domains);
     const domainGroups = new Map();
     for (const domain of domains) {
         const displayDomain = getRecommendBaseDomainFromHost(domain);
@@ -34058,8 +34270,9 @@ async function loadBlockedDomainsList(domains, container = null) {
         for (const b of allBookmarks) {
             if (!b.url) continue;
             try {
-                const host = getRecommendBaseDomainFromHost(new URL(b.url).hostname || '');
-                if (host === domain) {
+                const host = new URL(b.url).hostname || '';
+                const hostBase = getRecommendBaseDomainFromHost(host);
+                if (hostBase === domain && isHostnameBlockedByDomainMatchers(host, domainMatchers)) {
                     groupItems.push(b);
                 }
             } catch (_) {
@@ -34153,7 +34366,7 @@ async function unblockFolder(folderId) {
 // 屏蔽/恢复域名
 async function blockDomain(domain) {
     try {
-        const normalized = getRecommendBaseDomainFromHost(domain);
+        const normalized = buildBlockedDomainBaseEntry(domain);
         if (!normalized) return false;
 
         const blocked = await getBlockedBookmarks();
@@ -34169,13 +34382,28 @@ async function blockDomain(domain) {
 
 async function unblockDomain(domain) {
     try {
-        const normalized = getRecommendBaseDomainFromHost(domain);
-        if (!normalized) return false;
+        const normalizedRaw = normalizeBlockedDomainEntry(domain);
+        if (!normalizedRaw) return false;
 
         const blocked = await getBlockedBookmarks();
-        blocked.domains = blocked.domains.filter(d => d !== normalized);
+        const removeSet = new Set([normalizedRaw]);
+        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
+        if (!isExplicitBase) {
+            const hasExactRule = (Array.isArray(blocked.domains) ? blocked.domains : [])
+                .some(entry => normalizeBlockedDomainEntry(entry) === normalizedRaw);
+            if (!hasExactRule) {
+                const normalizedBase = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+                if (normalizedBase) removeSet.add(normalizedBase);
+            }
+        }
+        blocked.domains = blocked.domains.filter((entry) => {
+            const normalized = normalizeBlockedDomainEntry(entry);
+            return !normalized || !removeSet.has(normalized);
+        });
         await saveBlockedBookmarks(blocked);
-        await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain: normalized });
+        for (const domainEntry of removeSet) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain: domainEntry });
+        }
         return true;
     } catch (e) {
         return false;
