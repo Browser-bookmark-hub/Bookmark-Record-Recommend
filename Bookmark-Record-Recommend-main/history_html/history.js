@@ -94,6 +94,9 @@ let syncMarkdownGlobalTooltipActiveBtn = null;
 let syncRepoCollapsed = false;
 let syncPushPackageInfoVisible = false;
 let syncPushTimeRange = 'month';
+let syncPushCustomRange = null;
+let syncPushLastPresetRange = 'month';
+let syncPushCustomRangePanelVisible = false;
 let syncPullPolicyInfoVisible = false;
 let syncControlPanelCollapsed = false;
 let syncControlPanelCollapseBound = false;
@@ -386,6 +389,9 @@ const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
 const SYNC_HISTORY_VISITS_EXPORT_LIMIT = 50000;
 const SYNC_CLOUD_ROOT_FOLDER_ZH = '书签记录与推荐';
 const SYNC_CLOUD_ROOT_FOLDER_EN = 'Bookmark Record and Recommend';
+const SYNC_OUTPUT_NAMING_LEGACY = 'legacy-v1';
+const SYNC_OUTPUT_NAMING_RANGE = 'range-v2';
+const SYNC_RANGE_NAMING_MIN_VERSION = '0.3.9';
 
 const SYNC_DEFAULT_CONFIG = Object.freeze({
     remoteProvider: SYNC_PROVIDER_GITHUB,
@@ -395,7 +401,9 @@ const SYNC_DEFAULT_CONFIG = Object.freeze({
     githubRepoBranch: 'main',
     bookmarkRecommend: true,
     bookmarkRecord: true,
-    rawNative: true
+    rawNative: true,
+    syncOutputNamingVersion: SYNC_RANGE_NAMING_MIN_VERSION,
+    syncOutputNamingMode: SYNC_OUTPUT_NAMING_RANGE
 });
 syncConfigState = { ...SYNC_DEFAULT_CONFIG };
 
@@ -423,13 +431,17 @@ const SYNC_PACKAGE_FIELDS = Object.freeze([
     }
 ]);
 const SYNC_DYNAMIC_PACKAGE_FIELDS = Object.freeze([]);
+const SYNC_PUSH_TIME_RANGE_DEFAULT = 'month';
+const SYNC_PUSH_TIME_RANGE_CUSTOM_KEY = 'custom';
 
 const SYNC_PUSH_TIME_RANGE_OPTIONS = Object.freeze([
     { key: 'day', i18nKey: 'syncPushTimeRangeDay' },
     { key: 'week', i18nKey: 'syncPushTimeRangeWeek' },
     { key: 'month', i18nKey: 'syncPushTimeRangeMonth' },
+    { key: 'quarter', i18nKey: 'syncPushTimeRangeQuarter' },
     { key: 'year', i18nKey: 'syncPushTimeRangeYear' },
-    { key: 'all', i18nKey: 'syncPushTimeRangeAll' }
+    { key: 'all', i18nKey: 'syncPushTimeRangeAll' },
+    { key: SYNC_PUSH_TIME_RANGE_CUSTOM_KEY, i18nKey: 'syncPushTimeRangeCustom' }
 ]);
 
 const SYNC_DEFAULT_DOCS = Object.freeze([]);
@@ -3396,12 +3408,33 @@ const i18n = {pageTitle: {
     },syncPushTimeRangeMonth: {
         'zh_CN': '本月',
         'en': 'This Month'
+    },syncPushTimeRangeQuarter: {
+        'zh_CN': '本季',
+        'en': 'This Quarter'
     },syncPushTimeRangeYear: {
         'zh_CN': '本年',
         'en': 'This Year'
     },syncPushTimeRangeAll: {
         'zh_CN': '全部',
         'en': 'All'
+    },syncPushTimeRangeCustom: {
+        'zh_CN': '自定义',
+        'en': 'Custom'
+    },syncPushCustomRangeStartLabel: {
+        'zh_CN': '开始日期',
+        'en': 'Start Date'
+    },syncPushCustomRangeEndLabel: {
+        'zh_CN': '结束日期',
+        'en': 'End Date'
+    },syncPushCustomRangeConfirmBtn: {
+        'zh_CN': '确认',
+        'en': 'Confirm'
+    },syncPushCustomRangeCancelBtn: {
+        'zh_CN': '取消',
+        'en': 'Cancel'
+    },syncPushCustomRangeInvalid: {
+        'zh_CN': '请选择有效的开始和结束日期',
+        'en': 'Please select a valid start and end date'
     },syncPullPolicyInfoBtnLabel: {
         'zh_CN': '说明',
         'en': 'Info'
@@ -4384,8 +4417,8 @@ const i18n = {pageTitle: {
         'zh_CN': '确定',
         'en': 'Confirm'
     },laterCustomTimeHint: {
-        'zh_CN': '选择一个未来时间，到期后进入待复习。',
-        'en': 'Choose a future time. It will enter the review queue when due.'
+        'zh_CN': '输入一个未来时间，到期后进入待复习。',
+        'en': 'Enter a future time. It will enter the review queue when due.'
     }
 ,exportTooltip: {
         'zh_CN': '导出书签添加记录',
@@ -8609,22 +8642,54 @@ function buildSyncTimeKey(timestamp = Date.now()) {
     return `${hh}${mm}${ss}`;
 }
 
-function buildSyncLocalSnapshotFileName(timestamp = Date.now()) {
-    const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
-    const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark_record_and_recommend_${dateKey}_${timeKey}.json`;
+function buildSyncDateCompactKey(timestamp = Date.now()) {
+    return buildSyncDateKey(timestamp).replace(/-/g, '');
 }
 
-function buildSyncLocalExportArchiveName(timestamp = Date.now()) {
-    const dateKey = buildSyncDateKey(timestamp).replace(/-/g, '');
-    const timeKey = buildSyncTimeKey(timestamp);
-    return `bookmark_record_and_recommend_${dateKey}_${timeKey}.zip`;
+function normalizeSyncCompactDateKey(value = '') {
+    const clean = String(value || '').trim().replace(/-/g, '');
+    if (!/^\d{8}$/.test(clean)) return '';
+    const year = Number(clean.slice(0, 4));
+    const month = Number(clean.slice(4, 6));
+    const day = Number(clean.slice(6, 8));
+    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+    if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return '';
+    return clean;
+}
+
+function normalizeSyncRangeTagFromKeys(startDateKey = '', endDateKey = '', fallbackTimestamp = Date.now()) {
+    const fallbackKey = buildSyncDateCompactKey(fallbackTimestamp);
+    const todayKey = buildSyncDateCompactKey(Date.now());
+    let startKey = normalizeSyncCompactDateKey(startDateKey) || fallbackKey;
+    let endKey = normalizeSyncCompactDateKey(endDateKey) || startKey;
+    if (endKey > todayKey) endKey = todayKey;
+    if (startKey > endKey) startKey = endKey;
+    return `${startKey}--${endKey}`;
+}
+
+function getSyncRangeTagFromSnapshot(snapshotInput = null, fallbackTimestamp = Date.now()) {
+    const timeRange = snapshotInput?.payload?.timeRange || snapshotInput?.timeRange || null;
+    return normalizeSyncRangeTagFromKeys(
+        timeRange?.startTimeText || timeRange?.custom?.startDate || '',
+        timeRange?.endTimeText || timeRange?.custom?.endDate || '',
+        fallbackTimestamp
+    );
+}
+
+function buildSyncLocalSnapshotFileName(timestamp = Date.now(), rangeTag = '') {
+    const safeRangeTag = String(rangeTag || '').trim() || normalizeSyncRangeTagFromKeys('', '', timestamp);
+    return `bookmark_record_and_recommend_${safeRangeTag}.json`;
+}
+
+function buildSyncLocalExportArchiveName(timestamp = Date.now(), rangeTag = '') {
+    const safeRangeTag = String(rangeTag || '').trim() || normalizeSyncRangeTagFromKeys('', '', timestamp);
+    return `bookmark_record_and_recommend_${safeRangeTag}.zip`;
 }
 
 async function downloadSyncLocalSnapshot(snapshotInput) {
     const snapshot = snapshotInput && typeof snapshotInput === 'object' ? snapshotInput : {};
     const ts = Number(snapshot?.updatedAt || Date.now()) || Date.now();
-    const filename = buildSyncLocalSnapshotFileName(ts);
+    const filename = buildSyncLocalSnapshotFileName(ts, getSyncRangeTagFromSnapshot(snapshot, ts));
     let jsonText = '';
     try {
         jsonText = JSON.stringify(snapshot, null, 2);
@@ -9102,7 +9167,7 @@ async function downloadSyncLocalExportBundle(snapshotInput, repoConfigInput = sy
         };
     }
 
-    const archiveName = buildSyncLocalExportArchiveName(bundle.timestamp);
+    const archiveName = buildSyncLocalExportArchiveName(bundle.timestamp, getSyncRangeTagFromSnapshot(snapshotInput, bundle.timestamp));
     const zipResult = buildSyncLocalExportZipBlob(bundle);
     if (!zipResult?.success || !(zipResult.blob instanceof Blob)) {
         const fallback = await downloadSyncLocalSnapshot(snapshotInput);
@@ -10595,7 +10660,7 @@ async function syncGitHubReadCommittedAtMap(repoConfig, pathsInput, { branch = '
     };
 }
 
-function normalizeSyncConfig(raw) {
+function normalizeSyncConfig(raw, options = {}) {
     const src = raw && typeof raw === 'object' ? raw : {};
     const readBoolean = (primaryKey, fallback = false) => {
         if (Object.prototype.hasOwnProperty.call(src, primaryKey)) {
@@ -10613,6 +10678,12 @@ function normalizeSyncConfig(raw) {
     const providerRaw = readString('remoteProvider', SYNC_PROVIDER_GITHUB).toLowerCase();
     const remoteProvider = providerRaw === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
     const githubRepoBranch = readString('githubRepoBranch', 'main');
+    const syncOutputNamingVersion = readString('syncOutputNamingVersion', options.defaultOutputNamingVersion || '');
+    const namingRaw = readString('syncOutputNamingMode', '');
+    const versionImpliesRangeNaming = isSyncVersionAtLeast(syncOutputNamingVersion, SYNC_RANGE_NAMING_MIN_VERSION);
+    const syncOutputNamingMode = namingRaw === SYNC_OUTPUT_NAMING_LEGACY
+        ? SYNC_OUTPUT_NAMING_LEGACY
+        : (versionImpliesRangeNaming ? SYNC_OUTPUT_NAMING_RANGE : SYNC_OUTPUT_NAMING_LEGACY);
     return {
         remoteProvider,
         githubRepoToken: readString('githubRepoToken', ''),
@@ -10621,8 +10692,61 @@ function normalizeSyncConfig(raw) {
         githubRepoBranch: githubRepoBranch || 'main',
         bookmarkRecommend: readBoolean('bookmarkRecommend', true),
         bookmarkRecord: readBoolean('bookmarkRecord', true),
-        rawNative: readBoolean('rawNative', true)
+        rawNative: readBoolean('rawNative', true),
+        syncOutputNamingVersion,
+        syncOutputNamingMode
     };
+}
+
+function getSyncRuntimeVersion() {
+    try {
+        const version = browserAPI?.runtime?.getManifest?.()?.version;
+        return String(version || SYNC_RANGE_NAMING_MIN_VERSION).trim() || SYNC_RANGE_NAMING_MIN_VERSION;
+    } catch (_) {
+        return SYNC_RANGE_NAMING_MIN_VERSION;
+    }
+}
+
+function parseSyncVersionParts(version = '') {
+    const parts = String(version || '').trim().split('.').map((part) => {
+        const value = Number.parseInt(part, 10);
+        return Number.isFinite(value) && value >= 0 ? value : 0;
+    });
+    while (parts.length < 3) parts.push(0);
+    return parts.slice(0, 4);
+}
+
+function compareSyncVersions(left = '', right = '') {
+    const leftParts = parseSyncVersionParts(left);
+    const rightParts = parseSyncVersionParts(right);
+    const len = Math.max(leftParts.length, rightParts.length);
+    for (let i = 0; i < len; i += 1) {
+        const diff = (leftParts[i] || 0) - (rightParts[i] || 0);
+        if (diff !== 0) return diff > 0 ? 1 : -1;
+    }
+    return 0;
+}
+
+function isSyncVersionAtLeast(version = '', minVersion = '') {
+    const safeVersion = String(version || '').trim();
+    if (!safeVersion) return false;
+    return compareSyncVersions(safeVersion, minVersion) >= 0;
+}
+
+function getSyncConfigEndpointSignature(configInput = syncConfigState) {
+    const config = normalizeSyncConfig(configInput || null);
+    return [
+        String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        String(config.githubRepoOwner || '').trim().toLowerCase(),
+        String(config.githubRepoName || '').trim().toLowerCase(),
+        String(config.githubRepoBranch || 'main').trim()
+    ].join('|');
+}
+
+function shouldUseSyncRangeNaming(configInput = syncConfigState) {
+    const config = normalizeSyncConfig(configInput || null);
+    return isSyncVersionAtLeast(config.syncOutputNamingVersion, SYNC_RANGE_NAMING_MIN_VERSION)
+        && config.syncOutputNamingMode !== SYNC_OUTPUT_NAMING_LEGACY;
 }
 
 function getSyncPackageSelection(configInput = syncConfigState) {
@@ -10650,7 +10774,9 @@ function buildSanitizedSyncConfigSnapshot(configInput) {
         githubRepoNameConfigured: hasRepo,
         bookmarkRecord: config.bookmarkRecord !== false,
         bookmarkRecommend: config.bookmarkRecommend !== false,
-        rawNative: config.rawNative !== false
+        rawNative: config.rawNative !== false,
+        syncOutputNamingVersion: config.syncOutputNamingVersion,
+        syncOutputNamingMode: config.syncOutputNamingMode
     };
 }
 
@@ -10711,15 +10837,267 @@ function ensureSyncPackageOptionElements() {
     });
 }
 
+function isSyncPushPresetRange(range = '') {
+    const safe = String(range || '').trim();
+    return SYNC_PUSH_TIME_RANGE_OPTIONS.some((opt) => (
+        opt.key === safe && opt.key !== SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+    ));
+}
+
+function normalizeSyncPushPresetRange(range = '', fallback = SYNC_PUSH_TIME_RANGE_DEFAULT) {
+    if (isSyncPushPresetRange(range)) return String(range);
+    return isSyncPushPresetRange(fallback) ? String(fallback) : SYNC_PUSH_TIME_RANGE_DEFAULT;
+}
+
+function normalizeSyncPushCustomRange(range = null) {
+    if (!range || typeof range !== 'object') return null;
+    const rawStart = Number(range.startTime || 0);
+    const rawEnd = Number(range.endTime || 0);
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+    const startTime = Math.max(0, Math.min(rawStart, rawEnd));
+    const endTime = Math.max(startTime, Math.max(rawStart, rawEnd));
+    return { startTime, endTime };
+}
+
+function formatDateByCurrentLang(timestamp = 0) {
+    const safeTs = Number(timestamp || 0);
+    if (!Number.isFinite(safeTs) || safeTs <= 0) return '';
+    const date = new Date(safeTs);
+    if (!Number.isFinite(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    if (currentLang === 'zh_CN') {
+        return `${year}-${month}-${day}`;
+    }
+    return `${month}/${day}/${year}`;
+}
+
+function parseSyncDatePartsByLang(value, preferLang = currentLang) {
+    const safeValue = String(value || '').trim();
+    const parts = safeValue.match(/^(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})$/);
+    if (!parts) return null;
+    const first = Number(parts[1]);
+    const second = Number(parts[2]);
+    const third = Number(parts[3]);
+    if (![first, second, third].every(Number.isFinite)) return null;
+    const langOrder = preferLang === 'zh_CN' ? 'ymd' : 'mdy';
+    const fallbackOrder = langOrder === 'ymd' ? 'mdy' : 'ymd';
+    const build = (order) => {
+        const year = order === 'ymd' ? first : third;
+        const month = order === 'ymd' ? second : first;
+        const day = order === 'ymd' ? third : second;
+        if (year < 1000 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+        return { year, month, day };
+    };
+    return build(langOrder) || build(fallbackOrder);
+}
+
+function formatSyncPushCustomRangeLabel(range = null) {
+    const safeRange = normalizeSyncPushCustomRange(range);
+    if (!safeRange) return '';
+    const startDateLabel = formatDateByCurrentLang(safeRange.startTime) || buildSyncDateKey(safeRange.startTime);
+    const endDateLabel = formatDateByCurrentLang(safeRange.endTime) || buildSyncDateKey(safeRange.endTime);
+    if (startDateLabel === endDateLabel) return startDateLabel;
+    return `${startDateLabel} ~ ${endDateLabel}`;
+}
+
+function buildSyncDateInputValue(timestamp = Date.now()) {
+    return formatDateByCurrentLang(timestamp) || buildSyncDateKey(timestamp);
+}
+
+function parseSyncDateInputValue(value, endOfDay = false) {
+    const parts = parseSyncDatePartsByLang(value);
+    if (!parts) return NaN;
+    const { year, month, day } = parts;
+    const date = endOfDay
+        ? new Date(year, month - 1, day, 23, 59, 59, 999)
+        : new Date(year, month - 1, day, 0, 0, 0, 0);
+    if (date.getFullYear() !== year || (date.getMonth() + 1) !== month || date.getDate() !== day) return NaN;
+    return date.getTime();
+}
+
+function getTodayEndTime() {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    return today.getTime();
+}
+
+function clampSyncRangeToToday(range = null) {
+    const safeRange = normalizeSyncPushCustomRange(range);
+    if (!safeRange) return null;
+    const maxEndTime = Math.min(Date.now(), getTodayEndTime());
+    const endTime = Math.min(safeRange.endTime, maxEndTime);
+    const startTime = Math.min(safeRange.startTime, endTime);
+    return normalizeSyncPushCustomRange({ startTime, endTime });
+}
+
+function getSyncPushCustomRangeFromPanelInputs() {
+    const startInput = document.getElementById('syncPushCustomRangeStartInput');
+    const endInput = document.getElementById('syncPushCustomRangeEndInput');
+    if (!startInput || !endInput) return null;
+    const startTime = parseSyncDateInputValue(startInput.value, false);
+    const endTime = parseSyncDateInputValue(endInput.value, true);
+    return clampSyncRangeToToday({ startTime, endTime });
+}
+
+function syncPushHideTimeRangeMenus() {
+    const wrap = document.getElementById('syncPushTimeRangeWrap');
+    const dropdown = document.getElementById('syncPushTimeRangeDropdown');
+    const customPanel = document.getElementById('syncPushCustomRangePanel');
+    if (dropdown) dropdown.hidden = true;
+    if (customPanel) {
+        customPanel.hidden = true;
+        resetSyncPushCustomRangePanelPosition(customPanel);
+    }
+    if (wrap) wrap.classList.remove('open');
+    syncPushCustomRangePanelVisible = false;
+}
+
+function resetSyncPushCustomRangePanelPosition(customPanel = document.getElementById('syncPushCustomRangePanel')) {
+    if (!customPanel) return;
+    customPanel.classList.remove('is-fixed');
+    customPanel.style.left = '';
+    customPanel.style.top = '';
+    customPanel.style.right = '';
+    customPanel.style.width = '';
+    customPanel.style.maxWidth = '';
+}
+
+function positionSyncPushCustomRangePanel() {
+    const wrap = document.getElementById('syncPushTimeRangeWrap');
+    const customPanel = document.getElementById('syncPushCustomRangePanel');
+    if (!wrap || !customPanel || customPanel.hidden) return;
+    resetSyncPushCustomRangePanelPosition(customPanel);
+    const panelRect = customPanel.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    const owner = wrap.closest('.sync-settings-card') || wrap.closest('.sync-control-panel') || document.documentElement;
+    const ownerRect = owner.getBoundingClientRect ? owner.getBoundingClientRect() : document.documentElement.getBoundingClientRect();
+    const margin = 8;
+    const viewportLeft = margin;
+    const viewportRight = window.innerWidth - margin;
+    const safeLeft = Math.max(viewportLeft, ownerRect.left + margin);
+    const safeRight = Math.min(viewportRight, ownerRect.right - margin);
+    if (panelRect.left >= safeLeft && panelRect.right <= safeRight) return;
+
+    const safeWidth = Math.max(180, safeRight - safeLeft);
+    const panelWidth = Math.min(Math.max(panelRect.width, 220), safeWidth);
+    const left = Math.max(viewportLeft, safeLeft + Math.max(0, (safeWidth - panelWidth) / 2));
+    const topAbove = wrapRect.top - panelRect.height - margin;
+    const topBelow = wrapRect.bottom + margin;
+    const top = topAbove >= margin ? topAbove : Math.min(topBelow, window.innerHeight - panelRect.height - margin);
+    customPanel.classList.add('is-fixed');
+    customPanel.style.width = `${panelWidth}px`;
+    customPanel.style.maxWidth = `${safeWidth}px`;
+    customPanel.style.left = `${left}px`;
+    customPanel.style.top = `${Math.max(margin, top)}px`;
+}
+
+function setSyncPushCustomRangePanelVisible(visible) {
+    const wrap = document.getElementById('syncPushTimeRangeWrap');
+    const dropdown = document.getElementById('syncPushTimeRangeDropdown');
+    const customPanel = document.getElementById('syncPushCustomRangePanel');
+    if (!wrap || !dropdown || !customPanel) return;
+    const shouldShow = !!visible;
+    if (shouldShow) {
+        dropdown.hidden = true;
+        customPanel.hidden = false;
+        wrap.classList.add('open');
+        resetSyncPushCustomRangePanelPosition(customPanel);
+        requestAnimationFrame(positionSyncPushCustomRangePanel);
+    } else {
+        customPanel.hidden = true;
+        resetSyncPushCustomRangePanelPosition(customPanel);
+        if (dropdown.hidden) {
+            wrap.classList.remove('open');
+        }
+    }
+    syncPushCustomRangePanelVisible = shouldShow;
+}
+
+function populateSyncPushCustomRangePanelInputs(range = syncPushCustomRange) {
+    const startInput = document.getElementById('syncPushCustomRangeStartInput');
+    const endInput = document.getElementById('syncPushCustomRangeEndInput');
+    if (!startInput || !endInput) return;
+    const safeRange = normalizeSyncPushCustomRange(range);
+    const todayStart = parseSyncDateInputValue(buildSyncDateKey(Date.now()), false) || Date.now();
+    const startTime = safeRange?.startTime || (todayStart - 3 * 24 * 60 * 60 * 1000);
+    const endTime = safeRange?.endTime || Date.now();
+    startInput.value = buildSyncDateInputValue(startTime);
+    endInput.value = buildSyncDateInputValue(endTime);
+}
+
+function commitSyncPushCustomRangeFromPanel() {
+    const nextRange = getSyncPushCustomRangeFromPanelInputs();
+    if (!nextRange) {
+        showToast(getSyncText('syncPushCustomRangeInvalid', currentLang === 'zh_CN'
+            ? '请选择有效的开始和结束日期'
+            : 'Please select a valid start and end date'));
+        return false;
+    }
+    syncPushCustomRange = nextRange;
+    syncPushTimeRange = SYNC_PUSH_TIME_RANGE_CUSTOM_KEY;
+    syncPushHideTimeRangeMenus();
+    renderSyncPushTimeRangeButtons();
+    return true;
+}
+
 function renderSyncPushTimeRangeButtons() {
     const wrap = document.getElementById('syncPushTimeRangeWrap');
     const btnText = document.getElementById('syncPushTimeRangeBtnText');
     const triggerBtn = document.getElementById('syncPushTimeRangeBtn');
     const dropdown = document.getElementById('syncPushTimeRangeDropdown');
-    if (!wrap || !btnText || !triggerBtn || !dropdown) return;
+    const customPanel = document.getElementById('syncPushCustomRangePanel');
+    const customStartLabel = document.getElementById('syncPushCustomRangeStartLabel');
+    const customStartInput = document.getElementById('syncPushCustomRangeStartInput');
+    const customEndLabel = document.getElementById('syncPushCustomRangeEndLabel');
+    const customEndInput = document.getElementById('syncPushCustomRangeEndInput');
+    const customCancelBtn = document.getElementById('syncPushCustomRangeCancelBtn');
+    const customConfirmBtn = document.getElementById('syncPushCustomRangeConfirmBtn');
+    if (!wrap || !btnText || !triggerBtn || !dropdown || !customPanel) return;
 
-    const currentOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || SYNC_PUSH_TIME_RANGE_OPTIONS[2];
-    btnText.textContent = (i18n[currentOpt.i18nKey] || {})[currentLang] || currentOpt.key;
+    const fallbackOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === SYNC_PUSH_TIME_RANGE_DEFAULT) || SYNC_PUSH_TIME_RANGE_OPTIONS[0];
+    const currentOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === syncPushTimeRange) || fallbackOpt;
+    const currentRangeText = (i18n[currentOpt.i18nKey] || {})[currentLang] || currentOpt.key;
+    btnText.textContent = currentRangeText;
+    if (syncPushTimeRange === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY) {
+        const customLabel = formatSyncPushCustomRangeLabel(syncPushCustomRange);
+        const titleText = customLabel ? `${currentRangeText}: ${customLabel}` : currentRangeText;
+        triggerBtn.title = titleText;
+        triggerBtn.setAttribute('aria-label', titleText);
+    } else {
+        triggerBtn.title = currentRangeText;
+        triggerBtn.setAttribute('aria-label', currentRangeText);
+    }
+
+    if (customStartLabel) {
+        customStartLabel.textContent = getSyncText('syncPushCustomRangeStartLabel', currentLang === 'zh_CN' ? '开始日期' : 'Start Date');
+    }
+    if (customEndLabel) {
+        customEndLabel.textContent = getSyncText('syncPushCustomRangeEndLabel', currentLang === 'zh_CN' ? '结束日期' : 'End Date');
+    }
+    const dateInputLocale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+    const dateInputPlaceholder = currentLang === 'zh_CN' ? 'YYYY-MM-DD' : 'MM/DD/YYYY';
+    if (customStartInput) {
+        customStartInput.type = 'text';
+        customStartInput.setAttribute('lang', dateInputLocale);
+        customStartInput.placeholder = dateInputPlaceholder;
+        const startTime = parseSyncDateInputValue(customStartInput.value, false);
+        if (Number.isFinite(startTime)) customStartInput.value = buildSyncDateInputValue(startTime);
+    }
+    if (customEndInput) {
+        customEndInput.type = 'text';
+        customEndInput.setAttribute('lang', dateInputLocale);
+        customEndInput.placeholder = dateInputPlaceholder;
+        const endTime = parseSyncDateInputValue(customEndInput.value, false);
+        if (Number.isFinite(endTime)) customEndInput.value = buildSyncDateInputValue(endTime);
+    }
+    if (customCancelBtn) {
+        customCancelBtn.textContent = getSyncText('syncPushCustomRangeCancelBtn', currentLang === 'zh_CN' ? '取消' : 'Cancel');
+    }
+    if (customConfirmBtn) {
+        customConfirmBtn.textContent = getSyncText('syncPushCustomRangeConfirmBtn', currentLang === 'zh_CN' ? '确认' : 'Confirm');
+    }
 
     dropdown.innerHTML = '';
     SYNC_PUSH_TIME_RANGE_OPTIONS.forEach((opt) => {
@@ -10729,10 +11107,15 @@ function renderSyncPushTimeRangeButtons() {
         item.dataset.range = opt.key;
         item.textContent = (i18n[opt.i18nKey] || {})[currentLang] || opt.key;
         item.addEventListener('click', () => {
+            if (opt.key === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY) {
+                populateSyncPushCustomRangePanelInputs(syncPushCustomRange);
+                setSyncPushCustomRangePanelVisible(true);
+                return;
+            }
             syncPushTimeRange = opt.key;
+            syncPushLastPresetRange = opt.key;
             saveSyncPushTimeRange();
-            dropdown.hidden = true;
-            wrap.classList.remove('open');
+            syncPushHideTimeRangeMenus();
             renderSyncPushTimeRangeButtons();
         });
         dropdown.appendChild(item);
@@ -10742,32 +11125,55 @@ function renderSyncPushTimeRangeButtons() {
         wrap._timeRangeInited = true;
         triggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const opening = dropdown.hidden;
-            dropdown.hidden = !opening;
-            wrap.classList.toggle('open', opening);
-        });
-        document.addEventListener('click', (e) => {
-            if (!dropdown.hidden && !wrap.contains(e.target)) {
-                dropdown.hidden = true;
-                wrap.classList.remove('open');
+            const opening = dropdown.hidden && customPanel.hidden;
+            if (opening) {
+                dropdown.hidden = false;
+                customPanel.hidden = true;
+                syncPushCustomRangePanelVisible = false;
+                wrap.classList.add('open');
+            } else {
+                syncPushHideTimeRangeMenus();
             }
         });
+        if (customCancelBtn) {
+            customCancelBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                syncPushHideTimeRangeMenus();
+            });
+        }
+        if (customConfirmBtn) {
+            customConfirmBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                commitSyncPushCustomRangeFromPanel();
+            });
+        }
+        document.addEventListener('click', (e) => {
+            if ((!dropdown.hidden || !customPanel.hidden) && !wrap.contains(e.target)) {
+                syncPushHideTimeRangeMenus();
+            }
+        });
+    }
+
+    if (!syncPushCustomRangePanelVisible) {
+        customPanel.hidden = true;
     }
 }
 
 function saveSyncPushTimeRange() {
-    try { localStorage.setItem('syncPushTimeRange', syncPushTimeRange); } catch(e) {}
+    const persistValue = normalizeSyncPushPresetRange(
+        syncPushTimeRange,
+        normalizeSyncPushPresetRange(syncPushLastPresetRange, SYNC_PUSH_TIME_RANGE_DEFAULT)
+    );
+    try { localStorage.setItem('syncPushTimeRange', persistValue); } catch(e) {}
 }
 
 function loadSyncPushTimeRange() {
+    syncPushCustomRange = null;
+    syncPushCustomRangePanelVisible = false;
     try {
         const stored = localStorage.getItem('syncPushTimeRange');
-        if (stored && SYNC_PUSH_TIME_RANGE_OPTIONS.some(o => o.key === stored)) {
-            syncPushTimeRange = stored;
-        } else if (stored === 'quarter') {
-            syncPushTimeRange = 'month';
-            saveSyncPushTimeRange();
-        }
+        syncPushTimeRange = normalizeSyncPushPresetRange(stored, SYNC_PUSH_TIME_RANGE_DEFAULT);
+        syncPushLastPresetRange = syncPushTimeRange;
     } catch(e) {}
 }
 
@@ -11294,18 +11700,27 @@ function applySyncConfigToUI() {
 
 function readSyncConfigFromUI() {
     ensureSyncPackageOptionElements();
+    const previousConfig = normalizeSyncConfig(syncConfigState || null);
+    const previousEndpointSignature = getSyncConfigEndpointSignature(previousConfig);
     const next = {
         remoteProvider: String(document.getElementById('syncProviderSelect')?.value || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
         githubRepoToken: String(document.getElementById('syncGithubTokenInput')?.value || '').trim(),
         githubRepoOwner: String(document.getElementById('syncGithubOwnerInput')?.value || '').trim(),
         githubRepoName: String(document.getElementById('syncGithubRepoInput')?.value || '').trim(),
-        githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim()
+        githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim(),
+        syncOutputNamingVersion: previousConfig.syncOutputNamingVersion,
+        syncOutputNamingMode: previousConfig.syncOutputNamingMode
     };
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const checkbox = getSyncPackageCheckboxByKey(field.key);
         const checked = checkbox ? checkbox.checked !== false : field.defaultEnabled !== false;
         next[field.key] = checked;
     });
+    const nextEndpointSignature = getSyncConfigEndpointSignature(next);
+    if (previousEndpointSignature !== nextEndpointSignature) {
+        next.syncOutputNamingVersion = getSyncRuntimeVersion();
+        next.syncOutputNamingMode = SYNC_OUTPUT_NAMING_RANGE;
+    }
     syncConfigState = normalizeSyncConfig(next);
     updateSyncRepoFormState();
     updateSyncPathInfoText();
@@ -13226,10 +13641,19 @@ async function loadSyncStateFromStorage() {
         SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY
     ]);
 
-    syncConfigState = normalizeSyncConfig(result?.[SYNC_CONFIG_STORAGE_KEY] || null);
+    const storedSyncConfig = result?.[SYNC_CONFIG_STORAGE_KEY] || null;
+    const storedConfigHasNamingVersion = !!(storedSyncConfig && typeof storedSyncConfig === 'object'
+        && Object.prototype.hasOwnProperty.call(storedSyncConfig, 'syncOutputNamingVersion'));
+    syncConfigState = normalizeSyncConfig(storedSyncConfig, {
+        defaultOutputNamingVersion: storedSyncConfig && !storedConfigHasNamingVersion
+            ? ''
+            : getSyncRuntimeVersion()
+    });
     syncActivityState = normalizeSyncActivityState(result?.[SYNC_ACTIVITY_STORAGE_KEY] || null);
     syncRepoCollapsed = false;
     syncPushPackageInfoVisible = false;
+    syncPushCustomRange = null;
+    syncPushCustomRangePanelVisible = false;
     syncPullPolicyInfoVisible = false;
     let docs = normalizeSyncDocs(result?.[SYNC_DOCS_STORAGE_KEY] || []);
     if (!docs.length) {
@@ -14122,16 +14546,35 @@ async function buildRelatedRecordsForSync(rows, additionsRecords, options = {}) 
     return [];
 }
 
-async function buildTimeRankingsForSync(limit = 100, startTime = 0) {
-    const rangeLabel = startTime > 0 ? 'filtered' : 'all';
+function normalizeSyncTrackingRangeForPush(range = 'all') {
+    const safe = String(range || '').trim().toLowerCase();
+    if (safe === 'day') return 'today';
+    if (safe === 'week' || safe === 'month' || safe === 'quarter' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    if (safe === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY) {
+        return 'custom';
+    }
+    return 'all';
+}
+
+async function buildTimeRankingsForSync(limit = 100, startTime = 0, endTime = Date.now(), pushRange = 'all') {
+    const safeEndTime = Number(endTime || Date.now()) || Date.now();
+    const safeStartTime = Number(startTime || 0) || 0;
+    const rangeLabel = safeStartTime > 0 ? 'filtered' : 'all';
     const empty = { composite: [], wakes: [], generatedAt: Date.now(), range: rangeLabel };
     try {
+        let trackingRange = normalizeSyncTrackingRangeForPush(pushRange);
+        // 自定义时间段仍然走按天聚合路径，避免回落到全量累计统计。
+        if (trackingRange === 'all' && safeStartTime > 0) {
+            trackingRange = 'custom';
+        }
         // Export persisted ranking summaries only. In-progress active sessions are intentionally not part of sync.
         const response = await browserAPI.runtime.sendMessage({
             action: 'getTrackingRankingStatsByRange',
-            range: 'all',
-            startTime: startTime || 0,
-            endTime: Date.now()
+            range: trackingRange,
+            startTime: safeStartTime,
+            endTime: safeEndTime
         });
         if (!response || !response.success || !response.stats || typeof response.stats !== 'object') {
             return empty;
@@ -14312,15 +14755,29 @@ async function collectSyncPushPayload(config) {
     }
     timing.mark('read_local_storage', { keys: keys.length });
 
-    const pushTimeRange = SYNC_PUSH_TIME_RANGE_OPTIONS.some(o => o.key === syncPushTimeRange) ? syncPushTimeRange : 'month';
-    if (pushTimeRange !== syncPushTimeRange) {
+    let pushTimeRange = normalizeSyncPushPresetRange(syncPushTimeRange, SYNC_PUSH_TIME_RANGE_DEFAULT);
+    let pushTimeRangeStart = getTimeRangeStart(pushTimeRange);
+    let pushTimeRangeEnd = Date.now();
+    let pushTimeRangeStartDateKey = pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null;
+    let pushTimeRangeEndDateKey = buildSyncDateKey(pushTimeRangeEnd);
+    let pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === pushTimeRange) || {};
+    if (syncPushTimeRange === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY) {
+        const customBounds = normalizeSyncPushCustomRange(syncPushCustomRange);
+        if (!customBounds) {
+            throw new Error('sync_push_custom_range_invalid');
+        }
+        pushTimeRange = SYNC_PUSH_TIME_RANGE_CUSTOM_KEY;
+        pushTimeRangeStart = customBounds.startTime;
+        pushTimeRangeEnd = Math.min(customBounds.endTime, Date.now());
+        pushTimeRangeStart = Math.min(pushTimeRangeStart, pushTimeRangeEnd);
+        pushTimeRangeStartDateKey = buildSyncDateKey(pushTimeRangeStart);
+        pushTimeRangeEndDateKey = buildSyncDateKey(pushTimeRangeEnd);
+        pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY) || pushTimeRangeOpt;
+    } else if (pushTimeRange !== syncPushTimeRange) {
         syncPushTimeRange = pushTimeRange;
         saveSyncPushTimeRange();
     }
-    const pushTimeRangeStart = getTimeRangeStart(pushTimeRange);
-    const pushTimeRangeEnd = Date.now();
-    const pushTimeRangeStartDateKey = pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null;
-    const pushTimeRangeOpt = SYNC_PUSH_TIME_RANGE_OPTIONS.find(o => o.key === pushTimeRange) || {};
+    const pushTimeRangeExportStartDateKey = pushTimeRangeStartDateKey || '1970-01-01';
     const payload = {
         schema: 'bookmark_record_and_recommend.ai-push.v3',
         generatedAt: pushTimeRangeEnd,
@@ -14328,12 +14785,20 @@ async function collectSyncPushPayload(config) {
         timeRange: {
             range: pushTimeRange,
             startTime: pushTimeRangeStart,
-            startTimeText: pushTimeRangeStart > 0 ? buildSyncDateKey(pushTimeRangeStart) : null,
+            startTimeText: pushTimeRangeExportStartDateKey,
             endTime: pushTimeRangeEnd,
+            endTimeText: pushTimeRangeEndDateKey,
+            rangeTag: normalizeSyncRangeTagFromKeys(pushTimeRangeExportStartDateKey, pushTimeRangeEndDateKey, pushTimeRangeEnd),
             label: {
                 zh_CN: (i18n[pushTimeRangeOpt.i18nKey] || {}).zh_CN || pushTimeRange,
                 en: (i18n[pushTimeRangeOpt.i18nKey] || {}).en || pushTimeRange
-            }
+            },
+            custom: pushTimeRange === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+                ? {
+                    startDate: buildSyncDateKey(pushTimeRangeStart),
+                    endDate: buildSyncDateKey(pushTimeRangeEnd)
+                }
+                : null
         },
         packages: {},
         docs: buildSyncDocsPayload()
@@ -14463,8 +14928,14 @@ async function collectSyncPushPayload(config) {
     const ensureAdditionsRecords = () => {
         if (additionsRecords) return additionsRecords;
         let raw = normalizeAdditionsRecordsForSync(localData?.bb_cache_additions_v1);
-        if (pushTimeRangeStart > 0) {
-            raw = raw.filter(entry => (entry.dateAdded || 0) >= pushTimeRangeStart);
+        if (pushTimeRangeStart > 0 || pushTimeRangeEnd > 0) {
+            raw = raw.filter((entry) => {
+                const dateAdded = Number(entry?.dateAdded || 0);
+                if (!Number.isFinite(dateAdded) || dateAdded <= 0) return false;
+                if (pushTimeRangeStart > 0 && dateAdded < pushTimeRangeStart) return false;
+                if (pushTimeRangeEnd > 0 && dateAdded > pushTimeRangeEnd) return false;
+                return true;
+            });
         }
         additionsRecords = raw;
         return additionsRecords;
@@ -14482,8 +14953,14 @@ async function collectSyncPushPayload(config) {
             endTime: pushTimeRangeEnd
         });
         let rows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
-        if (pushTimeRangeStartDateKey) {
-            rows = rows.filter(row => (row?.[0] || '') >= pushTimeRangeStartDateKey);
+        if (pushTimeRangeStartDateKey || pushTimeRangeEndDateKey) {
+            rows = rows.filter((row) => {
+                const dateKey = String(row?.[0] || '');
+                if (!dateKey) return false;
+                if (pushTimeRangeStartDateKey && dateKey < pushTimeRangeStartDateKey) return false;
+                if (pushTimeRangeEndDateKey && dateKey > pushTimeRangeEndDateKey) return false;
+                return true;
+            });
         }
         browsingRows = rows;
         browsingRowsSource = String(resolvedRows?.source || 'empty');
@@ -14540,7 +15017,7 @@ async function collectSyncPushPayload(config) {
     }
 
     if (config.timeTracking) {
-        const rankings = await buildTimeRankingsForSync(100, pushTimeRangeStart);
+        const rankings = await buildTimeRankingsForSync(100, pushTimeRangeStart, pushTimeRangeEnd, pushTimeRange);
         const trackingBlocked = normalizeBlockedState(localData?.timetracking_blocked);
         const trackingBlockedCount = ['bookmarks', 'folders', 'domains']
             .reduce((sum, key) => sum + (Array.isArray(trackingBlocked[key]) ? trackingBlocked[key].length : 0), 0);
@@ -14629,6 +15106,11 @@ function buildSyncSnapshotId(timestamp = Date.now(), pushId = '') {
         .replace(/[:.]/g, '-');
     const suffix = String(pushId || '').split('_').pop() || buildSyncTimeKey(timestamp);
     return `${iso}_${suffix}`;
+}
+
+function buildSyncRangeSnapshotId(timestamp = Date.now(), pushId = '', rangeTag = '') {
+    const safeRangeTag = String(rangeTag || '').trim() || normalizeSyncRangeTagFromKeys('', '', timestamp);
+    return safeRangeTag;
 }
 
 function stripSyncPathPrefix(path = '', prefixPath = '') {
@@ -15273,7 +15755,11 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     const nowTs = Number(snapshot?.updatedAt || Date.now()) || Date.now();
     const paths = buildSyncRepoPaths(repoConfig, nowTs);
     const pushId = String(snapshot.pushId || buildSyncPushId(nowTs));
-    const snapshotId = String(snapshot.snapshotId || buildSyncSnapshotId(nowTs, pushId));
+    const rangeTag = getSyncRangeTagFromSnapshot(snapshot, nowTs);
+    const useRangeNaming = shouldUseSyncRangeNaming(snapshot.pushConfig || syncConfigState);
+    const snapshotId = String(snapshot.snapshotId || (useRangeNaming
+        ? buildSyncRangeSnapshotId(nowTs, pushId, rangeTag)
+        : buildSyncSnapshotId(nowTs, pushId)));
     const commitPrefix = `[sync:${pushId}]`;
     const packageSelection = getSyncPackageSelection(snapshot.pushConfig || syncConfigState);
     const files = [];
@@ -15997,9 +16483,16 @@ async function pushSyncSnapshotToCloud() {
     const payloadPackageCount = Object.keys(payload.packages || {}).length;
     const packageCount = countEnabledSyncPackages(config);
     const sanitizedPushConfig = buildSanitizedSyncConfigSnapshot(config);
+    const snapshotUpdatedAt = Date.now();
+    const snapshotPushId = buildSyncPushId(snapshotUpdatedAt);
+    const useRangeNaming = shouldUseSyncRangeNaming(config);
     const snapshot = {
         schema: 'bookmark_record_and_recommend.ai-cloud-snapshot.v2',
-        updatedAt: Date.now(),
+        updatedAt: snapshotUpdatedAt,
+        pushId: snapshotPushId,
+        snapshotId: useRangeNaming
+            ? buildSyncRangeSnapshotId(snapshotUpdatedAt, snapshotPushId, payload?.timeRange?.rangeTag || getSyncRangeTagFromSnapshot({ payload }, snapshotUpdatedAt))
+            : buildSyncSnapshotId(snapshotUpdatedAt, snapshotPushId),
         pushConfig: sanitizedPushConfig,
         packageCount,
         payloadPackageCount,
@@ -16789,11 +17282,12 @@ function bindSyncViewEvents() {
         });
     }
     document.addEventListener('pointerdown', (event) => {
-        if (!syncPullPolicyInfoVisible && !syncPushPackageInfoVisible) return;
+        if (!syncPullPolicyInfoVisible && !syncPushPackageInfoVisible && !syncPushCustomRangePanelVisible) return;
         const target = event.target;
         if (!(target instanceof Node)) {
             if (syncPullPolicyInfoVisible) setSyncPullPolicyInfoVisible(false);
             if (syncPushPackageInfoVisible) setSyncPushPackageInfoVisible(false);
+            syncPushHideTimeRangeMenus();
             return;
         }
         const pullWrap = document.getElementById('syncPullPolicyInfoWrap');
@@ -16804,6 +17298,16 @@ function bindSyncViewEvents() {
         if (syncPushPackageInfoVisible && (!pushWrap || !pushWrap.contains(target))) {
             setSyncPushPackageInfoVisible(false);
         }
+        const pushRangeWrap = document.getElementById('syncPushTimeRangeWrap');
+        if (syncPushCustomRangePanelVisible && (!pushRangeWrap || !pushRangeWrap.contains(target))) {
+            syncPushHideTimeRangeMenus();
+        }
+    }, true);
+    window.addEventListener('resize', () => {
+        if (syncPushCustomRangePanelVisible) positionSyncPushCustomRangePanel();
+    });
+    window.addEventListener('scroll', () => {
+        if (syncPushCustomRangePanelVisible) positionSyncPushCustomRangePanel();
     }, true);
 
     const pushBtn = document.getElementById('syncPushBtn');
@@ -16852,6 +17356,7 @@ function bindSyncViewEvents() {
     }
     document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;
+        syncPushHideTimeRangeMenus();
         if (syncPushPackageInfoVisible) {
             setSyncPushPackageInfoVisible(false);
         }
@@ -28774,20 +29279,51 @@ function formatDateTimeLocalValue(timestamp) {
     const date = new Date(timestamp);
     if (!Number.isFinite(date.getTime())) return '';
     const pad = (value) => String(value).padStart(2, '0');
-    return [
-        date.getFullYear(),
-        pad(date.getMonth() + 1),
-        pad(date.getDate())
-    ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const dateText = currentLang === 'zh_CN'
+        ? `${year}-${month}-${day}`
+        : `${month}/${day}/${year}`;
+    return `${dateText} ${time}`;
+}
+
+function parseDateTimeLocalValue(value) {
+    const safeValue = String(value || '').trim();
+    const match = /^(.+?)[ T](\d{1,2}):(\d{2})$/.exec(safeValue);
+    if (!match) return NaN;
+    const dateParts = parseSyncDatePartsByLang(match[1]);
+    if (!dateParts) return NaN;
+    const hours = Number(match[2]);
+    const minutes = Number(match[3]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        return NaN;
+    }
+    const date = new Date(dateParts.year, dateParts.month - 1, dateParts.day, hours, minutes, 0, 0);
+    if (
+        date.getFullYear() !== dateParts.year
+        || date.getMonth() + 1 !== dateParts.month
+        || date.getDate() !== dateParts.day
+        || date.getHours() !== hours
+        || date.getMinutes() !== minutes
+    ) {
+        return NaN;
+    }
+    return date.getTime();
 }
 
 function syncLaterModalTexts(options = {}) {
     const customInput = document.getElementById('laterCustomDatetime');
     if (customInput) {
-        const minValue = formatDateTimeLocalValue(Date.now() + 60 * 1000);
-        customInput.min = minValue;
-        if (options.resetCustomTime === true || !customInput.value) {
+        customInput.type = 'text';
+        customInput.setAttribute('lang', currentLang === 'zh_CN' ? 'zh-CN' : 'en-US');
+        customInput.placeholder = currentLang === 'zh_CN' ? 'YYYY-MM-DD HH:mm' : 'MM/DD/YYYY HH:mm';
+        const currentValueTime = parseDateTimeLocalValue(customInput.value);
+        if (options.resetCustomTime === true || !Number.isFinite(currentValueTime)) {
             customInput.value = formatDateTimeLocalValue(Date.now() + LATER_CUSTOM_DEFAULT_DELAY_MS);
+        } else {
+            customInput.value = formatDateTimeLocalValue(currentValueTime);
         }
     }
 }
@@ -28796,7 +29332,7 @@ function getLaterCustomDelayMs() {
     const input = document.getElementById('laterCustomDatetime');
     const value = String(input?.value || '').trim();
     if (!value) return NaN;
-    const targetTime = new Date(value).getTime();
+    const targetTime = parseDateTimeLocalValue(value);
     if (!Number.isFinite(targetTime)) return NaN;
     return targetTime - Date.now();
 }

@@ -3644,13 +3644,14 @@ html.sidebar-state-hidden #sidebar {
 }
 
 .sync-push-time-range-wrap.open .sync-push-time-range-caret {
-    transform: rotate(180deg);
+    transform: rotate(-90deg);
 }
 
 .sync-push-time-range-dropdown {
     position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
+    top: 50%;
+    right: calc(100% + 8px);
+    transform: translateY(-50%);
     min-width: 84px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -3680,6 +3681,99 @@ html.sidebar-state-hidden #sidebar {
 .sync-push-time-range-option.active {
     color: var(--accent-primary);
     font-weight: 500;
+}
+
+.sync-push-custom-range-panel {
+    position: absolute;
+    top: 50%;
+    right: calc(100% + 8px);
+    transform: translateY(-50%);
+    min-width: 220px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    z-index: 201;
+    padding: 10px;
+}
+
+.sync-push-custom-range-panel.is-fixed {
+    position: fixed;
+    right: auto;
+    transform: none;
+}
+
+.sync-push-custom-range-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.sync-push-custom-range-row:last-of-type {
+    margin-bottom: 10px;
+}
+
+.sync-push-custom-range-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.sync-push-custom-range-input {
+    width: 100%;
+    min-height: 28px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    color-scheme: light;
+}
+
+.sync-push-custom-range-input::placeholder {
+    color: var(--text-tertiary, var(--text-secondary));
+}
+
+.sync-push-custom-range-input::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    filter: none;
+    opacity: 0.85;
+}
+
+[data-theme="dark"] .sync-push-custom-range-input,
+body.dark-theme .sync-push-custom-range-input {
+    color-scheme: dark;
+}
+
+.sync-push-custom-range-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.sync-push-custom-range-btn {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.sync-push-custom-range-btn:hover {
+    background: var(--bg-hover);
+}
+
+.sync-push-custom-range-btn.primary {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.sync-push-custom-range-btn.primary:hover {
+    opacity: 0.92;
 }
 
 .sync-state-row {

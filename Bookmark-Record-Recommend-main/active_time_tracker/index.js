@@ -953,7 +953,7 @@ async function getTrackingDailyStatsByRange(startTime, endTime) {
 
 function normalizeTrackingRange(range) {
     const safe = String(range || '').toLowerCase();
-    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'quarter' || safe === 'year' || safe === 'all' || safe === 'custom') {
         return safe;
     }
     return 'all';

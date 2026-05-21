@@ -1488,9 +1488,23 @@
                                     <div class="sync-push-time-range-wrap" id="syncPushTimeRangeWrap">
                                         <button id="syncPushTimeRangeBtn" class="view-action-btn view-action-btn-ghost sync-info-btn sync-push-time-range-trigger" type="button">
                                             <span id="syncPushTimeRangeBtnText">本月</span>
-                                            <i class="fas fa-chevron-down sync-push-time-range-caret"></i>
+                                            <i class="fas fa-chevron-left sync-push-time-range-caret"></i>
                                         </button>
                                         <div id="syncPushTimeRangeDropdown" class="sync-push-time-range-dropdown" hidden></div>
+                                        <div id="syncPushCustomRangePanel" class="sync-push-custom-range-panel" hidden>
+                                            <div class="sync-push-custom-range-row">
+                                                <label id="syncPushCustomRangeStartLabel" class="sync-push-custom-range-label" for="syncPushCustomRangeStartInput">开始日期</label>
+                                                <input id="syncPushCustomRangeStartInput" class="sync-push-custom-range-input" type="text" inputmode="numeric" autocomplete="off">
+                                            </div>
+                                            <div class="sync-push-custom-range-row">
+                                                <label id="syncPushCustomRangeEndLabel" class="sync-push-custom-range-label" for="syncPushCustomRangeEndInput">结束日期</label>
+                                                <input id="syncPushCustomRangeEndInput" class="sync-push-custom-range-input" type="text" inputmode="numeric" autocomplete="off">
+                                            </div>
+                                            <div class="sync-push-custom-range-actions">
+                                                <button id="syncPushCustomRangeCancelBtn" class="sync-push-custom-range-btn ghost" type="button">取消</button>
+                                                <button id="syncPushCustomRangeConfirmBtn" class="sync-push-custom-range-btn primary" type="button">确认</button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2023,7 +2037,7 @@
             <div class="later-custom-time">
                 <label for="laterCustomDatetime" id="laterCustomTimeLabel">自定义时间</label>
                 <div class="later-custom-row">
-                    <input type="datetime-local" id="laterCustomDatetime" class="later-custom-input">
+                    <input type="text" inputmode="numeric" autocomplete="off" id="laterCustomDatetime" class="later-custom-input">
                     <button class="later-custom-submit" id="laterCustomSubmitBtn" type="button">
                         <i class="fas fa-check"></i>
                         <span id="laterCustomSubmitText">确定</span>
