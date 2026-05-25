@@ -7,7 +7,7 @@
     .filter(Boolean);
 
   const state = {
-    lang: navigator.language && navigator.language.toLowerCase().startsWith('en') ? 'en' : 'zh_CN',
+    lang: 'zh_CN',
     items: [],
     totalCount: 0,
     closingAsSkipped: false
@@ -41,7 +41,9 @@
       actionFailed: '操作失败，请重试',
       reviewing: '已标记复习',
       openFailed: '打开失败，请重试',
+      openedNotReviewed: '已打开，但未标记为已复习，请稍后重试',
       close: '关闭',
+      iconAlt: '扩展图标',
       debugTitle: '参数',
       debugLoading: '参数加载中...',
       debugLoadFailed: '参数加载失败',
@@ -65,7 +67,9 @@
       actionFailed: 'Action failed, please retry',
       reviewing: 'Reviewed',
       openFailed: 'Open failed, please retry',
+      openedNotReviewed: 'Opened, but not marked as reviewed yet. Please retry shortly.',
       close: 'Close',
+      iconAlt: 'Extension icon',
       debugTitle: 'Debug',
       debugLoading: 'Loading debug...',
       debugLoadFailed: 'Debug load failed',
@@ -102,7 +106,50 @@
     document.getElementById('itemsTitle').textContent = t('itemsTitle');
     document.getElementById('loadingText').textContent = t('loading');
     document.getElementById('openReviewBtn').textContent = t('open');
+    const closeBtn = document.getElementById('closeBtn');
+    if (closeBtn) closeBtn.setAttribute('aria-label', t('close'));
+    const icon = document.querySelector('.notification-icon');
+    if (icon) icon.setAttribute('alt', t('iconAlt'));
     document.title = t('notificationTitle');
+  }
+
+  function detectDefaultLang() {
+    try {
+      const ui = String(browserAPI?.i18n?.getUILanguage?.() || navigator.language || '').toLowerCase();
+      return ui.startsWith('zh') ? 'zh_CN' : 'en';
+    } catch (_) {
+      return 'en';
+    }
+  }
+
+  async function resolvePopupLanguage() {
+    try {
+      const hasOverride = localStorage.getItem('historyViewerHasCustomLang') === 'true';
+      const override = String(localStorage.getItem('historyViewerCustomLang') || '').trim();
+      if (hasOverride && (override === 'zh_CN' || override === 'en')) {
+        state.lang = override;
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      const result = await new Promise((resolve) => {
+        try {
+          browserAPI.storage.local.get(['preferredLang'], (payload) => {
+            resolve(payload || {});
+          });
+        } catch (_) {
+          resolve({});
+        }
+      });
+      const preferredLang = String(result?.preferredLang || '').trim();
+      if (preferredLang === 'zh_CN' || preferredLang === 'en') {
+        state.lang = preferredLang;
+        return;
+      }
+    } catch (_) {}
+
+    state.lang = detectDefaultLang();
   }
 
   function setActionFeedback(message = '', tone = '') {
@@ -582,7 +629,15 @@
       keys: reminderKeys
     });
     if (!response?.success) {
+      if (response?.opened === true) {
+        setActionFeedback(t('openedNotReviewed'), 'error');
+        return;
+      }
       setActionFeedback(t('openFailed'), 'error');
+      return;
+    }
+    if (response?.reviewHandled === false) {
+      setActionFeedback(t('openedNotReviewed'), 'error');
       return;
     }
     setActionFeedback(t('reviewing'), 'success');
@@ -590,8 +645,9 @@
     if (state.items.length === 0) window.close();
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', async () => {
     applyPopupTheme().catch(() => {});
+    await resolvePopupLanguage();
     setCopy();
     document.getElementById('closeBtn').addEventListener('click', () => {
       closeAsSkipped().catch(() => window.close());

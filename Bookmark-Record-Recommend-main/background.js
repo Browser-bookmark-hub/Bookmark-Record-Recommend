@@ -1902,11 +1902,13 @@ function setupAutoBookmarkOpenMonitoring() {
 
         let bookmarkId = null;
         let bookmarkTitle = '';
+        let matchedBookmarkIds = [];
 
         try {
           const matches = await browserAPI.bookmarks.search({ url });
           if (Array.isArray(matches) && matches.length > 0) {
-            bookmarkId = matches[0].id || null;
+            matchedBookmarkIds = normalizeBookmarkIdList(matches.map(item => item?.id));
+            bookmarkId = matchedBookmarkIds[0] || null;
             bookmarkTitle = matches[0].title || '';
           }
         } catch (_) {}
@@ -1926,6 +1928,18 @@ function setupAutoBookmarkOpenMonitoring() {
           timeStamp: typeof details.timeStamp === 'number' ? details.timeStamp : Date.now(),
           source: 'browser_auto_bookmark'
         });
+
+        for (const matchedBookmarkId of matchedBookmarkIds) {
+          const reviewResult = await markPostponedBookmarkReviewedFromOpen(matchedBookmarkId, {
+            timestamp: typeof details.timeStamp === 'number' ? details.timeStamp : Date.now(),
+            source: 'browser_auto_bookmark'
+          });
+          if (reviewResult?.reviewed === true) break;
+          if (reviewResult?.success === false) {
+            console.warn('[AutoBookmarkOpen] auto review failed:', reviewResult?.reason || 'unknown');
+            break;
+          }
+        }
       } catch (error) {
         console.warn('[AutoBookmarkOpen] failed to handle event:', error);
       }
@@ -3350,6 +3364,82 @@ async function executeRecommendCardActionFromReminderPopup(actionType, bookmarkI
   }
 
   return result;
+}
+
+async function markPostponedBookmarkReviewedFromOpen(bookmarkId, options = {}) {
+  const normalizedBookmarkId = String(bookmarkId || '').trim();
+  if (!normalizedBookmarkId) {
+    return { success: false, reviewed: false, reason: 'invalid_bookmark_id' };
+  }
+
+  const postponed = normalizeRecommendPostponedList(await getRecommendPostponedList());
+  const target = postponed.find((item) => String(item?.bookmarkId || '').trim() === normalizedBookmarkId);
+  if (!target) {
+    return { success: true, reviewed: false, reason: 'bookmark_not_postponed' };
+  }
+  if (!isReviewReminderCandidate(target, Number(options.timestamp || Date.now()))) {
+    return { success: true, reviewed: false, reason: 'bookmark_not_due' };
+  }
+
+  const result = await executeRecommendCardActionFromReminderPopup('review', normalizedBookmarkId, {
+    timestamp: Number(options.timestamp || Date.now()),
+    source: options.source || 'bookmark_open_auto_review'
+  });
+
+  if (result?.success === false) {
+    return {
+      success: false,
+      reviewed: false,
+      reason: result?.reason || 'review_action_failed',
+      result
+    };
+  }
+
+  clearActiveReviewReminderPopupItem(normalizedBookmarkId);
+  await scheduleReviewReminderAlarm();
+  return { success: true, reviewed: true, reason: 'reviewed', result };
+}
+
+async function findBookmarkIdsByUrl(url = '') {
+  const safeUrl = String(url || '').trim();
+  if (!safeUrl || !browserAPI?.bookmarks?.search) return [];
+  try {
+    const matches = await browserAPI.bookmarks.search({ url: safeUrl });
+    return normalizeBookmarkIdList(
+      (Array.isArray(matches) ? matches : []).map(item => item?.id)
+    );
+  } catch (_) {
+    return [];
+  }
+}
+
+async function markPostponedBookmarkReviewedFromOpenContext(options = {}) {
+  const normalizedBookmarkId = String(options.bookmarkId || '').trim();
+  const safeUrl = String(options.url || '').trim();
+  const timestamp = Number(options.timestamp || Date.now());
+  const source = options.source || 'bookmark_open_auto_review';
+  const candidates = normalizedBookmarkId
+    ? [normalizedBookmarkId]
+    : await findBookmarkIdsByUrl(safeUrl);
+
+  if (candidates.length === 0) {
+    return { success: true, reviewed: false, reason: 'bookmark_not_found' };
+  }
+
+  for (const candidateId of candidates) {
+    const reviewResult = await markPostponedBookmarkReviewedFromOpen(candidateId, {
+      timestamp,
+      source
+    });
+    if (reviewResult?.success === false) {
+      return reviewResult;
+    }
+    if (reviewResult?.reviewed === true) {
+      return reviewResult;
+    }
+  }
+
+  return { success: true, reviewed: false, reason: 'bookmark_not_due' };
 }
 
 async function scheduleReviewReminderAlarm(options = {}) {
@@ -7775,7 +7865,21 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
 
-        sendResponse({ success: true });
+        const reviewResult = await markPostponedBookmarkReviewedFromOpenContext({
+          bookmarkId,
+          url,
+          timestamp: Date.now(),
+          source: 'extension'
+        });
+        if (reviewResult?.success === false) {
+          console.warn('[ExtensionOpen] auto review failed:', reviewResult?.reason || 'unknown');
+        }
+
+        sendResponse({
+          success: true,
+          reviewHandled: reviewResult?.reviewed === true,
+          reviewReason: reviewResult?.reason || ''
+        });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
@@ -7928,11 +8032,25 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
         const normalizedBookmarkId = String(message.bookmarkId || '').trim();
-        if (normalizedBookmarkId) {
-          await executeRecommendCardActionFromReminderPopup('review', normalizedBookmarkId, {
-            timestamp: Date.now(),
-            source: 'review_reminder_popup'
+        if (!normalizedBookmarkId) {
+          await scheduleReviewReminderAlarm();
+          sendResponse({ success: false, opened: true, reason: 'missing_bookmark_id', keys });
+          return;
+        }
+
+        const reviewResult = await markPostponedBookmarkReviewedFromOpen(normalizedBookmarkId, {
+          timestamp: Date.now(),
+          source: 'review_reminder_popup'
+        });
+        if (reviewResult?.success === false || reviewResult?.reviewed !== true) {
+          await scheduleReviewReminderAlarm();
+          sendResponse({
+            success: false,
+            opened: true,
+            reason: reviewResult?.reason || 'review_failed_after_open',
+            keys
           });
+          return;
         }
         if (keys.length > 0) {
           await markReviewReminderNotified(keys);
@@ -7941,7 +8059,12 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           clearActiveReviewReminderPopupItem(normalizedBookmarkId);
         }
         await scheduleReviewReminderAlarm();
-        sendResponse({ success: true, keys });
+        sendResponse({
+          success: true,
+          keys,
+          reviewHandled: reviewResult?.reviewed === true,
+          reviewReason: reviewResult?.reason || ''
+        });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
