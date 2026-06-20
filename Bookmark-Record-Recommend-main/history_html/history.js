@@ -1576,6 +1576,50 @@ const FaviconCache = {
     cravatarDefaultCheckCache: new BoundedLruMap(1200), // {dataUrl: boolean}
     pendingRequests: new Map(), // inflight(hostname) 去重
 
+    scheduleIdleCleanup() {
+        try {
+            if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+                window.requestIdleCallback(() => this.checkAndEvictOldest(), { timeout: 5000 });
+            } else {
+                setTimeout(() => this.checkAndEvictOldest(), 2000);
+            }
+        } catch (_) { }
+    },
+
+    // 检查图标缓存容量并淘汰最老的数据，保证不超过 2000 个域名
+    async checkAndEvictOldest() {
+        try {
+            if (!this.db) await this.init();
+
+            const transaction = this.db.transaction([this.storeName], 'readwrite');
+            const store = transaction.objectStore(this.storeName);
+
+            const countRequest = store.count();
+            countRequest.onsuccess = () => {
+                const count = countRequest.result;
+                if (count < 2000) return; // 没到 2000 个域名，不进行任何处理
+
+                const deleteCount = 500; // 超限后淘汰最老的 500 个
+                const index = store.index('timestamp');
+                const cursorRequest = index.openCursor(null, 'next'); // 按时间戳升序遍历（最老的最先）
+
+                let evicted = 0;
+                cursorRequest.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor && evicted < deleteCount) {
+                        const domain = cursor.value.domain;
+                        this.memoryCache.delete(domain);
+                        cursor.delete();
+                        evicted++;
+                        cursor.continue();
+                    }
+                };
+            };
+        } catch (_) {
+            // 静默处理
+        }
+    },
+
     // 初始化 IndexedDB
     async init() {
         if (this.db) return;
@@ -1595,7 +1639,11 @@ const FaviconCache = {
                     .catch(() => {
                         // ignore init errors
                     })
-                    .finally(() => resolve());
+                    .finally(() => {
+                        resolve();
+                        // 触发容量检查与超限淘汰
+                        this.scheduleIdleCleanup();
+                    });
             };
 
             request.onupgradeneeded = (event) => {
@@ -40440,7 +40488,14 @@ function setupBookmarkListener() {
             // 删除对应的 favicon 缓存
             // removeInfo.node 包含被删除书签的信息（包括 URL）
             if (removeInfo.node && removeInfo.node.url) {
-                FaviconCache.clear(removeInfo.node.url);
+                const domain = FaviconCache._getHostnameFromUrl(removeInfo.node.url);
+                const hasSameDomain = allBookmarks.some(item => {
+                    if (!item.url) return false;
+                    return FaviconCache._getHostnameFromUrl(item.url) === domain;
+                });
+                if (!hasSameDomain) {
+                    FaviconCache.clear(removeInfo.node.url);
+                }
             }
 
             // 书签被删除后，对应的点击记录与排行需要重算
@@ -40543,7 +40598,14 @@ function setupRealtimeMessageListener() {
         } else if (message.action === 'clearFaviconCache') {
             // 书签URL被修改，清除favicon缓存（静默）
             if (message.url) {
-                FaviconCache.clear(message.url);
+                const domain = FaviconCache._getHostnameFromUrl(message.url);
+                const hasSameDomain = allBookmarks.some(item => {
+                    if (!item.url) return false;
+                    return FaviconCache._getHostnameFromUrl(item.url) === domain;
+                });
+                if (!hasSameDomain) {
+                    FaviconCache.clear(message.url);
+                }
             }
         } else if (message.action === 'updateFaviconFromTab') {
             // 从打开的 tab 更新 favicon（静默）
