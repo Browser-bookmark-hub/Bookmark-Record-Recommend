@@ -3901,6 +3901,12 @@ const i18n = {pageTitle: {
     },calendarTotalThisDay: {
         'zh_CN': '共 {0} 个书签',
         'en': 'Total {0} bookmarks'
+    },calendarNoBookmarksThisMonth: {
+        'zh_CN': '本月暂无书签',
+        'en': 'No bookmarks this month'
+    },calendarNoBookmarksThisDay: {
+        'zh_CN': '当天暂无书签',
+        'en': 'No bookmarks this day'
     },calendarExpandMore: {
         'zh_CN': '展开更多 (还有{0}个)',
         'en': 'Show more ({0} more)'
@@ -4724,8 +4730,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (isSidePanelMode && currentView === 'widgets') {
         if (widgetsSmartSortEnabled) {
             widgetsSortApplyDeferredInteractionsOnOpen = true;
-            syncWidgetsOpenStabilizingState();
         }
+        widgetsOpenInitializing = true;
+        syncWidgetsOpenStabilizingState();
+        setTimeout(() => {
+            widgetsOpenInitializing = false;
+            syncWidgetsOpenStabilizingState();
+        }, 250);
         await renderCurrentView();
         renderedCurrentViewEarly = true;
     }
@@ -8257,9 +8268,16 @@ function switchView(view) {
     // 更新全局变量
     currentView = view;
 
-    if (isSidePanelMode && previousView !== view && view === 'widgets' && widgetsSmartSortEnabled) {
-        widgetsSortApplyDeferredInteractionsOnOpen = true;
+    if (isSidePanelMode && previousView !== view && view === 'widgets') {
+        if (widgetsSmartSortEnabled) {
+            widgetsSortApplyDeferredInteractionsOnOpen = true;
+        }
+        widgetsOpenInitializing = true;
         syncWidgetsOpenStabilizingState();
+        setTimeout(() => {
+            widgetsOpenInitializing = false;
+            syncWidgetsOpenStabilizingState();
+        }, 250);
     }
 
     try { window.currentView = currentView; } catch (_) { }
@@ -17678,6 +17696,7 @@ let widgetsSortDeferredInteractionIds = new Set(readWidgetsSortDeferredInteracti
 let widgetsSortApplyDeferredInteractionsOnOpen = isSidePanelMode && widgetsSortDeferredInteractionIds.size > 0;
 let widgetsSortDeferredOpenEventsBound = false;
 let widgetsOpenStabilizing = false;
+let widgetsOpenInitializing = false; // [Phase 3] Optimization for side panel widgets view initialization/view transition
 let widgetsOpenStabilizingReleaseTimer = null;
 let widgetsOpenStabilizingViewportEventsBound = false;
 const WIDGETS_SORT_MOVE_HIGHLIGHT_DEBOUNCE_MS = 180;
@@ -17711,6 +17730,7 @@ let widgetsDirtyFlags = {
 function shouldStabilizeWidgetsOnOpen() {
     if (!isSidePanelMode) return false;
     if (currentView !== 'widgets') return false;
+    if (widgetsOpenInitializing) return true;
     if (!widgetsSmartSortEnabled) return false;
     if (!widgetsSortOpenMaskEnabled) return false;
     if (!widgetsSortApplyDeferredInteractionsOnOpen) return false;
@@ -39881,7 +39901,80 @@ function attachAdditionGroupEvents() {
         const willExpand = !items.classList.contains('expanded');
         if (willExpand && items.getAttribute('data-loaded') !== '1') {
             const groupBookmarks = additionsGroupItemsCache.get(groupId) || [];
-            items.innerHTML = groupBookmarks.map(renderBookmarkItem).join('');
+            
+            // Batched rendering to prevent DOM thread locking on expansion
+            const BATCH_SIZE = 100;
+            let renderedCount = 0;
+            
+            items.innerHTML = ''; // clear loading state
+            
+            const renderBatch = () => {
+                const end = Math.min(renderedCount + BATCH_SIZE, groupBookmarks.length);
+                const batch = groupBookmarks.slice(renderedCount, end);
+                const html = batch.map(renderBookmarkItem).join('');
+                
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                while (tempDiv.firstChild) {
+                    items.appendChild(tempDiv.firstChild);
+                }
+                
+                renderedCount = end;
+                return renderedCount < groupBookmarks.length;
+            };
+            
+            const hasMore = renderBatch();
+            
+            if (hasMore) {
+                const loadMoreBtn = document.createElement('div');
+                loadMoreBtn.className = 'addition-load-more-btn';
+                loadMoreBtn.style.padding = '8px 12px';
+                loadMoreBtn.style.margin = '10px auto';
+                loadMoreBtn.style.textAlign = 'center';
+                loadMoreBtn.style.background = 'var(--bg-secondary)';
+                loadMoreBtn.style.border = '1px solid var(--border-color)';
+                loadMoreBtn.style.borderRadius = '6px';
+                loadMoreBtn.style.cursor = 'pointer';
+                loadMoreBtn.style.color = 'var(--text-secondary)';
+                loadMoreBtn.style.fontSize = '12px';
+                loadMoreBtn.style.width = 'fit-content';
+                loadMoreBtn.style.transition = 'all 0.2s';
+                
+                const updateBtnText = () => {
+                    const remaining = groupBookmarks.length - renderedCount;
+                    const nextBatch = Math.min(BATCH_SIZE, remaining);
+                    loadMoreBtn.textContent = currentLang === 'zh_CN'
+                        ? `加载更多 ${nextBatch} 个（剩余 ${remaining} 个）`
+                        : `Load ${nextBatch} more (${remaining} remaining)`;
+                };
+                
+                updateBtnText();
+                
+                loadMoreBtn.addEventListener('mouseenter', () => {
+                    loadMoreBtn.style.background = 'var(--bg-tertiary)';
+                    loadMoreBtn.style.borderColor = 'var(--accent-primary)';
+                    loadMoreBtn.style.color = 'var(--accent-primary)';
+                });
+                loadMoreBtn.addEventListener('mouseleave', () => {
+                    loadMoreBtn.style.background = 'var(--bg-secondary)';
+                    loadMoreBtn.style.borderColor = 'var(--border-color)';
+                    loadMoreBtn.style.color = 'var(--text-secondary)';
+                });
+                
+                loadMoreBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const more = renderBatch();
+                    if (more) {
+                        updateBtnText();
+                        items.appendChild(loadMoreBtn); // move button to the end
+                    } else {
+                        loadMoreBtn.remove();
+                    }
+                });
+                
+                items.appendChild(loadMoreBtn);
+            }
+            
             items.setAttribute('data-loaded', '1');
         }
 
@@ -40480,21 +40573,46 @@ function setupBookmarkListener() {
     browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 
         try {
-            removeBookmarkFromAdditionsCache(id);
-            // 从S值缓存中删除该书签
-            if (typeof removeCachedScore === 'function') {
-                await removeCachedScore(id);
+            // 收集所有被删除的节点ID和URL（包括子书签）
+            const removedNodes = [];
+            const collectRemovedNodes = (node) => {
+                if (node.id) {
+                    removedNodes.push({ id: node.id, url: node.url });
+                }
+                if (node.children && node.children.length > 0) {
+                    node.children.forEach(collectRemovedNodes);
+                }
+            };
+
+            if (removeInfo && removeInfo.node) {
+                collectRemovedNodes(removeInfo.node);
+            } else {
+                removedNodes.push({ id, url: null });
             }
-            // 删除对应的 favicon 缓存
-            // removeInfo.node 包含被删除书签的信息（包括 URL）
-            if (removeInfo.node && removeInfo.node.url) {
-                const domain = FaviconCache._getHostnameFromUrl(removeInfo.node.url);
-                const hasSameDomain = allBookmarks.some(item => {
-                    if (!item.url) return false;
-                    return FaviconCache._getHostnameFromUrl(item.url) === domain;
-                });
-                if (!hasSameDomain) {
-                    FaviconCache.clear(removeInfo.node.url);
+
+            for (const node of removedNodes) {
+                // 如果是叶子节点书签，或者我们在缓存中能找到对应的书签
+                const target = allBookmarks.find(item => item.id === node.id);
+                const url = node.url || (target ? target.url : null);
+
+                // 从内存缓存中删除
+                removeBookmarkFromAdditionsCache(node.id);
+
+                // 从S值缓存中删除该书签
+                if (typeof removeCachedScore === 'function') {
+                    await removeCachedScore(node.id);
+                }
+
+                // 清理 favicon 缓存（如果该站点已无其他书签）
+                if (url) {
+                    const domain = FaviconCache._getHostnameFromUrl(url);
+                    const hasSameDomain = allBookmarks.some(item => {
+                        if (!item.url) return false;
+                        return FaviconCache._getHostnameFromUrl(item.url) === domain;
+                    });
+                    if (!hasSameDomain) {
+                        FaviconCache.clear(url);
+                    }
                 }
             }
 

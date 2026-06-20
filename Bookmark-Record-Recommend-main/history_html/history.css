@@ -5141,6 +5141,23 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-open-stabili
     pointer-events: none;
 }
 
+/* GPU Acceleration & Style Simplification during Side Panel Stabilization */
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid,
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .time-tracking-widget,
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-widget-card,
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-mini-chart-wrap,
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-pie-segment {
+    will-change: transform, opacity;
+}
+
+html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
+    transition: none !important;
+    animation: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
 .widgets-grid {
     display: grid;
     width: 100%;
