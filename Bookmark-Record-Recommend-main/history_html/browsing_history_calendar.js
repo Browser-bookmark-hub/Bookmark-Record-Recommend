@@ -1615,6 +1615,13 @@ class BrowsingHistoryCalendar {
             if (!this.bookmarkFolderPaths.has(node.url)) {
                 this.bookmarkFolderPaths.set(node.url, parentPath.slice());
             }
+            // 保存URL到书签节点的映射，用于上下文查找
+            if (!this.bookmarkNodesByUrl) {
+                this.bookmarkNodesByUrl = new Map();
+            }
+            if (!this.bookmarkNodesByUrl.has(node.url)) {
+                this.bookmarkNodesByUrl.set(node.url, node);
+            }
         }
 
         if (node.children) {
@@ -3327,9 +3334,12 @@ class BrowsingHistoryCalendar {
             `;
 
             // 创建导出按钮
-            const headerText = `${tw(date.getDay())} ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}`;
+            const yearPart = date.getFullYear();
+            const exportTitle = currentLang === 'zh_CN'
+                ? `${yearPart}年${date.getMonth() + 1}月${date.getDate()}日 ${tw(date.getDay())}`
+                : `${yearPart}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${tw(date.getDay())}`;
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'day',
                 data: { date: new Date(date) }
             });
@@ -3454,11 +3464,18 @@ class BrowsingHistoryCalendar {
             `;
 
             // 创建导出按钮
-            const headerText = t('calendarWeek', weekNum);
             const weekStart = new Date(weekData[0].date);
             weekStart.setHours(0, 0, 0, 0);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            const dateRange = currentLang === 'zh_CN'
+                ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+            const exportTitle = currentLang === 'zh_CN'
+                ? `${this.currentYear}年 ${t('calendarWeek', weekNum)} ${dateRange}`
+                : `${this.currentYear} ${t('calendarWeek', weekNum)} ${dateRange}`;
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'week',
                 data: { weekNum, weekStart }
             });
@@ -3537,8 +3554,11 @@ class BrowsingHistoryCalendar {
             `;
 
             // 创建导出按钮
+            const exportTitle = this.selectMode ?
+                (currentLang === 'en' ? 'All Selected Bookmarks' : '所有选中的书签') :
+                (currentLang === 'zh_CN' ? `${this.currentYear}年${String(this.currentMonth + 1).padStart(2, '0')}月 书签记录` : `${this.currentYear}-${String(this.currentMonth + 1).padStart(2, '0')} Bookmark Records`);
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'all',
                 data: { viewLevel: 'month', year: this.currentYear, month: this.currentMonth }
             });
@@ -5130,9 +5150,12 @@ class BrowsingHistoryCalendar {
                 titleContainer.innerHTML = `<i class="fas fa-calendar-day"></i> ${twFull(date.getDay())}, ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}${isDayToday ? ` <span style="color: ${todayColor};">(${currentLang === 'en' ? 'Today' : '今天'})</span>` : ''}`;
 
                 // 创建导出按钮
-                const headerText = `${twFull(date.getDay())} ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}`;
+                const yearPart = date.getFullYear();
+                const exportTitle = currentLang === 'zh_CN'
+                    ? `${yearPart}年${date.getMonth() + 1}月${date.getDate()}日 ${twFull(date.getDay())}`
+                    : `${yearPart}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${twFull(date.getDay())}`;
                 const exportBtn = this.createInlineExportButton({
-                    title: headerText,
+                    title: exportTitle,
                     type: 'day',
                     data: { date: new Date(date) }
                 });
@@ -5281,8 +5304,18 @@ class BrowsingHistoryCalendar {
                 }
 
                 // 创建导出按钮
+                const weekStart = new Date(this.currentWeekStart);
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekEnd.getDate() + 6);
+                const weekNum = this.getWeekNumber(weekStart);
+                const dateRange = currentLang === 'zh_CN'
+                    ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                    : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+                const exportTitle = this.selectMode ?
+                    (currentLang === 'en' ? 'All Selected Bookmarks' : '所有选中的书签') :
+                    (currentLang === 'zh_CN' ? `${weekStart.getFullYear()}年 ${t('calendarWeek', weekNum)} ${dateRange} 书签记录` : `${weekStart.getFullYear()} ${t('calendarWeek', weekNum)} ${dateRange} Bookmark Records`);
                 const exportBtn = this.createInlineExportButton({
-                    title: headerText,
+                    title: exportTitle,
                     type: 'all',
                     data: { viewLevel: 'week', weekStart: this.currentWeekStart }
                 });
@@ -6004,6 +6037,35 @@ class BrowsingHistoryCalendar {
         if (doExportBtn) {
             doExportBtn.addEventListener('click', () => this.handleExport());
         }
+
+        // 监听单选框变化来更新导出格式的勾选项
+        const radios = document.querySelectorAll('input[name="browsingExportMode"]');
+        radios.forEach(radio => {
+            radio.addEventListener('change', () => this.updateBrowsingExportFormats());
+        });
+    }
+
+    updateBrowsingExportFormats() {
+        const selectedMode = document.querySelector('input[name="browsingExportMode"]:checked')?.value;
+        const jsonlLabel = document.getElementById('browsingExportFormatJsonlLabel');
+        if (!jsonlLabel) return;
+        
+        const jsonlInput = jsonlLabel.querySelector('input');
+        if (!jsonlInput) return;
+
+        if (selectedMode === 'history_context') {
+            jsonlLabel.style.display = 'flex';
+            jsonlInput.checked = true;
+            jsonlInput.onclick = () => false; // 阻止点击切换状态
+            jsonlInput.style.pointerEvents = 'none'; // 禁用鼠标事件以保持原生蓝色外观且不能点击
+            jsonlLabel.style.cursor = 'default';
+        } else {
+            jsonlLabel.style.display = 'none';
+            jsonlInput.checked = false;
+            jsonlInput.onclick = null;
+            jsonlInput.style.pointerEvents = 'auto';
+            jsonlLabel.style.cursor = 'pointer';
+        }
     }
 
     openExportModal() {
@@ -6072,6 +6134,7 @@ class BrowsingHistoryCalendar {
             }
         }
 
+        this.updateBrowsingExportFormats();
         modal.classList.add('show');
     }
 
@@ -6123,6 +6186,78 @@ class BrowsingHistoryCalendar {
             if (formats.includes('json')) {
                 const jsonContent = JSON.stringify(exportData, null, 2);
                 this.downloadFile(jsonContent, `${filenameBase}.json`, 'application/json');
+            }
+
+            // 导出 浏览历史 (当模式为 history_context 时)
+            if (mode === 'history_context') {
+                try {
+                    const sortedDateKeys = [...this.bookmarksByDate.keys()].sort();
+                    const inScopeDates = sortedDateKeys.filter(dateKey => this.checkDateInScope(dateKey));
+
+                    if (inScopeDates.length > 0) {
+                        let startTime, endTime;
+                        if (this.currentExportScope && this.currentExportScope.type === 'hour') {
+                            const targetDate = new Date(this.currentExportScope.data.date);
+                            const targetHour = this.currentExportScope.data.hour;
+                            startTime = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), targetHour, 0, 0, 0).getTime();
+                            endTime = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), targetHour, 59, 59, 999).getTime();
+                        } else {
+                            const [y1, m1, d1] = inScopeDates[0].split('-').map(Number);
+                            startTime = new Date(y1, m1 - 1, d1, 0, 0, 0, 0).getTime();
+                            
+                            const [y2, m2, d2] = inScopeDates[inScopeDates.length - 1].split('-').map(Number);
+                            endTime = new Date(y2, m2 - 1, d2, 23, 59, 59, 999).getTime();
+                        }
+
+                        // 异步拉取这段范围内的全部浏览器历史记录
+                        const historyItems = await new Promise((resolve) => {
+                            if (typeof chrome !== 'undefined' && chrome.history) {
+                                chrome.history.search({
+                                    text: '',
+                                    startTime: startTime,
+                                    endTime: endTime,
+                                    maxResults: 999999
+                                }, (results) => {
+                                    resolve(results || []);
+                                });
+                            } else {
+                                resolve([]);
+                            }
+                        });
+
+                        // 过滤出属于被选中日期（及对应小时，若是小时视图）的记录
+                        const inScopeDatesSet = new Set(inScopeDates);
+                        const filteredHistoryItems = historyItems.filter(item => {
+                            if (!item.lastVisitTime) return false;
+                            const visitDate = new Date(item.lastVisitTime);
+                            
+                            if (this.currentExportScope && this.currentExportScope.type === 'hour') {
+                                const targetDate = new Date(this.currentExportScope.data.date);
+                                const targetHour = this.currentExportScope.data.hour;
+                                const dateKey = this.getDateKey(visitDate);
+                                return dateKey === this.getDateKey(targetDate) && visitDate.getHours() === targetHour;
+                            }
+                            
+                            const dateKey = this.getDateKey(visitDate);
+                            return inScopeDatesSet.has(dateKey);
+                        });
+
+                        if (filteredHistoryItems.length > 0) {
+                            const historyJsonlContent = filteredHistoryItems.map(item => JSON.stringify({
+                                title: item.title || '',
+                                url: item.url,
+                                lastVisitTime: item.lastVisitTime ? new Date(item.lastVisitTime).toISOString() : '',
+                                visitCount: item.visitCount || 1,
+                                typedCount: item.typedCount || 0
+                            })).join('\n');
+
+                            // 下载浏览历史文件
+                            this.downloadFile(historyJsonlContent, `${filenameBase}_全部浏览历史.jsonl`, 'application/x-jsonlines');
+                        }
+                    }
+                } catch (e) {
+                    console.error('[BrowsingHistoryCalendar] 导出浏览历史上下文失败:', e);
+                }
             }
 
             modal.classList.remove('show');
@@ -6267,12 +6402,22 @@ class BrowsingHistoryCalendar {
         switch (this.viewLevel) {
             case 'year': return t('calendarYear', this.currentYear);
             case 'month': return formatYearMonth(this.currentYear, this.currentMonth);
-            case 'week':
+            case 'week': {
                 const weekNum = this.getWeekNumber(this.currentWeekStart);
-                // 需要组合 年 + 周
-                return `${t('calendarYear', this.currentYear)} ${t('calendarWeek', weekNum)}`;
-            case 'day':
-                return t('calendarYearMonthDay', this.currentYear, this.currentMonth + 1, this.currentDay.getDate()).replace('{0}', this.currentYear).replace('{1}', this.currentMonth + 1).replace('{2}', this.currentDay.getDate());
+                const weekStart = new Date(this.currentWeekStart);
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekEnd.getDate() + 6);
+                const dateRange = currentLang === 'zh_CN'
+                    ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                    : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+                return currentLang === 'zh_CN'
+                    ? `${this.currentYear}年 ${t('calendarWeek', weekNum)} ${dateRange}`
+                    : `${this.currentYear} ${t('calendarWeek', weekNum)} ${dateRange}`;
+            }
+            case 'day': {
+                const dayStr = t('calendarYearMonthDay', this.currentYear, this.currentMonth + 1, this.currentDay.getDate()).replace('{0}', this.currentYear).replace('{1}', this.currentMonth + 1).replace('{2}', this.currentDay.getDate());
+                return `${dayStr} ${twFull(this.currentDay.getDay())}`;
+            }
             default: return i18n.exportRootTitle[currentLang];
         }
     }
@@ -6294,6 +6439,10 @@ class BrowsingHistoryCalendar {
             case 'collection':
                 prefix = '书签点击记录_集合';
                 prefixEn = 'bookmark_click_collection';
+                break;
+            case 'history_context':
+                prefix = '书签点击及浏览历史';
+                prefixEn = 'bookmark_click_and_browsing_history';
                 break;
             default:
                 prefix = '书签点击记录';
@@ -6379,6 +6528,22 @@ class BrowsingHistoryCalendar {
     }
 
     async getExportData(mode) {
+        // Ensure bookmarkFolderPaths is populated to resolve actual bookmark folder hierarchy
+        if (!this.bookmarkFolderPaths || this.bookmarkFolderPaths.size === 0) {
+            try {
+                if (browserAPI?.bookmarks && typeof browserAPI.bookmarks.getTree === 'function') {
+                    const tree = await browserAPI.bookmarks.getTree();
+                    if (tree && tree[0]) {
+                        const bookmarkUrls = new Set();
+                        const bookmarkTitles = new Set();
+                        this.collectBookmarkUrlsAndTitles(tree[0], bookmarkUrls, bookmarkTitles, [], null);
+                    }
+                }
+            } catch (e) {
+                console.warn('[BrowsingHistoryCalendar] failed to lazy-load bookmark folder paths:', e);
+            }
+        }
+
         const root = {
             title: i18n.exportRootTitle[currentLang],
             children: []
@@ -6467,7 +6632,7 @@ class BrowsingHistoryCalendar {
                     // 检查书签是否在导出范围内（用于hour类型过滤）
                     if (!this.checkBookmarkInScope(bm)) return;
 
-                    const path = bm.folderPath || [];
+                    const path = this.bookmarkFolderPaths?.get(bm.url) || bm.folderPath || [];
                     const parentFolder = ensurePath(targetFolder, path);
 
                     parentFolder.children.push({
@@ -6496,8 +6661,8 @@ class BrowsingHistoryCalendar {
 
             if (allTargetBookmarks.length === 0) return root;
 
-            if (mode === 'collection') {
-                // COLLECTION 模式：按日期分组，扁平化放在日期文件夹下
+            if (mode === 'collection' || mode === 'history_context') {
+                // COLLECTION 模式或 HISTORY_CONTEXT 模式：按日期分组，扁平化放在日期文件夹下
 
                 if (isSingleDayExport) {
                     // 单日导出：直接扁平化放在主文件夹下
@@ -6558,6 +6723,65 @@ class BrowsingHistoryCalendar {
                             });
                         });
                     });
+                }
+            } else if (mode === 'context') {
+                // CONTEXT 模式：按父文件夹分组，并包含兄弟节点
+                const parentIds = new Set();
+                allTargetBookmarks.forEach(bm => {
+                    const node = this.bookmarkNodesByUrl?.get(bm.url);
+                    if (node && node.parentId) {
+                        parentIds.add(node.parentId);
+                    }
+                });
+
+                // 对每个父文件夹，获取其所有子节点（上下文）
+                for (const parentId of parentIds) {
+                    try {
+                        const [folderNode] = await new Promise(r => {
+                            if (browserAPI?.bookmarks) {
+                                browserAPI.bookmarks.get(parentId, r);
+                            } else {
+                                r([]);
+                            }
+                        });
+                        if (!folderNode) continue;
+
+                        const children = await new Promise(r => {
+                            if (browserAPI?.bookmarks) {
+                                browserAPI.bookmarks.getChildren(parentId, r);
+                            } else {
+                                r([]);
+                            }
+                        });
+
+                        // 创建文件夹节点
+                        const folderObj = {
+                            title: folderNode.title,
+                            addDate: folderNode.dateAdded ? folderNode.dateAdded / 1000 : 0,
+                            lastModified: folderNode.dateGroupModified ? folderNode.dateGroupModified / 1000 : 0,
+                            type: 'folder',
+                            children: children.map(child => {
+                                if (child.url) {
+                                    return {
+                                        title: child.title,
+                                        url: child.url,
+                                        addDate: child.dateAdded ? child.dateAdded / 1000 : 0,
+                                        type: 'bookmark'
+                                    };
+                                } else {
+                                    return {
+                                        title: child.title,
+                                        type: 'folder',
+                                        children: []
+                                    };
+                                }
+                            })
+                        };
+                        // 将文件夹加入到主文件夹下
+                        mainFolder.children.push(folderObj);
+                    } catch (e) {
+                        console.warn('Error processing folder context in browsing calendar:', e);
+                    }
                 }
             }
         }

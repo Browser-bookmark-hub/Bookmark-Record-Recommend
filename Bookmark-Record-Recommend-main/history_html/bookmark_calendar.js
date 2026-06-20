@@ -197,8 +197,6 @@ class BookmarkCalendar {
 
         this.setupBreadcrumb();
         this.setupDragEvents();
-        this.setupBreadcrumb();
-        this.setupDragEvents();
 
         // [Performance Optimization] Lazy Render
         // Only render if the view is visible. Otherwise wait for it to become visible.
@@ -2182,9 +2180,12 @@ class BookmarkCalendar {
             `;
 
             // 创建导出按钮
-            const headerText = `${tw(date.getDay())} ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}`;
+            const yearPart = date.getFullYear();
+            const exportTitle = currentLang === 'zh_CN'
+                ? `${yearPart}年${date.getMonth() + 1}月${date.getDate()}日 ${tw(date.getDay())}`
+                : `${yearPart}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${tw(date.getDay())}`;
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'day',
                 data: { date: new Date(date) }
             });
@@ -2309,11 +2310,18 @@ class BookmarkCalendar {
             `;
 
             // 创建导出按钮
-            const headerText = t('calendarWeek', weekNum);
             const weekStart = new Date(weekData[0].date);
             weekStart.setHours(0, 0, 0, 0);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            const dateRange = currentLang === 'zh_CN'
+                ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+            const exportTitle = currentLang === 'zh_CN'
+                ? `${this.currentYear}年 ${t('calendarWeek', weekNum)} ${dateRange}`
+                : `${this.currentYear} ${t('calendarWeek', weekNum)} ${dateRange}`;
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'week',
                 data: { weekNum, weekStart }
             });
@@ -2392,8 +2400,11 @@ class BookmarkCalendar {
             `;
 
             // 创建导出按钮
+            const exportTitle = this.selectMode ?
+                (currentLang === 'en' ? 'All Selected Bookmarks' : '所有选中的书签') :
+                (currentLang === 'zh_CN' ? `${this.currentYear}年${String(this.currentMonth + 1).padStart(2, '0')}月 书签记录` : `${this.currentYear}-${String(this.currentMonth + 1).padStart(2, '0')} Bookmark Records`);
             const exportBtn = this.createInlineExportButton({
-                title: headerText,
+                title: exportTitle,
                 type: 'all',
                 data: { viewLevel: 'month', year: this.currentYear, month: this.currentMonth }
             });
@@ -3812,9 +3823,12 @@ class BookmarkCalendar {
                 `;
 
                 // 创建导出按钮
-                const headerText = `${twFull(date.getDay())} ${t('calendarMonthDay', date.getMonth() + 1, date.getDate())}`;
+                const yearPart = date.getFullYear();
+                const exportTitle = currentLang === 'zh_CN'
+                    ? `${yearPart}年${date.getMonth() + 1}月${date.getDate()}日 ${twFull(date.getDay())}`
+                    : `${yearPart}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${twFull(date.getDay())}`;
                 const exportBtn = this.createInlineExportButton({
-                    title: headerText,
+                    title: exportTitle,
                     type: 'day',
                     data: { date: new Date(date) }
                 });
@@ -3963,8 +3977,18 @@ class BookmarkCalendar {
                 }
 
                 // 创建导出按钮
+                const weekStart = new Date(this.currentWeekStart);
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekEnd.getDate() + 6);
+                const weekNum = this.getWeekNumber(weekStart);
+                const dateRange = currentLang === 'zh_CN'
+                    ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                    : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+                const exportTitle = this.selectMode ?
+                    (currentLang === 'en' ? 'All Selected Bookmarks' : '所有选中的书签') :
+                    (currentLang === 'zh_CN' ? `${weekStart.getFullYear()}年 ${t('calendarWeek', weekNum)} ${dateRange} 书签记录` : `${weekStart.getFullYear()} ${t('calendarWeek', weekNum)} ${dateRange} Bookmark Records`);
                 const exportBtn = this.createInlineExportButton({
-                    title: headerText,
+                    title: exportTitle,
                     type: 'all',
                     data: { viewLevel: 'week', weekStart: this.currentWeekStart }
                 });
@@ -4961,12 +4985,22 @@ class BookmarkCalendar {
         switch (this.viewLevel) {
             case 'year': return t('calendarYear', this.currentYear);
             case 'month': return formatYearMonth(this.currentYear, this.currentMonth);
-            case 'week':
+            case 'week': {
                 const weekNum = this.getWeekNumber(this.currentWeekStart);
-                // 需要组合 年 + 周
-                return `${t('calendarYear', this.currentYear)} ${t('calendarWeek', weekNum)}`;
-            case 'day':
-                return t('calendarYearMonthDay', this.currentYear, this.currentMonth + 1, this.currentDay.getDate()).replace('{0}', this.currentYear).replace('{1}', this.currentMonth + 1).replace('{2}', this.currentDay.getDate());
+                const weekStart = new Date(this.currentWeekStart);
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekEnd.getDate() + 6);
+                const dateRange = currentLang === 'zh_CN'
+                    ? `(${weekStart.getMonth() + 1}月${weekStart.getDate()}日-${weekEnd.getMonth() + 1}月${weekEnd.getDate()}日)`
+                    : `(${String(weekStart.getMonth() + 1).padStart(2, '0')}.${String(weekStart.getDate()).padStart(2, '0')}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}.${String(weekEnd.getDate()).padStart(2, '0')})`;
+                return currentLang === 'zh_CN'
+                    ? `${this.currentYear}年 ${t('calendarWeek', weekNum)} ${dateRange}`
+                    : `${this.currentYear} ${t('calendarWeek', weekNum)} ${dateRange}`;
+            }
+            case 'day': {
+                const dayStr = t('calendarYearMonthDay', this.currentYear, this.currentMonth + 1, this.currentDay.getDate()).replace('{0}', this.currentYear).replace('{1}', this.currentMonth + 1).replace('{2}', this.currentDay.getDate());
+                return `${dayStr} ${twFull(this.currentDay.getDay())}`;
+            }
             default: return i18n.exportRootTitle[currentLang];
         }
     }
@@ -5289,15 +5323,15 @@ class BookmarkCalendar {
                         // 创建文件夹节点
                         const folderObj = {
                             title: folderNode.title,
-                            addDate: folderNode.dateAdded,
-                            lastModified: folderNode.dateGroupModified,
+                            addDate: folderNode.dateAdded ? folderNode.dateAdded / 1000 : 0,
+                            lastModified: folderNode.dateGroupModified ? folderNode.dateGroupModified / 1000 : 0,
                             type: 'folder',
                             children: children.map(child => {
                                 if (child.url) {
                                     return {
                                         title: child.title,
                                         url: child.url,
-                                        addDate: child.dateAdded,
+                                        addDate: child.dateAdded ? child.dateAdded / 1000 : 0,
                                         type: 'bookmark'
                                     };
                                 } else {

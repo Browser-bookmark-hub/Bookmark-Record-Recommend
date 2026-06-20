@@ -1640,8 +1640,8 @@
                             <div class="radio-group" style="display: flex; flex-direction: column; gap: 8px;">
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                    <input type="radio" name="exportMode" value="records" checked>
-                                    <span>仅导出书签添加记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                    <input type="radio" name="exportMode" value="records">
+                                    <span>仅导出书签添加记录 <small style="color: var(--text-tertiary);">(所见即所得，保留原书签保存路径)</small></span>
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -1650,7 +1650,7 @@
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                    <input type="radio" name="exportMode" value="collection">
+                                    <input type="radio" name="exportMode" value="collection" checked>
                                     <span>按日期集合导出书签添加记录 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
                                 </label>
                             </div>
@@ -1707,13 +1707,23 @@
                             <div class="radio-group" style="display: flex; flex-direction: column; gap: 8px;">
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                    <input type="radio" name="browsingExportMode" value="records" checked>
-                                    <span>仅导出书签点击记录 <small style="color: var(--text-tertiary);">(仅现有记录)</small></span>
+                                    <input type="radio" name="browsingExportMode" value="records">
+                                    <span>仅导出书签点击记录 <small style="color: var(--text-tertiary);">(所见即所得，保留原书签保存路径)</small></span>
                                 </label>
                                 <label class="radio-label"
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                    <input type="radio" name="browsingExportMode" value="collection">
+                                    <input type="radio" name="browsingExportMode" value="context">
+                                    <span>导出书签点击记录及上下文 <small style="color: var(--text-tertiary);">(包含同文件夹下的其他书签)</small></span>
+                                </label>
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="browsingExportMode" value="collection" checked>
                                     <span>按日期集合导出书签点击记录 <small style="color: var(--text-tertiary);">(按日期归档，不保留原目录名)</small></span>
+                                </label>
+                                <label class="radio-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="browsingExportMode" value="history_context">
+                                    <span>导出书签点击记录及浏览历史 <small style="color: var(--text-tertiary);">(按日期归档，并包含该时段的全部浏览器历史记录)</small></span>
                                 </label>
                             </div>
                         </div>
@@ -1735,6 +1745,11 @@
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="checkbox" name="browsingExportFormat" value="copy">
                                     <span>复制到剪贴板</span>
+                                </label>
+                                <label class="checkbox-label" id="browsingExportFormatJsonlLabel"
+                                    style="display: none; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="browsingExportFormat" value="jsonl">
+                                    <span>JSONL (历史访问记录)</span>
                                 </label>
                             </div>
                         </div>
