@@ -1795,6 +1795,7 @@ if (browserAPI?.runtime?.onInstalled) {
     initSidePanel();
     refreshSidePanelOpenWindows().catch(() => {});
     ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    ensureHistoryBackgroundSyncAlarm({ force: true }).catch(() => {});
     scheduleReviewReminderAlarm().catch(() => {});
     scheduleRecommendStartupSelfHeal('on-installed').catch(() => {});
     triggerRecommendBackgroundRefresh('on-installed', { requireIdle: true });
@@ -1804,6 +1805,7 @@ if (browserAPI?.runtime?.onInstalled) {
 if (browserAPI?.runtime?.onStartup) {
   browserAPI.runtime.onStartup.addListener(() => {
     ensureRecommendBackgroundRefreshAlarm({ force: true }).catch(() => {});
+    ensureHistoryBackgroundSyncAlarm({ force: true }).catch(() => {});
     scheduleReviewReminderAlarm().catch(() => {});
     scheduleRecommendStartupSelfHeal('on-startup').catch(() => {});
     triggerRecommendBackgroundRefresh('on-startup', { requireIdle: true });
@@ -1813,6 +1815,7 @@ if (browserAPI?.runtime?.onStartup) {
 initSidePanel();
 registerSidePanelTogglePortListener();
 refreshSidePanelOpenWindows().catch(() => {});
+ensureHistoryBackgroundSyncAlarm().catch(() => {});
 
 if (browserAPI?.storage?.onChanged) {
   browserAPI.storage.onChanged.addListener((changes, areaName) => {
@@ -1835,6 +1838,12 @@ if (browserAPI?.alarms?.onAlarm) {
     }
     if (alarm.name === RECOMMEND_REVIEW_REMINDER_ALARM) {
       showReviewReminderPopupIfDue('alarm').catch(() => {});
+      return;
+    }
+    if (alarm.name === HISTORY_BACKGROUND_SYNC_ALARM || alarm.name === HISTORY_BACKGROUND_SYNC_RETRY_ALARM) {
+      const reason = alarm.name === HISTORY_BACKGROUND_SYNC_RETRY_ALARM ? 'background-alarm-retry' : 'background-alarm-sync';
+      runBrowsingHistoryCalibration({ reason, requireIdle: true }).catch(() => {});
+      return;
     }
   });
 }
@@ -1960,6 +1969,11 @@ const BROWSING_HISTORY_CACHE_DB_NAME = 'BookmarkBrowsingHistoryCacheDB';
 const BROWSING_HISTORY_CACHE_DB_VERSION = 1;
 const BROWSING_HISTORY_CACHE_DB_STORE = 'records';
 const BROWSING_HISTORY_CACHE_DB_META = 'meta';
+const BROWSING_HISTORY_META_LAST_SYNC = 'lastSyncTime';
+const BROWSING_HISTORY_META_LAST_FULL_SYNC = 'lastFullSyncTime';
+const BROWSING_HISTORY_META_LAST_INCREMENTAL_WRITE = 'lastIncrementalWriteTime';
+const BROWSING_HISTORY_META_LAST_PARTIAL_SYNC = 'lastPartialSyncTime';
+const BROWSING_HISTORY_META_LAST_ANY_WRITE = 'lastAnyWriteTime';
 const BROWSING_HISTORY_SEARCH_PAGE_SIZE = 5000;
 const BROWSING_HISTORY_SEARCH_MAX_ITEMS = 50000;
 const BROWSING_HISTORY_MAX_VISITS_PER_URL = 400;
@@ -1982,6 +1996,123 @@ const DEFAULT_BROWSING_CALIBRATION_STATE = {
 
 let browsingCalibrationInProgress = false;
 let browsingHistoryCacheDbPromise = null;
+let browsingHistoryLegacyCacheMigrationPromise = null;
+let browsingHistoryLegacyCacheMigrationFinished = false;
+
+const HISTORY_BACKGROUND_SYNC_ALARM = 'bb_history_background_sync_v1';
+const HISTORY_BACKGROUND_SYNC_RETRY_ALARM = 'bb_history_background_sync_retry_v1';
+const HISTORY_BACKGROUND_SYNC_PERIOD_MINUTES = 12 * 60; // 12 hours
+const HISTORY_BACKGROUND_SYNC_RETRY_DELAY_MINUTES = 15;
+let ensureHistoryBackgroundSyncAlarmPromise = null;
+let ensureHistoryBackgroundSyncAlarmLastCheckAt = 0;
+
+function getSafeBrowsingHistoryMetaTime(...values) {
+  for (const value of values) {
+    const numeric = Number(value || 0);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
+function applyBrowsingHistoryCachePayloadMeta(payload, timestamp, mode = 'full', existing = {}) {
+  const safeTime = getSafeBrowsingHistoryMetaTime(timestamp, Date.now());
+  const previousFullSync = getSafeBrowsingHistoryMetaTime(existing.lastFullSyncTime, existing.lastSyncTime, payload.lastFullSyncTime, payload.lastSyncTime);
+  if (mode === 'incremental') {
+    payload.lastSyncTime = previousFullSync;
+    payload.lastFullSyncTime = previousFullSync;
+    payload.lastIncrementalWriteTime = safeTime;
+  } else if (mode === 'partial') {
+    payload.lastSyncTime = previousFullSync;
+    payload.lastFullSyncTime = previousFullSync;
+    payload.lastPartialSyncTime = safeTime;
+  } else {
+    payload.lastSyncTime = safeTime;
+    payload.lastFullSyncTime = safeTime;
+  }
+  payload.lastAnyWriteTime = safeTime;
+  return payload;
+}
+
+function putBrowsingHistoryCacheMeta(metaStore, timestamp, mode = 'full') {
+  if (!metaStore || typeof metaStore.put !== 'function') return;
+  const safeTime = getSafeBrowsingHistoryMetaTime(timestamp, Date.now());
+  if (mode === 'incremental') {
+    metaStore.put({ key: BROWSING_HISTORY_META_LAST_INCREMENTAL_WRITE, value: safeTime });
+  } else if (mode === 'partial') {
+    metaStore.put({ key: BROWSING_HISTORY_META_LAST_PARTIAL_SYNC, value: safeTime });
+  } else {
+    metaStore.put({ key: BROWSING_HISTORY_META_LAST_SYNC, value: safeTime });
+    metaStore.put({ key: BROWSING_HISTORY_META_LAST_FULL_SYNC, value: safeTime });
+  }
+  metaStore.put({ key: BROWSING_HISTORY_META_LAST_ANY_WRITE, value: safeTime });
+}
+
+async function scheduleHistoryBackgroundSyncRetry(reason = 'idle-active') {
+  if (!browserAPI?.alarms?.create) return false;
+  try {
+    browserAPI.alarms.create(HISTORY_BACKGROUND_SYNC_RETRY_ALARM, {
+      delayInMinutes: HISTORY_BACKGROUND_SYNC_RETRY_DELAY_MINUTES
+    });
+    console.info('[Background][HistoryCache] scheduled retry after skip:', reason);
+    return true;
+  } catch (error) {
+    console.warn('[Background][HistoryCache] schedule retry failed:', error);
+    return false;
+  }
+}
+
+async function ensureHistoryBackgroundSyncAlarm(options = {}) {
+  if (!browserAPI?.alarms?.create || !browserAPI?.alarms?.get) {
+    return { success: false, skipped: 'alarms-api-unavailable' };
+  }
+
+  const force = options?.force === true;
+  const now = Date.now();
+
+  if (ensureHistoryBackgroundSyncAlarmPromise) {
+    return ensureHistoryBackgroundSyncAlarmPromise;
+  }
+
+  if (!force && (now - ensureHistoryBackgroundSyncAlarmLastCheckAt) < 60 * 1000) {
+    return { success: true, skipped: 'throttled' };
+  }
+
+  ensureHistoryBackgroundSyncAlarmPromise = (async () => {
+    try {
+      const existingAlarm = await new Promise((resolve, reject) => {
+        try {
+          browserAPI.alarms.get(HISTORY_BACKGROUND_SYNC_ALARM, (alarm) => {
+            const err = browserAPI?.runtime?.lastError;
+            if (err) {
+              reject(new Error(err.message || 'alarms_get_failed'));
+              return;
+            }
+            resolve(alarm || null);
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      if (existingAlarm) {
+        return { success: true, created: false };
+      }
+
+      browserAPI.alarms.create(HISTORY_BACKGROUND_SYNC_ALARM, {
+        delayInMinutes: 5,
+        periodInMinutes: HISTORY_BACKGROUND_SYNC_PERIOD_MINUTES
+      });
+      return { success: true, created: true };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    } finally {
+      ensureHistoryBackgroundSyncAlarmLastCheckAt = Date.now();
+      ensureHistoryBackgroundSyncAlarmPromise = null;
+    }
+  })();
+
+  return ensureHistoryBackgroundSyncAlarmPromise;
+}
 
 function normalizeBrowsingCalibrationSettings(raw = {}) {
   const settings = { ...DEFAULT_BROWSING_CALIBRATION_SETTINGS, ...(raw || {}) };
@@ -2064,20 +2195,7 @@ async function openBrowsingHistoryCacheDB() {
   return browsingHistoryCacheDbPromise;
 }
 
-async function removeBrowsingHistoryCacheFromIDB() {
-  const db = await openBrowsingHistoryCacheDB();
-  if (!db) return false;
-  return new Promise((resolve) => {
-    const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readwrite');
-    tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE).clear();
-    tx.objectStore(BROWSING_HISTORY_CACHE_DB_META).clear();
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
-    tx.onabort = () => resolve(false);
-  });
-}
-
-async function writeBrowsingHistoryCacheToIDB(payload) {
+async function writeBrowsingHistoryCacheToIDB(payload, metaMode = 'full', options = {}) {
   if (!payload || !Array.isArray(payload.records)) return false;
   const db = await openBrowsingHistoryCacheDB();
   if (!db) return false;
@@ -2086,11 +2204,15 @@ async function writeBrowsingHistoryCacheToIDB(payload) {
     const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
     const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
     try {
+      if (options.replaceExisting) {
+        recordsStore.clear();
+        metaStore.clear();
+      }
       for (const [dateKey, items] of payload.records) {
         if (!dateKey) continue;
         recordsStore.put({ dateKey, items: Array.isArray(items) ? items : [] });
       }
-      metaStore.put({ key: 'lastSyncTime', value: payload.lastSyncTime || Date.now() });
+      putBrowsingHistoryCacheMeta(metaStore, payload.lastSyncTime || payload.lastFullSyncTime || Date.now(), metaMode);
     } catch (error) {
       console.warn('[Background][HistoryCache] write DB failed:', error);
       resolve(false);
@@ -2102,12 +2224,517 @@ async function writeBrowsingHistoryCacheToIDB(payload) {
   });
 }
 
-async function writeBrowsingHistoryCache(payload) {
+async function removeBrowsingHistoryLegacyStorageCache() {
+  try {
+    if (browserAPI?.storage?.local?.remove) {
+      await browserAPI.storage.local.remove(BROWSING_HISTORY_CACHE_KEY);
+    }
+  } catch (error) {
+    console.warn('[Background][HistoryCache] remove legacy storage cache failed:', error);
+  } finally {
+    browsingHistoryLegacyCacheMigrationFinished = true;
+  }
+}
+
+async function migrateLegacyBrowsingHistoryCacheToIDB() {
+  if (browsingHistoryLegacyCacheMigrationFinished) return false;
+  if (browsingHistoryLegacyCacheMigrationPromise) return browsingHistoryLegacyCacheMigrationPromise;
+
+  browsingHistoryLegacyCacheMigrationPromise = (async () => {
+    try {
+      const db = await openBrowsingHistoryCacheDB();
+      if (!db || !browserAPI?.storage?.local?.get) return false;
+
+      const result = await browserAPI.storage.local.get([BROWSING_HISTORY_CACHE_KEY]);
+      const legacy = result && result[BROWSING_HISTORY_CACHE_KEY] ? result[BROWSING_HISTORY_CACHE_KEY] : null;
+      if (!legacy || !Array.isArray(legacy.records) || legacy.records.length === 0) {
+        browsingHistoryLegacyCacheMigrationFinished = true;
+        return false;
+      }
+
+      const existing = await readBrowsingHistoryCacheFromIDB();
+      const mergedMap = new Map();
+      for (const [dateKey, items] of legacy.records) {
+        if (!dateKey) continue;
+        const existingItems = Array.isArray(mergedMap.get(dateKey)) ? mergedMap.get(dateKey) : [];
+        mergedMap.set(dateKey, mergeBrowsingHistoryRecordItems(existingItems, Array.isArray(items) ? items : []));
+      }
+      if (existing && Array.isArray(existing.records)) {
+        for (const [dateKey, items] of existing.records) {
+          if (!dateKey) continue;
+          const existingItems = Array.isArray(mergedMap.get(dateKey)) ? mergedMap.get(dateKey) : [];
+          mergedMap.set(dateKey, mergeBrowsingHistoryRecordItems(existingItems, Array.isArray(items) ? items : []));
+        }
+      }
+
+      const mergedRecords = Array.from(mergedMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+      const migratedLastSyncTime = Math.max(
+        Number(existing?.lastFullSyncTime || existing?.lastSyncTime || 0),
+        Number(legacy.lastFullSyncTime || legacy.lastSyncTime || 0)
+      ) || Date.now();
+      const ok = await writeBrowsingHistoryCacheToIDB({
+        lastSyncTime: migratedLastSyncTime,
+        lastFullSyncTime: migratedLastSyncTime,
+        records: mergedRecords
+      });
+
+      if (ok) {
+        await removeBrowsingHistoryLegacyStorageCache();
+        browsingHistoryLegacyCacheMigrationFinished = true;
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.warn('[Background][HistoryCache] migrate legacy storage cache failed:', error);
+      return false;
+    } finally {
+      browsingHistoryLegacyCacheMigrationPromise = null;
+    }
+  })();
+
+  return browsingHistoryLegacyCacheMigrationPromise;
+}
+
+async function readBrowsingHistoryLastSyncTime() {
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) {
+    try {
+      const result = await browserAPI.storage.local.get([BROWSING_HISTORY_CACHE_KEY]);
+      const cached = result && result[BROWSING_HISTORY_CACHE_KEY] ? result[BROWSING_HISTORY_CACHE_KEY] : null;
+      return getSafeBrowsingHistoryMetaTime(cached?.lastFullSyncTime, cached?.lastSyncTime);
+    } catch (_) {
+      return 0;
+    }
+  }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_META], 'readonly');
+      const store = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+      const fullReq = store.get(BROWSING_HISTORY_META_LAST_FULL_SYNC);
+      const legacyReq = store.get(BROWSING_HISTORY_META_LAST_SYNC);
+      let fullValue = 0;
+      let legacyValue = 0;
+      let pending = 2;
+      const finish = () => {
+        pending -= 1;
+        if (pending > 0) return;
+        resolve(getSafeBrowsingHistoryMetaTime(fullValue, legacyValue));
+      };
+      fullReq.onsuccess = () => {
+        fullValue = fullReq.result?.value || 0;
+        finish();
+      };
+      fullReq.onerror = () => finish();
+      legacyReq.onsuccess = () => {
+        legacyValue = legacyReq.result?.value || 0;
+        finish();
+      };
+      legacyReq.onerror = () => finish();
+    } catch (e) {
+      console.warn('[Background][HistoryCache] get lastSyncTime failed:', e);
+      resolve(0);
+    }
+  });
+}
+
+function getBrowsingHistoryRecordTimestamp(record) {
+  const timestamp = Number(record?.visitTime || record?.dateAdded || 0);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function mergeBrowsingHistoryRecordItems(existingItems = [], newItems = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...existingItems, ...newItems]) {
+    const timestamp = getBrowsingHistoryRecordTimestamp(item);
+    const key = `${item?.url || ''}|${timestamp || item?.id || ''}`;
+    if (!item || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged.sort((a, b) => getBrowsingHistoryRecordTimestamp(a) - getBrowsingHistoryRecordTimestamp(b));
+}
+
+async function mergeBrowsingHistoryCacheRecordsMapInIDB(recordsMap, lastSyncTime) {
+  if (!recordsMap || recordsMap.size === 0) return true;
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return false;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readwrite');
+      const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+      const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+      const entries = Array.from(recordsMap.entries())
+        .filter(([dateKey]) => !!dateKey)
+        .sort((a, b) => a[0].localeCompare(b[0]));
+      let index = 0;
+
+      const processNext = () => {
+        if (index >= entries.length) {
+          putBrowsingHistoryCacheMeta(metaStore, lastSyncTime || Date.now(), 'incremental');
+          return;
+        }
+
+        const [dateKey, items] = entries[index++];
+        const request = recordsStore.get(dateKey);
+        request.onsuccess = () => {
+          const existingItems = Array.isArray(request.result?.items) ? request.result.items : [];
+          const mergedItems = mergeBrowsingHistoryRecordItems(existingItems, Array.isArray(items) ? items : []);
+          if (mergedItems.length) {
+            recordsStore.put({ dateKey, items: mergedItems });
+          }
+          processNext();
+        };
+        request.onerror = () => processNext();
+      };
+
+      processNext();
+      tx.oncomplete = () => finish(true);
+      tx.onerror = () => finish(false);
+      tx.onabort = () => finish(false);
+    } catch (error) {
+      console.warn('[Background][HistoryCache] merge records in DB failed:', error);
+      finish(false);
+    }
+  });
+}
+
+async function mergeBrowsingHistoryCacheRecordsMap(recordsMap, lastSyncTime = Date.now()) {
+  if (!recordsMap || recordsMap.size === 0) return true;
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+
   const idbOk = await openBrowsingHistoryCacheDB();
   if (idbOk) {
-    await removeBrowsingHistoryCacheFromIDB();
-    const ok = await writeBrowsingHistoryCacheToIDB(payload);
-    if (ok) return true;
+    const ok = await mergeBrowsingHistoryCacheRecordsMapInIDB(recordsMap, lastSyncTime);
+    if (ok) {
+      await removeBrowsingHistoryLegacyStorageCache();
+      return true;
+    }
+  }
+
+  try {
+    const result = await browserAPI.storage.local.get([BROWSING_HISTORY_CACHE_KEY]);
+    const existing = result && result[BROWSING_HISTORY_CACHE_KEY] ? result[BROWSING_HISTORY_CACHE_KEY] : { lastSyncTime: 0, records: [] };
+    const mergedMap = new Map(existing.records || []);
+    for (const [dateKey, items] of recordsMap.entries()) {
+      if (!dateKey) continue;
+      const existingItems = Array.isArray(mergedMap.get(dateKey)) ? mergedMap.get(dateKey) : [];
+      mergedMap.set(dateKey, mergeBrowsingHistoryRecordItems(existingItems, Array.isArray(items) ? items : []));
+    }
+    const recordsPayload = Array.from(mergedMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const payload = applyBrowsingHistoryCachePayloadMeta({ records: recordsPayload }, lastSyncTime || Date.now(), 'incremental', existing);
+    await browserAPI.storage.local.set({ [BROWSING_HISTORY_CACHE_KEY]: payload });
+    return true;
+  } catch (error) {
+    console.warn('[Background][HistoryCache] fallback merge records failed:', error);
+    return false;
+  }
+}
+
+async function replaceBrowsingHistoryCacheRangeInIDB(recordsMap, lastSyncTime, startDateKey, endDateKey, startTime = 0, endTime = 0, metaMode = 'full') {
+  if (!recordsMap || !startDateKey || !endDateKey) return false;
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readwrite');
+      const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+      const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+      const range = IDBKeyRange.bound(startDateKey, endDateKey);
+      const request = recordsStore.openCursor(range);
+      const retainedMap = new Map();
+
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const value = cursor.value || {};
+          const dateKey = value.dateKey;
+          const items = Array.isArray(value.items) ? value.items : [];
+          const retainedItems = (startTime || endTime)
+            ? items.filter((item) => {
+              const timestamp = getBrowsingHistoryRecordTimestamp(item);
+              if (!timestamp) return true;
+              if (startTime && timestamp < startTime) return true;
+              if (endTime && timestamp > endTime) return true;
+              return false;
+            })
+            : [];
+          if (dateKey && retainedItems.length) {
+            retainedMap.set(dateKey, retainedItems);
+          }
+          cursor.delete();
+          cursor.continue();
+          return;
+        }
+
+        const dateKeys = new Set([...retainedMap.keys(), ...recordsMap.keys()]);
+        for (const dateKey of Array.from(dateKeys).sort((a, b) => a.localeCompare(b))) {
+          if (!dateKey || dateKey < startDateKey || dateKey > endDateKey) continue;
+          const items = mergeBrowsingHistoryRecordItems(
+            retainedMap.get(dateKey) || [],
+            recordsMap.get(dateKey) || []
+          );
+          if (items.length) {
+            recordsStore.put({ dateKey, items });
+          }
+        }
+        putBrowsingHistoryCacheMeta(metaStore, lastSyncTime || Date.now(), metaMode);
+      };
+      request.onerror = () => finish(false);
+      tx.oncomplete = () => finish(true);
+      tx.onerror = () => finish(false);
+      tx.onabort = () => finish(false);
+    } catch (error) {
+      console.warn('[Background][HistoryCache] replace range in DB failed:', error);
+      finish(false);
+    }
+  });
+}
+
+async function replaceBrowsingHistoryCacheRange(recordsMap, lastSyncTime, startDateKey, endDateKey, startTime = 0, endTime = 0, metaMode = 'full') {
+  if (!recordsMap || !startDateKey || !endDateKey) return false;
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const ok = await replaceBrowsingHistoryCacheRangeInIDB(recordsMap, lastSyncTime, startDateKey, endDateKey, startTime, endTime, metaMode);
+    if (ok) {
+      await removeBrowsingHistoryLegacyStorageCache();
+      return true;
+    }
+  }
+
+  try {
+    const result = await browserAPI.storage.local.get([BROWSING_HISTORY_CACHE_KEY]);
+    const existing = result && result[BROWSING_HISTORY_CACHE_KEY] ? result[BROWSING_HISTORY_CACHE_KEY] : { lastSyncTime: 0, records: [] };
+    const mergedMap = new Map(existing.records || []);
+    const retainedMap = new Map();
+    for (const dateKey of Array.from(mergedMap.keys())) {
+      if (dateKey >= startDateKey && dateKey <= endDateKey) {
+        const items = mergedMap.get(dateKey) || [];
+        const retainedItems = (startTime || endTime)
+          ? items.filter((item) => {
+            const timestamp = getBrowsingHistoryRecordTimestamp(item);
+            if (!timestamp) return true;
+            if (startTime && timestamp < startTime) return true;
+            if (endTime && timestamp > endTime) return true;
+            return false;
+          })
+          : [];
+        if (retainedItems.length) {
+          retainedMap.set(dateKey, retainedItems);
+        }
+        mergedMap.delete(dateKey);
+      }
+    }
+    for (const [dateKey, items] of recordsMap.entries()) {
+      if (!dateKey || dateKey < startDateKey || dateKey > endDateKey) continue;
+      mergedMap.set(dateKey, mergeBrowsingHistoryRecordItems(retainedMap.get(dateKey) || [], items || []));
+      retainedMap.delete(dateKey);
+    }
+    for (const [dateKey, items] of retainedMap.entries()) {
+      mergedMap.set(dateKey, items);
+    }
+    const recordsPayload = Array.from(mergedMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const payload = applyBrowsingHistoryCachePayloadMeta({ records: recordsPayload }, lastSyncTime || Date.now(), metaMode, existing);
+    await browserAPI.storage.local.set({ [BROWSING_HISTORY_CACHE_KEY]: payload });
+    return true;
+  } catch (error) {
+    console.warn('[Background][HistoryCache] fallback replace range failed:', error);
+    return false;
+  }
+}
+
+async function removeBrowsingHistoryCacheUrlsFromIDB(urls) {
+  const urlSet = new Set((Array.isArray(urls) ? urls : []).filter(Boolean));
+  if (urlSet.size === 0) return { success: true, deletedCount: 0 };
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return { success: false, deletedCount: 0 };
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE], 'readwrite');
+      const store = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+      const request = store.openCursor();
+      let deletedCount = 0;
+
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor) return;
+
+        const value = cursor.value || {};
+        const items = Array.isArray(value.items) ? value.items : [];
+        const remaining = items.filter((item) => {
+          const shouldDelete = urlSet.has(item?.url);
+          if (shouldDelete) deletedCount += 1;
+          return !shouldDelete;
+        });
+
+        if (remaining.length !== items.length) {
+          if (remaining.length) {
+            cursor.update({ ...value, items: remaining });
+          } else {
+            cursor.delete();
+          }
+        }
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve({ success: true, deletedCount });
+      tx.onerror = () => resolve({ success: false, deletedCount });
+      tx.onabort = () => resolve({ success: false, deletedCount });
+    } catch (error) {
+      console.warn('[Background][HistoryCache] remove urls from DB failed:', error);
+      resolve({ success: false, deletedCount: 0 });
+    }
+  });
+}
+
+async function removeBrowsingHistoryCacheUrls(urls) {
+  const urlSet = new Set((Array.isArray(urls) ? urls : []).filter(Boolean));
+  if (urlSet.size === 0) return { success: true, deletedCount: 0, remainingCount: 0 };
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const result = await removeBrowsingHistoryCacheUrlsFromIDB(Array.from(urlSet));
+    if (result.success) {
+      await removeBrowsingHistoryLegacyStorageCache();
+      const stats = await getBrowsingHistoryStats();
+      return {
+        success: true,
+        deletedCount: result.deletedCount,
+        remainingCount: stats.recordsCount
+      };
+    }
+  }
+
+  try {
+    const existingCache = await readBrowsingHistoryCache();
+    if (!existingCache || !Array.isArray(existingCache.records)) {
+      return { success: true, deletedCount: 0, remainingCount: 0 };
+    }
+
+    let deletedCount = 0;
+    const remainingRecords = [];
+    for (const [dateKey, items] of existingCache.records) {
+      const safeItems = Array.isArray(items) ? items : [];
+      const remainingItems = safeItems.filter((item) => {
+        const shouldDelete = urlSet.has(item?.url);
+        if (shouldDelete) deletedCount += 1;
+        return !shouldDelete;
+      });
+      if (remainingItems.length) remainingRecords.push([dateKey, remainingItems]);
+    }
+    const remainingCount = remainingRecords.reduce((sum, [, items]) => sum + (items?.length || 0), 0);
+    const payload = applyBrowsingHistoryCachePayloadMeta(
+      { records: remainingRecords },
+      Date.now(),
+      'incremental',
+      existingCache
+    );
+    await browserAPI.storage.local.set({ [BROWSING_HISTORY_CACHE_KEY]: payload });
+    return { success: true, deletedCount, remainingCount };
+  } catch (error) {
+    console.warn('[Background][HistoryCache] fallback remove urls failed:', error);
+    return { success: false, deletedCount: 0, remainingCount: 0, error: error?.message || String(error) };
+  }
+}
+
+async function purgeBrowsingHistoryCacheFromIDB(cutoffDateKey) {
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return { success: false, deletedCount: 0 };
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE], 'readwrite');
+      const store = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+      const range = IDBKeyRange.upperBound(cutoffDateKey, true); // strictly less than cutoffDateKey
+      const request = store.openCursor(range);
+      let deletedCount = 0;
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          deletedCount += cursor.value?.items?.length || 0;
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+      request.onerror = () => finish({ success: false, deletedCount });
+      tx.oncomplete = () => finish({ success: true, deletedCount });
+      tx.onerror = () => finish({ success: false, deletedCount });
+      tx.onabort = () => finish({ success: false, deletedCount });
+    } catch (e) {
+      console.warn('[Background][HistoryCache] purge from IDB exception:', e);
+      finish({ success: false, deletedCount: 0 });
+    }
+  });
+}
+
+async function getBrowsingHistoryStatsFromIDB() {
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE], 'readonly');
+      const store = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+      const request = store.openCursor();
+      let daysCount = 0;
+      let recordsCount = 0;
+      let totalChars = 0;
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          daysCount += 1;
+          const items = cursor.value.items || [];
+          recordsCount += items.length;
+          totalChars += JSON.stringify(cursor.value).length;
+          cursor.continue();
+        } else {
+          resolve({
+            success: true,
+            daysCount,
+            recordsCount,
+            estimatedBytes: totalChars * 2
+          });
+        }
+      };
+      request.onerror = () => resolve(null);
+    } catch (e) {
+      console.warn('[Background][HistoryCache] get stats exception:', e);
+      resolve(null);
+    }
+  });
+}
+
+async function writeBrowsingHistoryCache(payload, metaMode = 'full') {
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const ok = await writeBrowsingHistoryCacheToIDB(payload, metaMode, { replaceExisting: true });
+    if (ok) {
+      await removeBrowsingHistoryLegacyStorageCache();
+      return true;
+    }
   }
   try {
     await browserAPI.storage.local.set({ [BROWSING_HISTORY_CACHE_KEY]: payload });
@@ -2118,11 +2745,128 @@ async function writeBrowsingHistoryCache(payload) {
   }
 }
 
+async function readBrowsingHistoryCacheFromIDB() {
+  const db = await openBrowsingHistoryCacheDB();
+  if (!db) return null;
+
+  return new Promise((resolve) => {
+    const tx = db.transaction([BROWSING_HISTORY_CACHE_DB_STORE, BROWSING_HISTORY_CACHE_DB_META], 'readonly');
+    const recordsStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_STORE);
+    const metaStore = tx.objectStore(BROWSING_HISTORY_CACHE_DB_META);
+    const recordsRequest = recordsStore.getAll();
+    const metaRequest = metaStore.getAll();
+    let records = null;
+    let meta = {};
+    let pending = 2;
+
+    const finish = () => {
+      pending -= 1;
+      if (pending > 0) return;
+      const lastSyncTime = getSafeBrowsingHistoryMetaTime(meta.lastFullSyncTime, meta.lastSyncTime);
+      if (!records || records.length === 0) {
+        resolve(lastSyncTime ? { ...meta, lastSyncTime, records: [] } : null);
+        return;
+      }
+      const normalizedRecords = records.map(entry => [entry.dateKey, entry.items || []]);
+      resolve({ ...meta, lastSyncTime, records: normalizedRecords });
+    };
+
+    recordsRequest.onsuccess = () => {
+      records = recordsRequest.result || [];
+      finish();
+    };
+    recordsRequest.onerror = () => {
+      records = null;
+      finish();
+    };
+    metaRequest.onsuccess = () => {
+      meta = {};
+      for (const entry of (metaRequest.result || [])) {
+        if (entry?.key) meta[entry.key] = entry.value || 0;
+      }
+      finish();
+    };
+    metaRequest.onerror = () => {
+      meta = {};
+      finish();
+    };
+  });
+}
+
+async function readBrowsingHistoryCache() {
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const cached = await readBrowsingHistoryCacheFromIDB();
+    if (cached) return cached;
+  }
+  try {
+    const result = await browserAPI.storage.local.get([BROWSING_HISTORY_CACHE_KEY]);
+    return result && result[BROWSING_HISTORY_CACHE_KEY] ? result[BROWSING_HISTORY_CACHE_KEY] : null;
+  } catch (error) {
+    console.warn('[Background][HistoryCache] read storage failed:', error);
+    return null;
+  }
+}
+
+async function purgeBrowsingHistoryCache(cutoffDateKey) {
+  if (!cutoffDateKey) return { success: false, error: 'cutoffDateKey is required' };
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const purgeResult = await purgeBrowsingHistoryCacheFromIDB(cutoffDateKey);
+    if (purgeResult.success) {
+      const stats = await getBrowsingHistoryStats();
+      return {
+        success: true,
+        deletedCount: purgeResult.deletedCount,
+        remainingCount: stats.recordsCount
+      };
+    }
+  }
+
+  // Fallback to storage.local
+  const existingCache = await readBrowsingHistoryCache();
+  if (!existingCache || !Array.isArray(existingCache.records)) return { success: true, deletedCount: 0, remainingCount: 0 };
+
+  const initialCount = existingCache.records.reduce((sum, [, items]) => sum + (items?.length || 0), 0);
+  const remainingRecords = existingCache.records.filter(([dateKey]) => dateKey >= cutoffDateKey);
+  const finalCount = remainingRecords.reduce((sum, [, items]) => sum + (items?.length || 0), 0);
+  const deletedCount = initialCount - finalCount;
+
+  await writeBrowsingHistoryCache(applyBrowsingHistoryCachePayloadMeta(
+    { records: remainingRecords },
+    Date.now(),
+    'incremental',
+    existingCache
+  ), 'incremental');
+
+  return { success: true, deletedCount, remainingCount: finalCount };
+}
+
+async function getBrowsingHistoryStats() {
+  await migrateLegacyBrowsingHistoryCacheToIDB();
+  const idbOk = await openBrowsingHistoryCacheDB();
+  if (idbOk) {
+    const idbStats = await getBrowsingHistoryStatsFromIDB();
+    if (idbStats) return idbStats;
+  }
+
+  const cached = await readBrowsingHistoryCache();
+  if (!cached || !Array.isArray(cached.records)) {
+    return { success: true, daysCount: 0, recordsCount: 0, estimatedBytes: 0 };
+  }
+
+  const daysCount = cached.records.length;
+  const recordsCount = cached.records.reduce((sum, [, items]) => sum + (items?.length || 0), 0);
+  const estimatedBytes = JSON.stringify(cached).length * 2; // approximation (UTF-16 characters)
+
+  return { success: true, daysCount, recordsCount, estimatedBytes };
+}
+
 async function resetBrowsingHistoryCache(lastSyncTime) {
-  const payload = {
-    lastSyncTime: lastSyncTime || Date.now(),
-    records: []
-  };
+  const payload = applyBrowsingHistoryCachePayloadMeta({ records: [] }, lastSyncTime || Date.now(), 'full');
   await writeBrowsingHistoryCache(payload);
 }
 
@@ -2242,6 +2986,160 @@ function addVisitRecord(recordsByDate, visitKeySet, item, visitTime, options = {
   return true;
 }
 
+function buildHistoryVisitRecord(item, visitTime, options = {}) {
+  const safeVisitTime = Number(visitTime || 0);
+  if (!item || !item.url || !safeVisitTime) return null;
+  return {
+    id: options.id || `${item.id || item.url}-${safeVisitTime}`,
+    title: item.title || item.url,
+    url: item.url,
+    dateAdded: safeVisitTime,
+    visitTime: safeVisitTime,
+    visitCount: typeof options.count === 'number' && options.count > 0 ? options.count : 1,
+    typedCount: item.typedCount || 0,
+    folderPath: [],
+    transition: options.transition || '',
+    referringVisitId: options.referringVisitId || null,
+    aggregated: !!options.aggregated
+  };
+}
+
+async function isHistoryItemBookmarkRelated(item) {
+  const url = String(item?.url || '').trim();
+  if (!url || !browserAPI?.bookmarks) return false;
+
+  try {
+    if (typeof browserAPI.bookmarks.search === 'function') {
+      const exactMatches = await browserAPI.bookmarks.search({ url });
+      if (Array.isArray(exactMatches) && exactMatches.length > 0) {
+        return true;
+      }
+    }
+  } catch (_) { }
+
+  const title = String(item?.title || '').trim();
+  if (!title || typeof browserAPI.bookmarks.search !== 'function') return false;
+
+  try {
+    const titleMatches = await browserAPI.bookmarks.search({ title });
+    if (!Array.isArray(titleMatches) || titleMatches.length === 0) return false;
+    const itemDomain = getHistoryUrlDomain(url);
+    if (!itemDomain) return false;
+    for (const bookmark of titleMatches) {
+      const bookmarkTitle = String(bookmark?.title || '').trim();
+      if (bookmarkTitle !== title || !bookmark?.url) continue;
+      if (getHistoryUrlDomain(bookmark.url) === itemDomain) {
+        return true;
+      }
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function recordVisitedHistoryItemToBrowsingCache(item = {}) {
+  const url = String(item?.url || '').trim();
+  const visitTime = Number(item?.lastVisitTime || Date.now());
+  if (!url || !Number.isFinite(visitTime) || visitTime <= 0) return false;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return false;
+  if (!await isHistoryItemBookmarkRelated(item)) return false;
+
+  const record = buildHistoryVisitRecord(item, visitTime, {
+    id: item.id || `${url}-${visitTime}`,
+    transition: item.transition || 'history_on_visited',
+    count: 1
+  });
+  if (!record) return false;
+
+  const dateKey = getHistoryDateKey(visitTime);
+  const recordsMap = new Map([[dateKey, [record]]]);
+  const ok = await mergeBrowsingHistoryCacheRecordsMap(recordsMap, Date.now());
+  if (ok) {
+    notifyBrowsingHistoryCacheChanged('history-visited-incremental', false);
+  }
+  return ok;
+}
+
+async function syncBrowsingHistoryCacheForBookmarkUrls(urls = [], { reason = 'bookmark-url-sync' } = {}) {
+  if (!browserAPI?.history || typeof browserAPI.history.getVisits !== 'function') {
+    return { success: false, skipped: 'history-getVisits-unavailable' };
+  }
+
+  const urlList = Array.from(new Set(
+    (Array.isArray(urls) ? urls : [])
+      .map(url => String(url || '').trim())
+      .filter(url => /^https?:\/\//i.test(url))
+  ));
+  if (urlList.length === 0) {
+    return { success: true, addedCount: 0, urlCount: 0 };
+  }
+
+  const now = Date.now();
+  const hotStartTime = now - 90 * 24 * 60 * 60 * 1000;
+  const recordsByDate = new Map();
+  let addedCount = 0;
+
+  const getBookmarkTitle = async (url) => {
+    try {
+      if (typeof browserAPI.bookmarks?.search !== 'function') return url;
+      const matches = await browserAPI.bookmarks.search({ url });
+      const match = Array.isArray(matches) ? matches.find(item => item?.url === url) : null;
+      return String(match?.title || url).trim() || url;
+    } catch (_) {
+      return url;
+    }
+  };
+
+  const getVisitsAsync = (url) => new Promise((resolve) => {
+    try {
+      browserAPI.history.getVisits({ url }, (visits) => {
+        const err = browserAPI?.runtime?.lastError;
+        if (err) {
+          resolve([]);
+          return;
+        }
+        resolve(Array.isArray(visits) ? visits : []);
+      });
+    } catch (_) {
+      resolve([]);
+    }
+  });
+
+  for (const url of urlList) {
+    const title = await getBookmarkTitle(url);
+    const visits = await getVisitsAsync(url);
+    let inserted = 0;
+    for (const visit of visits) {
+      const visitTime = Number(visit?.visitTime || 0);
+      if (!Number.isFinite(visitTime) || visitTime < hotStartTime || visitTime > now) continue;
+      const record = buildHistoryVisitRecord({ url, title }, visitTime, {
+        id: `${url}-${visit?.visitId || visitTime}-${inserted}`,
+        transition: visit?.transition || reason,
+        referringVisitId: visit?.referringVisitId || null,
+        count: 1
+      });
+      if (!record) continue;
+      const dateKey = getHistoryDateKey(visitTime);
+      if (!recordsByDate.has(dateKey)) recordsByDate.set(dateKey, []);
+      recordsByDate.get(dateKey).push(record);
+      inserted += 1;
+      addedCount += 1;
+      if (BROWSING_HISTORY_MAX_VISITS_PER_URL && inserted >= BROWSING_HISTORY_MAX_VISITS_PER_URL) break;
+    }
+  }
+
+  if (recordsByDate.size === 0) {
+    return { success: true, addedCount: 0, urlCount: urlList.length };
+  }
+
+  const ok = await mergeBrowsingHistoryCacheRecordsMap(recordsByDate, now);
+  if (ok) {
+    notifyBrowsingHistoryCacheChanged(reason, false);
+  }
+  return { success: ok, addedCount, urlCount: urlList.length };
+}
+
 async function rebuildBrowsingHistoryCache(reason = 'auto') {
   if (!browserAPI.history || !browserAPI.history.search || !browserAPI.bookmarks) return false;
 
@@ -2254,6 +3152,22 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
   }
 
   const now = Date.now();
+
+  // 1. 读取上次同步时间
+  const lastSyncTime = await readBrowsingHistoryLastSyncTime();
+
+  // 2. 智能、自适应拉取范围：
+  // 如果是后台静默同步，根据上次同步至今流逝的时间动态调整拉取范围 (最少 3 天，最多 90 天，额外加上 2 天作为网络/时区缓冲)
+  // 如果用户一个星期没开浏览器，流逝时间为 7 天，自动计算出拉取 9 天，确保不会产生任何数据断链；平时日常使用则仅拉取 3 天，开销极低。
+  let scanDays = 90;
+  if ((reason === 'background-alarm-sync' || reason === 'background-alarm-retry') && lastSyncTime > 0) {
+    const timePassedMs = now - lastSyncTime;
+    const timePassedDays = Math.ceil(timePassedMs / (24 * 60 * 60 * 1000));
+    scanDays = Math.min(90, Math.max(3, timePassedDays + 2));
+  }
+  const scanLimitMs = scanDays * 24 * 60 * 60 * 1000;
+  const apiCutoffTime = now - scanLimitMs;
+
   const lookbackMs = (typeof BROWSING_HISTORY_LOOKBACK_DAYS === 'number' && BROWSING_HISTORY_LOOKBACK_DAYS > 0)
     ? BROWSING_HISTORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
     : 0;
@@ -2264,26 +3178,51 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
     return true;
   }
 
+  // 2. 只向浏览器查询热数据区作为对齐数据
+  const effectiveStartTime = Math.max(cutoffTime, apiCutoffTime);
+  const effectiveEndTime = now;
+  const replaceStartDateKey = getHistoryDateKey(effectiveStartTime);
+  const replaceEndDateKey = getHistoryDateKey(effectiveEndTime);
+
+  let historySearchError = '';
   const fetchHistoryBatch = (startTime, endTime) => new Promise((resolve) => {
-    browserAPI.history.search({
-      text: '',
-      startTime,
-      endTime,
-      maxResults: BROWSING_HISTORY_SEARCH_PAGE_SIZE
-    }, (results) => resolve(results || []));
+    try {
+      browserAPI.history.search({
+        text: '',
+        startTime,
+        endTime,
+        maxResults: BROWSING_HISTORY_SEARCH_PAGE_SIZE
+      }, (results) => {
+        const err = browserAPI?.runtime?.lastError;
+        if (err) {
+          historySearchError = err.message || 'history_search_failed';
+          resolve([]);
+          return;
+        }
+        resolve(Array.isArray(results) ? results : []);
+      });
+    } catch (error) {
+      historySearchError = error?.message || 'history_search_failed';
+      resolve([]);
+    }
   });
 
   const historyItems = [];
-  let pageEnd = now;
-  const effectiveStartTime = cutoffTime || 0;
+  let pageEnd = effectiveEndTime;
+  let historySearchHitLimit = false;
 
   while (pageEnd >= effectiveStartTime) {
     const batch = await fetchHistoryBatch(effectiveStartTime, pageEnd);
+    if (historySearchError) {
+      console.warn('[Background][HistoryCache] history.search failed, keeping existing cache:', historySearchError);
+      return false;
+    }
     if (!batch.length) break;
 
     historyItems.push(...batch);
     if (historyItems.length >= BROWSING_HISTORY_SEARCH_MAX_ITEMS) {
       historyItems.length = BROWSING_HISTORY_SEARCH_MAX_ITEMS;
+      historySearchHitLimit = true;
       break;
     }
 
@@ -2315,7 +3254,12 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
   });
 
   if (!relevantHistoryItems.length) {
-    await resetBrowsingHistoryCache(now);
+    if (historySearchHitLimit) {
+      console.info('[Background][HistoryCache] search hit max items without bookmark matches; keeping existing cache range.');
+      return true;
+    }
+    // 若最近扫描范围内没有匹配到新记录，只替换热区范围，冷数据不动。
+    await replaceBrowsingHistoryCacheRange(new Map(), now, replaceStartDateKey, replaceEndDateKey, effectiveStartTime, effectiveEndTime);
     return true;
   }
 
@@ -2339,7 +3283,7 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
         count: Math.max(item.visitCount || 1, 1),
         aggregated: true,
         id: item.id || item.url
-      }, cutoffTime);
+      }, effectiveStartTime);
     });
   } else {
     const concurrency = Math.max(1, Math.min(8, relevantHistoryItems.length));
@@ -2363,7 +3307,7 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
               transition: visit.transition || '',
               referringVisitId: visit.referringVisitId || null,
               count: 1
-            }, cutoffTime)) {
+            }, effectiveStartTime)) {
               inserted += 1;
             }
             if (BROWSING_HISTORY_MAX_VISITS_PER_URL && inserted >= BROWSING_HISTORY_MAX_VISITS_PER_URL) {
@@ -2377,7 +3321,7 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
             count: Math.max(item.visitCount || 1, 1),
             aggregated: true,
             id: item.id || item.url
-          }, cutoffTime);
+          }, effectiveStartTime);
         }
 
         if (cursor % 100 === 0) {
@@ -2389,26 +3333,36 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
     await Promise.all(Array.from({ length: concurrency }, () => processNext()));
   }
 
-  const recordsPayload = [];
+  // 3. 规范化并增量写入热数据区记录，不触碰冷数据区
+  const normalizedRecordsMap = new Map();
   for (const [dateKey, items] of recordsByDate.entries()) {
     const normalizedItems = items.map(record => ({
       ...record,
       dateAdded: typeof record.dateAdded === 'number' ? record.dateAdded : (record.visitTime || Date.now())
     }));
-    recordsPayload.push([dateKey, normalizedItems]);
+    normalizedRecordsMap.set(dateKey, normalizedItems);
   }
 
-  await writeBrowsingHistoryCache({
-    lastSyncTime: now,
-    records: recordsPayload
-  });
-
+  if (historySearchHitLimit) {
+    await mergeBrowsingHistoryCacheRecordsMap(normalizedRecordsMap, now);
+  } else {
+    await replaceBrowsingHistoryCacheRange(normalizedRecordsMap, now, replaceStartDateKey, replaceEndDateKey, effectiveStartTime, effectiveEndTime);
+  }
 
   return true;
 }
 
-async function runBrowsingHistoryCalibration({ reason = 'auto', clearOnly = false } = {}) {
+async function runBrowsingHistoryCalibration({ reason = 'auto', clearOnly = false, requireIdle = false } = {}) {
   if (browsingCalibrationInProgress) return false;
+
+  if (requireIdle) {
+    const idleState = await queryIdleStateForBookmarkMutationFlush();
+    if (idleState === 'active') {
+      await scheduleHistoryBackgroundSyncRetry(`${reason}-active`);
+      return false;
+    }
+  }
+
   browsingCalibrationInProgress = true;
   try {
     if (clearOnly) {
@@ -2510,15 +3464,44 @@ async function recordInteractionForCalibration({ type = 'open', increment = 1, s
   await saveBrowsingCalibrationState(nextState);
 }
 
+function notifyBrowsingHistoryCacheChanged(reason = 'history-cache-updated', clearOnly = false) {
+  try {
+    const maybePromise = browserAPI.runtime.sendMessage({
+      action: 'browsingCalibrationCompleted',
+      payload: { reason, clearOnly }
+    });
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      maybePromise.catch(() => {});
+    }
+  } catch (_) { }
+}
+
+async function handleBrowsingHistoryVisitRemoved(details = {}) {
+  const urls = Array.isArray(details?.urls) ? details.urls.filter(Boolean) : [];
+  const allHistory = !!details?.allHistory;
+
+  if (!allHistory && urls.length > 0) {
+    const result = await removeBrowsingHistoryCacheUrls(urls);
+    if (result?.success && result.deletedCount > 0) {
+      notifyBrowsingHistoryCacheChanged('history-url-removed', false);
+    }
+  } else if (!allHistory && urls.length === 0) {
+    await runBrowsingHistoryCalibration({ reason: 'history-delete-without-url-list', requireIdle: true });
+  }
+
+  await recordDeletionForCalibration({
+    source: 'history',
+    allHistory,
+    urlCount: urls.length,
+    hasUrlList: urls.length > 0
+  });
+}
+
 if (browserAPI.history && browserAPI.history.onVisitRemoved) {
   browserAPI.history.onVisitRemoved.addListener((details) => {
-    const urls = Array.isArray(details?.urls) ? details.urls : [];
-    recordDeletionForCalibration({
-      source: 'history',
-      allHistory: !!details?.allHistory,
-      urlCount: urls.length,
-      hasUrlList: urls.length > 0
-    }).catch(() => {});
+    handleBrowsingHistoryVisitRemoved(details).catch((error) => {
+      console.warn('[Background][HistoryCache] handle visit removed failed:', error);
+    });
   });
 }
 
@@ -5010,6 +5993,19 @@ function collectRemovedNodeIds(node, bookmarkIdSet, folderIdSet) {
   }
 }
 
+function collectRemovedNodeUrls(node, urlSet) {
+  if (!node || typeof node !== 'object' || !urlSet) return;
+  if (node.url) {
+    const url = String(node.url || '').trim();
+    if (url) urlSet.add(url);
+  }
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      collectRemovedNodeUrls(child, urlSet);
+    }
+  }
+}
+
 function queueRemovedRecommendStatePrune({ bookmarkIds = [], folderIds = [] } = {}) {
   const normalizedBookmarks = normalizeBookmarkIdList(bookmarkIds);
   const normalizedFolders = normalizeBookmarkIdList(folderIds);
@@ -5540,45 +6536,20 @@ let bookmarkUrlIndexBuilding = null;
 let bookmarkUrlIndexStale = false;
 const bookmarkUrlIndex = new Map(); // urlKey -> Set<bookmarkId>
 const bookmarkIdToUrlKey = new Map();
+const bookmarkIdToUrl = new Map();
 
 function clearBookmarkUrlIndex() {
   bookmarkUrlIndex.clear();
   bookmarkIdToUrlKey.clear();
+  bookmarkIdToUrl.clear();
   bookmarkUrlIndexReady = false;
   bookmarkUrlIndexStale = true;
 }
 
 function addBookmarkToUrlIndex(bookmark) {
   if (!bookmark || !bookmark.id || !bookmark.url) return;
+  const bookmarkId = String(bookmark.id);
   const key = normalizeScoreUrlKey(bookmark.url);
-  if (!key) return;
-  let set = bookmarkUrlIndex.get(key);
-  if (!set) {
-    set = new Set();
-    bookmarkUrlIndex.set(key, set);
-  }
-  set.add(bookmark.id);
-  bookmarkIdToUrlKey.set(bookmark.id, key);
-}
-
-function removeBookmarkFromUrlIndex(bookmarkId) {
-  if (!bookmarkId) return;
-  const key = bookmarkIdToUrlKey.get(bookmarkId);
-  if (!key) return;
-  const set = bookmarkUrlIndex.get(key);
-  if (set) {
-    set.delete(bookmarkId);
-    if (set.size === 0) {
-      bookmarkUrlIndex.delete(key);
-    }
-  }
-  bookmarkIdToUrlKey.delete(bookmarkId);
-}
-
-function updateBookmarkUrlIndex(bookmarkId, newUrl) {
-  removeBookmarkFromUrlIndex(bookmarkId);
-  if (!newUrl) return;
-  const key = normalizeScoreUrlKey(newUrl);
   if (!key) return;
   let set = bookmarkUrlIndex.get(key);
   if (!set) {
@@ -5587,12 +6558,52 @@ function updateBookmarkUrlIndex(bookmarkId, newUrl) {
   }
   set.add(bookmarkId);
   bookmarkIdToUrlKey.set(bookmarkId, key);
+  bookmarkIdToUrl.set(bookmarkId, bookmark.url);
+}
+
+function removeBookmarkFromUrlIndex(bookmarkId) {
+  if (!bookmarkId) return '';
+  const safeId = String(bookmarkId);
+  const oldUrl = bookmarkIdToUrl.get(safeId) || '';
+  const key = bookmarkIdToUrlKey.get(safeId);
+  if (!key) {
+    bookmarkIdToUrl.delete(safeId);
+    return oldUrl;
+  }
+  const set = bookmarkUrlIndex.get(key);
+  if (set) {
+    set.delete(safeId);
+    if (set.size === 0) {
+      bookmarkUrlIndex.delete(key);
+    }
+  }
+  bookmarkIdToUrlKey.delete(safeId);
+  bookmarkIdToUrl.delete(safeId);
+  return oldUrl;
+}
+
+function updateBookmarkUrlIndex(bookmarkId, newUrl) {
+  const safeId = String(bookmarkId || '').trim();
+  const oldUrl = removeBookmarkFromUrlIndex(safeId);
+  if (!newUrl || !safeId) return oldUrl;
+  const key = normalizeScoreUrlKey(newUrl);
+  if (!key) return oldUrl;
+  let set = bookmarkUrlIndex.get(key);
+  if (!set) {
+    set = new Set();
+    bookmarkUrlIndex.set(key, set);
+  }
+  set.add(safeId);
+  bookmarkIdToUrlKey.set(safeId, key);
+  bookmarkIdToUrl.set(safeId, newUrl);
+  return oldUrl;
 }
 
 async function buildBookmarkUrlIndex() {
   const tree = await new Promise(resolve => browserAPI.bookmarks.getTree(resolve));
   const nextIndex = new Map();
   const nextIdMap = new Map();
+  const nextUrlMap = new Map();
 
   function traverse(nodes) {
     for (const node of nodes) {
@@ -5604,8 +6615,10 @@ async function buildBookmarkUrlIndex() {
             set = new Set();
             nextIndex.set(key, set);
           }
-          set.add(node.id);
-          nextIdMap.set(node.id, key);
+          const bookmarkId = String(node.id);
+          set.add(bookmarkId);
+          nextIdMap.set(bookmarkId, key);
+          nextUrlMap.set(bookmarkId, node.url);
         }
       }
       if (node.children) traverse(node.children);
@@ -5616,11 +6629,15 @@ async function buildBookmarkUrlIndex() {
 
   bookmarkUrlIndex.clear();
   bookmarkIdToUrlKey.clear();
+  bookmarkIdToUrl.clear();
   for (const [key, set] of nextIndex.entries()) {
     bookmarkUrlIndex.set(key, set);
   }
   for (const [id, key] of nextIdMap.entries()) {
     bookmarkIdToUrlKey.set(id, key);
+  }
+  for (const [id, url] of nextUrlMap.entries()) {
+    bookmarkIdToUrl.set(id, url);
   }
   bookmarkUrlIndexReady = true;
   bookmarkUrlIndexStale = false;
@@ -7434,11 +8451,16 @@ function scheduleRecommendStartupSelfHeal(reason = 'startup') {
   return startupRecommendSelfHealPromise;
 }
 
+ensureBookmarkUrlIndex().catch(() => {});
+
   if (browserAPI.history && browserAPI.history.onVisited) {
     browserAPI.history.onVisited.addListener((result) => {
       if (result && result.url) {
         scheduleScoreUpdateByUrl(result.url);
         invalidateScoreDebugHistoryStatsCache();
+        recordVisitedHistoryItemToBrowsingCache(result).catch((error) => {
+          console.warn('[Background][HistoryCache] incremental visited write failed:', error);
+        });
       }
     });
   }
@@ -7451,6 +8473,9 @@ browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
   if (bookmark.url) {
     addBookmarkToUrlIndex(bookmark);
     queueBookmarkScoreMutation(id, 'created');
+    syncBrowsingHistoryCacheForBookmarkUrls([bookmark.url], { reason: 'bookmark-created-url-sync' }).catch((error) => {
+      console.warn('[Background][HistoryCache] bookmark created history sync failed:', error);
+    });
   }
 });
 
@@ -7459,9 +8484,11 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 
   const removedBookmarkSet = new Set();
   const removedFolderSet = new Set();
+  const removedUrlSet = new Set();
 
   if (removeInfo && removeInfo.node) {
     collectRemovedNodeIds(removeInfo.node, removedBookmarkSet, removedFolderSet);
+    collectRemovedNodeUrls(removeInfo.node, removedUrlSet);
   }
 
   const normalizedId = String(id || '').trim();
@@ -7471,7 +8498,8 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   }
 
   for (const bookmarkId of removedBookmarkSet) {
-    removeBookmarkFromUrlIndex(bookmarkId);
+    const oldUrl = removeBookmarkFromUrlIndex(bookmarkId);
+    if (oldUrl) removedUrlSet.add(oldUrl);
   }
 
   queueRemovedRecommendStatePrune({
@@ -7482,6 +8510,16 @@ browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   if (isBookmarkImporting || isBookmarkBulkChanging) {
     return;
   }
+
+  if (removedUrlSet.size > 0) {
+    removeBrowsingHistoryCacheUrls(Array.from(removedUrlSet)).then((result) => {
+      if (result?.success && result.deletedCount > 0) {
+        notifyBrowsingHistoryCacheChanged('bookmark-removed-url-prune', false);
+      }
+    }).catch((error) => {
+      console.warn('[Background][HistoryCache] bookmark removed prune failed:', error);
+    });
+  }
 });
 
 browserAPI.bookmarks.onChanged.addListener((id, changeInfo) => {
@@ -7491,8 +8529,23 @@ browserAPI.bookmarks.onChanged.addListener((id, changeInfo) => {
   }
   if (changeInfo.url || changeInfo.title) {
     if (changeInfo.url) {
-      updateBookmarkUrlIndex(id, changeInfo.url);
+      const oldUrl = updateBookmarkUrlIndex(id, changeInfo.url);
       queueBookmarkChangedUrlForFavicon(changeInfo.url);
+      const pruneUrls = oldUrl && oldUrl !== changeInfo.url ? [oldUrl] : [];
+      const syncUrls = changeInfo.url ? [changeInfo.url] : [];
+      (async () => {
+        if (pruneUrls.length) {
+          const result = await removeBrowsingHistoryCacheUrls(pruneUrls);
+          if (result?.success && result.deletedCount > 0) {
+            notifyBrowsingHistoryCacheChanged('bookmark-url-changed-prune', false);
+          }
+        }
+        if (syncUrls.length) {
+          await syncBrowsingHistoryCacheForBookmarkUrls(syncUrls, { reason: 'bookmark-url-changed-sync' });
+        }
+      })().catch((error) => {
+        console.warn('[Background][HistoryCache] bookmark url change sync failed:', error);
+      });
     }
     queueBookmarkScoreMutation(id, 'changed');
   }
@@ -8171,6 +9224,65 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         await resetBrowsingCalibrationState(message?.payload?.reason || 'manual');
         sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'runBrowsingHistoryCalibration') {
+    (async () => {
+      try {
+        const payload = message?.payload || {};
+        const ok = await runBrowsingHistoryCalibration({
+          reason: payload.reason || 'manual',
+          clearOnly: payload.clearOnly === true,
+          requireIdle: payload.requireIdle === true
+        });
+        if (ok) {
+          await resetBrowsingCalibrationState(payload.reason || 'manual');
+        }
+        sendResponse({ success: ok === true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'syncBrowsingHistoryCacheForBookmarkUrls') {
+    (async () => {
+      try {
+        const payload = message?.payload || {};
+        const result = await syncBrowsingHistoryCacheForBookmarkUrls(payload.urls || [], {
+          reason: payload.reason || 'manual-url-sync'
+        });
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'purgeBrowsingHistoryCache') {
+    (async () => {
+      try {
+        const result = await purgeBrowsingHistoryCache(message?.payload?.cutoffDateKey);
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (action === 'getBrowsingHistoryStats') {
+    (async () => {
+      try {
+        const result = await getBrowsingHistoryStats();
+        sendResponse(result);
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });
       }
