@@ -2059,6 +2059,12 @@ async function hydrateBrowsingDateMapForDateMeta(calendar, dateMeta) {
     if (!calendar || !calendar.bookmarksByDate || typeof readHistoryCacheRange !== 'function') {
         return false;
     }
+    if (
+        typeof calendar.buildBookmarkClickReferenceSets !== 'function' ||
+        typeof calendar.isBookmarkClickRecord !== 'function'
+    ) {
+        return false;
+    }
 
     const range = getDateMetaSearchRange(dateMeta);
     if (!range || !range.startKey || !range.endKey) return false;
@@ -2072,27 +2078,47 @@ async function hydrateBrowsingDateMapForDateMeta(calendar, dateMeta) {
 
     if (!cached || !Array.isArray(cached.records) || !cached.records.length) return false;
 
+    const refs = await calendar.buildBookmarkClickReferenceSets();
     let changed = false;
+    let processed = 0;
+    const shouldYield = typeof shouldYieldBrowsingClickDerivation === 'function'
+        ? shouldYieldBrowsingClickDerivation
+        : () => false;
+    const yieldToBrowser = typeof yieldBrowsingClickDerivation === 'function'
+        ? yieldBrowsingClickDerivation
+        : async () => {};
 
-    cached.records.forEach((entry) => {
-        if (!Array.isArray(entry) || entry.length < 2) return;
+    for (const entry of cached.records) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
 
         const dateKeyRaw = entry[0];
         const recordsRaw = entry[1];
         const normalizedDateKey = normalizeDateKey(dateKeyRaw);
-        if (!normalizedDateKey || !Array.isArray(recordsRaw) || !recordsRaw.length) return;
+        if (!normalizedDateKey || !Array.isArray(recordsRaw) || !recordsRaw.length) continue;
 
-        const incoming = recordsRaw
-            .map((record) => normalizeBrowsingCacheRecord(record))
-            .filter(Boolean);
+        const incoming = [];
+        for (const rawRecord of recordsRaw) {
+            processed += 1;
+            const record = normalizeBrowsingCacheRecord(rawRecord);
+            if (record && calendar.isBookmarkClickRecord(record, refs)) {
+                if (typeof calendar.normalizeBookmarkClickRecord === 'function') {
+                    incoming.push(calendar.normalizeBookmarkClickRecord(record));
+                } else {
+                    incoming.push(record);
+                }
+            }
+            if (shouldYield(processed)) {
+                await yieldToBrowser();
+            }
+        }
 
-        if (!incoming.length) return;
+        if (!incoming.length) continue;
 
         const existing = calendar.bookmarksByDate.get(normalizedDateKey);
         if (!Array.isArray(existing) || existing.length === 0) {
             calendar.bookmarksByDate.set(normalizedDateKey, incoming);
             changed = true;
-            return;
+            continue;
         }
 
         const seen = new Set(existing.map((record) => {
@@ -2113,7 +2139,7 @@ async function hydrateBrowsingDateMapForDateMeta(calendar, dateMeta) {
         });
 
         if (merged) changed = true;
-    });
+    }
 
     return changed;
 }

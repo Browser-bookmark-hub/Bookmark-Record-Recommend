@@ -5,6 +5,7 @@
   "version": "0.3.9",
   "description": "__MSG_extensionDescription__",
   "author": "kwenxu",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqw8JJdVheaCG6eKCy4exYG27+RY2yiX9eK1zXPQmGfQmIl3ChrTNKy1xcpkqslqvtSo87N6hxCm9d3tr3hSHsvkkJ4z6hFfmTjDoqk4sQJpsOT+CD/ufpUtu/L/h1MGXrzb0ubfGIVnZZgF6ThYw/+LQt9sH/CE4cYjDhllyJd6U2ADLsYfmBZmvXMJrbsJ/tn0qjsyehAdQUwP7s9kS8QwbqizMH3wEZ9LNrmaRx5Dyf1Jkiyp2Zd5t3fnIqO6TVyDeLyjYjf1GU7Ll3Ju9h0eYkTs4+O4yXJjL6TJYPPS0I9Jq1aQAJR3EwvlJUbjz6TeSQEPEdWcYB6BXAfx8mQIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

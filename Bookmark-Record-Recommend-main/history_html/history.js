@@ -204,8 +204,8 @@ const SYNC_AGENT_DOC_TEMPLATE = `# Bookmark Record and Recommend AI 规则
 5. 输出结论时，必须标注引用的 pushId、短 commit SHA 与对应路径。
 
 ## 4. 数据口径与边界
-- \`bookmark-record.data.clickRecords\` 不是完整浏览器历史；它是从 Chrome History API 或缓存中筛选出的“能匹配当前书签”的访问记录。匹配方式、上限与截断状态看 \`bookmark-record.data.clickRecords.meta\` 和 manifest。
-- \`data/raw-native/history-visits.jsonl\` 也是书签相关访问事实源，不要当作用户完整浏览历史。
+- \`bookmark-record.data.clickRecords\` 是由当前书签树 + 浏览历史事实源派生出的书签点击记录，只包含能匹配当前书签的访问记录。匹配方式、原始来源与原始记录数看 \`bookmark-record.data.clickRecords.meta\` 和 manifest。
+- \`data/raw-native/history-visits.jsonl\` 是完整浏览访问事实源；bookmarkId 只有在能匹配当前书签时才存在，不能假设每条记录都对应书签，也不要把它直接当作书签点击记录。
 - 时间捕捉只使用 \`bookmark-record.data.timeTracking.rankings\` 里已导出的当前时间排行；正在捕捉的活跃会话不会进入推送包，不要假设它存在，也不要从原始 tracking 明细重算一套排行。
 - 推荐分数缓存状态看 \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`：包括 \`recommendScoresTime\`、\`staleMeta\`、\`ensureResult\`、\`templateScoreCount\`、\`templateScoreRatio\`。template 分是临时可用分，解释优先级时要标注不确定性。
 - \`recommend_reviews_similar\` 可能为 null；必须查看 \`recommend_reviews_similar_meta\` 的 \`available/source/skippedReason\`，不要把“未生成相似候选”解释成“没有相似书签”。
@@ -242,7 +242,7 @@ const SYNC_AGENT_DOC_TEMPLATE = `# Bookmark Record and Recommend AI 规则
 2. 读取 \`data/manifest.json\`，确认 \`pushId\`、可用文件、记录数、截断状态与 \`readOrder\`。
 3. 优先读取 \`bookmark-recommend.json\` 的 \`summary\` 与 \`data.signals\`，先处理 \`blockedSummary\`、\`reviewTargets\`、\`postponedTargets\`、\`currentCards\`、\`scoreLeaders\`、\`skippedTargets\`。
 4. 再读取 \`bookmark-record.json\` 的 \`summary\` 与 \`data.signals\`，用 \`recentClicks\`、\`unopenedAdditions\`、\`recentUnopenedAdditions\`、\`topClickedDomains\`、\`topClickedFolders\`、\`topAddedFolders\`、\`timeTracking.rankings\` 补充行为证据。
-5. 用 \`bookmarkId\` 作为四个文件的共同主键反查，不要用标题做跨文件匹配：\`bookmark-recommend.signals.*.items[].id\`、\`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`、\`bookmarks-tree.records[].id\`、\`history-visits.jsonl[].bookmarkId\` 都等于纯 bookmarkId；\`bookmark-record.clickRecords.rows[].id\` 形如 \`<bookmarkId>-<visitId>-<seq>\`，取连字符前的第一段即可还原 bookmarkId；原生 \`history-visits.jsonl\` 不含独立 visitId，需要把单条点击精确对位到原生访问时用 \`bookmarkId + visitTime\` 组合定位。\`bookmarks-tree.json\` 与 \`history-visits.jsonl\` 只用于核验和补字段。
+5. 用 \`bookmarkId\` 作为跨包主键时必须先确认字段存在，不要用标题做跨文件匹配：\`bookmark-recommend.signals.*.items[].id\`、\`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`、\`bookmarks-tree.records[].id\` 都等于纯 bookmarkId；\`history-visits.jsonl[].bookmarkId\` 只有在原记录有真实 bookmarkId 时才存在，后台校准记录可能为 null；\`bookmark-record.clickRecords.rows[].id\` 可能是复合 visit id，不要把它直接当 bookmarkId。精确对位访问记录时优先用 \`bookmarkId + visitTime\`，bookmarkId 缺失时退回 \`url + visitTime\`。\`bookmarks-tree.json\` 与 \`history-visits.jsonl\` 只用于核验和补字段。
 6. 输出时说明每个建议来自哪些本地信号；需要判断外部价值、时效或替代方案时，再按第 7 节进行网络搜索。
 
 ## 7. 网络搜索作为第二证据层
@@ -308,8 +308,8 @@ All sync files live under the \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` folder in the GitH
 5. Always cite pushId, short commit SHA, and file paths in conclusions.
 
 ## 4. Data Semantics and Limits
-- \`bookmark-record.data.clickRecords\` is not full browser history. It is the subset of Chrome History API/cache records that can be matched back to current bookmarks. Check \`bookmark-record.data.clickRecords.meta\` and manifest for match methods, limits, and truncation.
-- \`data/raw-native/history-visits.jsonl\` is also bookmark-related visit facts, not the user's complete browsing history.
+- \`bookmark-record.data.clickRecords\` is derived from the current bookmark tree plus the browsing-history fact source. It contains only visits that match current bookmarks. Check \`bookmark-record.data.clickRecords.meta\` and manifest for match methods, raw source, and raw record counts.
+- \`data/raw-native/history-visits.jsonl\` is the complete browsing-visit fact source; bookmarkId exists only when the visit can be matched to a current bookmark. Do not treat it directly as bookmark click records.
 - For time tracking, use only the exported current ranking at \`bookmark-record.data.timeTracking.rankings\`. Active in-progress capture sessions are intentionally not pushed; do not assume they exist, and do not recompute a separate ranking from raw tracking details.
 - For recommendation score freshness, read \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`: \`recommendScoresTime\`, \`staleMeta\`, \`ensureResult\`, \`templateScoreCount\`, and \`templateScoreRatio\`. Template scores are temporary usable scores; mark uncertainty when interpreting priority.
 - \`recommend_reviews_similar\` may be null. Always inspect \`recommend_reviews_similar_meta.available/source/skippedReason\`; do not treat missing similar candidates as proof that no similar bookmarks exist.
@@ -345,7 +345,7 @@ When analyzing a sync data package, follow this basic flow instead of linearly r
 2. Read \`data/manifest.json\` to confirm \`pushId\`, available files, record counts, truncation status, and \`readOrder\`.
 3. Read \`bookmark-recommend.json\` \`summary\` and \`data.signals\` first, handling \`blockedSummary\`, \`reviewTargets\`, \`postponedTargets\`, \`currentCards\`, \`scoreLeaders\`, and \`skippedTargets\`.
 4. Then read \`bookmark-record.json\` \`summary\` and \`data.signals\`, using \`recentClicks\`, \`unopenedAdditions\`, \`recentUnopenedAdditions\`, \`topClickedDomains\`, \`topClickedFolders\`, \`topAddedFolders\`, and \`timeTracking.rankings\` as behavioral evidence.
-5. Use \`bookmarkId\` as the shared primary key across the four files; never match by title across files. \`bookmark-recommend.signals.*.items[].id\`, \`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`, \`bookmarks-tree.records[].id\`, and \`history-visits.jsonl[].bookmarkId\` are all the plain bookmarkId. \`bookmark-record.clickRecords.rows[].id\` is composite \`<bookmarkId>-<visitId>-<seq>\`; take the first hyphen-separated segment to recover the bookmarkId. The raw \`history-visits.jsonl\` does not carry an independent visitId; to map a single click row precisely to a raw visit, use \`bookmarkId + visitTime\`. \`bookmarks-tree.json\` and \`history-visits.jsonl\` are only for verification and missing fields.
+5. Use \`bookmarkId\` as a cross-package key only after confirming the field exists; never match by title across files. \`bookmark-recommend.signals.*.items[].id\`, \`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`, and \`bookmarks-tree.records[].id\` are plain bookmarkIds. \`history-visits.jsonl[].bookmarkId\` exists only when the source row has a real bookmarkId; background-calibrated rows may be null. \`bookmark-record.clickRecords.rows[].id\` may be a composite visit id, so do not treat it directly as bookmarkId. To align a visit precisely, prefer \`bookmarkId + visitTime\`; when bookmarkId is missing, fall back to \`url + visitTime\`. \`bookmarks-tree.json\` and \`history-visits.jsonl\` are only for verification and missing fields.
 6. In the output, explain which local signals support each suggestion. When external value, freshness, or alternatives matter, use web search according to section 7.
 
 ## 7. Web Search as a Second Evidence Layer
@@ -561,6 +561,8 @@ let currentTimeFilter = 'all'; // 'all', 'year', 'month', 'day'
 let allBookmarks = [];
 let currentBookmarkData = null;
 let browsingClickRankingStats = null; // 点击排行缓存（基于浏览器历史记录）
+let browsingClickRankingStatsCache = new Map();
+let browsingClickRankingStatsPromises = new Map();
 let browsingClickRankingRetryTimer = null;
 const BROWSING_RANKING_TRANSIENT_RETRY_MS = 1200;
 const BROWSING_RANKING_TRANSIENT_CACHE_TTL_MS = 2600;
@@ -627,8 +629,11 @@ let heatmapBookmarkMapCache = {
 let saveAdditionsCacheTimer = null;
 let saveAdditionsWidgetsSnapshotTimer = null;
 let browsingHistoryRefreshPromise = null;
+let browsingHistoryCacheRefreshPromise = null;
+let browsingHistoryCacheRefreshTimer = null;
 let additionsTreeRefreshInFlight = null;
 let additionsCacheLoadPromise = null;
+const BROWSING_HISTORY_CACHE_REFRESH_DELAY_MS = 350;
 
 function readLocalNumber(key, fallback = 0) {
     try {
@@ -1088,6 +1093,21 @@ function moveBookmarkInAdditionsCache(bookmarkId, moveInfo = {}) {
     handleAdditionsDataMutation(false);
 }
 
+function markBookmarkReferenceDerivedDataStale(reason = 'bookmark-change') {
+    try {
+        resetBrowsingRankingDerivedCache();
+    } catch (_) { }
+    try {
+        markBrowsingRelatedSnapshotStale(reason);
+    } catch (_) { }
+    try {
+        clearWidgetsTrendDataCaches({ historyOnly: true });
+    } catch (_) { }
+    try {
+        markWidgetsDirty(['ranking', 'related'], { delayMs: 120 });
+    } catch (_) { }
+}
+
 function normalizeBookmarkTitle(title) {
     if (!title || typeof title !== 'string') return null;
     const trimmed = title.trim();
@@ -1194,6 +1214,11 @@ let historyRealtimeBound = false;
 let messageListenerRegistered = false;
 let historyPollingTimer = null;
 let bookmarkListenerRegistered = false;
+let bookmarkListenerImporting = false;
+let bookmarkListenerBulkMode = false;
+let bookmarkListenerBulkWindowStart = 0;
+let bookmarkListenerBulkEventCount = 0;
+let bookmarkListenerBulkRefreshTimer = null;
 let storageListenerRegistered = false;
 let lastRecommendCardsRefreshAt = 0;
 let recommendCardsRefreshDebounceMs = 900;
@@ -1204,6 +1229,57 @@ let recommendCandidatesPreloadTimer = null;
 let recommendCandidatesPreloadInFlight = false;
 let recommendCandidatesPreloadQueuedLimit = 0;
 let recommendCandidatesPreloadLastRunAt = 0;
+
+const BOOKMARK_LISTENER_BULK_WINDOW_MS = 800;
+const BOOKMARK_LISTENER_BULK_THRESHOLD = 120;
+const BOOKMARK_LISTENER_BULK_QUIET_MS = 1200;
+
+function scheduleBookmarkListenerBulkRefresh(reason = 'bookmark-bulk-change') {
+    if (bookmarkListenerBulkRefreshTimer) {
+        clearTimeout(bookmarkListenerBulkRefreshTimer);
+    }
+    bookmarkListenerBulkRefreshTimer = setTimeout(async () => {
+        bookmarkListenerBulkRefreshTimer = null;
+        if (bookmarkListenerImporting) {
+            scheduleBookmarkListenerBulkRefresh(reason);
+            return;
+        }
+
+        bookmarkListenerBulkMode = false;
+        bookmarkListenerBulkWindowStart = 0;
+        bookmarkListenerBulkEventCount = 0;
+
+        try {
+            cachedBookmarkTree = null;
+            await refreshAdditionsDataFromTree({ renderAfter: currentView === 'additions' });
+            markBookmarkReferenceDerivedDataStale(reason);
+        } catch (error) {
+            console.warn('[书签监听] 批量刷新失败:', error);
+        }
+    }, BOOKMARK_LISTENER_BULK_QUIET_MS);
+}
+
+function shouldDeferBookmarkListenerEvent(eventType = 'bookmark-change') {
+    if (bookmarkListenerImporting || bookmarkListenerBulkMode) {
+        scheduleBookmarkListenerBulkRefresh(eventType);
+        return true;
+    }
+
+    const now = Date.now();
+    if (!bookmarkListenerBulkWindowStart || now - bookmarkListenerBulkWindowStart > BOOKMARK_LISTENER_BULK_WINDOW_MS) {
+        bookmarkListenerBulkWindowStart = now;
+        bookmarkListenerBulkEventCount = 0;
+    }
+
+    bookmarkListenerBulkEventCount += 1;
+    if (bookmarkListenerBulkEventCount >= BOOKMARK_LISTENER_BULK_THRESHOLD) {
+        bookmarkListenerBulkMode = true;
+        scheduleBookmarkListenerBulkRefresh(eventType);
+        return true;
+    }
+
+    return false;
+}
 
 function ensureHistoryPolling() {
     if (historyPollingTimer) return;
@@ -1240,12 +1316,61 @@ function setupBrowsingHistoryRealtimeListeners() {
     }
 }
 
+function sendRuntimeMessage(message) {
+    return new Promise((resolve) => {
+        try {
+            if (!browserAPI?.runtime || typeof browserAPI.runtime.sendMessage !== 'function') {
+                resolve({ success: false, error: 'runtime_unavailable' });
+                return;
+            }
+            const maybePromise = browserAPI.runtime.sendMessage(message, (response) => {
+                const err = browserAPI.runtime?.lastError;
+                if (err) {
+                    resolve({ success: false, error: err.message || 'runtime_last_error' });
+                    return;
+                }
+                resolve(response || { success: true });
+            });
+            if (maybePromise && typeof maybePromise.then === 'function') {
+                maybePromise.then(response => resolve(response || { success: true })).catch(error => {
+                    resolve({ success: false, error: error?.message || String(error) });
+                });
+            }
+        } catch (error) {
+            resolve({ success: false, error: error?.message || String(error) });
+        }
+    });
+}
+
+async function requestBrowsingHistoryBackgroundCalibration({ reason = 'manual', clearOnly = false, requireIdle = false } = {}) {
+    return sendRuntimeMessage({
+        action: 'runBrowsingHistoryCalibration',
+        payload: { reason, clearOnly, requireIdle }
+    });
+}
+
+async function reloadBrowsingHistoryInstanceFromCache(inst) {
+    if (!inst) return;
+    if (inst.useNewArchitecture && inst.dbManager && typeof inst.syncFromDatabaseManager === 'function') {
+        await inst.syncFromDatabaseManager();
+    } else if (typeof inst.getViewDateRange === 'function' && typeof inst.getRangeKeys === 'function' && typeof inst.loadViewRangeFromCache === 'function') {
+        const range = inst.getViewDateRange();
+        if (range) {
+            const { startKey, endKey } = inst.getRangeKeys(range);
+            await inst.loadViewRangeFromCache(startKey, endKey);
+        }
+    }
+    if (typeof inst.render === 'function') inst.render();
+    if (typeof inst.updateSelectModeButton === 'function') inst.updateSelectModeButton();
+}
+
 async function refreshBrowsingHistoryData(options = {}) {
     const { forceFull = false, silent = false } = options;
     const inst = window.browsingHistoryCalendarInstance;
-    if (!inst || typeof inst.loadBookmarkData !== 'function') {
+    if (!inst) {
         return;
     }
+    cancelScheduledBrowsingHistoryCacheRefresh();
 
     if (browsingHistoryRefreshPromise) {
         try {
@@ -1254,20 +1379,22 @@ async function refreshBrowsingHistoryData(options = {}) {
         }
     }
 
-    const incremental = !forceFull && !!(inst.historyCacheMeta && inst.historyCacheMeta.lastSyncTime);
     browsingHistoryRefreshPromise = (async () => {
         try {
-            await inst.loadBookmarkData({ incremental });
+            if (forceFull) {
+                const result = await requestBrowsingHistoryBackgroundCalibration({
+                    reason: 'manual-foreground-refresh',
+                    requireIdle: false
+                });
+                if (!result?.success) {
+                    throw new Error(result?.error || 'background_calibration_failed');
+                }
+            }
+
+            await reloadBrowsingHistoryInstanceFromCache(inst);
 
             if (typeof rebuildBookmarkUrlSet === 'function' && allBookmarks.length > 0) {
                 rebuildBookmarkUrlSet();
-            }
-
-            if (typeof inst.render === 'function') {
-                inst.render();
-            }
-            if (typeof inst.updateSelectModeButton === 'function') {
-                inst.updateSelectModeButton();
             }
 
             resetBrowsingRankingDerivedCache();
@@ -1293,6 +1420,11 @@ async function refreshBrowsingHistoryData(options = {}) {
 async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
     const inst = window.browsingHistoryCalendarInstance;
     if (!inst) return;
+    cancelScheduledBrowsingHistoryCacheRefresh();
+
+    if (browsingHistoryCacheRefreshPromise) {
+        return browsingHistoryCacheRefreshPromise;
+    }
 
     if (browsingHistoryRefreshPromise) {
         try {
@@ -1300,31 +1432,41 @@ async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
         } catch (_) { }
     }
 
-    try {
-        if (inst.useNewArchitecture && inst.dbManager && typeof inst.syncFromDatabaseManager === 'function') {
-            inst.syncFromDatabaseManager();
-            if (typeof inst.render === 'function') inst.render();
-            if (typeof inst.updateSelectModeButton === 'function') inst.updateSelectModeButton();
-        } else if (typeof inst.getViewDateRange === 'function' && typeof inst.getRangeKeys === 'function' && typeof inst.loadViewRangeFromCache === 'function') {
-            const range = inst.getViewDateRange();
-            if (range) {
-                const { startKey, endKey } = inst.getRangeKeys(range);
-                await inst.loadViewRangeFromCache(startKey, endKey);
-                if (typeof inst.render === 'function') inst.render();
-                if (typeof inst.updateSelectModeButton === 'function') inst.updateSelectModeButton();
-            }
-        }
+    browsingHistoryCacheRefreshPromise = (async () => {
+        try {
+            await reloadBrowsingHistoryInstanceFromCache(inst);
 
-        resetBrowsingRankingDerivedCache();
-        markBrowsingRelatedSnapshotStale('history-refresh-from-cache');
-        clearWidgetsTrendDataCaches({ historyOnly: true });
-        markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
-        document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
-    } catch (error) {
-        if (!silent) {
-            console.warn('[BrowsingHistory] 缓存刷新失败:', error);
+            resetBrowsingRankingDerivedCache();
+            markBrowsingRelatedSnapshotStale('history-refresh-from-cache');
+            clearWidgetsTrendDataCaches({ historyOnly: true });
+            markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
+            document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
+        } catch (error) {
+            if (!silent) {
+                console.warn('[BrowsingHistory] 缓存刷新失败:', error);
+            }
+        } finally {
+            browsingHistoryCacheRefreshPromise = null;
         }
+    })();
+
+    return browsingHistoryCacheRefreshPromise;
+}
+
+function scheduleBrowsingHistoryCacheRefresh(options = {}) {
+    if (browsingHistoryCacheRefreshTimer) {
+        clearTimeout(browsingHistoryCacheRefreshTimer);
     }
+    browsingHistoryCacheRefreshTimer = setTimeout(() => {
+        browsingHistoryCacheRefreshTimer = null;
+        refreshBrowsingHistoryFromCache(options).catch(() => { });
+    }, BROWSING_HISTORY_CACHE_REFRESH_DELAY_MS);
+}
+
+function cancelScheduledBrowsingHistoryCacheRefresh() {
+    if (!browsingHistoryCacheRefreshTimer) return;
+    clearTimeout(browsingHistoryCacheRefreshTimer);
+    browsingHistoryCacheRefreshTimer = null;
 }
 
 // =============================================================================
@@ -1332,14 +1474,17 @@ async function refreshBrowsingHistoryFromCache({ silent = true } = {}) {
 // =============================================================================
 
 const BROWSING_CALIBRATION_RECOMMENDED = {
-    deleteThreshold: 15,
-    openThreshold: 50
+    deleteThreshold: 50,
+    openThreshold: 200
 };
 
 const DEFAULT_BROWSING_CALIBRATION_SETTINGS = {
     autoEnabled: true,
     deleteThreshold: BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold,
-    openThreshold: 0,
+    openThreshold: BROWSING_CALIBRATION_RECOMMENDED.openThreshold,
+    scheduledCalibrationEnabled: true,
+    scheduledCalibrationTime: '15:30',
+    scheduledCalibrationRequireIdle: true,
     lastCalibrationTime: 0
 };
 
@@ -1355,10 +1500,15 @@ function normalizeBrowsingCalibrationSettings(raw = {}) {
     const hasOpen = Object.prototype.hasOwnProperty.call(raw || {}, 'openThreshold');
     const hasClick = Object.prototype.hasOwnProperty.call(raw || {}, 'clickThreshold');
     const hasAutoEnabled = Object.prototype.hasOwnProperty.call(raw || {}, 'autoEnabled');
+    const hasOpenUserConfigured = Object.prototype.hasOwnProperty.call(raw || {}, 'openThresholdUserConfigured');
     const autoDisabled = hasAutoEnabled ? raw.autoEnabled === false : false;
 
     if (!hasOpen && hasClick) {
         settings.openThreshold = raw.clickThreshold;
+    }
+
+    if (hasOpen && !hasClick && !hasOpenUserConfigured && !autoDisabled && parseInt(raw.openThreshold, 10) === 0) {
+        settings.openThreshold = DEFAULT_BROWSING_CALIBRATION_SETTINGS.openThreshold;
     }
 
     if (raw && autoDisabled) {
@@ -1368,7 +1518,19 @@ function normalizeBrowsingCalibrationSettings(raw = {}) {
 
     settings.deleteThreshold = Math.max(0, parseInt(settings.deleteThreshold, 10) || 0);
     settings.openThreshold = Math.max(0, parseInt(settings.openThreshold, 10) || 0);
+    settings.scheduledCalibrationEnabled = settings.scheduledCalibrationEnabled !== false;
+    settings.scheduledCalibrationTime = normalizeBrowsingCalibrationTime(settings.scheduledCalibrationTime);
+    settings.scheduledCalibrationRequireIdle = settings.scheduledCalibrationRequireIdle === true;
     return settings;
+}
+
+function normalizeBrowsingCalibrationTime(value) {
+    const text = String(value || '').trim();
+    const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+    if (!match) return DEFAULT_BROWSING_CALIBRATION_SETTINGS.scheduledCalibrationTime;
+    const hour = Math.max(0, Math.min(23, parseInt(match[1], 10) || 0));
+    const minute = Math.max(0, Math.min(59, parseInt(match[2], 10) || 0));
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 function normalizeBrowsingCalibrationState(raw = {}) {
@@ -1407,9 +1569,16 @@ async function saveBrowsingCalibrationSettings(settings) {
         const next = { ...settings };
         next.deleteThreshold = Math.max(0, parseInt(next.deleteThreshold, 10) || 0);
         next.openThreshold = Math.max(0, parseInt(next.openThreshold, 10) || 0);
+        next.scheduledCalibrationEnabled = next.scheduledCalibrationEnabled !== false;
+        next.scheduledCalibrationTime = normalizeBrowsingCalibrationTime(next.scheduledCalibrationTime);
+        next.scheduledCalibrationRequireIdle = next.scheduledCalibrationRequireIdle === true;
+        next.openThresholdUserConfigured = true;
         delete next.clickThreshold;
         next.autoEnabled = next.deleteThreshold > 0 || next.openThreshold > 0;
         await browserAPI.storage.local.set({ browsingCalibrationSettings: next });
+        try {
+            await sendRuntimeMessage({ action: 'ensureBrowsingHistoryBackgroundSyncAlarm' });
+        } catch (_) { }
     } catch (e) {
         console.warn('[校准设置] 保存失败:', e);
     }
@@ -1469,17 +1638,16 @@ async function runBrowsingCalibration({ reason = 'manual', showToast: shouldToas
     const inst = window.browsingHistoryCalendarInstance;
     if (!inst) return false;
 
-    await refreshBrowsingHistoryData({ forceFull: true, silent: false });
+    const result = await requestBrowsingHistoryBackgroundCalibration({ reason, requireIdle: false });
+    if (!result?.success) {
+        if (shouldToast && typeof showToast === 'function') {
+            const msg = currentLang === 'zh_CN' ? '校准失败' : 'Calibration failed';
+            showToast(msg, 2500);
+        }
+        return false;
+    }
 
-    const settings = await getBrowsingCalibrationSettings();
-    settings.lastCalibrationTime = Date.now();
-    await saveBrowsingCalibrationSettings(settings);
-    try {
-        browserAPI.runtime.sendMessage({
-            action: 'resetBrowsingCalibrationState',
-            payload: { reason }
-        }).catch(() => { });
-    } catch (_) { }
+    await refreshBrowsingHistoryFromCache({ silent: false });
     scheduleBrowsingCalibrationCountRefresh(600);
 
     if (shouldToast && typeof showToast === 'function') {
@@ -3440,8 +3608,8 @@ const i18n = {pageTitle: {
         'zh_CN': '书签记录包（新增/点击/排行/关联/时间排行）',
         'en': 'Bookmark record bundle (additions/clicks/ranking/related/time ranking)'
     },syncPushPackageRawNativeText: {
-        'zh_CN': '原生真相源包（书签树/浏览历史事实源）',
-        'en': 'Raw-native source bundle (bookmark tree/history facts)'
+        'zh_CN': '原生真相源包（书签树/浏览访问事实源）',
+        'en': 'Raw-native source bundle (bookmark tree/browsing visit facts)'
     },syncPushPackageRecommendText: {
         'zh_CN': '书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）',
         'en': 'Bookmark recommendation bundle (S-score/candidates/review/block/skip/flip)'
@@ -3779,8 +3947,8 @@ const i18n = {pageTitle: {
         'zh_CN': '关联记录',
         'en': 'Related History'
     },browsingCalibrationText: {
-        'zh_CN': '校准',
-        'en': 'Calibrate'
+        'zh_CN': '校准与清理',
+        'en': 'Calibrate & Clean'
     },browsingCalibrationManual: {
         'zh_CN': '手动校准',
         'en': 'Manual calibrate'
@@ -3791,11 +3959,32 @@ const i18n = {pageTitle: {
         'zh_CN': '自动校准设置',
         'en': 'Auto calibration settings'
     },browsingCalibrationSettingsDesc1: {
-        'zh_CN': '说明：<span class="calibration-desc-highlight">浏览器历史删除 API</span> 有时不会返回完整 URL 列表，因此需要通过校准对齐数据。',
-        'en': 'Note: The <span class="calibration-desc-highlight">browser history deletion API</span> may not return the full URL list, so calibration is used to realign data.'
+        'zh_CN': '说明：校准只维护扩展自己的<span class="calibration-desc-highlight">本地浏览历史库</span>；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。',
+        'en': 'Note: calibration only maintains the extension-owned <span class="calibration-desc-highlight">local browsing history library</span>. Click records, rankings, and related history are matched against the current bookmark library when read.'
     },browsingCalibrationSettingsDesc3: {
-        'zh_CN': '校准在后台执行，避免影响前台使用体验。',
-        'en': 'Calibration runs in the background to avoid impacting the UI.'
+        'zh_CN': '首次启用当前本地库版本时，会丢弃旧版本的历史缓存，并通过浏览器 History API 建立最近约 90 天的基线；之后校准只重新对齐最近热区，同时保留本版本后续沉淀的 90 天前冷数据。每日后台定时校准按固定时间执行；如果错过时间，后台启动或打开插件页面时会补检查。下方空闲选项只影响后台定时校准，手动校准和打开页面校准不受影响。',
+        'en': 'The first run of the current local library version discards legacy history cache data and seeds a roughly 90-day baseline through the browser History API. Later calibration realigns only the recent hot window while preserving cold data accumulated by this library version. Daily background calibration runs at the selected time. If the time is missed, the background startup or extension page open checks whether it should catch up. The idle option below only affects background scheduled calibration; manual and page-open calibration are unaffected.'
+    },historyPurgeRangeLabel: {
+        'zh_CN': '清理本地记录:',
+        'en': 'Clean local records:'
+    },historyPurgeInfoTitle: {
+        'zh_CN': '清理规则说明',
+        'en': 'Cleanup rules'
+    },historyPurgeInfoText: {
+        'zh_CN': '浏览器 History API 通常只能回查最近约 90 天的浏览记录；首次启用当前本地库版本时，扩展会丢弃旧版本历史缓存并用 API 建立最近约 90 天的基线。之后，为支持更久的点击排行、关联记录和导出，扩展会维护自己的本地浏览历史库。本地库保存浏览器访问事实，不会因为书签被删除或 URL 被修改而删除；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。本地记录库会监听浏览器历史删除事件并做同步；浏览器清空全部历史时，本地记录也会清空。浏览器只删除部分历史时，本地库只同步最近 90 天窗口，避免误删本版本后续沉淀的冷数据。这里的“立即清理”只清理扩展自己的本地记录库，不会删除 Chrome/Edge 的浏览器历史。',
+        'en': 'The browser History API usually only lets extensions query roughly the most recent 90 days of browsing records. On the first run of the current local library version, this extension discards legacy history cache data and seeds a roughly 90-day baseline from the API. After that, the extension maintains its own local browsing history library to support longer click ranking, related records, and exports. The local library stores browser visit facts and is not deleted just because a bookmark is removed or its URL changes. Click records, rankings, and related history are matched against the current bookmark library when read. The local library listens to browser history deletion events and syncs them. If the browser clears all history, local records are cleared too. If the browser deletes only part of history, the local library syncs only the recent 90-day window to protect cold data accumulated by this library version. “Clean now” only cleans this extension’s local records and does not delete Chrome/Edge browser history.'
+    },historyPurgeOptionKeep2Years: {
+        'zh_CN': '清理2年前记录',
+        'en': 'Clean records older than 2 years'
+    },historyPurgeOptionKeep1Year: {
+        'zh_CN': '清理1年前记录',
+        'en': 'Clean records older than 1 year'
+    },historyPurgeOptionKeep180Days: {
+        'zh_CN': '清理180天前记录',
+        'en': 'Clean records older than 180 days'
+    },historyPurgeOptionKeep90Days: {
+        'zh_CN': '清理90天前记录',
+        'en': 'Clean records older than 90 days'
     },browsingCalibrationSettingsSave: {
         'zh_CN': '保存',
         'en': 'Save'
@@ -3806,11 +3995,20 @@ const i18n = {pageTitle: {
         'zh_CN': '次后自动校准',
         'en': 'deletions'
     },browsingCalibrationOpenLabel: {
-        'zh_CN': '打开/点击书签浏览记录',
+        'zh_CN': '浏览历史相关打开/点击',
         'en': 'Auto calibrate after'
     },browsingCalibrationOpenUnit: {
         'zh_CN': '次后自动校准',
-        'en': 'opens/clicks of browsing records'
+        'en': 'history-related opens/clicks'
+    },browsingCalibrationScheduleLabel: {
+        'zh_CN': '每天',
+        'en': 'Every day at'
+    },browsingCalibrationScheduleUnit: {
+        'zh_CN': '自动校准',
+        'en': 'auto calibrate'
+    },browsingCalibrationIdleLabel: {
+        'zh_CN': '后台定时校准遇到浏览器忙碌时延后',
+        'en': 'Delay background scheduled calibration while the browser is busy'
     },browsingRankingTitle: {
         'zh_CN': '点击排行',
         'en': 'Click Ranking'
@@ -4700,6 +4898,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 初始化 UI（此时currentView已经是正确的值）
     initializeUI();
 
+    try {
+        sendRuntimeMessage({ action: 'ensureBrowsingHistoryBackgroundSyncAlarm' }).catch(() => {});
+    } catch (_) { }
+
     // 初始化侧边栏收起功能
     initSidebarToggle();
 
@@ -4731,15 +4933,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let renderedCurrentViewEarly = false;
     if (isSidePanelMode && currentView === 'widgets') {
-        if (widgetsSmartSortEnabled) {
+        const hasDeferred = widgetsSmartSortEnabled
+            && widgetsSortDeferredInteractionIds instanceof Set
+            && widgetsSortDeferredInteractionIds.size > 0;
+
+        if (hasDeferred) {
             widgetsSortApplyDeferredInteractionsOnOpen = true;
-        }
-        widgetsOpenInitializing = true;
-        syncWidgetsOpenStabilizingState();
-        setTimeout(() => {
-            widgetsOpenInitializing = false;
+            widgetsOpenInitializing = true;
             syncWidgetsOpenStabilizingState();
-        }, 250);
+            setTimeout(() => {
+                widgetsOpenInitializing = false;
+                syncWidgetsOpenStabilizingState();
+            }, 250);
+        } else {
+            widgetsSortApplyDeferredInteractionsOnOpen = false;
+            widgetsOpenInitializing = false;
+            setWidgetsOpenStabilizing(false, { releaseDelayMs: 0 });
+        }
         await renderCurrentView();
         renderedCurrentViewEarly = true;
     }
@@ -5412,6 +5622,30 @@ function applyLanguage() {
     if (browsingCalibrationSettingsDesc1) browsingCalibrationSettingsDesc1.innerHTML = i18n.browsingCalibrationSettingsDesc1[currentLang];
     const browsingCalibrationSettingsDesc3 = document.getElementById('browsingCalibrationSettingsDesc3');
     if (browsingCalibrationSettingsDesc3) browsingCalibrationSettingsDesc3.textContent = i18n.browsingCalibrationSettingsDesc3[currentLang];
+    const historyPurgeRangeLabel = document.getElementById('historyPurgeRangeLabel');
+    if (historyPurgeRangeLabel) historyPurgeRangeLabel.textContent = i18n.historyPurgeRangeLabel[currentLang];
+    const historyPurgeInfoBtn = document.getElementById('historyPurgeInfoBtn');
+    if (historyPurgeInfoBtn) {
+        const label = i18n.historyPurgeInfoTitle[currentLang];
+        historyPurgeInfoBtn.setAttribute('title', label);
+        historyPurgeInfoBtn.setAttribute('aria-label', label);
+    }
+    const historyPurgeInfoPanel = document.getElementById('historyPurgeInfoPanel');
+    if (historyPurgeInfoPanel) historyPurgeInfoPanel.textContent = i18n.historyPurgeInfoText[currentLang];
+    const historyPurgeRange = document.getElementById('historyPurgeRange');
+    if (historyPurgeRange) {
+        const optionTextByValue = {
+            keep_2years: i18n.historyPurgeOptionKeep2Years[currentLang],
+            keep_1year: i18n.historyPurgeOptionKeep1Year[currentLang],
+            keep_180days: i18n.historyPurgeOptionKeep180Days[currentLang],
+            keep_90days: i18n.historyPurgeOptionKeep90Days[currentLang]
+        };
+        Array.from(historyPurgeRange.options || []).forEach((option) => {
+            if (optionTextByValue[option.value]) {
+                option.textContent = optionTextByValue[option.value];
+            }
+        });
+    }
     const browsingCalibrationSettingsSaveText = document.getElementById('browsingCalibrationSettingsSaveText');
     if (browsingCalibrationSettingsSaveText) browsingCalibrationSettingsSaveText.textContent = i18n.browsingCalibrationSettingsSave[currentLang];
     const browsingCalibrationDeleteLabel = document.getElementById('browsingCalibrationDeleteLabel');
@@ -5422,6 +5656,12 @@ function applyLanguage() {
     if (browsingCalibrationOpenLabel) browsingCalibrationOpenLabel.textContent = i18n.browsingCalibrationOpenLabel[currentLang];
     const browsingCalibrationOpenUnit = document.getElementById('browsingCalibrationOpenUnit');
     if (browsingCalibrationOpenUnit) browsingCalibrationOpenUnit.textContent = i18n.browsingCalibrationOpenUnit[currentLang];
+    const browsingCalibrationScheduleLabel = document.getElementById('browsingCalibrationScheduleLabel');
+    if (browsingCalibrationScheduleLabel) browsingCalibrationScheduleLabel.textContent = i18n.browsingCalibrationScheduleLabel[currentLang];
+    const browsingCalibrationScheduleUnit = document.getElementById('browsingCalibrationScheduleUnit');
+    if (browsingCalibrationScheduleUnit) browsingCalibrationScheduleUnit.textContent = i18n.browsingCalibrationScheduleUnit[currentLang];
+    const browsingCalibrationIdleLabel = document.getElementById('browsingCalibrationIdleLabel');
+    if (browsingCalibrationIdleLabel) browsingCalibrationIdleLabel.textContent = i18n.browsingCalibrationIdleLabel[currentLang];
 
     const browsingRankingTitle = document.getElementById('browsingRankingTitle');
     if (browsingRankingTitle) browsingRankingTitle.textContent = i18n.browsingRankingTitle[currentLang];
@@ -6463,13 +6703,12 @@ async function updateTimeTrackingWidget() {
         if (w) w.dataset.mode = 'ranking';
 
         try {
-            const stats = await ensureBrowsingClickRankingStats();
-
             // Initialize User Preference Range
             if (!window.timeTrackingWidgetRankingRange) {
                 window.timeTrackingWidgetRankingRange = localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
             }
-            const currentRange = window.timeTrackingWidgetRankingRange;
+            const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange);
+            const stats = await ensureBrowsingClickRankingStats(currentRange);
 
             // Map range to localized text and count key
             const rangeConfig = {
@@ -6484,7 +6723,7 @@ async function updateTimeTrackingWidget() {
             // Fetch Items
             let items = [];
             if (stats && !stats.error && stats.items) {
-                items = getBrowsingRankingItemsForRange(currentRange);
+                items = getBrowsingRankingItemsForRangeFromStats(stats, currentRange);
             }
 
             widgetList.innerHTML = '';
@@ -8276,15 +8515,23 @@ function switchView(view) {
     currentView = view;
 
     if (isSidePanelMode && previousView !== view && view === 'widgets') {
-        if (widgetsSmartSortEnabled) {
+        const hasDeferred = widgetsSmartSortEnabled
+            && widgetsSortDeferredInteractionIds instanceof Set
+            && widgetsSortDeferredInteractionIds.size > 0;
+
+        if (hasDeferred) {
             widgetsSortApplyDeferredInteractionsOnOpen = true;
-        }
-        widgetsOpenInitializing = true;
-        syncWidgetsOpenStabilizingState();
-        setTimeout(() => {
-            widgetsOpenInitializing = false;
+            widgetsOpenInitializing = true;
             syncWidgetsOpenStabilizingState();
-        }, 250);
+            setTimeout(() => {
+                widgetsOpenInitializing = false;
+                syncWidgetsOpenStabilizingState();
+            }, 250);
+        } else {
+            widgetsSortApplyDeferredInteractionsOnOpen = false;
+            widgetsOpenInitializing = false;
+            setWidgetsOpenStabilizing(false, { releaseDelayMs: 0 });
+        }
     }
 
     try { window.currentView = currentView; } catch (_) { }
@@ -9368,7 +9615,7 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: '书签记录包：新增、点击、点击排行、关联记录、当前时间排行与时间屏蔽状态。' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: '书签推荐包：S 分数池、候选池、推荐模式、复习、屏蔽、跳过、翻卡事件。' },
             { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: '书签树/准原生事实源：Phase A 标注 source 与 flattened-records 格式。' },
-            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: '浏览历史事实源：JSONL 明细，manifest 标注 limit 与 truncated。' },
+            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: '浏览访问事实源：JSONL 明细，manifest 标注 scope、limit 与 truncated。' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: '“查看”区输入文档索引：记录任务 Markdown 的文件名与更新时间。' },
             { branch: '|--', path: 'ai/input-docs/*.md', op: '[PULL/PUSH]', desc: '输入任务文档：你在“查看”里维护；本地/云端删除会按拉取或推送同步。' },
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。' },
@@ -9382,7 +9629,7 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: 'Bookmark record bundle: additions, clicks, rankings, related records, current time rankings and blocked state.' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: 'Bookmark recommendation bundle: S-scores, candidates, mode, review/block/skip/flip events.' },
             { branch: '|--', path: 'data/raw-native/bookmarks-tree.json', op: '[PUSH]', desc: 'Bookmark-tree fact source: Phase A marks source and flattened-records format.' },
-            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: 'History fact source: JSONL rows; manifest records limit and truncated.' },
+            { branch: '|--', path: 'data/raw-native/history-visits.jsonl', op: '[PUSH]', desc: 'Browsing visit fact source: JSONL rows; manifest records scope, limit, and truncated.' },
             { branch: '|--', path: 'ai/input-docs/index.json', op: '[PUSH]', desc: 'Input-doc index in the View panel: file names and update timestamps.' },
             { branch: '|--', path: 'ai/input-docs/*.md', op: '[PULL/PUSH]', desc: 'Input task docs maintained in View; local/cloud deletes sync through push or pull.' },
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.' },
@@ -13770,11 +14017,131 @@ function normalizeAdditionsRecordsForSync(raw) {
     return [];
 }
 
+const SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION = 2;
+const SYNC_BROWSING_HISTORY_CACHE_DB_NAME = 'BookmarkBrowsingHistoryCacheDB_v2';
+const BROWSING_DERIVED_ROWS_YIELD_EVERY = 800;
+
+function yieldBrowsingDerivedRows() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function shouldYieldBrowsingDerivedRows(processedCount, yieldEvery = BROWSING_DERIVED_ROWS_YIELD_EVERY) {
+    const safeEvery = Math.max(0, Number(yieldEvery || 0) || 0);
+    return !!(safeEvery && processedCount > 0 && processedCount % safeEvery === 0);
+}
+
+function isCurrentBrowsingHistoryLibraryPayload(raw) {
+    return !!(
+        raw &&
+        typeof raw === 'object' &&
+        Number(raw.schemaVersion || 0) === SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION &&
+        raw.dbName === SYNC_BROWSING_HISTORY_CACHE_DB_NAME &&
+        Array.isArray(raw.records)
+    );
+}
+
 function normalizeBrowsingCacheRowsForSync(raw) {
-    const rows = Array.isArray(raw?.records) ? raw.records : (Array.isArray(raw) ? raw : []);
+    if (!isCurrentBrowsingHistoryLibraryPayload(raw)) return [];
+    const rows = Array.isArray(raw?.records) ? raw.records : [];
     return rows
         .filter((row) => Array.isArray(row) && row.length >= 2)
         .map(([dateKey, records]) => [String(dateKey || ''), Array.isArray(records) ? records : []]);
+}
+
+function getBrowsingCacheRecordTimestamp(record) {
+    const raw = record?.visitTime ?? record?.dateAdded ?? 0;
+    if (raw instanceof Date) return raw.getTime();
+    const numeric = Number(raw || 0);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const parsed = Date.parse(String(raw || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function filterBrowsingCacheRowsByTime(rows, startTime = 0, endTime = Date.now()) {
+    const safeStart = Math.max(0, Number(startTime || 0) || 0);
+    const safeEnd = Math.max(safeStart, Number(endTime || Date.now()) || Date.now());
+    return (Array.isArray(rows) ? rows : [])
+        .map(([dateKey, records]) => {
+            const filtered = (Array.isArray(records) ? records : []).filter((record) => {
+                const recordTime = getBrowsingCacheRecordTimestamp(record);
+                if (!recordTime) return false;
+                if (safeStart > 0 && recordTime < safeStart) return false;
+                if (recordTime > safeEnd) return false;
+                return true;
+            });
+            return [dateKey, filtered];
+        })
+        .filter(([, records]) => Array.isArray(records) && records.length > 0);
+}
+
+async function filterBrowsingCacheRowsByTimeAsync(rows, startTime = 0, endTime = Date.now(), options = {}) {
+    const safeStart = Math.max(0, Number(startTime || 0) || 0);
+    const safeEnd = Math.max(safeStart, Number(endTime || Date.now()) || Date.now());
+    const filteredRows = [];
+    let processed = 0;
+    for (const [dateKey, records] of (Array.isArray(rows) ? rows : [])) {
+        const filtered = [];
+        for (const record of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const recordTime = getBrowsingCacheRecordTimestamp(record);
+            if (
+                recordTime &&
+                !(safeStart > 0 && recordTime < safeStart) &&
+                recordTime <= safeEnd
+            ) {
+                filtered.push(record);
+            }
+            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                await yieldBrowsingDerivedRows();
+            }
+        }
+        if (filtered.length) {
+            filteredRows.push([dateKey, filtered]);
+        }
+    }
+    return filteredRows;
+}
+
+function countBrowsingCacheRowsRecords(rows) {
+    return (Array.isArray(rows) ? rows : [])
+        .reduce((sum, row) => sum + (Array.isArray(row?.[1]) ? row[1].length : 0), 0);
+}
+
+function buildBookmarkDataFromAdditionsRecordsForDerivation(records = []) {
+    const urls = new Set();
+    const titles = new Set();
+    const info = new Map();
+
+    (Array.isArray(records) ? records : []).forEach((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+        const url = String(entry.url || '').trim();
+        if (!url) return;
+        urls.add(url);
+
+        const title = String(entry.title || '').trim();
+        if (title) titles.add(title);
+
+        const rawPath = Array.isArray(entry.folderPath)
+            ? entry.folderPath
+            : splitSyncBookmarkPath(entry.path || '');
+        let folderPath = rawPath
+            .map((item) => String(item || '').trim())
+            .filter(Boolean);
+        if (!Array.isArray(entry.folderPath) && folderPath.length > 1) {
+            folderPath = folderPath.slice(0, -1);
+        }
+
+        if (!info.has(url)) {
+            info.set(url, {
+                id: entry.id == null ? null : String(entry.id),
+                url,
+                title: title || url,
+                folderPath
+            });
+        }
+    });
+
+    return { urls, titles, info };
 }
 
 function buildSyncBrowsingCacheRowsFromCalendarMap(bookmarksByDate) {
@@ -13972,32 +14339,6 @@ async function loadSyncHistoryBookmarkRecords(localData = {}) {
     };
 }
 
-async function persistSyncBrowsingRowsToCache(localData = {}, rows = [], timestamp = Date.now()) {
-    const cachePayload = {
-        lastSyncTime: Number(timestamp || Date.now()) || Date.now(),
-        records: Array.isArray(rows) ? rows : []
-    };
-    localData.bb_cache_browsing_history_v1 = cachePayload;
-    try {
-        if (typeof resetBrowsingRankingDerivedCache === 'function') resetBrowsingRankingDerivedCache();
-        if (typeof markBrowsingRelatedSnapshotStale === 'function') markBrowsingRelatedSnapshotStale('sync-history-cache-refresh');
-    } catch (_) { }
-    if (typeof writeHistoryCacheValue === 'function') {
-        try {
-            if (typeof removeHistoryCacheValue === 'function') {
-                await removeHistoryCacheValue('bb_cache_browsing_history_v1');
-            }
-            await writeHistoryCacheValue('bb_cache_browsing_history_v1', cachePayload);
-            if (typeof refreshBrowsingHistoryFromCache === 'function') {
-                await refreshBrowsingHistoryFromCache({ silent: true });
-            } else if (typeof document !== 'undefined') {
-                document.dispatchEvent(new CustomEvent('browsingHistoryCacheUpdated'));
-            }
-        } catch (_) { }
-    }
-    return cachePayload;
-}
-
 function getSyncHistoryVisitsConcurrency(itemCount = 0) {
     const count = Math.max(0, Number(itemCount || 0) || 0);
     if (count >= 800) return 16;
@@ -14015,35 +14356,9 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
     const requestedStartTime = Math.max(0, Number(options?.startTime || 0) || 0);
     const requestedEndTimeRaw = Number(options?.endTime || 0) || 0;
     const requestedEndTime = requestedEndTimeRaw > 0 ? Math.min(requestedEndTimeRaw, now) : now;
-    const shouldPersistCache = options?.persistCache !== false && requestedStartTime <= 0;
     const bookmarkRecordResult = await loadSyncHistoryBookmarkRecords(localData);
     const bookmarkRecords = Array.isArray(bookmarkRecordResult?.records) ? bookmarkRecordResult.records : [];
     const refs = buildSyncHistoryBookmarkRefs(bookmarkRecords);
-    if (!(refs.urlMap instanceof Map) || refs.urlMap.size === 0) {
-        if (bookmarkRecordResult?.authoritative) {
-            const rows = [];
-            if (shouldPersistCache) {
-                await persistSyncBrowsingRowsToCache(localData, rows, now);
-            }
-            return {
-                ok: true,
-                rows,
-                source: `${bookmarkRecordResult.source || 'bookmarks_api'}_empty`,
-                fetchedAt: now,
-                meta: {
-                    scope: 'bookmark_matched_history',
-                    source: `${bookmarkRecordResult.source || 'bookmarks_api'}_empty`,
-                    matchMethods: ['exact_url', 'title_domain'],
-                    bookmarkReferenceSource: bookmarkRecordResult.source || 'bookmarks_api',
-                    bookmarkReferenceCount: bookmarkRecords.length,
-                    chromeHistorySearchItemCount: 0,
-                    matchedUrlCount: 0,
-                    truncated: false
-                }
-            };
-        }
-        return { ok: false, rows: [], source: 'bookmark_refs_unavailable' };
-    }
 
     const pageSize = (typeof BROWSING_HISTORY_SEARCH_PAGE_SIZE === 'number' && BROWSING_HISTORY_SEARCH_PAGE_SIZE > 0)
         ? BROWSING_HISTORY_SEARCH_PAGE_SIZE
@@ -14058,8 +14373,16 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
         ? BROWSING_HISTORY_LOOKBACK_DAYS
         : 0;
     const cutoffTime = lookbackDays ? now - lookbackDays * 24 * 60 * 60 * 1000 : 0;
+
+    // 90天物理限制，以此做为API热查询和本地冷缓存的界限
+    const CHROME_HISTORY_LIMIT_MS = 90 * 24 * 60 * 60 * 1000;
+    const apiCutoffTime = now - CHROME_HISTORY_LIMIT_MS;
+
     const effectiveStartTime = Math.max(cutoffTime || 0, requestedStartTime || 0);
+    // API 只查询 90 天以内的部分，90天之前的数据通过合并缓存获取
+    const queryStartTime = Math.max(effectiveStartTime, apiCutoffTime);
     const effectiveEndTime = Math.max(effectiveStartTime, requestedEndTime || now);
+    const coldWindowRequested = effectiveStartTime < queryStartTime;
 
     let historySearchError = '';
     let historyItemsTruncated = false;
@@ -14097,8 +14420,8 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
 
     const historyItems = [];
     let pageEnd = effectiveEndTime;
-    while (pageEnd >= effectiveStartTime) {
-        const batch = await fetchHistoryBatch(effectiveStartTime, pageEnd);
+    while (pageEnd >= queryStartTime) {
+        const batch = await fetchHistoryBatch(queryStartTime, pageEnd);
         if (historySearchError) break;
         if (!batch.length) break;
         historyItems.push(...batch);
@@ -14114,7 +14437,7 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
             const t = Number(item?.lastVisitTime || pageEnd);
             if (t < oldest) oldest = t;
         }
-        if (!oldest || oldest <= effectiveStartTime) break;
+        if (!oldest || oldest <= queryStartTime) break;
         pageEnd = oldest - 1;
     }
 
@@ -14129,11 +14452,13 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
 
     const relevantItems = [];
     const seenUrls = new Set();
+    let matchedUrlCount = 0;
     for (const item of historyItems) {
         const url = String(item?.url || '').trim();
         if (!url || seenUrls.has(url)) continue;
+        if (!/^https?:\/\//i.test(url)) continue;
         const match = findSyncHistoryBookmarkMatch(item, refs);
-        if (!match) continue;
+        if (match) matchedUrlCount += 1;
         relevantItems.push({ item, match });
         seenUrls.add(url);
     }
@@ -14234,23 +14559,62 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
         ])
         .sort((a, b) => String(a?.[0] || '').localeCompare(String(b?.[0] || '')));
 
-    if (shouldPersistCache) {
-        await persistSyncBrowsingRowsToCache(localData, rows, now);
+    // 只从当前库版本缓存中提取冷记录，防止热区 API 对齐时覆盖本版本沉淀的数据。
+    let existingBrowsingCache = localData?.bb_cache_browsing_history_v1;
+    let cachedRows = normalizeBrowsingCacheRowsForSync(existingBrowsingCache);
+    if (cachedRows.length === 0 && typeof readHistoryCacheValue === 'function') {
+        try {
+            const historyCache = await readHistoryCacheValue('bb_cache_browsing_history_v1');
+            const idbRows = normalizeBrowsingCacheRowsForSync(historyCache);
+            if (idbRows.length > 0) {
+                cachedRows = idbRows;
+                localData.bb_cache_browsing_history_v1 = historyCache && typeof historyCache === 'object'
+                    ? historyCache
+                    : { schemaVersion: SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION, dbName: SYNC_BROWSING_HISTORY_CACHE_DB_NAME, lastSyncTime: now, records: idbRows };
+            }
+        } catch (_) { }
     }
+    const coldRows = [];
+    let coldCacheRecordCount = 0;
+    for (const [dateKey, records] of cachedRows) {
+        const coldRecords = (Array.isArray(records) ? records : []).filter((record) => {
+            const recordTime = getBrowsingCacheRecordTimestamp(record);
+            if (!recordTime) return false;
+            if (effectiveStartTime && recordTime < effectiveStartTime) return false;
+            if (recordTime >= queryStartTime) return false; // 热区域由刚才 API 重新对齐的 rows 覆盖
+            return true;
+        });
+        if (coldRecords.length) {
+            coldCacheRecordCount += coldRecords.length;
+            coldRows.push([dateKey, coldRecords]);
+        }
+    }
+    const partial = historyItemsTruncated || (coldWindowRequested && coldCacheRecordCount === 0);
+    const partialReason = historyItemsTruncated
+        ? 'history_search_item_limit'
+        : (coldWindowRequested && coldCacheRecordCount === 0 ? 'missing_cold_cache' : '');
+
+    // 合并冷数据和热对齐数据
+    const mergedMap = new Map(coldRows);
+    for (const [dateKey, records] of rows) {
+        mergedMap.set(dateKey, records);
+    }
+    const finalRows = Array.from(mergedMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
     return {
         ok: true,
-        rows,
+        rows: finalRows,
         source: hasVisitDetails ? 'chrome.history.search+getVisits' : 'chrome.history.search',
         fetchedAt: now,
         meta: {
-            scope: 'bookmark_matched_history',
+            scope: 'browsing_history',
             source: hasVisitDetails ? 'chrome.history.search+getVisits' : 'chrome.history.search',
-            matchMethods: ['exact_url', 'title_domain'],
+            bookmarkMatchMethods: ['exact_url', 'title_domain'],
             bookmarkReferenceSource: bookmarkRecordResult?.source || 'unknown',
             bookmarkReferenceCount: bookmarkRecords.length,
             chromeHistorySearchItemCount: historyItems.length,
-            matchedUrlCount: relevantItems.length,
+            cachedUrlCount: relevantItems.length,
+            matchedUrlCount,
             historyItemLimit: maxItems,
             searchPageSize: pageSize,
             maxVisitsPerUrl,
@@ -14258,82 +14622,140 @@ async function resolveSyncBrowsingRowsFromHistoryApi(localData = {}, options = {
             lookbackDays,
             requestedStartTime,
             requestedEndTime: effectiveEndTime,
+            apiStartTime: queryStartTime,
+            coldWindowRequested,
+            coldCacheRecordCount,
+            partial,
+            partialReason,
             truncated: historyItemsTruncated
         }
     };
 }
 
 async function resolveSyncBrowsingCacheRows(localData = {}, options = {}) {
-    if (options.preferLive !== false) {
-        const fromHistoryApi = await resolveSyncBrowsingRowsFromHistoryApi(localData, options);
-        if (fromHistoryApi?.ok) {
-            return fromHistoryApi;
-        }
-    }
+    const now = Date.now();
+    const requestedStartTime = Math.max(0, Number(options?.startTime || 0) || 0);
+    const requestedEndTimeRaw = Number(options?.endTime || 0) || 0;
+    const requestedEndTime = requestedEndTimeRaw > 0 ? Math.min(requestedEndTimeRaw, now) : now;
+    const cacheStartKey = requestedStartTime > 0 ? getSyncHistoryDateKey(requestedStartTime) : '';
+    const cacheEndKey = getSyncHistoryDateKey(requestedEndTime);
 
-    const fromStorage = normalizeBrowsingCacheRowsForSync(localData?.bb_cache_browsing_history_v1);
+    const fromStorage = filterBrowsingCacheRowsByTime(
+        normalizeBrowsingCacheRowsForSync(localData?.bb_cache_browsing_history_v1),
+        requestedStartTime,
+        requestedEndTime
+    );
     if (fromStorage.length > 0) {
         return {
             rows: fromStorage,
             source: 'storage_local',
             meta: {
-                scope: 'bookmark_matched_history',
+                scope: 'browsing_history',
                 source: 'storage_local',
-                matchMethods: ['exact_url', 'title_domain'],
+                matchingApplied: false,
                 fromCache: true
             }
         };
     }
 
-    if (typeof readHistoryCacheValue === 'function') {
+    if (typeof readHistoryCacheRange === 'function' && cacheEndKey) {
         try {
-            const historyCache = await readHistoryCacheValue('bb_cache_browsing_history_v1');
-            const fromHistoryCache = normalizeBrowsingCacheRowsForSync(historyCache);
-            if (fromHistoryCache.length > 0) {
+            const historyCache = await readHistoryCacheRange(cacheStartKey, cacheEndKey);
+            const fromHistoryRange = filterBrowsingCacheRowsByTime(
+                normalizeBrowsingCacheRowsForSync(historyCache),
+                requestedStartTime,
+                requestedEndTime
+            );
+            if (fromHistoryRange.length > 0 || isCurrentBrowsingHistoryLibraryPayload(historyCache)) {
                 localData.bb_cache_browsing_history_v1 = historyCache && typeof historyCache === 'object'
                     ? historyCache
-                    : { lastSyncTime: Date.now(), records: fromHistoryCache };
+                    : { schemaVersion: SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION, dbName: SYNC_BROWSING_HISTORY_CACHE_DB_NAME, lastSyncTime: Date.now(), records: fromHistoryRange };
                 return {
-                    rows: fromHistoryCache,
-                    source: 'history_cache',
+                    rows: fromHistoryRange,
+                    source: 'history_cache_range',
                     meta: {
-                        scope: 'bookmark_matched_history',
-                        source: 'history_cache',
-                        matchMethods: ['exact_url', 'title_domain'],
-                        fromCache: true
+                        scope: 'browsing_history',
+                        source: 'history_cache_range',
+                        matchingApplied: false,
+                        fromCache: true,
+                        lastSyncTime: Number(historyCache?.lastSyncTime || 0) || 0,
+                        lastFullSyncTime: Number(historyCache?.lastFullSyncTime || historyCache?.lastSyncTime || 0) || 0
                     }
                 };
             }
         } catch (_) { }
     }
 
-    const calendar = await waitForBrowsingHistoryCalendar({
-        timeout: 1600,
-        pollMs: 120
-    });
-    const fromCalendar = buildSyncBrowsingCacheRowsFromCalendarMap(calendar?.bookmarksByDate);
-    if (fromCalendar.length > 0) {
-        localData.bb_cache_browsing_history_v1 = {
-            lastSyncTime: Date.now(),
-            records: fromCalendar
-        };
-        return {
-            rows: fromCalendar,
-            source: 'calendar_runtime',
-            meta: {
-                scope: 'bookmark_matched_history',
-                source: 'calendar_runtime',
-                matchMethods: ['exact_url', 'title_domain'],
-                fromCache: true
+    if (typeof readHistoryCacheValue === 'function') {
+        try {
+            const historyCache = await readHistoryCacheValue('bb_cache_browsing_history_v1');
+            const fromHistoryCache = filterBrowsingCacheRowsByTime(
+                normalizeBrowsingCacheRowsForSync(historyCache),
+                requestedStartTime,
+                requestedEndTime
+            );
+            if (fromHistoryCache.length > 0 || isCurrentBrowsingHistoryLibraryPayload(historyCache)) {
+                localData.bb_cache_browsing_history_v1 = historyCache && typeof historyCache === 'object'
+                    ? historyCache
+                    : { schemaVersion: SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION, dbName: SYNC_BROWSING_HISTORY_CACHE_DB_NAME, lastSyncTime: Date.now(), records: fromHistoryCache };
+                return {
+                    rows: fromHistoryCache,
+                    source: 'history_cache',
+                    meta: {
+                        scope: 'browsing_history',
+                        source: 'history_cache',
+                        matchingApplied: false,
+                        fromCache: true,
+                        lastSyncTime: Number(historyCache?.lastSyncTime || 0) || 0,
+                        lastFullSyncTime: Number(historyCache?.lastFullSyncTime || historyCache?.lastSyncTime || 0) || 0
+                    }
+                };
             }
-        };
+        } catch (_) { }
+    }
+
+    if (options.allowRuntimeFallback === true) {
+        const calendar = await waitForBrowsingHistoryCalendar({
+            timeout: 1600,
+            pollMs: 120
+        });
+        const fromCalendar = filterBrowsingCacheRowsByTime(
+            buildSyncBrowsingCacheRowsFromCalendarMap(calendar?.bookmarksByDate),
+            requestedStartTime,
+            requestedEndTime
+        );
+        if (fromCalendar.length > 0) {
+            localData.bb_cache_browsing_history_v1 = {
+                schemaVersion: SYNC_BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION,
+                dbName: SYNC_BROWSING_HISTORY_CACHE_DB_NAME,
+                lastSyncTime: Date.now(),
+                records: fromCalendar
+            };
+            return {
+                rows: fromCalendar,
+                source: 'calendar_runtime',
+                meta: {
+                    scope: 'browsing_history',
+                    source: 'calendar_runtime',
+                    matchingApplied: false,
+                    fromCache: true
+                }
+            };
+        }
+    }
+
+    if (options.allowLiveFallback === true) {
+        const fromHistoryApi = await resolveSyncBrowsingRowsFromHistoryApi(localData, options);
+        if (fromHistoryApi?.ok) {
+            return fromHistoryApi;
+        }
     }
 
     return {
         rows: [],
         source: 'empty',
         meta: {
-            scope: 'bookmark_matched_history',
+            scope: 'browsing_history',
             source: 'empty'
         }
     };
@@ -14430,70 +14852,32 @@ function normalizeFlipHistoryForSync(raw, maxItems = 2000) {
     return list.slice(list.length - maxItems);
 }
 
-function buildClickRankingFromRows(rows, limit = 200) {
-    const boundaries = getBrowsingClickRankingBoundaries();
-    const statsMap = new Map();
-
-    rows.forEach(([, records]) => {
-        records.forEach((record) => {
-            if (!record || typeof record !== 'object') return;
-            const url = String(record.url || '').trim();
-            if (!url) return;
-            const title = String(record.title || '').trim() || url;
-            const visitTime = Number(record.visitTime || record.dateAdded || 0);
-            if (!Number.isFinite(visitTime) || visitTime <= 0) return;
-            const increment = Math.max(1, Number(record.visitCount) || 1);
-
-            const entry = statsMap.get(url) || {
-                url,
-                title,
-                lastVisitTime: 0,
-                dayCount: 0,
-                weekCount: 0,
-                monthCount: 0,
-                yearCount: 0,
-                allCount: 0
-            };
-
-            entry.allCount += increment;
-            if (visitTime >= boundaries.dayStart && visitTime <= boundaries.now) entry.dayCount += increment;
-            if (visitTime >= boundaries.weekStart && visitTime <= boundaries.now) entry.weekCount += increment;
-            if (visitTime >= boundaries.monthStart && visitTime <= boundaries.now) entry.monthCount += increment;
-            if (visitTime >= boundaries.yearStart && visitTime <= boundaries.now) entry.yearCount += increment;
-            if (visitTime > entry.lastVisitTime) entry.lastVisitTime = visitTime;
-            if (!entry.title && title) entry.title = title;
-            statsMap.set(url, entry);
-        });
-    });
-
-    return Array.from(statsMap.values())
+function sortBookmarkClickRankingItemsForSync(items, limit = 200) {
+    return (Array.isArray(items) ? items : [])
+        .filter(item => Number(item?.allCount || 0) > 0)
         .sort((a, b) => {
-            if (b.allCount !== a.allCount) return b.allCount - a.allCount;
+            const bCount = Number(b?.allCount || 0);
+            const aCount = Number(a?.allCount || 0);
+            if (bCount !== aCount) return bCount - aCount;
             return (b.lastVisitTime || 0) - (a.lastVisitTime || 0);
         })
         .slice(0, Math.max(1, Number(limit) || 200));
 }
 
-async function buildClickRankingForSync(rows, limit = 200) {
+async function buildClickRankingForSync(rows, limit = 200, options = {}) {
     const safeLimit = Math.max(1, Number(limit) || 200);
     try {
-        const stats = await ensureBrowsingClickRankingStats();
-        if (stats && !stats.error && Array.isArray(stats.items)) {
-            return getBrowsingRankingItemsForRangeFromStats(stats, 'all')
-                .slice(0, safeLimit)
-                .map((item) => ({
-                    url: String(item?.url || ''),
-                    title: String(item?.title || item?.url || ''),
-                    lastVisitTime: Number(item?.lastVisitTime || 0) || 0,
-                    dayCount: Number(item?.dayCount || 0) || 0,
-                    weekCount: Number(item?.weekCount || 0) || 0,
-                    monthCount: Number(item?.monthCount || 0) || 0,
-                    yearCount: Number(item?.yearCount || 0) || 0,
-                    allCount: Number(item?.allCount || 0) || 0
-                }));
-        }
-    } catch (_) { }
-    return buildClickRankingFromRows(rows, safeLimit);
+        const stats = await buildBrowsingClickRankingStatsFromRows(rows, {
+            boundaries: getBrowsingClickRankingBoundaries(),
+            source: 'sync-bookmark-records',
+            bookmarkData: options.bookmarkData || null
+        });
+        if (!stats || !Array.isArray(stats.items)) return [];
+        return sortBookmarkClickRankingItemsForSync(stats.items, safeLimit);
+    } catch (error) {
+        console.warn('[Sync] 构建书签点击排行失败:', error);
+        return [];
+    }
 }
 
 function buildRelatedRecordsFromSnapshots(limitSnapshots = 3, limitItemsPerSnapshot = 120) {
@@ -14887,6 +15271,48 @@ async function collectSyncPushPayload(config) {
         docs: buildSyncDocsPayload()
     };
 
+    const needsBrowsingHistoryLibrary = config.bookmarkRecords || config.bookmarkTreeSnapshot;
+    let browsingHistoryLibraryPrepareStarted = false;
+    let browsingHistoryLibraryPrepareMeta = null;
+    const ensureBrowsingHistoryLibraryReadyForSync = async () => {
+        if (!needsBrowsingHistoryLibrary) {
+            return { success: true, skipped: 'browsing-history-not-selected' };
+        }
+        if (browsingHistoryLibraryPrepareStarted) {
+            return browsingHistoryLibraryPrepareMeta || { success: false, error: 'browsing_history_prepare_pending' };
+        }
+        browsingHistoryLibraryPrepareStarted = true;
+
+        let result = null;
+        try {
+            result = await requestBrowsingHistoryBackgroundCalibration({
+                reason: 'sync-push-before-collect',
+                requireIdle: false
+            });
+        } catch (error) {
+            result = { success: false, error: error?.message || String(error) };
+        }
+
+        // 校准会写入 IndexedDB；清掉本轮预先从 storage.local 读到的旧快照，后续强制按范围读历史库。
+        try {
+            delete localData.bb_cache_browsing_history_v1;
+        } catch (_) {
+            localData.bb_cache_browsing_history_v1 = undefined;
+        }
+
+        browsingHistoryLibraryPrepareMeta = {
+            success: result?.success === true,
+            reason: 'sync-push-before-collect',
+            source: 'background-calibration',
+            error: result?.success === true ? '' : String(result?.error || result?.skipped || 'calibration_failed')
+        };
+        timing.mark('prepare_browsing_history_library', {
+            success: browsingHistoryLibraryPrepareMeta.success,
+            error: browsingHistoryLibraryPrepareMeta.error
+        });
+        return browsingHistoryLibraryPrepareMeta;
+    };
+
     let cachedTreeSnapshot = null;
     const ensureBookmarkTreeSnapshot = async () => {
         if (cachedTreeSnapshot) return cachedTreeSnapshot;
@@ -15028,12 +15454,15 @@ async function collectSyncPushPayload(config) {
     let browsingRowsReady = false;
     let browsingRecordCount = 0;
     let browsingRowsSource = 'empty';
-    let browsingRowsMeta = { scope: 'bookmark_matched_history', source: 'empty' };
+    let browsingRowsMeta = { scope: 'browsing_history', source: 'empty' };
     const ensureBrowsingRows = async () => {
         if (browsingRowsReady) return browsingRows;
+        const libraryPrepareMeta = await ensureBrowsingHistoryLibraryReadyForSync();
         const resolvedRows = await resolveSyncBrowsingCacheRows(localData, {
             startTime: pushTimeRangeStart,
-            endTime: pushTimeRangeEnd
+            endTime: pushTimeRangeEnd,
+            allowRuntimeFallback: false,
+            allowLiveFallback: false
         });
         let rows = Array.isArray(resolvedRows?.rows) ? resolvedRows.rows : [];
         if (pushTimeRangeStartDateKey || pushTimeRangeEndDateKey) {
@@ -15049,26 +15478,54 @@ async function collectSyncPushPayload(config) {
         browsingRowsSource = String(resolvedRows?.source || 'empty');
         browsingRowsMeta = resolvedRows?.meta && typeof resolvedRows.meta === 'object'
             ? resolvedRows.meta
-            : { scope: 'bookmark_matched_history', source: browsingRowsSource };
+            : { scope: 'browsing_history', source: browsingRowsSource };
+        const prepareFailed = libraryPrepareMeta?.success === false;
+        const sourceUnavailable = browsingRowsSource === 'empty' || browsingRowsSource === 'history-cache-unavailable' || browsingRowsSource === 'history-cache-error';
+        browsingRowsMeta = {
+            ...browsingRowsMeta,
+            preparedBeforePush: libraryPrepareMeta,
+            partial: Boolean(browsingRowsMeta.partial || prepareFailed || sourceUnavailable),
+            partialReason: browsingRowsMeta.partialReason
+                || (prepareFailed ? (libraryPrepareMeta?.error || libraryPrepareMeta?.skipped || 'history_library_prepare_failed') : '')
+                || (sourceUnavailable ? browsingRowsSource : '')
+        };
         browsingRecordCount = browsingRows.reduce((sum, row) => sum + (Array.isArray(row?.[1]) ? row[1].length : 0), 0);
         browsingRowsReady = true;
         return browsingRows;
     };
 
     if (config.bookmarkRecords) {
-        const rows = await ensureBrowsingRows();
+        const rawRows = await ensureBrowsingRows();
         const additions = ensureAdditionsRecords();
-        const clickRanking = await buildClickRankingForSync(rows, 300);
-        const relatedSnapshots = await buildRelatedRecordsForSync(rows, additions);
+        const treeSnapshot = await ensureBookmarkTreeSnapshot();
+        const bookmarkReferenceRecords = Array.isArray(treeSnapshot?.records) && treeSnapshot.records.length
+            ? treeSnapshot.records
+            : additions;
+        const bookmarkData = buildBookmarkDataFromAdditionsRecordsForDerivation(bookmarkReferenceRecords);
+        const clickRows = await deriveBookmarkClickRowsFromHistoryRows(rawRows, { bookmarkData });
+        const clickRecordCount = countBrowsingCacheRowsRecords(clickRows);
+        const clickRanking = await buildClickRankingForSync(clickRows, 300, { bookmarkData });
+        const relatedSnapshots = await buildRelatedRecordsForSync(clickRows, additions);
         let relatedActiveRange = 'day';
         try {
             relatedActiveRange = String(localStorage.getItem('browsingRelatedActiveRange') || 'day');
         } catch (_) { }
+        const clickRecordsMeta = {
+            ...(browsingRowsMeta || {}),
+            scope: 'current_bookmark_matches',
+            source: browsingRowsSource,
+            rawSource: browsingRowsSource,
+            matchingApplied: true,
+            matchMethods: ['exact_url', 'title_domain'],
+            rawRecordCount: browsingRecordCount,
+            bookmarkReferenceSource: treeSnapshot?.source || 'current_bookmark_tree',
+            bookmarkReferenceCount: bookmarkReferenceRecords.length
+        };
         payload.packages.bookmarkRecords = {
             feature: currentLang === 'zh_CN' ? '书签记录' : 'Bookmark Records',
             summary: {
                 additionsCount: additions.length,
-                clickRecordCount: browsingRecordCount,
+                clickRecordCount,
                 clickRankingCount: Array.isArray(clickRanking) ? clickRanking.length : 0,
                 relatedSnapshotCount: relatedSnapshots.length
             },
@@ -15076,14 +15533,16 @@ async function collectSyncPushPayload(config) {
                 additionsRecords: additions,
                 clickRecords: {
                     source: browsingRowsSource,
-                    meta: browsingRowsMeta,
-                    recordCount: browsingRecordCount,
+                    meta: clickRecordsMeta,
+                    recordCount: clickRecordCount,
                     generatedAt: Date.now(),
-                    rows
+                    rows: clickRows
                 },
                 clickRanking: {
                     generatedAt: Date.now(),
                     range: pushTimeRange,
+                    scope: 'current_bookmark_matches',
+                    matchingApplied: true,
                     items: Array.isArray(clickRanking) ? clickRanking : []
                 },
                 relatedRecords: {
@@ -15093,8 +15552,9 @@ async function collectSyncPushPayload(config) {
             }
         };
         timing.mark('build_bookmark_records', {
-            rows: rows.length,
-            records: browsingRecordCount,
+            rows: clickRows.length,
+            records: clickRecordCount,
+            rawRecords: browsingRecordCount,
             relatedSnapshots: relatedSnapshots.length
         });
     }
@@ -15144,6 +15604,7 @@ async function collectSyncPushPayload(config) {
             schema: 'bookmark_record_and_recommend.raw-native-source.v1',
             generatedAt: Date.now(),
             historyVisits: {
+                scope: 'browsing_history',
                 source: browsingRowsSource,
                 meta: browsingRowsMeta,
                 rows: browsingRows,
@@ -15620,15 +16081,27 @@ function buildBookmarkRecordExportPackage(snapshot, pushId) {
     const timeSummary = timeTracking.summary && typeof timeTracking.summary === 'object'
         ? timeTracking.summary
         : {};
+    const clickRecords = bookmarkData.clickRecords && typeof bookmarkData.clickRecords === 'object'
+        ? bookmarkData.clickRecords
+        : {};
+    const clickRecordsMeta = clickRecords.meta && typeof clickRecords.meta === 'object'
+        ? clickRecords.meta
+        : {};
     const signals = buildBookmarkRecordSignals(bookmarkData, Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now());
     return {
         schema: 'bookmark_record_and_recommend.bookmark-record.v1',
         pushId,
         generatedAt: Number(payload.generatedAt || snapshot?.updatedAt || Date.now()) || Date.now(),
         generatedAtText: String(payload.generatedAtText || getSyncNowLabel(snapshot?.updatedAt || Date.now())),
+        timeRange: payload.timeRange || null,
         summary: {
             additionsCount: Number(bookmarkSummary.additionsCount || 0) || 0,
             clickRecordCount: Number(bookmarkSummary.clickRecordCount || 0) || 0,
+            clickRecordsSource: String(clickRecords.source || clickRecordsMeta.source || ''),
+            clickRecordsRawSource: String(clickRecordsMeta.rawSource || clickRecords.source || ''),
+            clickRecordsRawRecordCount: Number(clickRecordsMeta.rawRecordCount || 0) || 0,
+            clickRecordsPartial: clickRecordsMeta.partial === true,
+            clickRecordsPartialReason: String(clickRecordsMeta.partialReason || ''),
             clickRankingCount: Number(bookmarkSummary.clickRankingCount || 0) || 0,
             relatedSnapshotCount: Number(bookmarkSummary.relatedSnapshotCount || 0) || 0,
             activeClickDateCount: Number(signals.activityRange.activeDateCount || 0) || 0,
@@ -15788,7 +16261,7 @@ function normalizeSyncHistoryVisitRecord(record = {}, dateKey = '', source = '')
         visitTime: Number.isFinite(visitTime) && visitTime > 0 ? visitTime : null,
         visitCount: Math.max(1, Number(record.visitCount || 1) || 1),
         typedCount: Math.max(0, Number(record.typedCount || 0) || 0),
-        bookmarkId: record.bookmarkId || record.id ? String(record.bookmarkId || record.id) : null,
+        bookmarkId: record.bookmarkId == null ? null : String(record.bookmarkId),
         folderPath: Array.isArray(record.folderPath) ? record.folderPath : [],
         matchType: String(record.matchType || ''),
         source: source || 'sync-browsing-cache'
@@ -15802,11 +16275,10 @@ function buildHistoryVisitsJsonlExport(snapshot, limit = SYNC_HISTORY_VISITS_EXP
     const rawHistory = rawNative.historyVisits && typeof rawNative.historyVisits === 'object'
         ? rawNative.historyVisits
         : {};
-    const bookmarkRows = payload?.packages?.bookmarkRecords?.data?.clickRecords?.rows;
     const rows = Array.isArray(rawHistory.rows)
         ? rawHistory.rows
-        : (Array.isArray(bookmarkRows) ? bookmarkRows : []);
-    const source = String(rawHistory.source || 'sync-browsing-cache');
+        : [];
+    const source = String(rawHistory.source || 'raw-native-unavailable');
     const lines = [];
     let totalRecords = 0;
     rows.forEach((row) => {
@@ -15828,7 +16300,8 @@ function buildHistoryVisitsJsonlExport(snapshot, limit = SYNC_HISTORY_VISITS_EXP
         totalRecords,
         limit: safeLimit,
         truncated: totalRecords > lines.length,
-        source
+        source,
+        scope: 'browsing_history'
     };
 }
 
@@ -15880,6 +16353,12 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     if (packageSelection.bookmarkRecord) {
         const recordPackage = buildBookmarkRecordExportPackage(snapshot, pushId);
         const text = JSON.stringify(recordPackage, null, 2);
+        const clickRecords = recordPackage.data?.clickRecords && typeof recordPackage.data.clickRecords === 'object'
+            ? recordPackage.data.clickRecords
+            : {};
+        const clickRecordsMeta = clickRecords.meta && typeof clickRecords.meta === 'object'
+            ? clickRecords.meta
+            : {};
         addFile({
             path: paths.packageBookmarkRecordPath,
             text,
@@ -15892,7 +16371,14 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
             text,
             {
                 records: Number(recordPackage.summary.additionsCount || 0)
-                    + Number(recordPackage.summary.clickRecordCount || 0)
+                    + Number(recordPackage.summary.clickRecordCount || 0),
+                clickRecordCount: Number(recordPackage.summary.clickRecordCount || 0),
+                clickRecordsSource: String(clickRecords.source || clickRecordsMeta.source || ''),
+                clickRecordsRawSource: String(clickRecordsMeta.rawSource || clickRecords.source || ''),
+                clickRecordsRawRecordCount: Number(clickRecordsMeta.rawRecordCount || 0) || 0,
+                clickRecordsPartial: clickRecordsMeta.partial === true,
+                clickRecordsPartialReason: String(clickRecordsMeta.partialReason || ''),
+                clickRecordsPreparedBeforePush: clickRecordsMeta.preparedBeforePush || null
             }
         );
     }
@@ -15953,7 +16439,8 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
                 totalRecords: historyExport.totalRecords,
                 truncated: historyExport.truncated,
                 limit: historyExport.limit,
-                source: historyExport.source
+                source: historyExport.source,
+                scope: historyExport.scope
             }
         );
     }
@@ -16062,6 +16549,7 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
         generatedAt: nowTs,
         generatedAtText: getSyncNowLabel(nowTs),
         writeMode: String(options.writeMode || 'github-contents-api-multi-commit'),
+        timeRange: snapshot?.payload?.timeRange || null,
         packageSelection,
         files: manifestFileEntries,
         readOrder
@@ -17733,6 +18221,15 @@ let widgetsDirtyFlags = {
     historyWeek: true,
     related: true
 };
+let widgetsDirtyRevisions = {
+    recommend: 0,
+    ranking: 0,
+    timeRanking: 0,
+    tracking: 0,
+    additionsWeek: 0,
+    historyWeek: 0,
+    related: 0
+};
 
 function shouldStabilizeWidgetsOnOpen() {
     if (!isSidePanelMode) return false;
@@ -18047,6 +18544,7 @@ function markWidgetsDirty(targetsLike, options = {}) {
 
     targets.forEach((target) => {
         widgetsDirtyFlags[target] = true;
+        widgetsDirtyRevisions[target] = (Number(widgetsDirtyRevisions[target]) || 0) + 1;
     });
 
     if (options.schedule === false) return;
@@ -19726,67 +20224,27 @@ function paintWidgetsLoadingPlaceholders(targetsLike) {
 }
 
 async function buildWidgetsRankingFastStats(range) {
-    if (typeof readHistoryCacheRange !== 'function') return null;
-
     const safeRange = normalizeWidgetsRankingRange(range);
     const boundaries = getBrowsingClickRankingBoundaries();
     const nowMs = Number(boundaries?.now || Date.now());
     const rangeStartMs = Math.max(0, getWidgetsRankingRangeStartMs(safeRange, boundaries));
-    const startKey = getWidgetsDateKey(rangeStartMs);
-    const endKey = getWidgetsDateKey(nowMs);
-    if (!startKey || !endKey) return null;
+    const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(rangeStartMs, nowMs);
+    if (!libraryRows.rows.length) return null;
 
-    let cached = null;
-    try {
-        cached = await readHistoryCacheRange(startKey, endKey);
-    } catch (_) {
-        return null;
-    }
-
-    const statsMap = new Map();
-    const rows = Array.isArray(cached?.records) ? cached.records : [];
-    rows.forEach(([dateKey, records]) => {
-        if (!Array.isArray(records) || records.length === 0) return;
-
-        records.forEach((record) => {
-            const url = String(record?.url || '').trim();
-            if (!url) return;
-
-            const titleText = typeof record?.title === 'string' ? record.title.trim() : '';
-            const key = titleText ? `title:${titleText}` : `url:${url}`;
-            const fallbackDate = dateKey ? new Date(dateKey).getTime() : 0;
-            const visitTime = Number(record?.visitTime || record?.dateAdded || fallbackDate || 0);
-            if (!Number.isFinite(visitTime) || visitTime <= 0) return;
-            if (visitTime < rangeStartMs || visitTime > nowMs) return;
-
-            if (!statsMap.has(key)) {
-                statsMap.set(key, {
-                    url,
-                    title: titleText || url,
-                    lastVisitTime: 0,
-                    filteredCount: 0
-                });
-            }
-
-            const stat = statsMap.get(key);
-            stat.filteredCount += 1;
-            if (visitTime > stat.lastVisitTime) {
-                stat.lastVisitTime = visitTime;
-            }
-            if (!stat.url && url) {
-                stat.url = url;
-            }
-            if ((!stat.title || stat.title === stat.url) && titleText) {
-                stat.title = titleText;
-            }
-        });
+    const stats = await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
+        boundaries,
+        source: libraryRows.source,
+        meta: libraryRows.meta
     });
+    if (!stats || !Array.isArray(stats.items)) return null;
 
     return {
-        items: Array.from(statsMap.values()),
-        boundaries,
+        ...stats,
         filteredRange: safeRange,
-        source: 'history-cache'
+        items: stats.items.map((item) => ({
+            ...item,
+            filteredCount: Number(item.allCount || 0)
+        }))
     };
 }
 
@@ -19812,7 +20270,8 @@ function runWidgetsRankingHydration(reason = 'widgets-fast-path') {
 
     widgetsRankingHydrationPromise = (async () => {
         try {
-            await ensureBrowsingClickRankingStats();
+            const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week');
+            await ensureBrowsingClickRankingStats(currentRange);
             clearWidgetsRankingFastItems();
             if (currentView === 'widgets') {
                 markWidgetsDirty('ranking', { delayMs: 120 });
@@ -19865,10 +20324,11 @@ function scheduleWidgetsRankingHydration(reason = 'widgets-fast-path') {
 }
 
 async function getWidgetsRankingModeItems(range, stats, mode) {
+    const cachedStats = readBrowsingRankingStatsCache(range);
     const sourceStats = (stats && !stats.error && Array.isArray(stats.items))
         ? stats
-        : ((browsingClickRankingStats && !browsingClickRankingStats.error && Array.isArray(browsingClickRankingStats.items))
-            ? browsingClickRankingStats
+        : ((cachedStats && !cachedStats.error && Array.isArray(cachedStats.items))
+            ? cachedStats
             : null);
     if (!sourceStats || !Array.isArray(sourceStats.items)) {
         return [];
@@ -20602,6 +21062,142 @@ function buildWidgetsTrendPayloadFromBookmarksByDate(bookmarksByDate, range = 'w
     };
 }
 
+async function buildBookmarkClickCountByDateFromHistoryRows(rows, options = {}) {
+    const bookmarkData = options.bookmarkData || await getBookmarkUrlsAndTitles();
+    const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
+    if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
+        return new Map();
+    }
+
+    const { bookmarkKeyMap } = buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl);
+    const countByKey = new Map();
+    const seenVisitKeys = new Set();
+    let processed = 0;
+
+    for (const [dateKey, records] of (Array.isArray(rows) ? rows : [])) {
+        if (!dateKey) continue;
+        for (const record of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const url = String(record?.url || '').trim();
+            if (!url) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const visitTime = getBrowsingCacheRecordTimestamp(record);
+            if (!visitTime) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+
+            const match = findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap);
+            if (!match) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const bookmarkKey = match.bookmarkKey;
+
+            const visitKey = `${bookmarkKey}|${visitTime}`;
+            if (seenVisitKeys.has(visitKey)) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            seenVisitKeys.add(visitKey);
+            countByKey.set(dateKey, Number(countByKey.get(dateKey) || 0) + 1);
+            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                await yieldBrowsingDerivedRows();
+            }
+        }
+    }
+
+    return countByKey;
+}
+
+async function deriveBookmarkClickRowsFromHistoryRows(rows, options = {}) {
+    const bookmarkData = options.bookmarkData || await getBookmarkUrlsAndTitles();
+    const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
+    if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
+        return [];
+    }
+
+    const { bookmarkKeyMap, bookmarkInfoMap } = buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl);
+    const derivedRows = [];
+    const seenVisitKeys = new Set();
+    let processed = 0;
+
+    for (const [dateKey, records] of (Array.isArray(rows) ? rows : [])) {
+        const derivedRecords = [];
+        for (const record of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const url = String(record?.url || '').trim();
+            if (!url) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const title = typeof record?.title === 'string' && record.title.trim()
+                ? record.title.trim()
+                : '';
+            const visitTime = getBrowsingCacheRecordTimestamp(record);
+            if (!visitTime) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+
+            const match = findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap);
+            if (!match) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const bookmarkKey = match.bookmarkKey;
+
+            const visitKey = `${bookmarkKey}|${visitTime}`;
+            if (seenVisitKeys.has(visitKey)) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            seenVisitKeys.add(visitKey);
+
+            const bookmarkInfo = bookmarkInfoMap.get(bookmarkKey) || {};
+            derivedRecords.push({
+                ...record,
+                bookmarkId: bookmarkInfo.id || record.bookmarkId || null,
+                title: record.title || bookmarkInfo.title || url,
+                url,
+                visitTime,
+                dateAdded: record.dateAdded || visitTime,
+                folderPath: Array.isArray(bookmarkInfo.folderPath) ? bookmarkInfo.folderPath : (record.folderPath || []),
+                bookmarkMatchKey: bookmarkKey,
+                matchType: match.matchType,
+                bookmarkUrl: bookmarkInfo.url || url,
+                bookmarkTitle: bookmarkInfo.title || title || url
+            });
+            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                await yieldBrowsingDerivedRows();
+            }
+        }
+        if (derivedRecords.length) {
+            derivedRows.push([dateKey, derivedRecords]);
+        }
+    }
+
+    return derivedRows;
+}
+
 function getWidgetsMiniCalendarWeekdayLabels() {
     const fallback = currentLang === 'zh_CN'
         ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -20854,30 +21450,33 @@ async function readWidgetsHistoryTrendData(range = 'week') {
 
     if (safeRange === 'year') {
         const monthCountByKey = createWidgetsCurrentYearMonthCountMap();
-        const liveCalendar = window.browsingHistoryCalendarInstance;
-        if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.forEach === 'function') {
-            liveCalendar.bookmarksByDate.forEach((records, dateKey) => {
-                const count = Array.isArray(records) ? records.length : 0;
-                addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
-            });
-        } else {
-            const nowDate = new Date();
-            nowDate.setHours(0, 0, 0, 0);
-            const yearStartDate = new Date(nowDate.getFullYear(), 0, 1);
-            yearStartDate.setHours(0, 0, 0, 0);
-            const startKey = getWidgetsDateKey(yearStartDate);
-            const endKey = getWidgetsDateKey(nowDate);
-            try {
-                if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
-                    const cached = await readHistoryCacheRange(startKey, endKey);
-                    if (cached && Array.isArray(cached.records)) {
-                        cached.records.forEach(([dateKey, records]) => {
-                            const count = Array.isArray(records) ? records.length : 0;
-                            addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
-                        });
-                    }
+        const nowDate = new Date();
+        nowDate.setHours(0, 0, 0, 0);
+        const yearStartDate = new Date(nowDate.getFullYear(), 0, 1);
+        yearStartDate.setHours(0, 0, 0, 0);
+        const startKey = getWidgetsDateKey(yearStartDate);
+        const endKey = getWidgetsDateKey(nowDate);
+        let loadedFromCache = false;
+        try {
+            if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
+                const cached = await readHistoryCacheRange(startKey, endKey);
+                if (cached && Array.isArray(cached.records)) {
+                    const countByDateKey = await buildBookmarkClickCountByDateFromHistoryRows(cached.records);
+                    countByDateKey.forEach((count, dateKey) => {
+                        addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
+                    });
+                    loadedFromCache = true;
                 }
-            } catch (_) { }
+            }
+        } catch (_) { }
+        if (!loadedFromCache) {
+            const liveCalendar = window.browsingHistoryCalendarInstance;
+            if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.forEach === 'function') {
+                liveCalendar.bookmarksByDate.forEach((records, dateKey) => {
+                    const count = Array.isArray(records) ? records.length : 0;
+                    addWidgetsMonthCountByDateKey(monthCountByKey, dateKey, count);
+                });
+            }
         }
 
         const points = buildWidgetsYearMonthPointsFromCountMap(monthCountByKey, safeRange);
@@ -20895,26 +21494,30 @@ async function readWidgetsHistoryTrendData(range = 'week') {
     const dateKeys = dates.map((date) => getWidgetsDateKey(date));
     const countByKey = new Map(dateKeys.map((key) => [key, 0]));
 
-    const liveCalendar = window.browsingHistoryCalendarInstance;
-    if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.get === 'function') {
-        dateKeys.forEach((dateKey) => {
-            const records = liveCalendar.bookmarksByDate.get(dateKey) || [];
-            countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
-        });
-    } else {
-        const startKey = dateKeys[0] || '';
-        const endKey = dateKeys[dateKeys.length - 1] || '';
-        try {
-            if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
-                const cached = await readHistoryCacheRange(startKey, endKey);
-                if (cached && Array.isArray(cached.records)) {
-                    cached.records.forEach(([dateKey, records]) => {
-                        if (!countByKey.has(dateKey)) return;
-                        countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
-                    });
-                }
+    const startKey = dateKeys[0] || '';
+    const endKey = dateKeys[dateKeys.length - 1] || '';
+    let loadedFromCache = false;
+    try {
+        if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
+            const cached = await readHistoryCacheRange(startKey, endKey);
+            if (cached && Array.isArray(cached.records)) {
+                const derivedCountByKey = await buildBookmarkClickCountByDateFromHistoryRows(cached.records);
+                derivedCountByKey.forEach((count, dateKey) => {
+                    if (!countByKey.has(dateKey)) return;
+                    countByKey.set(dateKey, count);
+                });
+                loadedFromCache = true;
             }
-        } catch (_) { }
+        }
+    } catch (_) { }
+    if (!loadedFromCache) {
+        const liveCalendar = window.browsingHistoryCalendarInstance;
+        if (liveCalendar?.bookmarksByDate && typeof liveCalendar.bookmarksByDate.get === 'function') {
+            dateKeys.forEach((dateKey) => {
+                const records = liveCalendar.bookmarksByDate.get(dateKey) || [];
+                countByKey.set(dateKey, Array.isArray(records) ? records.length : 0);
+            });
+        }
     }
 
     const points = buildWidgetsTrendPointsFromCountMap(dates, countByKey, safeRange);
@@ -21427,15 +22030,17 @@ async function readWidgetsHistoryWeekDataFromCache() {
     const startKey = dateKeys[0] || '';
     const endKey = dateKeys[dateKeys.length - 1] || '';
 
-    let hasRawData = false;
+    let hasDerivedData = false;
+    let cacheResolved = false;
     try {
         if (typeof readHistoryCacheRange === 'function' && startKey && endKey) {
             const cached = await readHistoryCacheRange(startKey, endKey);
             if (cached && Array.isArray(cached.records)) {
-                cached.records.forEach(([dateKey, records]) => {
+                cacheResolved = true;
+                const derivedCountByKey = await buildBookmarkClickCountByDateFromHistoryRows(cached.records);
+                derivedCountByKey.forEach((size, dateKey) => {
                     if (!countByKey.has(dateKey)) return;
-                    const size = Array.isArray(records) ? records.length : 0;
-                    if (size > 0) hasRawData = true;
+                    if (size > 0) hasDerivedData = true;
                     countByKey.set(dateKey, size);
                 });
             }
@@ -21456,7 +22061,9 @@ async function readWidgetsHistoryWeekDataFromCache() {
         dailyCounts,
         total,
         loadedAt: now,
-        hasRawData: hasRawData || total > 0
+        cacheResolved,
+        source: cacheResolved ? 'history-cache' : 'unavailable',
+        hasRawData: hasDerivedData || total > 0
     };
     return widgetsHistoryWeekDataCache;
 }
@@ -21863,7 +22470,8 @@ async function waitForBookmarkCalendarForWidgets(timeoutMs = 3000) {
 
 async function waitForBrowsingCalendarForWidgets(timeoutMs = 3600) {
     try {
-        await ensureBrowsingClickRankingStats();
+        const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week');
+        await ensureBrowsingClickRankingStats(currentRange);
     } catch (_) { }
 
     const start = Date.now();
@@ -22573,6 +23181,24 @@ async function getWidgetsRelatedTimeBucketIndex() {
     if (widgetsRelatedTimeBucketIndexPromise) return widgetsRelatedTimeBucketIndexPromise;
 
     widgetsRelatedTimeBucketIndexPromise = (async () => {
+        try {
+            if (typeof readBrowsingHistoryLibraryRowsForBounds === 'function') {
+                const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, Date.now());
+                if (libraryRows?.source === 'history-cache' && Array.isArray(libraryRows?.rows)) {
+                    const clickRows = await deriveBookmarkClickRowsFromHistoryRows(libraryRows.rows);
+                    const index = buildWidgetsRelatedTimeBucketIndexFromRows(clickRows);
+                    widgetsRelatedTimeBucketIndexCache = {
+                        index,
+                        source: 'history-cache',
+                        builtAt: Date.now()
+                    };
+                    return index;
+                }
+            }
+        } catch (error) {
+            console.warn('[WidgetsRelated] build time bucket index from history cache failed:', error);
+        }
+
         if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
             try {
                 initBrowsingHistoryCalendar();
@@ -23349,7 +23975,7 @@ async function updateWidgetsRankingWidget(options = {}) {
 
     try {
         let items = [];
-        const hasHydratedStats = shouldReuseBrowsingRankingStatsCache();
+        const hasHydratedStats = shouldReuseBrowsingRankingStatsCache(currentRange);
         const fastOnlyWindow = isWidgetsInFirstVisualOnlyWindow({ bypassVisualGate }) && !hasHydratedStats;
         let usedFastPath = false;
 
@@ -23379,7 +24005,7 @@ async function updateWidgetsRankingWidget(options = {}) {
         }
 
         if (!usedFastPath) {
-            const stats = await ensureBrowsingClickRankingStats();
+            const stats = await ensureBrowsingClickRankingStats(currentRange);
             if (isWidgetsInLoadingGuardWindow() && (!stats || stats.error === 'noBookmarks') && isWidgetsBrowsingSourceStillLoading()) {
                 const nextSignature = `loading::warmup::${currentRange}::${currentMode}::${currentVisualMode}::${currentLang}`;
                 if (widgetsRankingRenderSignature !== nextSignature) {
@@ -24015,20 +24641,24 @@ async function updateWidgetsHistoryWeekWidget() {
             if (useMiniGrid) {
                 trendPayload = await readWidgetsHistoryTrendData(currentRange);
                 total = Number(trendPayload?.total || 0);
-            } else if (window.browsingHistoryCalendarInstance?.bookmarksByDate) {
-                const live = computeWidgetsWeekDailyCounts(window.browsingHistoryCalendarInstance.bookmarksByDate);
-                dailyCounts = live.dailyCounts;
-                total = live.total;
-                widgetsHistoryWeekDataCache = {
-                    dailyCounts,
-                    total,
-                    loadedAt: Date.now(),
-                    hasRawData: total > 0
-                };
             } else {
                 const cachedWeekData = await readWidgetsHistoryWeekDataFromCache();
-                dailyCounts = Array.isArray(cachedWeekData?.dailyCounts) ? cachedWeekData.dailyCounts : [];
-                total = Number(cachedWeekData?.total || 0);
+                if (cachedWeekData?.cacheResolved === true || !window.browsingHistoryCalendarInstance?.bookmarksByDate) {
+                    dailyCounts = Array.isArray(cachedWeekData?.dailyCounts) ? cachedWeekData.dailyCounts : [];
+                    total = Number(cachedWeekData?.total || 0);
+                } else {
+                    const live = computeWidgetsWeekDailyCounts(window.browsingHistoryCalendarInstance.bookmarksByDate);
+                    dailyCounts = live.dailyCounts;
+                    total = live.total;
+                    widgetsHistoryWeekDataCache = {
+                        dailyCounts,
+                        total,
+                        loadedAt: Date.now(),
+                        cacheResolved: false,
+                        source: 'calendar',
+                        hasRawData: total > 0
+                    };
+                }
             }
         } else {
             trendPayload = await readWidgetsHistoryTrendData(currentRange);
@@ -24327,6 +24957,7 @@ async function updateWidgetsViewData(options = {}) {
     if (explicitTargets.length > 0) {
         explicitTargets.forEach((target) => {
             widgetsDirtyFlags[target] = true;
+            widgetsDirtyRevisions[target] = (Number(widgetsDirtyRevisions[target]) || 0) + 1;
         });
     }
 
@@ -24348,6 +24979,10 @@ async function updateWidgetsViewData(options = {}) {
     if (!targets.length) {
         return false;
     }
+    const targetDirtyRevisionSnapshot = {};
+    targets.forEach((target) => {
+        targetDirtyRevisionSnapshot[target] = Number(widgetsDirtyRevisions[target]) || 0;
+    });
 
     widgetsViewRefreshRunning = true;
     try {
@@ -24427,7 +25062,11 @@ async function updateWidgetsViewData(options = {}) {
 
         results.forEach((result) => {
             if (result.ok) {
-                widgetsDirtyFlags[result.target] = false;
+                if ((Number(widgetsDirtyRevisions[result.target]) || 0) === targetDirtyRevisionSnapshot[result.target]) {
+                    widgetsDirtyFlags[result.target] = false;
+                } else {
+                    widgetsDirtyFlags[result.target] = true;
+                }
                 if (result.changed) {
                     hasVisualUpdate = true;
                 }
@@ -29850,12 +30489,39 @@ function initBrowsingCalibrationMenu() {
     initBrowsingCalibrationSettingsModal();
 }
 
+async function updateBrowsingHistoryStatsUI() {
+    const daysEl = document.getElementById('dbStatsDays');
+    const countEl = document.getElementById('dbStatsCount');
+    const sizeEl = document.getElementById('dbStatsSize');
+    if (!daysEl || !countEl || !sizeEl) return;
+
+    try {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'getBrowsingHistoryStats' }, (response) => {
+                if (response && response.success) {
+                    daysEl.textContent = `${response.daysCount || 0} 天`;
+                    countEl.textContent = `${response.recordsCount || 0} 条`;
+                    const sizeMB = ((response.estimatedBytes || 0) / (1024 * 1024)).toFixed(2);
+                    sizeEl.textContent = `${sizeMB} MB`;
+                } else {
+                    daysEl.textContent = '读取失败';
+                    countEl.textContent = '读取失败';
+                    sizeEl.textContent = '读取失败';
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('[Calibration] 载入统计失败:', e);
+    }
+}
+
 function showBrowsingCalibrationSettingsModal() {
     const panel = document.getElementById('browsingCalibrationSettingsPanel');
     if (!panel) return;
     loadBrowsingCalibrationSettingsToUI();
     panel.hidden = false;
     updateBrowsingCalibrationCounts();
+    updateBrowsingHistoryStatsUI();
     try {
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (_) { }
@@ -29888,6 +30554,13 @@ async function loadBrowsingCalibrationSettingsToUI() {
             ? settings.openThreshold
             : BROWSING_CALIBRATION_RECOMMENDED.openThreshold;
     }
+
+    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
+    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
+    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
+    if (scheduleEnabled) scheduleEnabled.checked = settings.scheduledCalibrationEnabled !== false;
+    if (scheduleTime) scheduleTime.value = normalizeBrowsingCalibrationTime(settings.scheduledCalibrationTime);
+    if (idleEnabled) idleEnabled.checked = settings.scheduledCalibrationRequireIdle === true;
     updateBrowsingCalibrationCounts();
 }
 
@@ -29906,6 +30579,13 @@ async function saveBrowsingCalibrationSettingsFromUI() {
         ? Math.max(1, parseInt(openValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.openThreshold)
         : 0;
     delete settings.clickThreshold;
+
+    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
+    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
+    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
+    settings.scheduledCalibrationEnabled = scheduleEnabled?.checked !== false;
+    settings.scheduledCalibrationTime = normalizeBrowsingCalibrationTime(scheduleTime?.value || DEFAULT_BROWSING_CALIBRATION_SETTINGS.scheduledCalibrationTime);
+    settings.scheduledCalibrationRequireIdle = idleEnabled?.checked === true;
 
     await saveBrowsingCalibrationSettings(settings);
     hideBrowsingCalibrationSettingsModal();
@@ -29930,13 +30610,32 @@ function initBrowsingCalibrationSettingsModal() {
     const manualBtn = document.getElementById('browsingCalibrationManualActionBtn');
     if (manualBtn) {
         manualBtn.onclick = async () => {
-            await runBrowsingCalibration({ reason: 'manual', showToast: true });
+            manualBtn.disabled = true;
+            const ok = await runBrowsingCalibration({ reason: 'manual', showToast: true });
+            manualBtn.disabled = false;
+            if (ok) {
+                updateBrowsingHistoryStatsUI();
+                // 刷新历史图表页面
+                if (typeof refreshBrowsingHistoryFromCache === 'function') {
+                    refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
+                }
+            }
         };
     }
 
     const saveBtn = document.getElementById('browsingCalibrationSettingsSaveBtn');
     if (saveBtn) {
         saveBtn.onclick = saveBrowsingCalibrationSettingsFromUI;
+    }
+
+    const purgeInfoBtn = document.getElementById('historyPurgeInfoBtn');
+    const purgeInfoPanel = document.getElementById('historyPurgeInfoPanel');
+    if (purgeInfoBtn && purgeInfoPanel) {
+        purgeInfoBtn.onclick = () => {
+            const nextHidden = !purgeInfoPanel.hidden;
+            purgeInfoPanel.hidden = nextHidden;
+            purgeInfoBtn.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
+        };
     }
 
     const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
@@ -29954,6 +30653,94 @@ function initBrowsingCalibrationSettingsModal() {
     const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
     if (openEnabled) {
         openEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
+    }
+
+    const purgeBtn = document.getElementById('historyPurgeBtn');
+    if (purgeBtn) {
+        purgeBtn.onclick = async () => {
+            const rangeSelect = document.getElementById('historyPurgeRange');
+            const range = rangeSelect ? rangeSelect.value : '';
+
+            const purgeRangeOptions = {
+                keep_2years: {
+                    days: 730,
+                    zh: '2年前的本地记录',
+                    en: 'local records older than 2 years'
+                },
+                keep_1year: {
+                    days: 365,
+                    zh: '1年前的本地记录',
+                    en: 'local records older than 1 year'
+                },
+                keep_180days: {
+                    days: 180,
+                    zh: '180天前的本地记录',
+                    en: 'local records older than 180 days'
+                },
+                keep_90days: {
+                    days: 90,
+                    zh: '90天前的本地记录',
+                    en: 'local records older than 90 days'
+                }
+            };
+            const purgeOption = purgeRangeOptions[range];
+            if (!purgeOption) {
+                if (typeof showToast === 'function') {
+                    showToast(currentLang === 'zh_CN' ? '未选择需要清理的范围' : 'No purge range selected', 2000);
+                }
+                return;
+            }
+
+            const now = Date.now();
+            let cutoffDateKey = null;
+            const rangeText = currentLang === 'zh_CN' ? purgeOption.zh : purgeOption.en;
+            const date = new Date(now - purgeOption.days * 24 * 60 * 60 * 1000);
+            cutoffDateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+            const confirmMsg = currentLang === 'zh_CN' 
+                ? `确定要清理扩展本地记录库中${rangeText}吗？此操作不可逆，但不会删除浏览器自身的历史记录。`
+                : `Clean ${rangeText} from the extension's local database? This cannot be undone, but it will not delete browser history.`;
+            
+            if (!confirm(confirmMsg)) return;
+
+            purgeBtn.disabled = true;
+            const originalText = purgeBtn.textContent;
+            purgeBtn.textContent = currentLang === 'zh_CN' ? '清理中...' : 'Purging...';
+
+            try {
+                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                    chrome.runtime.sendMessage({ 
+                        action: 'purgeBrowsingHistoryCache', 
+                        payload: { cutoffDateKey } 
+                    }, async (response) => {
+                        purgeBtn.disabled = false;
+                        purgeBtn.textContent = originalText;
+                        if (response && response.success) {
+                            const successMsg = currentLang === 'zh_CN'
+                                ? `清理成功！共删除 ${response.deletedCount || 0} 条记录。`
+                                : `Purged successfully! Deleted ${response.deletedCount || 0} records.`;
+                            if (typeof showToast === 'function') {
+                                showToast(successMsg, 3000);
+                            }
+                            updateBrowsingHistoryStatsUI();
+                            
+                            // 刷新历史图表页面
+                            if (typeof refreshBrowsingHistoryFromCache === 'function') {
+                                refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
+                            }
+                        } else {
+                            if (typeof showToast === 'function') {
+                                showToast(currentLang === 'zh_CN' ? '清理失败' : 'Purge failed', 2000);
+                            }
+                        }
+                    });
+                }
+            } catch (err) {
+                purgeBtn.disabled = false;
+                purgeBtn.textContent = originalText;
+                console.warn('[Purge] 发生异常:', err);
+            }
+        };
     }
 }
 
@@ -32158,7 +32945,7 @@ async function getAddPostponedTreeMetricMaps() {
     const timeByUrl = new Map();
 
     try {
-        const stats = await ensureBrowsingClickRankingStats();
+        const stats = await ensureBrowsingClickRankingStats('all');
         const clickItems = getBrowsingRankingItemsForRangeFromStats(stats, 'all');
         clickItems.forEach((item) => {
             const url = String(item?.url || '').trim();
@@ -35138,15 +35925,36 @@ async function clearScoresCache() {
 }
 
 // ===== P1: 缓存机制 =====
-// 综合时间排行静态缓存（"全部"范围，按标题和URL双索引）
+// 综合时间排行静态缓存（"全部"范围，按URL和标题+域名双索引）
 let trackingRankingCache = {
-    byTitle: new Map(),   // 标题 -> { compositeMs, url }
+    byTitleDomain: new Map(), // 标题+域名 -> { compositeMs, url }
     byUrl: new Map(),     // URL -> { compositeMs, title }
     loaded: false
 };
 let historyDataCache = null;
 let historyCacheTime = 0;
 const STATS_CACHE_TTL = 60000; // 1分钟缓存
+
+function getHistoryTitleDomainKeyForStats(title, url) {
+    const safeTitle = String(title || '').trim();
+    const domain = getSyncHistoryUrlDomain(url);
+    return safeTitle && domain ? `${safeTitle}|${domain}` : '';
+}
+
+function mergeVisitStatsIntoMap(map, key, data) {
+    if (!(map instanceof Map) || !key || !data) return;
+    const visitCount = Number(data.visitCount || 0) || 0;
+    const lastVisitTime = Number(data.lastVisitTime || 0) || 0;
+    const existing = map.get(key);
+    if (!existing) {
+        map.set(key, { visitCount, lastVisitTime });
+        return;
+    }
+    map.set(key, {
+        visitCount: (Number(existing.visitCount || 0) || 0) + visitCount,
+        lastVisitTime: Math.max(Number(existing.lastVisitTime || 0) || 0, lastVisitTime)
+    });
+}
 
 // ===== P0: 加载综合时间排行缓存（"全部"范围）=====
 async function loadTrackingRankingCache() {
@@ -35162,18 +35970,23 @@ async function loadTrackingRankingCache() {
         });
 
         if (response && response.success && response.sessions) {
-            // 按标题聚合综合时间（与排行榜逻辑一致）
-            const titleStats = new Map();
+            // 按 URL 或标题+域名聚合综合时间，避免同标题跨站点误归因。
+            const sessionStats = new Map();
             for (const session of response.sessions) {
-                const key = session.title || session.url;
-                if (!titleStats.has(key)) {
-                    titleStats.set(key, {
-                        url: session.url,
-                        title: session.title || session.url,
+                const url = String(session.url || '').trim();
+                const title = String(session.title || url || '').trim();
+                const titleDomainKey = getHistoryTitleDomainKeyForStats(title, url);
+                const key = titleDomainKey || url || title;
+                if (!key) continue;
+                if (!sessionStats.has(key)) {
+                    sessionStats.set(key, {
+                        url,
+                        title: title || url,
+                        titleDomainKey,
                         compositeMs: 0
                     });
                 }
-                const stat = titleStats.get(key);
+                const stat = sessionStats.get(key);
                 const sessionComposite = session.compositeMs ||
                     ((session.activeMs || 0) +
                         (session.idleFocusMs || session.pauseTotalMs || 0) * 0.8 +
@@ -35183,10 +35996,12 @@ async function loadTrackingRankingCache() {
             }
 
             // 构建双索引
-            trackingRankingCache.byTitle.clear();
+            trackingRankingCache.byTitleDomain.clear();
             trackingRankingCache.byUrl.clear();
-            for (const [key, stat] of titleStats) {
-                trackingRankingCache.byTitle.set(stat.title, stat);
+            for (const [, stat] of sessionStats) {
+                if (stat.titleDomainKey) {
+                    trackingRankingCache.byTitleDomain.set(stat.titleDomainKey, stat);
+                }
                 if (stat.url) {
                     trackingRankingCache.byUrl.set(stat.url, stat);
                 }
@@ -35202,12 +36017,12 @@ async function loadTrackingRankingCache() {
 
 // 清除T值缓存（在数据变化时调用）
 function clearTrackingRankingCache() {
-    trackingRankingCache.byTitle.clear();
+    trackingRankingCache.byTitleDomain.clear();
     trackingRankingCache.byUrl.clear();
     trackingRankingCache.loaded = false;
 }
 
-// ===== P0: 从静态缓存获取书签的综合时间（标题或URL匹配）=====
+// ===== P0: 从静态缓存获取书签的综合时间（URL或标题+域名匹配）=====
 async function getTrackingDataFromDB() {
     // 确保缓存已加载
     await loadTrackingRankingCache();
@@ -35223,7 +36038,7 @@ async function getTrackingDataFromDB() {
     return result;
 }
 
-// 根据书签获取综合时间（标题或URL匹配，并集）
+// 根据书签获取综合时间（URL优先，标题+域名兜底）
 async function getBookmarkCompositeTime(bookmark) {
     await loadTrackingRankingCache();
 
@@ -35232,15 +36047,15 @@ async function getBookmarkCompositeTime(bookmark) {
         return trackingRankingCache.byUrl.get(bookmark.url).compositeMs;
     }
 
-    // 其次标题匹配
-    if (bookmark.title && trackingRankingCache.byTitle.has(bookmark.title)) {
-        return trackingRankingCache.byTitle.get(bookmark.title).compositeMs;
+    const titleDomainKey = getHistoryTitleDomainKeyForStats(bookmark.title, bookmark.url);
+    if (titleDomainKey && trackingRankingCache.byTitleDomain.has(titleDomainKey)) {
+        return trackingRankingCache.byTitleDomain.get(titleDomainKey).compositeMs;
     }
 
     return 0;
 }
 
-// ===== P2: 批量获取历史记录（URL+标题并集匹配，与点击记录一致）=====
+// ===== P2: 批量获取历史记录（URL+标题同域名匹配，与点击记录一致）=====
 let historyDataLoadingPromise = null; // 防止并发加载
 
 async function getBatchHistoryData() {
@@ -35258,60 +36073,51 @@ async function getBatchHistoryData() {
     // 开始加载，设置Promise锁
     historyDataLoadingPromise = (async () => {
         try {
-            if (!browserAPI?.history?.search) {
-                return { original: new Map(), title: new Map() };
-            }
-
-            const historyItems = await new Promise((resolve) => {
-                browserAPI.history.search({
-                    text: '',
-                    startTime: 0,
-                    maxResults: 50000
-                }, (results) => {
-                    if (browserAPI.runtime?.lastError) {
-                        resolve([]);
-                    } else {
-                        resolve(results || []);
-                    }
-                });
-            });
+            const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, now);
 
             const originalMap = new Map();  // URL映射
-            const titleMap = new Map();    // 标题映射（与点击记录一致的并集匹配）
+            const titleDomainMap = new Map(); // 标题+域名映射
+            let processed = 0;
 
-            for (const item of historyItems) {
-                if (item.url) {
+            for (const [, records] of libraryRows.rows) {
+                for (const item of (Array.isArray(records) ? records : [])) {
+                    processed += 1;
+                    if (!item.url) {
+                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                        continue;
+                    }
+                    const visitTime = getBrowsingCacheRecordTimestamp(item);
+                    if (!visitTime) {
+                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                        continue;
+                    }
                     const data = {
-                        visitCount: item.visitCount || 0,
-                        lastVisitTime: item.lastVisitTime || 0
+                        visitCount: 1,
+                        lastVisitTime: visitTime
                     };
                     // URL映射
-                    originalMap.set(item.url, data);
-
-                    // 标题映射
-                    const title = item.title && item.title.trim();
-                    if (title) {
-                        if (!titleMap.has(title)) {
-                            titleMap.set(title, data);
-                        } else {
-                            const existing = titleMap.get(title);
-                            titleMap.set(title, {
-                                visitCount: existing.visitCount + data.visitCount,
-                                lastVisitTime: Math.max(existing.lastVisitTime, data.lastVisitTime)
-                            });
+                    const existingUrl = originalMap.get(item.url);
+                    originalMap.set(item.url, existingUrl
+                        ? {
+                            visitCount: existingUrl.visitCount + 1,
+                            lastVisitTime: Math.max(existingUrl.lastVisitTime, visitTime)
                         }
-                    }
+                        : data);
+
+                    const titleDomainKey = getHistoryTitleDomainKeyForStats(item.title, item.url);
+                    mergeVisitStatsIntoMap(titleDomainMap, titleDomainKey, data);
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
                 }
             }
 
-            // 更新缓存（URL + 标题，与点击记录一致）
-            historyDataCache = { original: originalMap, title: titleMap };
+            // 更新缓存（URL + 标题同域名，与点击记录一致）
+            historyDataCache = { original: originalMap, titleDomain: titleDomainMap };
             historyCacheTime = Date.now();
 
             return historyDataCache;
         } catch (e) {
             console.warn('[权重计算] 批量获取历史数据失败:', e);
-            return { original: new Map(), title: new Map() };
+            return { original: new Map(), titleDomain: new Map() };
         } finally {
             historyDataLoadingPromise = null; // 清除锁
         }
@@ -35322,25 +36128,40 @@ async function getBatchHistoryData() {
 
 // 获取书签的访问统计数据（保留用于单个查询场景）
 async function getBookmarkVisitStats(url) {
+    const normalizeVisitUrl = (value) => {
+        let safe = String(value || '').trim();
+        if (safe.length > 1 && safe.endsWith('/')) safe = safe.slice(0, -1);
+        return safe;
+    };
+    const targetUrl = normalizeVisitUrl(url);
+
     try {
-        if (!browserAPI?.history?.getVisits) {
-            return { visitCount: 0, lastVisitTime: 0 };
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, Date.now());
+        let visitCount = 0;
+        let lastVisitTime = 0;
+        let processed = 0;
+        for (const [, records] of libraryRows.rows) {
+            for (const record of (Array.isArray(records) ? records : [])) {
+                processed += 1;
+                if (normalizeVisitUrl(record?.url) !== targetUrl) {
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                    continue;
+                }
+                const visitTime = getBrowsingCacheRecordTimestamp(record);
+                if (!visitTime) {
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                    continue;
+                }
+                visitCount += 1;
+                if (visitTime > lastVisitTime) lastVisitTime = visitTime;
+                if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+            }
+        }
+        if (visitCount > 0) {
+            return { visitCount, lastVisitTime };
         }
 
-        const visits = await new Promise((resolve) => {
-            browserAPI.history.getVisits({ url }, (results) => {
-                if (browserAPI.runtime?.lastError) {
-                    resolve([]);
-                } else {
-                    resolve(results || []);
-                }
-            });
-        });
-
-        return {
-            visitCount: visits.length,
-            lastVisitTime: visits.length > 0 ? Math.max(...visits.map(v => v.visitTime)) : 0
-        };
+        return { visitCount: 0, lastVisitTime: 0 };
     } catch (e) {
         return { visitCount: 0, lastVisitTime: 0 };
     }
@@ -38182,9 +39003,60 @@ function clearBrowsingRankingTransientRetryTimer() {
 
 function resetBrowsingRankingDerivedCache() {
     browsingClickRankingStats = null;
+    if (browsingClickRankingStatsCache instanceof Map) {
+        browsingClickRankingStatsCache.clear();
+    } else {
+        browsingClickRankingStatsCache = new Map();
+    }
+    if (browsingClickRankingStatsPromises instanceof Map) {
+        browsingClickRankingStatsPromises.clear();
+    } else {
+        browsingClickRankingStatsPromises = new Map();
+    }
     clearBrowsingRankingTransientRetryTimer();
     clearWidgetsRankingFastItems();
     clearWidgetsRelatedTimeBucketIndexCache();
+}
+
+function normalizeBrowsingRankingStatsRange(range = 'all') {
+    return normalizeWidgetsRankingRange(range || 'all');
+}
+
+function isBrowsingRankingStatsUsable(stats, range) {
+    if (!stats) return false;
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    if (stats.error === 'noBookmarks' && stats.transient === true) {
+        const expiresAt = Number(stats.expiresAt || 0);
+        if (!expiresAt || Date.now() >= expiresAt) return false;
+    }
+    if (stats.filteredRange && stats.filteredRange !== safeRange) return false;
+    return true;
+}
+
+function readBrowsingRankingStatsCache(range = 'all') {
+    if (!(browsingClickRankingStatsCache instanceof Map)) {
+        browsingClickRankingStatsCache = new Map();
+    }
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    const exact = browsingClickRankingStatsCache.get(safeRange);
+    if (isBrowsingRankingStatsUsable(exact, safeRange)) {
+        return exact;
+    }
+    if (exact) {
+        browsingClickRankingStatsCache.delete(safeRange);
+    }
+
+    if (safeRange !== 'all') {
+        const allStats = browsingClickRankingStatsCache.get('all');
+        if (isBrowsingRankingStatsUsable(allStats, 'all') && !allStats.filteredRange) {
+            return allStats;
+        }
+        if (allStats && !isBrowsingRankingStatsUsable(allStats, 'all')) {
+            browsingClickRankingStatsCache.delete('all');
+        }
+    }
+
+    return null;
 }
 
 function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSIENT_RETRY_MS) {
@@ -38209,10 +39081,15 @@ function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSI
 function cacheBrowsingRankingError(error, options = {}) {
     const safeError = String(error || 'unknown');
     const transient = options.transient === true;
+    const safeRange = normalizeBrowsingRankingStatsRange(options.range || 'all');
     const payload = {
         items: [],
-        error: safeError
+        error: safeError,
+        rangeKey: safeRange
     };
+    if (safeRange !== 'all') {
+        payload.filteredRange = safeRange;
+    }
 
     if (transient) {
         payload.transient = true;
@@ -38221,19 +39098,15 @@ function cacheBrowsingRankingError(error, options = {}) {
     }
 
     browsingClickRankingStats = payload;
+    if (!(browsingClickRankingStatsCache instanceof Map)) {
+        browsingClickRankingStatsCache = new Map();
+    }
+    browsingClickRankingStatsCache.set(safeRange, payload);
     return payload;
 }
 
-function shouldReuseBrowsingRankingStatsCache() {
-    if (!browsingClickRankingStats) return false;
-    if (browsingClickRankingStats.error === 'noBookmarks' && browsingClickRankingStats.transient === true) {
-        const expiresAt = Number(browsingClickRankingStats.expiresAt || 0);
-        if (!expiresAt || Date.now() >= expiresAt) {
-            resetBrowsingRankingDerivedCache();
-            return false;
-        }
-    }
-    return true;
+function shouldReuseBrowsingRankingStatsCache(range = 'all') {
+    return !!readBrowsingRankingStatsCache(range);
 }
 
 async function waitForBrowsingHistoryCalendar(options = {}) {
@@ -38261,127 +39134,133 @@ async function waitForBrowsingHistoryCalendar(options = {}) {
     return window.browsingHistoryCalendarInstance || null;
 }
 
-async function ensureBrowsingClickRankingStats() {
-    if (shouldReuseBrowsingRankingStatsCache()) {
-        return browsingClickRankingStats;
+async function readBrowsingHistoryLibraryRowsForBounds(startTime = 0, endTime = Date.now()) {
+    const safeStart = Math.max(0, Number(startTime || 0) || 0);
+    const safeEnd = Math.max(safeStart, Number(endTime || Date.now()) || Date.now());
+    if (typeof readHistoryCacheRange !== 'function') {
+        return { rows: [], source: 'history-cache-unavailable', meta: { unavailable: true } };
     }
 
-    // 如果历史记录 API 完全不可用，直接标记为不支持
-    if (!browserAPI || !browserAPI.history || typeof browserAPI.history.search !== 'function') {
-        return cacheBrowsingRankingError('noHistoryApi');
-    }
-
-    // 确保「点击记录」日历已初始化
+    const startKey = safeStart > 0 ? getSyncHistoryDateKey(safeStart) : '';
+    const endKey = getSyncHistoryDateKey(safeEnd);
+    let cached = null;
     try {
-        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-            initBrowsingHistoryCalendar();
-        }
-    } catch (e) {
-        console.warn('[BrowsingRanking] 初始化 BrowsingHistoryCalendar 失败:', e);
-    }
-
-    const calendar = await waitForBrowsingHistoryCalendar({
-        timeout: currentView === 'widgets' ? 1700 : 5000,
-        pollMs: currentView === 'widgets' ? 100 : 200
-    });
-
-    const transientPending = isBrowsingRankingTransientPending(calendar);
-    if (!calendar || !calendar.bookmarksByDate) {
-        return cacheBrowsingRankingError('noBookmarks', { transient: transientPending });
-    }
-
-    // 如果完全没有任何点击记录，则视为无数据
-    if (calendar.bookmarksByDate.size === 0) {
-        return cacheBrowsingRankingError('noBookmarks', { transient: transientPending });
-    }
-
-    const boundaries = getBrowsingClickRankingBoundaries();
-
-    // ✨ 通过书签 API 获取 URL 和标题集合，用于构建书签标识映射
-    // 与「书签关联记录」和「点击记录」保持一致，使用 URL 或标题的并集匹配
-    let bookmarkData;
-    try {
-        bookmarkData = await getBookmarkUrlsAndTitles();
+        cached = await readHistoryCacheRange(startKey, endKey);
     } catch (error) {
-        console.warn('[BrowsingRanking] 获取书签URL和标题失败:', error);
-        return cacheBrowsingRankingError('noBookmarks');
+        console.warn('[BrowsingRanking] 读取浏览历史库失败:', error);
+        return { rows: [], source: 'history-cache-error', meta: { error: error?.message || String(error) } };
     }
 
+    const rows = normalizeBrowsingCacheRowsForSync(cached);
+    const filteredRows = await filterBrowsingCacheRowsByTimeAsync(rows, safeStart, safeEnd);
+
+    return {
+        rows: filteredRows,
+        source: 'history-cache',
+        meta: {
+            lastSyncTime: Number(cached?.lastSyncTime || 0) || 0,
+            lastFullSyncTime: Number(cached?.lastFullSyncTime || cached?.lastSyncTime || 0) || 0,
+            recordCount: filteredRows.reduce((sum, [, records]) => sum + (Array.isArray(records) ? records.length : 0), 0)
+        }
+    };
+}
+
+function buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl) {
+    const bookmarkKeyMap = new Map();
+    const bookmarkInfoMap = new Map();
+    let bookmarkKeyCounter = 0;
+
+    for (const [url, info] of bookmarkInfoByUrl.entries()) {
+        const normalizedUrl = String(url || '').trim();
+        if (!normalizedUrl) continue;
+        const normalizedTitle = info && typeof info.title === 'string' ? info.title.trim() : '';
+        const normalizedDomain = getSyncHistoryUrlDomain(normalizedUrl);
+        const titleDomainKey = normalizedTitle && normalizedDomain
+            ? `titleDomain:${normalizedTitle}|${normalizedDomain}`
+            : '';
+
+        const bookmarkKey = `bm_${bookmarkKeyCounter++}`;
+        bookmarkKeyMap.set(`url:${normalizedUrl}`, bookmarkKey);
+        if (titleDomainKey && !bookmarkKeyMap.has(titleDomainKey)) {
+            bookmarkKeyMap.set(titleDomainKey, bookmarkKey);
+        }
+        bookmarkInfoMap.set(bookmarkKey, {
+            id: info?.id == null ? null : String(info.id),
+            url: normalizedUrl,
+            title: normalizedTitle || normalizedUrl,
+            folderPath: Array.isArray(info?.folderPath) ? info.folderPath : [],
+            urls: [normalizedUrl]
+        });
+    }
+
+    return { bookmarkKeyMap, bookmarkInfoMap };
+}
+
+function findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap) {
+    if (!record || !(bookmarkKeyMap instanceof Map)) return null;
+    const url = String(record?.url || '').trim();
+    if (!url) return null;
+
+    let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
+    if (bookmarkKey) {
+        return { bookmarkKey, matchType: 'exact_url' };
+    }
+
+    const title = typeof record?.title === 'string' && record.title.trim()
+        ? record.title.trim()
+        : '';
+    const domain = getSyncHistoryUrlDomain(url);
+    if (title && domain) {
+        bookmarkKey = bookmarkKeyMap.get(`titleDomain:${title}|${domain}`);
+        if (bookmarkKey) {
+            return { bookmarkKey, matchType: 'title_domain' };
+        }
+    }
+
+    return null;
+}
+
+async function buildBrowsingClickRankingStatsFromRows(rows, options = {}) {
+    const boundaries = options.boundaries || getBrowsingClickRankingBoundaries();
+    let bookmarkData = options.bookmarkData || null;
+    if (!bookmarkData) {
+        bookmarkData = await getBookmarkUrlsAndTitles();
+    }
     const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
     if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
-        return cacheBrowsingRankingError('noBookmarks');
+        return null;
     }
 
-    // 构建 URL/标题 -> 书签主键的映射
-    // 标题相同的书签合并为同一个统计项（共享 bookmarkKey）
-    const bookmarkKeyMap = new Map(); // url or title (normalized) -> bookmarkKey
-    const bookmarkInfoMap = new Map(); // bookmarkKey -> { url, title, urls: [] }
+    const { bookmarkKeyMap, bookmarkInfoMap } = buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl);
+    const statsMap = new Map();
+    let processed = 0;
 
-    let bookmarkKeyCounter = 0;
-    for (const [url, info] of bookmarkInfoByUrl.entries()) {
-        const normalizedUrl = url;
-        const normalizedTitle = info && typeof info.title === 'string' ? info.title.trim() : '';
-
-        // 检查是否已有相同标题的书签
-        let bookmarkKey = null;
-        if (normalizedTitle) {
-            bookmarkKey = bookmarkKeyMap.get(`title:${normalizedTitle}`);
-        }
-
-        if (bookmarkKey) {
-            // 标题相同，复用已有的 bookmarkKey，添加 URL 映射
-            bookmarkKeyMap.set(`url:${normalizedUrl}`, bookmarkKey);
-            // 记录额外的 URL
-            const existingInfo = bookmarkInfoMap.get(bookmarkKey);
-            if (existingInfo && existingInfo.urls) {
-                existingInfo.urls.push(normalizedUrl);
+    for (const [, records] of (Array.isArray(rows) ? rows : [])) {
+        for (const record of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const url = String(record?.url || '').trim();
+            if (!url) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
             }
-        } else {
-            // 创建新的 bookmarkKey
-            bookmarkKey = `bm_${bookmarkKeyCounter++}`;
-            bookmarkKeyMap.set(`url:${normalizedUrl}`, bookmarkKey);
-            if (normalizedTitle) {
-                bookmarkKeyMap.set(`title:${normalizedTitle}`, bookmarkKey);
-            }
-            bookmarkInfoMap.set(bookmarkKey, {
-                url: normalizedUrl,
-                title: normalizedTitle || normalizedUrl,
-                urls: [normalizedUrl]
-            });
-        }
-    }
-
-    const statsMap = new Map(); // bookmarkKey -> stats
-
-    // 从「点击记录」的数据结构中汇总统计信息
-    for (const bookmarks of calendar.bookmarksByDate.values()) {
-        bookmarks.forEach(bm => {
-            if (!bm || !bm.url) return;
-
-            const url = bm.url;
-            const title = typeof bm.title === 'string' && bm.title.trim()
-                ? bm.title.trim()
-                : (bm.url || '');
-            const t = typeof bm.visitTime === 'number'
-                ? bm.visitTime
-                : (bm.dateAdded instanceof Date ? bm.dateAdded.getTime() : 0);
-            if (!t) return;
-
-            // ✨ 每条历史记录的 visitCount 应该是 1（单次访问），不应累积浏览器的总访问次数
-            // 因为我们已经将每次访问都记录为单独的记录
-            const increment = 1;
-
-            // ✨ 找出这条记录匹配的书签（优先URL匹配，其次标题匹配）
-            let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
-            if (!bookmarkKey && title) {
-                // URL 不匹配，尝试标题匹配
-                bookmarkKey = bookmarkKeyMap.get(`title:${title}`);
+            const t = getBrowsingCacheRecordTimestamp(record);
+            if (!t || t > boundaries.now) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
             }
 
-            if (!bookmarkKey) {
-                // 没有匹配的书签，跳过（理论上不应该发生，因为这些记录来自存储库3）
-                return;
+            const match = findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap);
+            if (!match) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
             }
+            const bookmarkKey = match.bookmarkKey;
 
             let stats = statsMap.get(bookmarkKey);
             if (!stats) {
@@ -38399,34 +39278,129 @@ async function ensureBrowsingClickRankingStats() {
                 statsMap.set(bookmarkKey, stats);
             }
 
-            if (t > stats.lastVisitTime) {
-                stats.lastVisitTime = t;
+            stats.allCount += 1;
+            if (t >= boundaries.dayStart) stats.dayCount += 1;
+            if (t >= boundaries.weekStart) stats.weekCount += 1;
+            if (t >= boundaries.monthStart) stats.monthCount += 1;
+            if (t >= boundaries.yearStart) stats.yearCount += 1;
+            if (t > stats.lastVisitTime) stats.lastVisitTime = t;
+            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                await yieldBrowsingDerivedRows();
             }
+        }
+    }
 
-            // ✨ 修复时间统计：只统计当前时间之前的访问
-            const now = boundaries.now;
-            if (t <= now) {
-                stats.allCount += increment; // 全部时间范围
-                if (t >= boundaries.dayStart && t <= now) stats.dayCount += increment;
-                if (t >= boundaries.weekStart && t <= now) stats.weekCount += increment;
-                if (t >= boundaries.monthStart && t <= now) stats.monthCount += increment;
-                if (t >= boundaries.yearStart && t <= now) stats.yearCount += increment;
+    return {
+        items: Array.from(statsMap.values()),
+        boundaries,
+        bookmarkKeyMap,
+        bookmarkInfoMap,
+        rows: Array.isArray(rows) ? rows : [],
+        source: options.source || 'history-cache',
+        meta: options.meta || null
+    };
+}
+
+async function ensureBrowsingClickRankingStats(range = 'all') {
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    const cachedStats = readBrowsingRankingStatsCache(safeRange);
+    if (cachedStats) {
+        browsingClickRankingStats = cachedStats;
+        return cachedStats;
+    }
+
+    if (typeof readHistoryCacheRange !== 'function') {
+        return cacheBrowsingRankingError('historyCacheUnavailable', { range: safeRange });
+    }
+
+    if (!(browsingClickRankingStatsPromises instanceof Map)) {
+        browsingClickRankingStatsPromises = new Map();
+    }
+    const existingPromise = browsingClickRankingStatsPromises.get(safeRange);
+    if (existingPromise) {
+        return existingPromise;
+    }
+
+    const loadPromise = (async () => {
+        try {
+            if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+                initBrowsingHistoryCalendar();
+            }
+        } catch (e) {
+            console.warn('[BrowsingRanking] 初始化 BrowsingHistoryCalendar 失败:', e);
+        }
+
+        const boundaries = getBrowsingClickRankingBoundaries();
+        let bookmarkData;
+        try {
+            bookmarkData = await getBookmarkUrlsAndTitles();
+        } catch (error) {
+            console.warn('[BrowsingRanking] 获取书签URL和标题失败:', error);
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
+
+        const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
+        if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
+
+        const rangeStartMs = safeRange === 'all'
+            ? 0
+            : Math.max(0, getWidgetsRankingRangeStartMs(safeRange, boundaries));
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(rangeStartMs, boundaries.now);
+        if (!libraryRows.rows.length) {
+            const calendar = await waitForBrowsingHistoryCalendar({
+                timeout: currentView === 'widgets' ? 900 : 1500,
+                pollMs: currentView === 'widgets' ? 100 : 150
+            });
+            return cacheBrowsingRankingError('noBookmarks', {
+                transient: isBrowsingRankingTransientPending(calendar),
+                range: safeRange
+            });
+        }
+
+        const stats = await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
+            boundaries,
+            bookmarkData,
+            source: libraryRows.source,
+            meta: {
+                ...(libraryRows.meta || {}),
+                filteredRange: safeRange,
+                rangeStartTime: rangeStartMs,
+                rangeEndTime: boundaries.now
             }
         });
-    }
+        if (!stats || !Array.isArray(stats.items) || stats.items.length === 0) {
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
 
-    const items = Array.from(statsMap.values());
+        if (safeRange !== 'all') {
+            stats.filteredRange = safeRange;
+            stats.items = stats.items.map((item) => ({
+                ...item,
+                filteredCount: Number(item.allCount || 0)
+            }));
+        }
 
-    // 保存映射供筛选函数使用
-    if (browsingClickRankingRetryTimer) {
-        clearBrowsingRankingTransientRetryTimer();
-    }
-    browsingClickRankingStats = { items, boundaries, bookmarkKeyMap, bookmarkInfoMap };
-    return browsingClickRankingStats;
+        if (browsingClickRankingRetryTimer) {
+            clearBrowsingRankingTransientRetryTimer();
+        }
+        browsingClickRankingStats = stats;
+        browsingClickRankingStatsCache.set(safeRange, stats);
+        return stats;
+    })().finally(() => {
+        if (browsingClickRankingStatsPromises instanceof Map) {
+            browsingClickRankingStatsPromises.delete(safeRange);
+        }
+    });
+
+    browsingClickRankingStatsPromises.set(safeRange, loadPromise);
+    return loadPromise;
 }
 
 function getBrowsingRankingItemsForRange(range) {
-    return getBrowsingRankingItemsForRangeFromStats(browsingClickRankingStats, range);
+    const stats = readBrowsingRankingStatsCache(range) || browsingClickRankingStats;
+    return getBrowsingRankingItemsForRangeFromStats(stats, range);
 }
 
 function getBrowsingRankingItemsForRangeFromStats(stats, range) {
@@ -38654,7 +39628,7 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
             });
             bookmarkItem.addEventListener('click', (e) => {
                 e.stopPropagation();
-                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-folder' });
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-folder', url: item.url });
                 try {
                     const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
                     if (browserAPI?.tabs?.create) {
@@ -38852,7 +39826,7 @@ function renderBrowsingDomainRankingList(container, items, range, options = {}) 
             });
             bookmarkItem.addEventListener('click', (e) => {
                 e.stopPropagation();
-                recordBrowsingCalibrationInteraction('click', { source: mode === 'subdomain' ? 'browsing-ranking-subdomain' : 'browsing-ranking-domain' });
+                recordBrowsingCalibrationInteraction('click', { source: mode === 'subdomain' ? 'browsing-ranking-subdomain' : 'browsing-ranking-domain', url: item.url });
                 try {
                     const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
                     if (browserAPI?.tabs?.create) {
@@ -38965,7 +39939,7 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
             titleLink.rel = 'noopener noreferrer';
             titleLink.textContent = entry.title;
             titleLink.addEventListener('click', () => {
-                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-link' });
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-link', url: entry.url });
             });
 
             const urlDiv = document.createElement('div');
@@ -39054,7 +40028,16 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
                 ? new Date(entry.lastVisitTime).toLocaleString()
                 : (isZh ? '无访问记录' : 'No visits');
 
-            if (isZh) {
+            const scopedStatsRange = options.stats && options.stats.filteredRange
+                ? normalizeWidgetsRankingRange(options.stats.filteredRange)
+                : '';
+            const isRangeScopedStats = scopedStatsRange && scopedStatsRange === normalizeWidgetsRankingRange(range);
+            if (isRangeScopedStats) {
+                const scopedCount = entry.filteredCount !== undefined ? entry.filteredCount : value;
+                detail.textContent = isZh
+                    ? `${rangeLabel}：${scopedCount} 次；最近访问：${lastVisitText}`
+                    : `${rangeLabel}: ${scopedCount} clicks; Last visit: ${lastVisitText}`;
+            } else if (isZh) {
                 detail.textContent =
                     `今天：${entry.dayCount} 次，本周：${entry.weekCount} 次，本月：${entry.monthCount} 次，本年：${entry.yearCount} 次；` +
                     `最近访问：${lastVisitText}`;
@@ -39087,7 +40070,7 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
                 detail.style.display = visible ? 'none' : 'block';
 
                 try {
-                    recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking' });
+                    recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking', url: entry.url });
                     if (browserAPI && browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
                         browserAPI.tabs.create({ url: entry.url });
                     } else {
@@ -39153,7 +40136,7 @@ async function loadBrowsingClickRanking(range) {
     `;
 
     try {
-        const stats = await ensureBrowsingClickRankingStats();
+        const stats = await ensureBrowsingClickRankingStats(range);
 
         if (stats.error === 'noHistoryApi') {
             const title = i18n.browsingRankingNotSupportedTitle
@@ -39198,11 +40181,11 @@ async function loadBrowsingClickRanking(range) {
             customRangeLabel = browsingRankingCustomRange.label || null;
             items = await getBrowsingRankingItemsForCustomRange(browsingRankingCustomRange.startTime, browsingRankingCustomRange.endTime);
         } else {
-            items = getBrowsingRankingItemsForRange(range);
+            items = getBrowsingRankingItemsForRangeFromStats(stats, range);
 
             // 应用二级菜单时间筛选
             if (browsingRankingTimeFilter && items.length > 0) {
-                items = filterRankingItemsByTime(items, browsingRankingTimeFilter, stats.boundaries);
+                items = filterRankingItemsByTime(items, browsingRankingTimeFilter, stats.boundaries, stats);
             }
         }
 
@@ -39231,7 +40214,7 @@ async function loadBrowsingClickRanking(range) {
                 mode: browsingRankingViewMode
             });
         } else {
-            renderBrowsingClickRankingList(listContainer, items, range, { customRangeLabel });
+            renderBrowsingClickRankingList(listContainer, items, range, { customRangeLabel, stats });
         }
     } catch (error) {
         console.error('[BrowsingRanking] 加载点击排行失败:', error);
@@ -40563,13 +41546,13 @@ function setupBookmarkListener() {
 
     // 书签创建
     browserAPI.bookmarks.onCreated.addListener(async (id, bookmark) => {
+        if (shouldDeferBookmarkListenerEvent('bookmark-created')) return;
 
         try {
             addBookmarkToAdditionsCache(bookmark);
             // S值计算由background.js的bookmarks.onCreated监听器处理
-            // 书签集合变化会影响「点击记录」「点击排行」「书签关联记录」
-            // 这里使用全量重建（仅限最近一年的历史，内部有lookback与去重）
-            scheduleHistoryRefresh({ forceFull: false });
+            // 前台只标记派生视图重算；本地历史库的定向回填由 background 处理
+            markBookmarkReferenceDerivedDataStale('bookmark-created');
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onCreated 处理异常:', e);
@@ -40578,6 +41561,7 @@ function setupBookmarkListener() {
 
     // 书签删除
     browserAPI.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
+        if (shouldDeferBookmarkListenerEvent('bookmark-removed')) return;
 
         try {
             // 收集所有被删除的节点ID和URL（包括子书签）
@@ -40623,8 +41607,8 @@ function setupBookmarkListener() {
                 }
             }
 
-            // 书签被删除后，对应的点击记录与排行需要重算
-            scheduleHistoryRefresh({ forceFull: false });
+            // 书签被删除后，只让派生视图重算；本地历史库不跟随书签删除
+            markBookmarkReferenceDerivedDataStale('bookmark-removed');
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onRemoved 处理异常:', e);
@@ -40633,6 +41617,7 @@ function setupBookmarkListener() {
 
     // 书签修改
     browserAPI.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+        if (shouldDeferBookmarkListenerEvent('bookmark-changed')) return;
 
         try {
             updateBookmarkInAdditionsCache(id, changeInfo);
@@ -40650,8 +41635,8 @@ function setupBookmarkListener() {
 
             }
 
-            // 书签URL或标题变化会影响匹配结果，重建最近一年的点击记录
-            scheduleHistoryRefresh({ forceFull: false });
+            // URL或标题变化会影响匹配结果；本地历史库的定向回填由 background 处理
+            markBookmarkReferenceDerivedDataStale('bookmark-changed');
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onChanged 处理异常:', e);
@@ -40660,15 +41645,33 @@ function setupBookmarkListener() {
 
     // 书签移动
     browserAPI.bookmarks.onMoved.addListener(async (id, moveInfo) => {
+        if (shouldDeferBookmarkListenerEvent('bookmark-moved')) return;
 
 
         try {
             moveBookmarkInAdditionsCache(id, moveInfo);
+            markBookmarkReferenceDerivedDataStale('bookmark-moved');
         } catch (e) {
             // 仅记录错误，不触发完全刷新以避免页面闪烁和滚动位置丢失
             console.warn('[书签监听] onMoved 处理异常:', e);
         }
     });
+
+    try {
+        if (browserAPI.bookmarks.onImportBegan) {
+            browserAPI.bookmarks.onImportBegan.addListener(() => {
+                bookmarkListenerImporting = true;
+                bookmarkListenerBulkMode = true;
+                scheduleBookmarkListenerBulkRefresh('bookmark-import');
+            });
+        }
+        if (browserAPI.bookmarks.onImportEnded) {
+            browserAPI.bookmarks.onImportEnded.addListener(() => {
+                bookmarkListenerImporting = false;
+                scheduleBookmarkListenerBulkRefresh('bookmark-import-ended');
+            });
+        }
+    } catch (_) { }
 
     bookmarkListenerRegistered = true;
 }
@@ -40691,22 +41694,24 @@ function setupRealtimeMessageListener() {
             if (message.url || message.title) {
                 // 增量更新缓存（不清除整个缓存，只更新变化的条目）
                 if (trackingRankingCache.loaded) {
+                    const titleDomainKey = getHistoryTitleDomainKeyForStats(message.title, message.url);
                     const stat = {
                         url: message.url,
                         title: message.title,
+                        titleDomainKey,
                         compositeMs: message.compositeMs || 0
                     };
                     // 累加到现有值（如果已存在）
                     if (message.url && trackingRankingCache.byUrl.has(message.url)) {
                         const existing = trackingRankingCache.byUrl.get(message.url);
                         stat.compositeMs = existing.compositeMs + (message.compositeMs || 0);
-                    } else if (message.title && trackingRankingCache.byTitle.has(message.title)) {
-                        const existing = trackingRankingCache.byTitle.get(message.title);
+                    } else if (titleDomainKey && trackingRankingCache.byTitleDomain.has(titleDomainKey)) {
+                        const existing = trackingRankingCache.byTitleDomain.get(titleDomainKey);
                         stat.compositeMs = existing.compositeMs + (message.compositeMs || 0);
                     }
                     // 更新双索引
-                    if (message.title) {
-                        trackingRankingCache.byTitle.set(message.title, stat);
+                    if (titleDomainKey) {
+                        trackingRankingCache.byTitleDomain.set(titleDomainKey, stat);
                     }
                     if (message.url) {
                         trackingRankingCache.byUrl.set(message.url, stat);
@@ -40782,7 +41787,7 @@ function setupRealtimeMessageListener() {
                 }
             }
         } else if (message.action === 'browsingCalibrationCompleted') {
-            refreshBrowsingHistoryFromCache({ silent: true });
+            scheduleBrowsingHistoryCacheRefresh({ silent: true });
             scheduleBrowsingCalibrationCountRefresh(600);
         }
     });
@@ -40952,6 +41957,9 @@ function getBrowsingRelatedSnapshotPayload(snapshot) {
     const historyItemsExpanded = snapshot.historyItemsExpanded.slice();
     const bookmarkUrls = snapshot.bookmarkUrls instanceof Set ? snapshot.bookmarkUrls : new Set();
     const bookmarkTitles = snapshot.bookmarkTitles instanceof Set ? snapshot.bookmarkTitles : new Set();
+    const bookmarkTitleDomainMap = snapshot.bookmarkTitleDomainMap instanceof Map
+        ? snapshot.bookmarkTitleDomainMap
+        : new Map();
 
     if (browsingRelatedSortAsc) {
         historyItemsExpanded.sort((a, b) => (a.lastVisitTime || 0) - (b.lastVisitTime || 0));
@@ -40962,7 +41970,8 @@ function getBrowsingRelatedSnapshotPayload(snapshot) {
     return {
         historyItemsExpanded,
         bookmarkUrls,
-        bookmarkTitles
+        bookmarkTitles,
+        bookmarkTitleDomainMap
     };
 }
 
@@ -40974,6 +41983,7 @@ async function renderBrowsingRelatedSnapshot(listContainer, snapshot, range) {
         payload.historyItemsExpanded,
         payload.bookmarkUrls,
         payload.bookmarkTitles,
+        payload.bookmarkTitleDomainMap,
         range
     );
     return true;
@@ -41153,6 +42163,7 @@ async function getBookmarkUrlsAndTitles() {
 
             if (!info.has(url)) {
                 info.set(url, {
+                    id: entry.id == null ? null : String(entry.id),
                     url,
                     title: title || url,
                     folderPath
@@ -41193,6 +42204,7 @@ async function getBookmarkUrlsAndTitles() {
                 // 记录URL到标题和文件夹路径的映射
                 if (!info.has(url)) {
                     info.set(url, {
+                        id: node.id == null ? null : String(node.id),
                         url,
                         title: trimmedTitle || url,
                         folderPath: parentPath.slice() // 复制父文件夹路径
@@ -41270,31 +42282,11 @@ function getTimeRangeStart(range) {
 
 // 获取书签关联历史数据（不渲染，仅返回数据）
 async function getBrowsingRelatedHistoryData(range = 'day') {
-    const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
-    if (!browserAPI || !browserAPI.history || !browserAPI.history.search) {
-        return [];
-    }
-
     try {
         const startTime = getTimeRangeStart(range);
         const endTime = Date.now();
-
-        const historyItems = await new Promise((resolve, reject) => {
-            browserAPI.history.search({
-                text: '',
-                startTime: startTime,
-                endTime: endTime,
-                maxResults: 0
-            }, (results) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                    reject(browserAPI.runtime.lastError);
-                } else {
-                    resolve(results || []);
-                }
-            });
-        });
-
-        return historyItems;
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(startTime, endTime);
+        return extractSyncHistoryItemsFromRows(libraryRows.rows);
     } catch (error) {
         console.error('[BrowsingRelated] 获取历史数据失败:', error);
         return [];
@@ -41317,11 +42309,72 @@ function getBrowsingRelatedQueryBoundsForBuild(range, options = {}) {
     };
 }
 
+function buildBrowsingRelatedTitleDomainMapFromInfo(bookmarkInfoByUrl) {
+    const titleDomainMap = new Map();
+    if (!(bookmarkInfoByUrl instanceof Map)) return titleDomainMap;
+    for (const [url, info] of bookmarkInfoByUrl.entries()) {
+        const title = String(info?.title || '').trim();
+        const domain = getSyncHistoryUrlDomain(url || info?.url || '');
+        if (!title || !domain) continue;
+        let domains = titleDomainMap.get(title);
+        if (!domains) {
+            domains = new Set();
+            titleDomainMap.set(title, domains);
+        }
+        domains.add(domain);
+    }
+    return titleDomainMap;
+}
+
+function isBrowsingRelatedBookmarkItem(item, bookmarkUrls, bookmarkTitleDomainMap) {
+    const url = String(item?.url || '').trim();
+    if (!url) return false;
+    if (bookmarkUrls instanceof Set && bookmarkUrls.has(url)) return true;
+
+    const title = String(item?.title || '').trim();
+    if (!title || !(bookmarkTitleDomainMap instanceof Map)) return false;
+    const domains = bookmarkTitleDomainMap.get(title);
+    if (!(domains instanceof Set) || domains.size === 0) return false;
+
+    const domain = getSyncHistoryUrlDomain(url);
+    return !!domain && domains.has(domain);
+}
+
+function getRelatedHistoryTargetMatchType(itemUrl, itemTitle, targetUrl, targetTitle) {
+    const safeItemUrl = String(itemUrl || '').trim();
+    const safeTargetUrl = String(targetUrl || '').trim();
+    if (safeItemUrl && safeTargetUrl && safeItemUrl === safeTargetUrl) {
+        return 'exact_url';
+    }
+
+    const safeItemTitle = String(itemTitle || '').trim();
+    const safeTargetTitle = String(targetTitle || '').trim();
+    if (!safeItemTitle || !safeTargetTitle || safeItemTitle !== safeTargetTitle) {
+        return '';
+    }
+
+    const itemDomain = getSyncHistoryUrlDomain(safeItemUrl);
+    const targetDomain = getSyncHistoryUrlDomain(safeTargetUrl);
+    if (itemDomain && targetDomain && itemDomain === targetDomain) {
+        return 'title_domain';
+    }
+
+    return '';
+}
+
 async function getBrowsingRelatedBookmarkSetsFromCalendar(calendar) {
     let bookmarkUrls = null;
     let bookmarkTitles = null;
+    let bookmarkTitleDomainMap = new Map();
 
-    if (calendar && calendar.dbManager) {
+    const bookmarkData = await getBookmarkUrlsAndTitles();
+    if (bookmarkData?.urls instanceof Set) bookmarkUrls = bookmarkData.urls;
+    if (bookmarkData?.titles instanceof Set) bookmarkTitles = bookmarkData.titles;
+    if (bookmarkData?.info instanceof Map) {
+        bookmarkTitleDomainMap = buildBrowsingRelatedTitleDomainMapFromInfo(bookmarkData.info);
+    }
+
+    if ((!bookmarkUrls || !bookmarkTitles) && calendar && calendar.dbManager) {
         const bookmarkDB = calendar.dbManager.getBookmarksDB();
         if (bookmarkDB) {
             bookmarkUrls = bookmarkDB.getAllUrls();
@@ -41329,38 +42382,15 @@ async function getBrowsingRelatedBookmarkSetsFromCalendar(calendar) {
         }
     }
 
-    if (!bookmarkUrls || !bookmarkTitles) {
-        if (calendar && calendar.bookmarksByDate && calendar.bookmarksByDate.size > 0) {
-            bookmarkUrls = new Set();
-            bookmarkTitles = new Set();
-            for (const records of calendar.bookmarksByDate.values()) {
-                if (!Array.isArray(records)) continue;
-                records.forEach(record => {
-                    if (record.url) bookmarkUrls.add(record.url);
-                    if (record.title && record.title.trim()) bookmarkTitles.add(record.title.trim());
-                });
-            }
-        }
-    }
-
-    if (!bookmarkUrls || !bookmarkTitles) {
-        const result = await getBookmarkUrlsAndTitles();
-        bookmarkUrls = result.urls;
-        bookmarkTitles = result.titles;
-    }
-
     return {
         bookmarkUrls: bookmarkUrls instanceof Set ? bookmarkUrls : new Set(),
-        bookmarkTitles: bookmarkTitles instanceof Set ? bookmarkTitles : new Set()
+        bookmarkTitles: bookmarkTitles instanceof Set ? bookmarkTitles : new Set(),
+        bookmarkTitleDomainMap
     };
 }
 
 async function buildBrowsingRelatedSnapshotForRange(range = 'day', options = {}) {
     const safeRange = normalizeBrowsingRelatedRange(range);
-    const api = (typeof chrome !== 'undefined') ? chrome : browser;
-    if (!api || !api.history || !api.history.search) {
-        throw new Error('History API not available');
-    }
 
     if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
         initBrowsingHistoryCalendar();
@@ -41378,61 +42408,50 @@ async function buildBrowsingRelatedSnapshotForRange(range = 'day', options = {})
     const startTime = queryBounds.startTime;
     const endTime = queryBounds.endTime;
 
-    const historyItems = await new Promise((resolve, reject) => {
-        api.history.search({
-            text: '',
-            startTime,
-            endTime,
-            maxResults: 0
-        }, (results) => {
-            if (api.runtime && api.runtime.lastError) {
-                reject(api.runtime.lastError);
-            } else {
-                resolve(results || []);
-            }
-        });
-    });
-
-    const getVisitsAsync = (url) => new Promise((resolve) => {
-        if (!api.history.getVisits) {
-            resolve([]);
-            return;
-        }
-        api.history.getVisits({ url }, (visits) => {
-            if (api.runtime && api.runtime.lastError) {
-                resolve([]);
-            } else {
-                resolve(visits || []);
-            }
-        });
-    });
-
     const expandedItems = [];
-    const visitPromises = historyItems.map(async (item) => {
-        const visits = await getVisitsAsync(item.url);
-        const filteredVisits = visits.filter(v =>
-            v.visitTime >= startTime && v.visitTime <= endTime
-        );
+    const seenVisitKeys = new Set();
+    const addExpandedItem = (item) => {
+        const url = String(item?.url || '').trim();
+        const visitTime = Number(item?.lastVisitTime || item?.visitTime || item?.dateAdded || 0);
+        if (!url || !Number.isFinite(visitTime) || visitTime <= 0) return;
+        if (visitTime < startTime || visitTime > endTime) return;
+        const key = `${url}|${visitTime}`;
+        if (seenVisitKeys.has(key)) return;
+        seenVisitKeys.add(key);
+        expandedItems.push({
+            id: item.id || url,
+            title: item.title || url,
+            url,
+            lastVisitTime: visitTime,
+            transition: item.transition || '',
+            visitCount: item.visitCount || 1,
+            typedCount: item.typedCount || 0,
+            _visitId: item._visitId
+        });
+    };
 
-        if (filteredVisits.length > 0) {
-            return filteredVisits.map(visit => ({
-                ...item,
-                lastVisitTime: visit.visitTime,
-                transition: visit.transition || '',
-                _visitId: visit.visitId
-            }));
+    const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(startTime, endTime);
+    let processed = 0;
+    for (const [, records] of libraryRows.rows) {
+        for (const rec of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const visitTime = getBrowsingCacheRecordTimestamp(rec);
+            addExpandedItem({
+                ...rec,
+                lastVisitTime: visitTime
+            });
+            if (shouldYieldBrowsingDerivedRows(processed)) {
+                await yieldBrowsingDerivedRows();
+            }
         }
-        return [item];
-    });
+    }
 
-    const allVisitArrays = await Promise.all(visitPromises);
-    allVisitArrays.forEach(arr => expandedItems.push(...arr));
-
-    const { bookmarkUrls, bookmarkTitles } = await getBrowsingRelatedBookmarkSetsFromCalendar(calendar);
+    const { bookmarkUrls, bookmarkTitles, bookmarkTitleDomainMap } = await getBrowsingRelatedBookmarkSetsFromCalendar(calendar);
     return {
         historyItemsExpanded: expandedItems.slice(),
         bookmarkUrls,
         bookmarkTitles,
+        bookmarkTitleDomainMap,
         savedAt: Date.now()
     };
 }
@@ -41456,7 +42475,7 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
     setBrowsingRelatedComputeStatus(true, getBrowsingRelatedComputeMessage('calc'));
 
     try {
-        const stats = await ensureBrowsingClickRankingStats();
+        const stats = await ensureBrowsingClickRankingStats(safeRange);
         const statsVersion = getBrowsingRelatedStatsVersion(stats);
         const snapshotKey = buildBrowsingRelatedSnapshotKey(safeRange, statsVersion, { scopeKey: snapshotScopeKey });
         const cachedSnapshot = forceRecompute ? null : getBrowsingRelatedSnapshot(snapshotKey);
@@ -41509,6 +42528,7 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
         const historyItemsExpanded = relatedSnapshot.historyItemsExpanded.slice();
         const bookmarkUrls = relatedSnapshot.bookmarkUrls;
         const bookmarkTitles = relatedSnapshot.bookmarkTitles;
+        const bookmarkTitleDomainMap = relatedSnapshot.bookmarkTitleDomainMap;
         // 按当前排序方式排序（使用展开后的记录）
         if (browsingRelatedSortAsc) {
             // 正序：旧到新
@@ -41520,7 +42540,7 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
 
         // 渲染历史记录（根据数量和时间范围自动决定是否懒加载）
         if (loadSeq !== browsingRelatedLoadSeq) return;
-        renderBrowsingRelatedList(listContainer, historyItemsExpanded, bookmarkUrls, bookmarkTitles, safeRange);
+        renderBrowsingRelatedList(listContainer, historyItemsExpanded, bookmarkUrls, bookmarkTitles, bookmarkTitleDomainMap, safeRange);
         browsingRelatedRecomputePending = false;
 
     } catch (error) {
@@ -41542,7 +42562,7 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
 }
 
 // 渲染书签关联记录列表（大列表场景支持懒加载）
-async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, bookmarkTitles, range) {
+async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, bookmarkTitles, bookmarkTitleDomainMap, range) {
     if (!container) return;
 
     container.innerHTML = '';
@@ -41587,9 +42607,7 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
 
     // ✨ 辅助函数：判断记录是否为书签
     const checkIsBookmark = (item) => {
-        if (bookmarkUrls.has(item.url)) return true;
-        if (item.title && item.title.trim() && bookmarkTitles.has(item.title.trim())) return true;
-        return false;
+        return isBrowsingRelatedBookmarkItem(item, bookmarkUrls, bookmarkTitleDomainMap);
     };
 
     // ✨ 辅助函数：从URL提取用于比较的键（去掉查询参数和hash）
@@ -41749,7 +42767,7 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
             try {
                 if (item.lastVisitTime) browsingRelatedFocusedVisitTime = item.lastVisitTime;
             } catch (_) { }
-            recordBrowsingCalibrationInteraction('click', { source: 'browsing-related' });
+            recordBrowsingCalibrationInteraction('click', { source: 'browsing-related', url: item.url });
             const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
             if (browserAPI && browserAPI.tabs && browserAPI.tabs.create) {
                 browserAPI.tabs.create({ url: item.url });
@@ -42202,6 +43220,17 @@ function syncBrowsingRelatedSortButtonPlacement() {
     }
 }
 
+function forEachBrowsingRankingStatsRecord(stats, callback) {
+    if (!stats || !Array.isArray(stats.rows) || typeof callback !== 'function') return;
+    for (const [, records] of stats.rows) {
+        for (const record of (Array.isArray(records) ? records : [])) {
+            const visitTime = getBrowsingCacheRecordTimestamp(record);
+            if (!visitTime) continue;
+            callback(record, visitTime);
+        }
+    }
+}
+
 // 显示点击排行的时间段菜单
 async function showBrowsingRankingTimeMenu(range) {
     browsingRankingCurrentRange = range;
@@ -42216,7 +43245,7 @@ async function showBrowsingRankingTimeMenu(range) {
     initBrowsingRankingViewMode();
 
     // 获取点击排行的数据
-    const stats = await ensureBrowsingClickRankingStats();
+    const stats = await ensureBrowsingClickRankingStats(range);
     if (!stats || !stats.items || stats.items.length === 0) {
         return;
     }
@@ -42408,19 +43437,14 @@ async function showBrowsingRankingTimeMenu(range) {
 function renderRankingDayHoursMenu(container, date, stats) {
     const isZh = currentLang === 'zh_CN';
     const boundaries = stats.boundaries;
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的小时
     const hoursSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.dayStart && t <= boundaries.now) {
-                hoursSet.add(new Date(t).getHours());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.dayStart && t <= boundaries.now) {
+            hoursSet.add(new Date(t).getHours());
+        }
+    });
 
     Array.from(hoursSet).sort((a, b) => a - b).forEach(hour => {
         const btn = document.createElement('button');
@@ -42441,8 +43465,6 @@ function renderRankingDayHoursMenu(container, date, stats) {
 function renderRankingWeekDaysMenu(container, date, stats) {
     const isZh = currentLang === 'zh_CN';
     const boundaries = stats.boundaries;
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     const weekdayNames = isZh
         ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -42450,14 +43472,11 @@ function renderRankingWeekDaysMenu(container, date, stats) {
 
     // 分析有数据的天
     const daysSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.weekStart && t <= boundaries.now) {
-                daysSet.add(new Date(t).toDateString());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.weekStart && t <= boundaries.now) {
+            daysSet.add(new Date(t).toDateString());
+        }
+    });
 
     // 生成本周的日期
     const weekStart = new Date(boundaries.weekStart);
@@ -42486,19 +43505,14 @@ function renderRankingWeekDaysMenu(container, date, stats) {
 function renderRankingMonthWeeksMenu(container, date, stats) {
     const isZh = currentLang === 'zh_CN';
     const boundaries = stats.boundaries;
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的周
     const weeksSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.monthStart && t <= boundaries.now) {
-                weeksSet.add(getWeekNumberForRelated(new Date(t)));
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.monthStart && t <= boundaries.now) {
+            weeksSet.add(getWeekNumberForRelated(new Date(t)));
+        }
+    });
 
     Array.from(weeksSet).sort((a, b) => a - b).forEach(weekNum => {
         const btn = document.createElement('button');
@@ -42519,8 +43533,6 @@ function renderRankingMonthWeeksMenu(container, date, stats) {
 function renderRankingYearMonthsMenu(container, date, stats) {
     const isZh = currentLang === 'zh_CN';
     const boundaries = stats.boundaries;
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     const monthNames = isZh
         ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
@@ -42528,14 +43540,11 @@ function renderRankingYearMonthsMenu(container, date, stats) {
 
     // 分析有数据的月份
     const monthsSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.yearStart && t <= boundaries.now) {
-                monthsSet.add(new Date(t).getMonth());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.yearStart && t <= boundaries.now) {
+            monthsSet.add(new Date(t).getMonth());
+        }
+    });
 
     Array.from(monthsSet).sort((a, b) => a - b).forEach(month => {
         const btn = document.createElement('button');
@@ -42555,19 +43564,14 @@ function renderRankingYearMonthsMenu(container, date, stats) {
 // 渲染点击排行全部时间的年份菜单
 function renderRankingAllYearsMenu(container, stats) {
     const isZh = currentLang === 'zh_CN';
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的年份
     const yearsSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t > 0) {
-                yearsSet.add(new Date(t).getFullYear());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t > 0) {
+            yearsSet.add(new Date(t).getFullYear());
+        }
+    });
 
     // 按年份倒序排列（最近的年份在前）
     Array.from(yearsSet).sort((a, b) => b - a).forEach(year => {
@@ -42586,14 +43590,11 @@ function renderRankingAllYearsMenu(container, stats) {
 }
 
 // 按时间筛选点击排行项目（重新计算每个时间段的点击次数）
-function filterRankingItemsByTime(items, filter, boundaries) {
+function filterRankingItemsByTime(items, filter, boundaries, statsInput = browsingClickRankingStats) {
     if (!filter || !items || items.length === 0) return items;
 
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate) return items;
-
     // 使用与原始统计相同的映射
-    const stats = browsingClickRankingStats;
+    const stats = statsInput;
     if (!stats || !stats.bookmarkKeyMap || !stats.bookmarkInfoMap) return items;
 
     const bookmarkKeyMap = stats.bookmarkKeyMap;
@@ -42603,68 +43604,50 @@ function filterRankingItemsByTime(items, filter, boundaries) {
     const keyVisitCounts = new Map();
 
     // 遍历所有访问记录，使用与原始统计完全相同的匹配逻辑
-    for (const bookmarks of calendar.bookmarksByDate.values()) {
-        for (const bm of bookmarks) {
-            if (!bm || !bm.url) continue;
+    forEachBrowsingRankingStatsRecord(stats, (bm, t) => {
+        if (!bm || !bm.url) return;
 
-            const url = bm.url;
-            const title = typeof bm.title === 'string' && bm.title.trim()
-                ? bm.title.trim()
-                : (bm.url || '');
-            const t = typeof bm.visitTime === 'number'
-                ? bm.visitTime
-                : (bm.dateAdded instanceof Date ? bm.dateAdded.getTime() : 0);
-            if (!t) continue;
+        const visitDate = new Date(t);
+        let matches = false;
 
-            const visitDate = new Date(t);
-            let matches = false;
-
-            switch (filter.type) {
-                case 'hour':
-                    if (t >= boundaries.dayStart && t <= boundaries.now &&
-                        visitDate.getHours() === filter.value) {
-                        matches = true;
-                    }
-                    break;
-                case 'day':
-                    if (t >= boundaries.weekStart && t <= boundaries.now &&
-                        visitDate.toDateString() === filter.value.toDateString()) {
-                        matches = true;
-                    }
-                    break;
-                case 'week':
-                    if (t >= boundaries.monthStart && t <= boundaries.now &&
-                        getWeekNumberForRelated(visitDate) === filter.value) {
-                        matches = true;
-                    }
-                    break;
-                case 'month':
-                    if (t >= boundaries.yearStart && t <= boundaries.now &&
-                        visitDate.getMonth() === filter.value) {
-                        matches = true;
-                    }
-                    break;
-                case 'year':
-                    // 筛选特定年份（用于「全部」范围的年份二级菜单）
-                    if (visitDate.getFullYear() === filter.value) {
-                        matches = true;
-                    }
-                    break;
-            }
-
-            if (matches) {
-                // 与原始统计完全相同的匹配逻辑
-                let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
-                if (!bookmarkKey && title) {
-                    bookmarkKey = bookmarkKeyMap.get(`title:${title}`);
+        switch (filter.type) {
+            case 'hour':
+                if (t >= boundaries.dayStart && t <= boundaries.now &&
+                    visitDate.getHours() === filter.value) {
+                    matches = true;
                 }
-
-                if (bookmarkKey) {
-                    keyVisitCounts.set(bookmarkKey, (keyVisitCounts.get(bookmarkKey) || 0) + 1);
+                break;
+            case 'day':
+                if (t >= boundaries.weekStart && t <= boundaries.now &&
+                    visitDate.toDateString() === filter.value.toDateString()) {
+                    matches = true;
                 }
-            }
+                break;
+            case 'week':
+                if (t >= boundaries.monthStart && t <= boundaries.now &&
+                    getWeekNumberForRelated(visitDate) === filter.value) {
+                    matches = true;
+                }
+                break;
+            case 'month':
+                if (t >= boundaries.yearStart && t <= boundaries.now &&
+                    visitDate.getMonth() === filter.value) {
+                    matches = true;
+                }
+                break;
+            case 'year':
+                if (visitDate.getFullYear() === filter.value) {
+                    matches = true;
+                }
+                break;
         }
-    }
+
+        if (!matches) return;
+        const match = findBrowsingRankingBookmarkMatch(bm, bookmarkKeyMap);
+        if (match?.bookmarkKey) {
+            keyVisitCounts.set(match.bookmarkKey, (keyVisitCounts.get(match.bookmarkKey) || 0) + 1);
+        }
+    });
 
     // 将 bookmarkKey 的计数映射回 item.url
     const urlVisitCounts = new Map();
@@ -42693,72 +43676,23 @@ function filterRankingItemsByTime(items, filter, boundaries) {
 // Phase 4.7: 自定义日期范围点击排行（用于日期/日期范围搜索）
 async function getBrowsingRankingItemsForCustomRange(startTime, endTime) {
     try {
-        const calendar = window.browsingHistoryCalendarInstance;
-        if (!calendar || !calendar.bookmarksByDate) return [];
-
-        const stats = await ensureBrowsingClickRankingStats();
-        if (!stats || !stats.bookmarkKeyMap || !stats.bookmarkInfoMap) return [];
-
-        const bookmarkKeyMap = stats.bookmarkKeyMap;
-        const bookmarkInfoMap = stats.bookmarkInfoMap;
-
         const start = Math.min(startTime, endTime);
         const end = Math.max(startTime, endTime);
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(start, end);
+        if (!libraryRows.rows.length) return [];
+        const stats = await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
+            boundaries: getBrowsingClickRankingBoundaries(),
+            source: libraryRows.source,
+            meta: libraryRows.meta
+        });
+        if (!stats || !Array.isArray(stats.items)) return [];
 
-        // bookmarkKey -> { count, lastVisitTime }
-        const keyAgg = new Map();
-
-        for (const bookmarks of calendar.bookmarksByDate.values()) {
-            if (!Array.isArray(bookmarks)) continue;
-            for (const bm of bookmarks) {
-                if (!bm || !bm.url) continue;
-
-                const t = typeof bm.visitTime === 'number'
-                    ? bm.visitTime
-                    : (bm.dateAdded instanceof Date ? bm.dateAdded.getTime() : 0);
-                if (!t || t < start || t > end) continue;
-
-                const url = bm.url;
-                const title = typeof bm.title === 'string' && bm.title.trim()
-                    ? bm.title.trim()
-                    : (bm.url || '');
-
-                let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
-                if (!bookmarkKey && title) {
-                    bookmarkKey = bookmarkKeyMap.get(`title:${title}`);
-                }
-                if (!bookmarkKey) continue;
-
-                if (!keyAgg.has(bookmarkKey)) {
-                    keyAgg.set(bookmarkKey, { count: 0, lastVisitTime: 0 });
-                }
-                const agg = keyAgg.get(bookmarkKey);
-                agg.count += 1;
-                if (t > agg.lastVisitTime) agg.lastVisitTime = t;
-            }
-        }
-
-        // url -> { count, lastVisitTime }
-        const urlAgg = new Map();
-        for (const [key, agg] of keyAgg.entries()) {
-            const info = bookmarkInfoMap.get(key);
-            if (info && info.url) {
-                urlAgg.set(info.url, { count: agg.count, lastVisitTime: agg.lastVisitTime });
-            }
-        }
-
-        // Use the existing all-range items as base so we preserve title/url fields.
-        const baseItems = getBrowsingRankingItemsForRange('all') || [];
-        const result = baseItems
-            .filter(it => urlAgg.has(it.url) && urlAgg.get(it.url).count > 0)
-            .map(it => {
-                const agg = urlAgg.get(it.url);
-                return {
-                    ...it,
-                    filteredCount: agg.count,
-                    lastVisitTime: agg.lastVisitTime || it.lastVisitTime
-                };
-            })
+        const result = stats.items
+            .filter(item => Number(item?.allCount || 0) > 0)
+            .map(item => ({
+                ...item,
+                filteredCount: Number(item.allCount || 0)
+            }))
             .sort((a, b) => {
                 if ((b.filteredCount || 0) !== (a.filteredCount || 0)) return (b.filteredCount || 0) - (a.filteredCount || 0);
                 return (b.lastVisitTime || 0) - (a.lastVisitTime || 0);
@@ -42776,8 +43710,31 @@ async function getBrowsingRankingItemsForCustomRange(startTime, endTime) {
 // 全局变量：当前选中的时间筛选
 let browsingRelatedTimeFilter = null; // { type: 'hour'|'day'|'week'|'month', value: number|Date }
 
+async function getBrowsingRelatedTimeMenuStats(range) {
+    if (
+        browsingRelatedCustomBounds &&
+        Number.isFinite(Number(browsingRelatedCustomBounds.startTime)) &&
+        Number.isFinite(Number(browsingRelatedCustomBounds.endTime))
+    ) {
+        const start = Math.min(Number(browsingRelatedCustomBounds.startTime), Number(browsingRelatedCustomBounds.endTime));
+        const end = Math.max(Number(browsingRelatedCustomBounds.startTime), Number(browsingRelatedCustomBounds.endTime));
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(start, end);
+        if (!Array.isArray(libraryRows?.rows) || libraryRows.rows.length === 0) return null;
+        return await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
+            boundaries: getBrowsingClickRankingBoundaries(),
+            source: libraryRows.source,
+            meta: {
+                ...(libraryRows.meta || {}),
+                customBounds: { startTime: start, endTime: end }
+            }
+        });
+    }
+
+    return await ensureBrowsingClickRankingStats(range);
+}
+
 // 显示时间段菜单（按需显示，只显示有数据的时间段）
-// 使用与点击排行相同的数据源（calendar.bookmarksByDate），保持一致
+// 使用与点击排行相同的 v2 本地历史库数据源，保持一致。
 async function showBrowsingRelatedTimeMenu(range) {
     const menuContainer = document.getElementById('browsingRelatedTimeMenu');
     if (!menuContainer) return;
@@ -42786,15 +43743,9 @@ async function showBrowsingRelatedTimeMenu(range) {
     menuContainer.style.display = 'none';
     browsingRelatedTimeFilter = null; // 重置筛选
 
-    // 使用与点击排行相同的数据源
-    const calendar = window.browsingHistoryCalendarInstance;
-    if (!calendar || !calendar.bookmarksByDate || calendar.bookmarksByDate.size === 0) {
-        return; // 没有数据，不显示菜单
-    }
-
     // 获取时间边界（与点击排行保持一致）
-    const stats = await ensureBrowsingClickRankingStats();
-    if (!stats || !stats.boundaries) return;
+    const stats = await getBrowsingRelatedTimeMenuStats(range);
+    if (!stats || !stats.boundaries || !Array.isArray(stats.rows) || stats.rows.length === 0) return;
 
     const boundaries = stats.boundaries;
     const now = new Date();
@@ -42826,23 +43777,23 @@ async function showBrowsingRelatedTimeMenu(range) {
     switch (range) {
         case 'day':
             // 当天：只显示有数据的小时段
-            renderRelatedDayHoursMenu(itemsContainer, boundaries, calendar);
+            renderRelatedDayHoursMenu(itemsContainer, boundaries, stats);
             break;
         case 'week':
             // 当周：只显示有数据的天
-            renderRelatedWeekDaysMenu(itemsContainer, boundaries, calendar);
+            renderRelatedWeekDaysMenu(itemsContainer, boundaries, stats);
             break;
         case 'month':
             // 当月：只显示有数据的周
-            renderRelatedMonthWeeksMenu(itemsContainer, boundaries, calendar);
+            renderRelatedMonthWeeksMenu(itemsContainer, boundaries, stats);
             break;
         case 'year':
             // 当年：只显示有数据的月份
-            renderRelatedYearMonthsMenu(itemsContainer, boundaries, calendar);
+            renderRelatedYearMonthsMenu(itemsContainer, boundaries, stats);
             break;
         case 'all':
             // 全部：显示有数据的年份
-            renderRelatedAllYearsMenu(itemsContainer, calendar);
+            renderRelatedAllYearsMenu(itemsContainer, stats);
             break;
     }
 
@@ -42864,20 +43815,16 @@ function getWeekNumberForRelated(date) {
 }
 
 // 书签关联记录 - 渲染当天的小时菜单（使用与点击排行相同的数据源）
-function renderRelatedDayHoursMenu(container, boundaries, calendar) {
+function renderRelatedDayHoursMenu(container, boundaries, stats) {
     const isZh = currentLang === 'zh_CN';
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的小时（与点击排行完全相同的逻辑）
     const hoursSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.dayStart && t <= boundaries.now) {
-                hoursSet.add(new Date(t).getHours());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.dayStart && t <= boundaries.now) {
+            hoursSet.add(new Date(t).getHours());
+        }
+    });
 
     Array.from(hoursSet).sort((a, b) => a - b).forEach(hour => {
         const btn = document.createElement('button');
@@ -42900,9 +43847,8 @@ function renderRelatedDayHoursMenu(container, boundaries, calendar) {
 }
 
 // 书签关联记录 - 渲染当周的天菜单（使用与点击排行相同的数据源）
-function renderRelatedWeekDaysMenu(container, boundaries, calendar) {
+function renderRelatedWeekDaysMenu(container, boundaries, stats) {
     const isZh = currentLang === 'zh_CN';
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     const weekdayNames = isZh
         ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -42910,14 +43856,11 @@ function renderRelatedWeekDaysMenu(container, boundaries, calendar) {
 
     // 分析有数据的天
     const daysSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.weekStart && t <= boundaries.now) {
-                daysSet.add(new Date(t).toDateString());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.weekStart && t <= boundaries.now) {
+            daysSet.add(new Date(t).toDateString());
+        }
+    });
 
     // 生成本周的日期
     const weekStart = new Date(boundaries.weekStart);
@@ -42948,20 +43891,16 @@ function renderRelatedWeekDaysMenu(container, boundaries, calendar) {
 }
 
 // 书签关联记录 - 渲染当月的周菜单（使用与点击排行相同的数据源）
-function renderRelatedMonthWeeksMenu(container, boundaries, calendar) {
+function renderRelatedMonthWeeksMenu(container, boundaries, stats) {
     const isZh = currentLang === 'zh_CN';
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的周
     const weeksSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.monthStart && t <= boundaries.now) {
-                weeksSet.add(getWeekNumberForRelated(new Date(t)));
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.monthStart && t <= boundaries.now) {
+            weeksSet.add(getWeekNumberForRelated(new Date(t)));
+        }
+    });
 
     Array.from(weeksSet).sort((a, b) => a - b).forEach(weekNum => {
         const btn = document.createElement('button');
@@ -42984,9 +43923,8 @@ function renderRelatedMonthWeeksMenu(container, boundaries, calendar) {
 }
 
 // 书签关联记录 - 渲染当年的月份菜单（使用与点击排行相同的数据源）
-function renderRelatedYearMonthsMenu(container, boundaries, calendar) {
+function renderRelatedYearMonthsMenu(container, boundaries, stats) {
     const isZh = currentLang === 'zh_CN';
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     const monthNames = isZh
         ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
@@ -42994,14 +43932,11 @@ function renderRelatedYearMonthsMenu(container, boundaries, calendar) {
 
     // 分析有数据的月份
     const monthsSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t >= boundaries.yearStart && t <= boundaries.now) {
-                monthsSet.add(new Date(t).getMonth());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t >= boundaries.yearStart && t <= boundaries.now) {
+            monthsSet.add(new Date(t).getMonth());
+        }
+    });
 
     Array.from(monthsSet).sort((a, b) => a - b).forEach(month => {
         const btn = document.createElement('button');
@@ -43024,20 +43959,16 @@ function renderRelatedYearMonthsMenu(container, boundaries, calendar) {
 }
 
 // 书签关联记录 - 渲染全部时间的年份菜单
-function renderRelatedAllYearsMenu(container, calendar) {
+function renderRelatedAllYearsMenu(container, stats) {
     const isZh = currentLang === 'zh_CN';
-    if (!calendar || !calendar.bookmarksByDate) return;
 
     // 分析有数据的年份
     const yearsSet = new Set();
-    for (const records of calendar.bookmarksByDate.values()) {
-        records.forEach(record => {
-            const t = record.visitTime || (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
-            if (t > 0) {
-                yearsSet.add(new Date(t).getFullYear());
-            }
-        });
-    }
+    forEachBrowsingRankingStatsRecord(stats, (record, t) => {
+        if (t > 0) {
+            yearsSet.add(new Date(t).getFullYear());
+        }
+    });
 
     // 按年份倒序排列（最近的年份在前）
     Array.from(yearsSet).sort((a, b) => b - a).forEach(year => {
@@ -43524,22 +44455,21 @@ function highlightRelatedHistoryItem(retryCount = 0) {
 
         const itemUrl = item.dataset.url;
         const itemTitle = (item.dataset.title || '').trim();
-        const matchesUrl = itemUrl === url;
-        const matchesTitle = normalizedTitleValue && itemTitle === normalizedTitleValue;
+        const matchType = getRelatedHistoryTargetMatchType(itemUrl, itemTitle, url, normalizedTitleValue);
 
         if (hasVisitTime) {
             const itemMinuteAttr = item.dataset.visitMinute;
             if (itemMinuteAttr && Number(itemMinuteAttr) === targetMinute) {
-                if (matchesUrl && !minuteUrlMatch) {
+                if (matchType === 'exact_url' && !minuteUrlMatch) {
                     minuteUrlMatch = item;
                     return;
                 }
-                if (matchesTitle && !minuteTitleMatch) {
+                if (matchType === 'title_domain' && !minuteTitleMatch) {
                     minuteTitleMatch = item;
                     return;
                 }
             }
-        } else if (!fallbackMatch && (matchesUrl || matchesTitle)) {
+        } else if (!fallbackMatch && matchType) {
             fallbackMatch = item;
         }
     });
@@ -43710,34 +44640,34 @@ async function jumpToRelatedHistoryFromAdditions(url, title, dateAdded) {
     // 先查询该URL在书签添加时间附近是否有访问记录
     let hasMatchingVisit = false;
     let matchingVisitTime = null;
+    const oneMinute = 60 * 1000;
+    const normalizeVisitUrl = (value) => {
+        let safe = String(value || '').trim();
+        if (safe.length > 1 && safe.endsWith('/')) safe = safe.slice(0, -1);
+        return safe;
+    };
+    const targetUrl = normalizeVisitUrl(url);
 
     try {
-        if (browserAPI && browserAPI.history && browserAPI.history.getVisits) {
-            const visits = await new Promise((resolve, reject) => {
-                browserAPI.history.getVisits({ url: url }, (results) => {
-                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
-                        reject(browserAPI.runtime.lastError);
-                    } else {
-                        resolve(results || []);
-                    }
-                });
-            });
-
-            // 查找时间精确匹配的访问记录（同一分钟内，即60秒）
-            const oneMinute = 60 * 1000;
-            let minDiff = Infinity;
-
-            visits.forEach(visit => {
-                const diff = Math.abs(visit.visitTime - dateAdded);
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(
+            Math.max(0, Number(dateAdded || 0) - oneMinute),
+            Number(dateAdded || 0) + oneMinute
+        );
+        let minDiff = Infinity;
+        for (const [, records] of libraryRows.rows) {
+            for (const record of (Array.isArray(records) ? records : [])) {
+                if (normalizeVisitUrl(record?.url) !== targetUrl) continue;
+                const visitTime = getBrowsingCacheRecordTimestamp(record);
+                if (!visitTime) continue;
+                const diff = Math.abs(visitTime - dateAdded);
                 if (diff < minDiff) {
                     minDiff = diff;
-                    matchingVisitTime = visit.visitTime;
+                    matchingVisitTime = visitTime;
                 }
-            });
-
-            // 时间差必须在1分钟内才算匹配
-            hasMatchingVisit = minDiff <= oneMinute;
+            }
         }
+        hasMatchingVisit = minDiff <= oneMinute;
+
     } catch (e) {
         console.warn('[jumpToRelatedHistoryFromAdditions] 查询访问记录失败:', e);
     }
@@ -44001,7 +44931,7 @@ function highlightAllRelatedHistoryItems(retryCount = 0) {
         return;
     }
 
-    // 查找所有匹配的记录项（URL匹配或标题匹配，与点击排行的计数逻辑保持一致）
+    // 查找所有匹配的记录项（URL 精确匹配；必要时标题+域名兜底，与点击排行一致）
     const items = listContainer.querySelectorAll('.related-history-item');
     const matchedItems = [];
     const normalizedTitle = title ? title.trim() : '';
@@ -44009,13 +44939,7 @@ function highlightAllRelatedHistoryItems(retryCount = 0) {
     items.forEach(item => {
         const itemUrl = item.dataset.url;
         const itemTitle = item.dataset.title || '';
-
-        // URL 精确匹配
-        if (itemUrl === url) {
-            matchedItems.push(item);
-        }
-        // 标题匹配（URL不同但标题相同）
-        else if (normalizedTitle && itemTitle === normalizedTitle) {
+        if (getRelatedHistoryTargetMatchType(itemUrl, itemTitle, url, normalizedTitle)) {
             matchedItems.push(item);
         }
     });
