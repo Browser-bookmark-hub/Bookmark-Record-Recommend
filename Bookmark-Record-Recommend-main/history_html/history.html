@@ -604,7 +604,7 @@
                         <div class="browsing-sub-tab-actions">
                             <button id="browsingCalibrationBtn" class="browsing-calibrate-btn" type="button">
                                 <i class="fas fa-sliders-h"></i>
-                                <span id="browsingCalibrationText">校准</span>
+                                <span id="browsingCalibrationText">校准与清理</span>
                             </button>
                         </div>
                     </div>
@@ -622,26 +622,70 @@
                         </div>
                         <div class="browsing-calibration-settings-body">
                             <div class="calibration-settings-desc">
-                                <p id="browsingCalibrationSettingsDesc1">说明：<span class="calibration-desc-highlight">浏览器历史删除 API</span> 有时不会返回完整 URL 列表，因此需要通过校准对齐数据。</p>
-                                <p id="browsingCalibrationSettingsDesc3">校准在后台执行，避免影响前台使用体验。</p>
+                                <p id="browsingCalibrationSettingsDesc1">说明：校准只维护扩展自己的<span class="calibration-desc-highlight">本地浏览历史库</span>；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。</p>
+                                <p id="browsingCalibrationSettingsDesc3">浏览器历史删除 API 有时不会返回完整 URL 列表；校准会用浏览器 History API 重新对齐最近热区，同时保留 90 天前的本地冷数据。</p>
                             </div>
                             <div class="refresh-settings-section" style="margin-top: 10px;">
                                 <label class="refresh-setting-item">
                                     <input type="checkbox" id="browsingCalibrationDeleteEnabled" checked>
                                     <span id="browsingCalibrationDeleteLabel">累计删除</span>
-                                    <input type="number" id="browsingCalibrationDeleteValue" value="15" min="1" max="999999"
+                                    <input type="number" id="browsingCalibrationDeleteValue" value="50" min="1" max="999999"
                                         style="width: 70px; margin: 0 6px;">
                                     <span id="browsingCalibrationDeleteUnit">次后自动校准</span>
-                                    <span id="browsingCalibrationDeleteCount" class="calibration-count">(0/15)</span>
+                                    <span id="browsingCalibrationDeleteCount" class="calibration-count">(0/50)</span>
                                 </label>
                                 <label class="refresh-setting-item">
-                                    <input type="checkbox" id="browsingCalibrationOpenEnabled">
-                                    <span id="browsingCalibrationOpenLabel">打开/点击书签浏览记录</span>
-                                    <input type="number" id="browsingCalibrationOpenValue" value="50" min="1" max="999999"
+                                    <input type="checkbox" id="browsingCalibrationOpenEnabled" checked>
+                                    <span id="browsingCalibrationOpenLabel">浏览历史相关打开/点击</span>
+                                    <input type="number" id="browsingCalibrationOpenValue" value="200" min="1" max="999999"
                                         style="width: 70px; margin: 0 6px;">
                                     <span id="browsingCalibrationOpenUnit">次后自动校准</span>
-                                    <span id="browsingCalibrationOpenCount" class="calibration-count">(0/50)</span>
+                                    <span id="browsingCalibrationOpenCount" class="calibration-count">(0/200)</span>
                                 </label>
+                                <label class="refresh-setting-item">
+                                    <input type="checkbox" id="browsingCalibrationScheduleEnabled" checked>
+                                    <span id="browsingCalibrationScheduleLabel">每天</span>
+                                    <input type="time" id="browsingCalibrationScheduleTime" class="calibration-time-input" value="15:30">
+                                    <span id="browsingCalibrationScheduleUnit">自动校准</span>
+                                </label>
+                                <label class="refresh-setting-item">
+                                    <input type="checkbox" id="browsingCalibrationIdleEnabled" checked>
+                                    <span id="browsingCalibrationIdleLabel">后台定时校准遇到浏览器忙碌时延后</span>
+                                </label>
+                            </div>
+                            <div class="db-stats-section" style="margin-top: 12px; padding: 12px; background-color: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color); font-size: 13px; color: var(--text-primary);">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                    <span style="color: var(--text-secondary);">本地已缓存天数:</span>
+                                    <span id="dbStatsDays" style="font-weight: 600;">-- 天</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                    <span style="color: var(--text-secondary);">已缓存历史记录数:</span>
+                                    <span id="dbStatsCount" style="font-weight: 600;">-- 条</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                    <span style="color: var(--text-secondary);">数据库估算占用空间:</span>
+                                    <span id="dbStatsSize" style="font-weight: 600;">-- MB</span>
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                                    <div style="display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); margin-right: 8px;">
+                                        <label id="historyPurgeRangeLabel" for="historyPurgeRange">清理本地记录:</label>
+                                        <button id="historyPurgeInfoBtn" class="sync-files-info-btn" type="button" aria-label="清理规则说明" title="清理规则说明" aria-expanded="false">
+                                            <i class="fas fa-info-circle"></i>
+                                        </button>
+                                    </div>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <select id="historyPurgeRange" style="padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); font-size: 12px; outline: none; cursor: pointer;">
+                                            <option value="keep_1year">清理1年前记录</option>
+                                            <option value="keep_2years">清理2年前记录</option>
+                                            <option value="keep_180days">清理180天前记录</option>
+                                            <option value="keep_90days">清理90天前记录</option>
+                                        </select>
+                                        <button id="historyPurgeBtn" class="view-action-btn danger" style="padding: 4px 10px; font-size: 12px; width: auto; height: auto; display: inline-flex;" type="button">立即清理</button>
+                                    </div>
+                                </div>
+                                <div id="historyPurgeInfoPanel" class="calibration-settings-note" hidden>
+                                    浏览器 History API 通常只能回查最近约 90 天的浏览记录；为支持更久的点击排行、关联记录和导出，扩展会维护自己的本地浏览历史库。本地库保存浏览器访问事实，不会因为书签被删除或 URL 被修改而删除；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。本地记录库会监听浏览器历史删除事件并做同步；浏览器清空全部历史时，本地记录也会清空。浏览器只删除部分历史时，本地库只同步最近 90 天窗口，避免误删冷数据。这里的“立即清理”只清理扩展自己的本地记录库，不会删除 Chrome/Edge 的浏览器历史。
+                                </div>
                             </div>
                             <div class="calibration-settings-actions"
                                 style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 10px; align-items: center;">
