@@ -9,23 +9,29 @@ function updateShortcutsDisplay() {
     const isMac = navigator.platform?.toUpperCase().includes('MAC') ||
                   navigator.userAgent?.toUpperCase().includes('MAC');
 
-    // 格式化快捷键显示（Mac上Alt显示为⌥）
+    // 格式化快捷键显示（Mac 上显示为符号修饰键）
     const formatKey = (key) => {
         if (!key) return key;
         let value = String(key).replace(/\bDown\b/gi, '↓');
         if (isMac) {
-            value = value.replace(/Alt\+/gi, '⌥');
+            value = value
+                .replace(/Command\+/gi, '⌘')
+                .replace(/Cmd\+/gi, '⌘')
+                .replace(/Ctrl\+/gi, '⌃')
+                .replace(/Alt\+/gi, '⌥')
+                .replace(/Shift\+/gi, '⇧');
         }
         return value;
     };
 
     const render = (shortcuts) => {
         const safe = (value, fallback) => (value && typeof value === 'string') ? value : fallback;
-        const defaultPrefix = 'Alt+';
-        const keyRecommend = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '4'));
-        const keyAdditions = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '5'));
-        const keyQuickReview = formatKey(safe(shortcuts.quick_review_next, 'Alt+S'));
-        const signature = `${lang}|${keyRecommend}|${keyAdditions}|${keyQuickReview}`;
+        const defaultPrefix = isMac ? 'Command+Shift+' : 'Ctrl+Shift+';
+        const keySidePanel = formatKey(safe(shortcuts._execute_action, defaultPrefix + '6'));
+        const keyRecommend = formatKey(safe(shortcuts.open_recommend_view, defaultPrefix + '7'));
+        const keyAdditions = formatKey(safe(shortcuts.open_additions_view, defaultPrefix + '8'));
+        const keyQuickReview = formatKey(safe(shortcuts.quick_review_next, defaultPrefix + '9'));
+        const signature = `${lang}|${keySidePanel}|${keyRecommend}|${keyAdditions}|${keyQuickReview}`;
 
         if (signature === shortcutsRenderSignature) {
             return;
@@ -33,6 +39,7 @@ function updateShortcutsDisplay() {
         shortcutsRenderSignature = signature;
 
         const rows = [];
+        rows.push({ key: keySidePanel, label: i18n.shortcutSidePanel[lang] });
         rows.push({ key: keyRecommend, label: i18n.shortcutRecommend[lang] });
         rows.push({ key: keyAdditions, label: i18n.shortcutAdditions[lang] });
         rows.push({ key: keyQuickReview, label: i18n.shortcutQuickReviewNext[lang] });
@@ -92,6 +99,7 @@ function updateShortcutsDisplay() {
                     });
                 }
                 render({
+                    _execute_action: map._execute_action,
                     open_additions_view: map.open_additions_view,
                     open_recommend_view: map.open_recommend_view,
                     quick_review_next: map.quick_review_next

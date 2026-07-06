@@ -28,30 +28,38 @@
     "type": "module"
   },
   "commands": {
-    "open_additions_view": {
+    "_execute_action": {
       "suggested_key": {
-        "default": "Alt+5",
-        "mac": "Alt+5",
-        "windows": "Alt+5",
-        "linux": "Alt+5"
-      },
-      "description": "Open 'Bookmark Records' view"
+        "default": "Ctrl+Shift+6",
+        "mac": "Command+Shift+6",
+        "windows": "Ctrl+Shift+6",
+        "linux": "Ctrl+Shift+6"
+      }
     },
     "open_recommend_view": {
       "suggested_key": {
-        "default": "Alt+4",
-        "mac": "Alt+4",
-        "windows": "Alt+4",
-        "linux": "Alt+4"
+        "default": "Ctrl+Shift+7",
+        "mac": "Command+Shift+7",
+        "windows": "Ctrl+Shift+7",
+        "linux": "Ctrl+Shift+7"
       },
       "description": "Open 'Bookmark Recommend' view"
     },
+    "open_additions_view": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+8",
+        "mac": "Command+Shift+8",
+        "windows": "Ctrl+Shift+8",
+        "linux": "Ctrl+Shift+8"
+      },
+      "description": "Open 'Bookmark Records' view"
+    },
     "quick_review_next": {
       "suggested_key": {
-        "default": "Alt+S",
-        "mac": "Alt+S",
-        "windows": "Alt+S",
-        "linux": "Alt+S"
+        "default": "Ctrl+Shift+9",
+        "mac": "Command+Shift+9",
+        "windows": "Ctrl+Shift+9",
+        "linux": "Ctrl+Shift+9"
       },
       "description": "Quick review: start or open next card"
     }

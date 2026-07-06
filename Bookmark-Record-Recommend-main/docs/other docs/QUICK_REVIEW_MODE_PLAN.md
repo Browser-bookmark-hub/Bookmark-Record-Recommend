@@ -37,8 +37,8 @@ UI only triggers and displays:
 
 ## 6. Shortcut Constraint
 Keep only one quick-review command with suggested key:
-1. Windows/Linux: `Alt+S`
-2. macOS: `Alt+S`
+1. Windows/Linux: `Ctrl+Shift+9`
+2. macOS: `Command+Shift+9`
 
 ## 7. Acceptance Criteria
 1. Pressing shortcut works with no side panel/page open.

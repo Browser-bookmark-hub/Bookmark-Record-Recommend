@@ -3982,6 +3982,9 @@ const i18n = {pageTitle: {
     },shortcutsSettingsTooltip: {
         'zh_CN': '在浏览器中管理快捷键',
         'en': 'Manage shortcuts in browser'
+    },shortcutSidePanel: {
+        'zh_CN': '激活扩展 / 打开侧栏',
+        'en': 'Activate extension / open side panel'
     },shortcutAdditions: {
         'zh_CN': '打开「书签记录」视图',
         'en': 'Open "Bookmark Record" view'
@@ -5857,6 +5860,10 @@ function isMacLikePlatform() {
         navigator.userAgent?.toUpperCase().includes('MAC');
 }
 
+function getDefaultQuickReviewShortcut() {
+    return isMacLikePlatform() ? 'Command+Shift+9' : 'Ctrl+Shift+9';
+}
+
 function formatShortcutForDisplay(shortcut) {
     if (!shortcut) return '';
     let value = String(shortcut).trim();
@@ -5883,7 +5890,7 @@ function formatShortcutForDisplay(shortcut) {
 function buildQuickReviewTooltipText(shortcutText) {
     const shortcut = (typeof shortcutText === 'string' && shortcutText.trim())
         ? shortcutText.trim()
-        : formatShortcutForDisplay('Alt+S');
+        : formatShortcutForDisplay(getDefaultQuickReviewShortcut());
     if (currentLang === 'en') {
         return `Quick Review (${shortcut})`;
     }
@@ -5930,7 +5937,7 @@ function bindQuickReviewTooltipRefreshTriggers() {
 function updateQuickReviewShortcutDisplay() {
     const textEl = document.getElementById('openShortcutsSettingsText');
 
-    const defaultShortcut = formatShortcutForDisplay('Alt+S');
+    const defaultShortcut = formatShortcutForDisplay(getDefaultQuickReviewShortcut());
     const unsetText = i18n.quickReviewShortcutUnset?.[currentLang] || (currentLang === 'en' ? 'Not Set' : '未设置');
 
     const applyText = (text) => {
