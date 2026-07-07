@@ -3886,8 +3886,8 @@ const i18n = {pageTitle: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh Cards'
     },widgetsQuickReviewText: {
-        'zh_CN': '快捷复习',
-        'en': 'Quick Review'
+        'zh_CN': '添加待复习',
+        'en': 'Add to Review'
     },widgetsSmartSortToggle: {
         'zh_CN': '智能排序',
         'en': 'Smart Sort'
@@ -4449,6 +4449,9 @@ const i18n = {pageTitle: {
     },refreshSettingsTitle: {
         'zh_CN': '书签推荐设置',
         'en': 'Bookmark Recommend Settings'
+    },widgetSettingsTooltip: {
+        'zh_CN': '设置',
+        'en': 'Settings'
     },settingsAutoRefreshText: {
         'zh_CN': '自动刷新设置',
         'en': 'Auto Refresh'
@@ -4537,14 +4540,14 @@ const i18n = {pageTitle: {
         'zh_CN': '随机',
         'en': 'Random'
     },addTabTree: {
-        'zh_CN': '书签树',
-        'en': 'Bookmark tree'
+        'zh_CN': '树',
+        'en': 'Tree'
     },addTabSearch: {
-        'zh_CN': '搜索书签',
-        'en': 'Search bookmarks'
+        'zh_CN': '搜索',
+        'en': 'Search'
     },addTabDomain: {
-        'zh_CN': '按域名',
-        'en': 'By domain'
+        'zh_CN': '域名',
+        'en': 'Domain'
     },addFolderLabel: {
         'zh_CN': '选择文件夹：',
         'en': 'Choose folder:'
@@ -4609,14 +4612,14 @@ const i18n = {pageTitle: {
         'zh_CN': '添加屏蔽',
         'en': 'Add Block'
     },addBlockTabTree: {
-        'zh_CN': '书签树',
-        'en': 'Bookmark tree'
+        'zh_CN': '树',
+        'en': 'Tree'
     },addBlockTabSearch: {
-        'zh_CN': '搜索书签',
-        'en': 'Search bookmarks'
+        'zh_CN': '搜索',
+        'en': 'Search'
     },addBlockTabDomain: {
-        'zh_CN': '按域名',
-        'en': 'By domain'
+        'zh_CN': '域名',
+        'en': 'Domain'
     },addBlockTreeHint: {
         'zh_CN': '',
         'en': ''
@@ -5426,8 +5429,9 @@ function applyLanguage() {
     }
     const widgetsQuickReviewSettingsBtn = document.getElementById('widgetsQuickReviewSettingsBtn');
     if (widgetsQuickReviewSettingsBtn) {
-        widgetsQuickReviewSettingsBtn.title = i18n.refreshSettingsTitle[currentLang];
-        widgetsQuickReviewSettingsBtn.setAttribute('aria-label', i18n.refreshSettingsTitle[currentLang]);
+        widgetsQuickReviewSettingsBtn.dataset.instantTooltip = i18n.widgetSettingsTooltip[currentLang];
+        widgetsQuickReviewSettingsBtn.removeAttribute('title');
+        widgetsQuickReviewSettingsBtn.setAttribute('aria-label', i18n.widgetSettingsTooltip[currentLang]);
     }
     syncRecommendLastUpdatedFromState();
 
@@ -6150,11 +6154,11 @@ function applyQuickReviewTooltipForButtons(shortcutText) {
         quickReviewTooltip.textContent = tooltipText;
     }
 
-    const buttonIds = ['quickReviewBtn', 'widgetsQuickReviewBtn', 'cardQuickReviewBtn'];
+    const buttonIds = ['quickReviewBtn', 'cardQuickReviewBtn'];
     buttonIds.forEach((buttonId) => {
         const btn = document.getElementById(buttonId);
         if (!btn) return;
-        const useInstantTooltip = buttonId === 'widgetsQuickReviewBtn' || buttonId === 'cardQuickReviewBtn';
+        const useInstantTooltip = buttonId === 'cardQuickReviewBtn';
         if (useInstantTooltip) {
             btn.dataset.instantTooltip = tooltipText;
             btn.removeAttribute('title');
@@ -6166,7 +6170,7 @@ function applyQuickReviewTooltipForButtons(shortcutText) {
 }
 
 function bindQuickReviewTooltipRefreshTriggers() {
-    const buttonIds = ['quickReviewBtn', 'widgetsQuickReviewBtn', 'cardQuickReviewBtn'];
+    const buttonIds = ['quickReviewBtn', 'cardQuickReviewBtn'];
     buttonIds.forEach((buttonId) => {
         const btn = document.getElementById(buttonId);
         if (!btn || btn.dataset.shortcutTooltipBound === 'true') return;
@@ -25393,9 +25397,10 @@ function initWidgetsView() {
     }
 
     if (widgetsQuickReviewBtn) {
-        widgetsQuickReviewBtn.addEventListener('click', async (e) => {
+        widgetsQuickReviewBtn.addEventListener('click', (e) => {
+            e.preventDefault();
             e.stopPropagation();
-            await quickReviewNext({ source: 'widgets_button' });
+            openAddToPostponedModal();
         });
     }
 
@@ -32273,7 +32278,27 @@ function initRecommendSectionSearch() {
     });
 }
 
+function openAddToPostponedModal(event = null) {
+    if (event && typeof event.stopPropagation === 'function') {
+        event.stopPropagation();
+    }
+
+    if (initAddToPostponedModal._initialized !== true) {
+        initAddToPostponedModal();
+    }
+
+    const modal = document.getElementById('addToPostponedModal');
+    if (!modal) return false;
+
+    resetAddPostponedModal();
+    modal.classList.add('show');
+    loadAddPostponedBookmarkTree();
+    return true;
+}
+
 function initAddToPostponedModal() {
+    if (initAddToPostponedModal._initialized === true) return true;
+
     const modal = document.getElementById('addToPostponedModal');
     const addBtn = document.getElementById('postponedAddBtn');
     const closeBtn = document.getElementById('addPostponedModalClose');
@@ -32282,15 +32307,9 @@ function initAddToPostponedModal() {
     const tabs = modal?.querySelectorAll('.add-postponed-tab');
     const panels = modal?.querySelectorAll('.add-postponed-panel');
 
-    if (!modal || !addBtn) return;
+    if (!modal || !addBtn) return false;
 
-    // 打开弹窗
-    addBtn.onclick = (e) => {
-        e.stopPropagation();
-        resetAddPostponedModal();
-        modal.classList.add('show');
-        loadAddPostponedBookmarkTree();
-    };
+    addBtn.onclick = openAddToPostponedModal;
 
     // 关闭弹窗
     const hideModal = () => modal.classList.remove('show');
@@ -32371,6 +32390,9 @@ function initAddToPostponedModal() {
         await confirmAddToPostponed();
         hideModal();
     });
+
+    initAddToPostponedModal._initialized = true;
+    return true;
 }
 
 function initAddToBlockModal() {
@@ -32400,8 +32422,11 @@ function initAddToBlockModal() {
                 : '-';
             return;
         }
-        const treeSelected = getAddBlockDomEl('addBlockTreeSelectedName');
-        footerSelectedName.textContent = treeSelected?.textContent || '-';
+        if (addBlockUnifiedTreeState) {
+            updateAddPostponedTreeSelectionSummary(addBlockUnifiedTreeState);
+            return;
+        }
+        footerSelectedName.textContent = '-';
     };
 
     function resetAddToBlockModal() {
@@ -32412,8 +32437,6 @@ function initAddToBlockModal() {
         addBlockUnifiedDomainData = [];
         addBlockUnifiedDomainSort = { key: 'domain', dir: 'asc' };
 
-        const treeSelected = getAddBlockDomEl('addBlockTreeSelectedName');
-        if (treeSelected) treeSelected.textContent = '-';
         const footerSelectedName = getAddBlockDomEl('addBlockFooterSelectedName');
         if (footerSelectedName) footerSelectedName.textContent = '-';
         const treeList = getAddBlockDomEl('addBlockTreeList');
@@ -32925,7 +32948,6 @@ function buildAddPostponedTreeState(tree, metricMaps) {
         indeterminateKeys: new Set(),
         selectedBookmarkIds: new Set(),
         userToggledKeys: new Set(),
-        _unitInjected: false,
         listId: 'addBookmarkTreeList',
         selectedNameId: 'addTreeSelectedName',
         bindFolderSelection: true
@@ -33181,7 +33203,50 @@ function toggleAddDomainSort(sortState, nextKey) {
     sortState.dir = safeKey === 'domain' ? 'asc' : 'desc';
 }
 
-function createAddPostponedTreeNode(nodeKey, state) {
+function createAddPostponedTreeTableShell() {
+    const isZh = currentLang === 'zh_CN';
+    const table = document.createElement('div');
+    table.className = 'add-bookmark-tree-table';
+    table.innerHTML = `
+        <div class="add-bookmark-tree-header">
+            <span class="add-bookmark-tree-header-metrics">
+                <span class="folder-count" title="${isZh ? '点击次数' : 'Click count'}">${isZh ? '点击次数' : 'clicks'}</span>
+                <span class="add-bookmark-tree-header-separator">|</span>
+                <span class="add-folder-tree-clicks" title="${isZh ? '唤醒次数' : 'Wake count'}">${isZh ? '唤醒次数' : 'wake-count'}</span>
+                <span class="add-bookmark-tree-header-separator">|</span>
+                <span class="add-folder-tree-time" title="${isZh ? '时间捕捉（小时）' : 'Time tracking (hours)'}">${isZh ? '时间(h)' : 'time(h)'}</span>
+                <span class="add-bookmark-tree-header-separator">|</span>
+            </span>
+            <span class="add-bookmark-tree-header-title">${isZh ? '树结构' : 'Tree'}</span>
+        </div>
+        <div class="add-bookmark-tree-rows"></div>
+    `;
+    return {
+        table,
+        rows: table.querySelector('.add-bookmark-tree-rows')
+    };
+}
+
+function renderAddPostponedTreeList(listEl, state) {
+    if (!listEl || !state) return;
+
+    listEl.innerHTML = '';
+    const { table, rows } = createAddPostponedTreeTableShell();
+    const fragment = document.createDocumentFragment();
+    state.rootNodeKeys.forEach((nodeKey) => {
+        const node = createAddPostponedTreeNode(nodeKey, state, 0);
+        if (node) fragment.appendChild(node);
+    });
+    rows.appendChild(fragment);
+    listEl.appendChild(table);
+
+    listEl.scrollLeft = 80;
+    requestAnimationFrame(() => {
+        listEl.scrollLeft = 80;
+    });
+}
+
+function createAddPostponedTreeNode(nodeKey, state, depth = 0) {
     const node = state?.nodeMap?.get(nodeKey);
     if (!node) return null;
 
@@ -33194,6 +33259,7 @@ function createAddPostponedTreeNode(nodeKey, state) {
         ? Math.max(0, Number(node.totalTimeMs || 0) || 0)
         : Math.max(0, Number(node.timeMs || 0) || 0);
     const timeHoursText = formatAddPostponedTreeHours(timeMs, locale);
+    const timeHoursValueText = String(timeHoursText || '').replace(/\s*(?:h|小时)$/i, '');
 
     const wrapper = document.createElement('div');
     wrapper.className = 'folder-tree-node add-folder-tree-node';
@@ -33208,19 +33274,6 @@ function createAddPostponedTreeNode(nodeKey, state) {
     row.dataset.id = node.id || '';
     row.dataset.title = node.title || '';
     row.title = node.pathText || node.title;
-    const isFirstRow = isFolder && state && state._unitInjected !== true;
-    if (isFirstRow && state) {
-        state._unitInjected = true;
-    }
-    const clickUnitTail = isFirstRow
-        ? `（${isZh ? '点击次数' : 'clicks'}）`
-        : '';
-    const wakeUnitTail = isFirstRow
-        ? `（${isZh ? '唤醒次数' : 'wake-count'}）`
-        : '';
-    const timeUnitTail = isFirstRow
-        ? `（${isZh ? '时间捕捉--小时' : 'time-tracking--hours'}）`
-        : '';
 
     const spacerOrToggle = hasChildren
         ? `<button class="add-folder-tree-toggle" type="button" aria-label="${isZh ? '展开文件夹' : 'Expand folder'}"><i class="fas fa-chevron-right"></i></button>`
@@ -33229,24 +33282,45 @@ function createAddPostponedTreeNode(nodeKey, state) {
     const iconHtml = isFolder
         ? `<i class="fas fa-folder add-tree-folder-icon"></i>`
         : `<img class="add-bookmark-favicon add-tree-bookmark-favicon" data-bookmark-url="${escapeHtml(node.url || '')}" src="${getFaviconUrl(node.url)}" alt="">`;
+    const clickLabel = isZh ? '点击次数' : 'Click count';
+    const wakeLabel = isZh ? '唤醒次数' : 'Wake count';
+    const timeLabel = isZh ? '时间捕捉（小时）' : 'Time tracking (hours)';
+    const clickValue = Math.max(0, Number(node.clickCount || 0) || 0);
+    const wakeValue = Math.max(0, Number(node.wakeCount || 0) || 0);
+    const metricItems = [
+        clickValue > 0
+            ? { className: 'folder-count', label: clickLabel, text: clickValue.toLocaleString(locale) }
+            : null,
+        wakeValue > 0
+            ? { className: 'add-folder-tree-clicks', label: wakeLabel, text: wakeValue.toLocaleString(locale) }
+            : null,
+        timeHoursValueText && timeHoursValueText !== '0'
+            ? { className: 'add-folder-tree-time', label: timeLabel, text: timeHoursValueText }
+            : null
+    ].filter(Boolean);
+    const visibleMetricCount = metricItems.length;
+    const metricsWidth = visibleMetricCount === 1 ? 14 : (visibleMetricCount === 2 ? 29 : 45);
+    const metricsLabel = metricItems.map((item) => `${item.label}: ${item.text}`).join(', ');
+    const metricsHtml = visibleMetricCount > 0
+        ? `
+            <span class="add-folder-tree-metrics ${isFolder ? '' : 'bookmark-metrics'}" aria-label="${escapeHtml(metricsLabel)}">
+                ${metricItems.map((item) => `<span class="${item.className}" title="${escapeHtml(item.label)}">${escapeHtml(item.text)}</span>`).join('')}
+            </span>
+        `
+        : '';
+
+    row.classList.toggle('metrics-empty', visibleMetricCount === 0);
+    row.style.setProperty('--add-tree-visible-metrics', String(Math.max(visibleMetricCount, 1)));
+    row.style.setProperty('--add-tree-row-metrics-width', `${visibleMetricCount > 0 ? metricsWidth : 0}px`);
+    row.style.setProperty('--add-tree-left-guide-width', `${visibleMetricCount > 0 ? metricsWidth + 4 : 0}px`);
 
     row.innerHTML = `
-        ${spacerOrToggle}
-        <input type="checkbox" class="add-tree-checkbox" data-node-key="${escapeHtml(nodeKey)}">
-        ${iconHtml}
-        <span class="add-folder-tree-title">${escapeHtml(node.title || '')}</span>
-        <span class="add-folder-tree-metrics ${isFolder ? '' : 'bookmark-metrics'}">
-            ${isFolder
-                ? `
-            <span class="folder-count" title="${isZh ? '点击次数' : 'Click count'}">${Math.max(0, Number(node.clickCount || 0)).toLocaleString(locale)}${clickUnitTail}</span>
-            <span class="add-folder-tree-clicks" title="${isZh ? '唤醒次数' : 'Wake count'}">${Math.max(0, Number(node.wakeCount || 0)).toLocaleString(locale)}${wakeUnitTail}</span>
-            <span class="add-folder-tree-time" title="${isZh ? '时间捕捉（小时）' : 'Time tracking (hours)'}">${timeHoursText}${timeUnitTail}</span>
-            `
-                : `
-            <span class="folder-count">${Math.max(0, Number(node.clickCount || 0)).toLocaleString(locale)}</span>
-            <span class="add-folder-tree-clicks">${Math.max(0, Number(node.wakeCount || 0)).toLocaleString(locale)}</span>
-            <span class="add-folder-tree-time">${timeHoursText}</span>
-            `}
+        <span class="add-folder-tree-main">
+            ${metricsHtml}
+            ${spacerOrToggle}
+            <input type="checkbox" class="add-tree-checkbox" data-node-key="${escapeHtml(nodeKey)}">
+            ${iconHtml}
+            <span class="add-folder-tree-title">${escapeHtml(node.title || '')}</span>
         </span>
     `;
     wrapper.appendChild(row);
@@ -33291,7 +33365,7 @@ function createAddPostponedTreeNode(nodeKey, state) {
             if (children.dataset.rendered !== 'true') {
                 const fragment = document.createDocumentFragment();
                 childKeys.forEach((childKey) => {
-                    const childNode = createAddPostponedTreeNode(childKey, state);
+                    const childNode = createAddPostponedTreeNode(childKey, state, depth + 1);
                     if (childNode) fragment.appendChild(childNode);
                 });
                 children.appendChild(fragment);
@@ -33364,13 +33438,7 @@ async function loadAddPostponedBookmarkTree() {
             return;
         }
 
-        listEl.innerHTML = '';
-        const fragment = document.createDocumentFragment();
-        state.rootNodeKeys.forEach((nodeKey) => {
-            const node = createAddPostponedTreeNode(nodeKey, state);
-            if (node) fragment.appendChild(node);
-        });
-        listEl.appendChild(fragment);
+        renderAddPostponedTreeList(listEl, state);
         updateAddPostponedTreeSelectionSummary(state);
     } catch (error) {
         console.warn('[添加到待复习] 加载书签树失败:', error);
@@ -33402,7 +33470,7 @@ async function loadAddBlockBookmarkTree() {
 
         const state = buildAddPostponedTreeState(tree, metricMaps);
         state.listId = 'addBlockTreeList';
-        state.selectedNameId = 'addBlockTreeSelectedName';
+        state.selectedNameId = 'addBlockFooterSelectedName';
         state.bindFolderSelection = false;
         addBlockUnifiedTreeState = state;
 
@@ -33413,13 +33481,7 @@ async function loadAddBlockBookmarkTree() {
             return;
         }
 
-        listEl.innerHTML = '';
-        const fragment = document.createDocumentFragment();
-        state.rootNodeKeys.forEach((nodeKey) => {
-            const node = createAddPostponedTreeNode(nodeKey, state);
-            if (node) fragment.appendChild(node);
-        });
-        listEl.appendChild(fragment);
+        renderAddPostponedTreeList(listEl, state);
         updateAddPostponedTreeSelectionSummary(state);
     } catch (error) {
         console.warn('[添加到屏蔽] 加载书签树失败:', error);

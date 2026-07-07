@@ -5767,6 +5767,8 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
 
 #widgetsQuickReviewBtn[data-instant-tooltip]::before,
 #widgetsQuickReviewBtn[data-instant-tooltip]::after,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]::before,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]::after,
 #widgetsCardRefreshBtn[data-instant-tooltip]::before,
 #widgetsCardRefreshBtn[data-instant-tooltip]::after,
 #cardQuickReviewBtn[data-instant-tooltip]::before,
@@ -5778,6 +5780,7 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
 }
 
 #widgetsQuickReviewBtn[data-instant-tooltip]::before,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]::before,
 #widgetsCardRefreshBtn[data-instant-tooltip]::before,
 #cardQuickReviewBtn[data-instant-tooltip]::before {
     content: '';
@@ -5791,6 +5794,7 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
 }
 
 #widgetsQuickReviewBtn[data-instant-tooltip]::after,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]::after,
 #widgetsCardRefreshBtn[data-instant-tooltip]::after,
 #cardQuickReviewBtn[data-instant-tooltip]::after {
     content: attr(data-instant-tooltip);
@@ -5813,6 +5817,10 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
 #widgetsQuickReviewBtn[data-instant-tooltip]:hover::after,
 #widgetsQuickReviewBtn[data-instant-tooltip]:focus-visible::before,
 #widgetsQuickReviewBtn[data-instant-tooltip]:focus-visible::after,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]:hover::before,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]:hover::after,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]:focus-visible::before,
+#widgetsQuickReviewSettingsBtn[data-instant-tooltip]:focus-visible::after,
 #widgetsCardRefreshBtn[data-instant-tooltip]:hover::before,
 #widgetsCardRefreshBtn[data-instant-tooltip]:hover::after,
 #widgetsCardRefreshBtn[data-instant-tooltip]:focus-visible::before,
@@ -5826,6 +5834,7 @@ html.side-panel-mode #widgetsView.widgets-open-stabilizing .widgets-grid * {
 }
 
 html.side-panel-mode #widgetsQuickReviewBtn[data-instant-tooltip]::after,
+html.side-panel-mode #widgetsQuickReviewSettingsBtn[data-instant-tooltip]::after,
 html.side-panel-mode #widgetsCardRefreshBtn[data-instant-tooltip]::after {
     font-size: 9px;
     line-height: 1.1;
@@ -15381,21 +15390,36 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 
 .add-postponed-modal .modal-body {
     padding: 0;
+    overflow: hidden;
+}
+
+.add-postponed-modal .modal-header {
+    padding: 9px 16px;
+}
+
+.add-postponed-modal .modal-header h3 {
+    font-size: 17px;
+    line-height: 1.2;
+}
+
+.add-postponed-modal .modal-close {
+    width: 28px;
+    height: 28px;
 }
 
 .add-postponed-modal .modal-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    padding: 16px 20px;
+    gap: 8px;
+    padding: 9px 14px;
     border-top: 1px solid var(--border-color);
 }
 
 .add-postponed-footer-actions {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
 }
 
 .add-postponed-tabs {
@@ -15439,6 +15463,10 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     display: block;
 }
 
+.add-postponed-panel[data-panel="tree"] {
+    padding: 8px 10px;
+}
+
 .add-panel-hint {
     margin: 0 0 10px;
     padding: 8px 10px;
@@ -15451,19 +15479,65 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 }
 
 .add-bookmark-tree-list {
-    max-height: 280px;
-    overflow-y: auto;
+    height: 380px;
+    max-height: 50vh;
+    overflow: auto;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background: var(--bg-primary);
-    padding: 8px;
+    padding: 4px 4px 4px 80px;
 }
 
-#addToBlockModal .add-bookmark-tree-list,
-#addToBlockModal .add-domain-list,
-#addToBlockModal .add-results-list {
-    max-height: min(420px, 56vh);
+.add-bookmark-tree-table {
+    min-width: 700px;
+    width: max(700px, 100%);
 }
+
+.add-bookmark-tree-header {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+    padding: 4px 10px 6px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.add-bookmark-tree-header-title {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary);
+}
+
+.add-bookmark-tree-header-metrics {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    color: var(--text-tertiary);
+}
+
+.add-bookmark-tree-header-metrics .folder-count {
+    color: var(--warning);
+}
+
+.add-bookmark-tree-header-separator {
+    color: var(--text-tertiary);
+    opacity: 0.55;
+}
+
+.add-bookmark-tree-rows {
+    min-width: 0;
+}
+
+
 
 .add-panel-row {
     display: flex;
@@ -15540,7 +15614,8 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 
 /* 域名列表 */
 .add-domain-list {
-    max-height: 280px;
+    height: 380px;
+    max-height: 50vh;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -15773,7 +15848,8 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 }
 
 .add-results-list {
-    max-height: 280px;
+    height: 380px;
+    max-height: 50vh;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -15892,6 +15968,11 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     filter: brightness(0.95);
 }
 
+.add-postponed-modal .modal-btn {
+    padding: 6px 16px;
+    line-height: 1.2;
+}
+
 /* 选择文件夹弹窗内嵌树形结构 */
 .add-folder-tree {
     max-height: 250px;
@@ -15923,13 +16004,24 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 .add-folder-tree-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 0;
+    min-height: 24px;
+    padding: 3px 6px 3px 0;
     border-radius: 6px;
     cursor: pointer;
     transition: background 0.15s;
     font-size: 13px;
     color: var(--text-primary);
+}
+
+.add-folder-tree-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1 0 520px;
+    min-width: 520px;
+    position: relative;
+    z-index: 1;
 }
 
 .add-folder-tree-item:hover {
@@ -15954,9 +16046,14 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     text-overflow: ellipsis;
 }
 
+.add-bookmark-tree-list .add-folder-tree-title {
+    font-size: 12px;
+    line-height: 1.25;
+}
+
 .add-folder-tree-toggle {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: none;
     background: transparent;
     color: var(--text-tertiary);
@@ -15979,8 +16076,8 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 }
 
 .add-folder-tree-toggle-spacer {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     display: inline-block;
     flex-shrink: 0;
 }
@@ -15991,6 +16088,74 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     height: 13px;
     flex-shrink: 0;
     accent-color: var(--accent-primary);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    display: inline-grid;
+    place-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:hover {
+    border-color: var(--accent-primary);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:checked {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:checked::after {
+    content: '';
+    width: 6px;
+    height: 3px;
+    border-left: 1.5px solid #fff;
+    border-bottom: 1.5px solid #fff;
+    transform: rotate(-45deg) translate(0, -1px);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:indeterminate {
+    border-color: var(--accent-primary);
+    background: var(--bg-secondary);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:indeterminate::after {
+    content: '';
+    width: 7px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--accent-primary);
+}
+
+.add-bookmark-tree-list .add-tree-checkbox:focus-visible {
+    outline: 2px solid rgba(var(--accent-primary-rgb), 0.35);
+    outline-offset: 1px;
+}
+
+[data-theme="dark"] .add-bookmark-tree-list .add-tree-checkbox {
+    border-color: #4b5563;
+    background: #111827;
+}
+
+[data-theme="dark"] .add-bookmark-tree-list .add-tree-checkbox:hover {
+    border-color: var(--accent-primary);
+    background: #172033;
+}
+
+[data-theme="dark"] .add-bookmark-tree-list .add-tree-checkbox:checked {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+}
+
+[data-theme="dark"] .add-bookmark-tree-list .add-tree-checkbox:indeterminate {
+    border-color: var(--accent-primary);
+    background: #111827;
 }
 
 .add-tree-folder-icon,
@@ -16026,34 +16191,67 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
 }
 
 .add-folder-tree-metrics {
-    margin-left: auto;
-    display: inline-flex;
+    display: inline-grid;
+    grid-template-columns: repeat(var(--add-tree-visible-metrics, 3), auto);
     align-items: center;
-    gap: 8px;
-    font-size: 11px;
+    gap: 0;
+    margin: 0 3px 0 0;
+    box-sizing: border-box;
+    padding: 1px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--add-tree-metrics-bg, var(--bg-primary));
+    box-shadow: 0 0 0 2px var(--bg-primary);
+    font-size: 8px;
+    line-height: 1;
     white-space: nowrap;
-    min-width: 130px;
-    justify-content: flex-end;
-    text-align: right;
+    width: auto;
+    min-width: max-content;
+    flex: 0 0 auto;
+    justify-content: stretch;
+    text-align: center;
+    position: relative;
+    z-index: 2;
 }
 
 .add-folder-tree-metrics.bookmark-metrics {
-    min-width: 90px;
+    width: auto;
+}
+
+.add-folder-tree-metrics > span {
+    min-width: 1ch;
+    padding: 0 3px;
+    overflow: visible;
+    line-height: 1;
+    text-align: center;
+    text-overflow: clip;
+}
+
+.add-folder-tree-metrics > span:not(:last-child) {
+    border-right: 1px solid var(--border-color);
 }
 
 .add-folder-tree-item .folder-count {
     font-size: 11px;
     color: var(--warning);
     white-space: nowrap;
-    min-width: 28px;
-    text-align: right;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    text-align: center;
+}
+
+.add-folder-tree-metrics .folder-count {
+    font-size: inherit;
 }
 
 .add-folder-tree-clicks,
 .add-folder-tree-time {
     color: var(--text-tertiary);
-    min-width: 28px;
-    text-align: right;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    text-align: center;
     font-variant-numeric: tabular-nums;
 }
 
@@ -16232,22 +16430,138 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     background: rgba(148, 163, 184, 0.08);
 }
 
-/* 文件夹树统一使用 .folder-tree-children 的连接线样式 */
-/* 待复习 > 书签树：竖线向右移一点，与展开后下箭头中心更接近 */
+/* 添加弹窗书签树：根层/子层使用垂直干线，指标放在水平引导线上 */
+.add-bookmark-tree-list {
+    --add-tree-guide-color: var(--border-color);
+    --add-tree-children-indent: 8px;
+    --add-tree-metrics-width: 45px;
+    --add-tree-metric-slot-width: 48px;
+    --add-tree-toggle-center: calc(var(--add-tree-metric-slot-width) + 8px);
+    --add-tree-checkbox-guide-width: 82px;
+    --add-tree-right-branch-width: 12px;
+    --add-tree-right-guide-width: var(--add-tree-right-branch-width);
+    --add-tree-metrics-gap: 4px;
+    --add-tree-left-guide-width: 0px;
+    --add-tree-guide-overhang: 3px;
+    --add-tree-metrics-bg: var(--bg-primary);
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-header-metrics {
+    min-width: var(--add-tree-metrics-width);
+    justify-content: center;
+    margin-right: 4px;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows {
+    position: relative;
+    margin-left: 0;
+    padding-left: 0;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows::before {
+    content: '';
+    position: absolute;
+    left: var(--add-tree-toggle-center);
+    top: 12px;
+    bottom: 0;
+    width: 1px;
+    background: var(--add-tree-guide-color);
+    opacity: 0.78;
+    pointer-events: none;
+}
+
 .add-bookmark-tree-list .folder-tree-children {
-    margin-left: 19.7px;
+    position: relative;
+    margin-left: var(--add-tree-toggle-center);
+    padding-left: var(--add-tree-children-indent);
+    border-left: 1px solid var(--add-tree-guide-color);
 }
 
-/* 待复习 > 书签树：连接线在折叠按钮前停止，避免侵入按钮区域 */
-.add-bookmark-tree-list .folder-tree-children .add-folder-tree-node.has-children::before {
-    top: 16px;
-    width: 18px;
+.add-bookmark-tree-list .folder-tree-children .folder-tree-children {
+    margin-left: calc(-1 * var(--add-tree-children-indent) + var(--add-tree-right-branch-width) + 8px);
 }
 
-/* 待复习 > 书签树：叶子节点没有折叠按钮，可继续延伸到勾选框前 */
-.add-bookmark-tree-list .folder-tree-children .add-folder-tree-node:not(.has-children)::before {
-    top: 16px;
-    width: 38px;
+.add-bookmark-tree-list .add-bookmark-tree-rows > .folder-tree-node,
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node {
+    position: relative;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows > .folder-tree-node::before,
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node::before {
+    content: none;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows > .folder-tree-node > .add-folder-tree-item::before,
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node > .add-folder-tree-item::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    height: 1px;
+    transform: translateY(-50%);
+    background: var(--add-tree-guide-color);
+    opacity: 0.78;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows > .folder-tree-node > .add-folder-tree-item::before {
+    left: var(--add-tree-toggle-center);
+    width: var(--add-tree-right-guide-width);
+}
+
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node > .add-folder-tree-item::before {
+    left: calc(-1 * var(--add-tree-children-indent));
+    width: calc(var(--add-tree-children-indent) + var(--add-tree-right-branch-width));
+}
+
+.add-bookmark-tree-list .add-folder-tree-item {
+    position: relative;
+    isolation: isolate;
+    overflow: visible;
+}
+
+.add-bookmark-tree-list .add-bookmark-tree-rows > .folder-tree-node > .add-folder-tree-item {
+    --add-tree-metrics-anchor-left: calc(var(--add-tree-toggle-center) - var(--add-tree-metrics-gap));
+}
+
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node > .add-folder-tree-item {
+    --add-tree-metrics-anchor-left: calc(-1 * var(--add-tree-children-indent) - var(--add-tree-metrics-gap));
+}
+
+.add-bookmark-tree-list .add-folder-tree-main {
+    padding-left: var(--add-tree-metric-slot-width);
+}
+
+.add-bookmark-tree-list .folder-tree-children > .folder-tree-node > .add-folder-tree-item .add-folder-tree-main {
+    padding-left: calc(-1 * var(--add-tree-children-indent) + var(--add-tree-right-branch-width));
+}
+
+.add-bookmark-tree-list .add-folder-tree-metrics {
+    position: absolute;
+    left: var(--add-tree-metrics-anchor-left);
+    top: 50%;
+    margin: 0;
+    transform: translate(-100%, -50%);
+    width: auto;
+    min-width: max-content;
+}
+
+.add-bookmark-tree-list .add-folder-tree-metrics::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    height: 1px;
+    left: 0;
+    right: calc(-1 * var(--add-tree-metrics-gap));
+    background: var(--add-tree-guide-color);
+    opacity: 0.78;
+    z-index: -1;
+    pointer-events: none;
+}
+
+[data-theme="dark"] .add-bookmark-tree-list {
+    --add-tree-guide-color: #3a3b3c;
+    --add-tree-metrics-bg: color-mix(in srgb, var(--bg-primary) 86%, #1f2937 14%);
 }
 
 /* 待复习 > 书签树：已选择信息移到底部左侧 */
