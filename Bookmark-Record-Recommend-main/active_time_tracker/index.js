@@ -787,20 +787,20 @@ async function clearSessionsByTimeRange(startTime, endTime) {
         return new Promise((resolve, reject) => {
             const transaction = database.transaction([CONFIG.STORE_NAME], 'readwrite');
             const store = transaction.objectStore(CONFIG.STORE_NAME);
-            const request = store.openCursor();
+            const endTimeIndex = store.index('endTime');
+            const safeStart = Math.max(0, Number(startTime) || 0);
+            const safeEnd = Math.max(safeStart, Number(endTime) || 0);
+            const request = endTimeIndex.openCursor(IDBKeyRange.bound(safeStart, safeEnd));
 
             let deletedCount = 0;
+            transaction.oncomplete = () => resolve(deletedCount);
+            transaction.onerror = () => reject(transaction.error);
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
-                    const record = cursor.value;
-                    if (record.endTime >= startTime && record.endTime <= endTime) {
-                        cursor.delete();
-                        deletedCount++;
-                    }
+                    cursor.delete();
+                    deletedCount++;
                     cursor.continue();
-                } else {
-                    resolve(deletedCount);
                 }
             };
             request.onerror = () => reject(request.error);

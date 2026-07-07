@@ -29172,6 +29172,14 @@ async function clearFlippedForBookmarkIds(bookmarkIds = []) {
     }
 }
 
+function normalizeRecommendBookmarkIds(bookmarkIds = []) {
+    return Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+}
+
 async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedInput = null) {
     const ids = Array.from(new Set(
         (Array.isArray(bookmarkIds) ? bookmarkIds : [])
@@ -29406,17 +29414,100 @@ async function blockBookmark(bookmarkId) {
 
 // 恢复屏蔽的书签
 async function unblockBookmark(bookmarkId) {
-    try {
-        const blocked = await getBlockedBookmarks();
-        blocked.bookmarks = blocked.bookmarks.filter(id => id !== bookmarkId);
-        await saveBlockedBookmarks(blocked);
+    const result = await unblockBlockedEntries({ bookmarkIds: [bookmarkId] });
+    return result.success === true;
+}
 
-        // 恢复后触发S值计算（该书签之前没有缓存）
-        await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
-        return true;
+function collectBlockedDomainRemovalEntries(domains = [], currentDomains = []) {
+    const removeSet = new Set();
+    const normalizedCurrentDomains = normalizeBlockedDomains(currentDomains);
+
+    for (const domain of Array.isArray(domains) ? domains : []) {
+        const normalizedRaw = normalizeBlockedDomainEntry(domain);
+        if (!normalizedRaw) continue;
+
+        removeSet.add(normalizedRaw);
+        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
+        if (isExplicitBase) continue;
+
+        const hasExactRule = normalizedCurrentDomains.some(entry => normalizeBlockedDomainEntry(entry) === normalizedRaw);
+        if (!hasExactRule) {
+            const normalizedBase = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+            if (normalizedBase) removeSet.add(normalizedBase);
+        }
+    }
+
+    return removeSet;
+}
+
+async function unblockBlockedEntries({ bookmarkIds = [], folderIds = [], domains = [] } = {}) {
+    try {
+        const bookmarkRemoveSet = new Set(normalizeRecommendBookmarkIds(bookmarkIds));
+        const folderRemoveSet = new Set(normalizeBlockedListIds(folderIds));
+        const blocked = await getBlockedBookmarks();
+        const domainRemoveSet = collectBlockedDomainRemovalEntries(domains, blocked.domains);
+
+        const removedBookmarkIds = [];
+        const removedFolderIds = [];
+        const removedDomains = [];
+
+        blocked.bookmarks = normalizeBlockedListIds(blocked.bookmarks).filter((id) => {
+            if (bookmarkRemoveSet.has(id)) {
+                removedBookmarkIds.push(id);
+                return false;
+            }
+            return true;
+        });
+
+        blocked.folders = normalizeBlockedListIds(blocked.folders).filter((id) => {
+            if (folderRemoveSet.has(id)) {
+                removedFolderIds.push(id);
+                return false;
+            }
+            return true;
+        });
+
+        blocked.domains = normalizeBlockedDomains(blocked.domains).filter((entry) => {
+            const normalized = normalizeBlockedDomainEntry(entry);
+            if (normalized && domainRemoveSet.has(normalized)) {
+                removedDomains.push(normalized);
+                return false;
+            }
+            return true;
+        });
+
+        const changed = removedBookmarkIds.length > 0 || removedFolderIds.length > 0 || removedDomains.length > 0;
+        if (changed) {
+            await saveBlockedBookmarks(blocked);
+        }
+
+        if (removedBookmarkIds.length > 0) {
+            await requestRecommendScoreUpdatesByIds(removedBookmarkIds, { chunkSize: 200 });
+        }
+        if (removedFolderIds.length > 0) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderIds: removedFolderIds });
+        }
+        if (removedDomains.length > 0) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domains: removedDomains });
+        }
+
+        return {
+            success: true,
+            changed,
+            removedBookmarkIds,
+            removedFolderIds,
+            removedDomains
+        };
     } catch (e) {
-        console.error('[屏蔽] 恢复书签失败:', e);
-        return false;
+        console.error('[屏蔽] 批量恢复失败:', e);
+        return {
+            success: false,
+            changed: false,
+            removedBookmarkIds: [],
+            removedFolderIds: [],
+            removedDomains: [],
+            error: e
+        };
     }
 }
 
@@ -29586,33 +29677,55 @@ async function postponeBookmark(bookmarkId, delayMs, options = {}) {
 
 // 取消稍后复习
 async function cancelPostpone(bookmarkId) {
+    const result = await cancelPostponedBookmarks([bookmarkId]);
+    return result.success === true;
+}
+
+async function cancelPostponedBookmarks(bookmarkIds = [], options = {}) {
+    const ids = normalizeRecommendBookmarkIds(bookmarkIds);
+    if (ids.length === 0) {
+        return { success: true, removedIds: [] };
+    }
+
     try {
-        let postponed = await getPostponedBookmarks();
+        const postponed = await getPostponedBookmarks();
         const expectedVersion = getRecommendStateVersion(postponed);
-        const hadManualPostponed = postponed.some(p => p.manuallyAdded);
+        const hadManualPostponed = postponed.some(p => p?.manuallyAdded);
+        const removeSet = new Set(ids);
+        const shouldRemove = typeof options.shouldRemove === 'function'
+            ? options.shouldRemove
+            : () => true;
+        const removedIds = [];
 
-        postponed = postponed.filter(p => p.bookmarkId !== bookmarkId);
-        attachRecommendListStateVersion(postponed, expectedVersion);
-        const nextPostponed = await savePostponedBookmarks(postponed);
-        await schedulePostponedExpiryRefresh(nextPostponed);
+        const next = postponed.filter((item) => {
+            const id = String(item?.bookmarkId || '').trim();
+            if (!id || !removeSet.has(id) || !shouldRemove(item)) {
+                return true;
+            }
+            removedIds.push(id);
+            return false;
+        });
 
-
-        // 检查取消后是否还有手动添加的待复习
-        const hasManualPostponed = nextPostponed.some(p => p.manuallyAdded);
-
-        // 如果手动待复习从有变无，后续 loadPostponedList 会触发模式切换和全量重算
-        // 此时不需要增量更新，避免重复计算
-        if (hadManualPostponed && !hasManualPostponed && currentRecommendMode === 'priority') {
-
-        } else {
-            // L因子变化，发消息给background.js更新该书签的S值
-            browserAPI.runtime.sendMessage({ action: 'updateBookmarkScore', bookmarkId });
+        const uniqueRemovedIds = normalizeRecommendBookmarkIds(removedIds);
+        if (uniqueRemovedIds.length === 0) {
+            return { success: true, removedIds: [] };
         }
 
-        return true;
+        attachRecommendListStateVersion(next, expectedVersion);
+        const nextPostponed = await savePostponedBookmarks(next);
+        syncRecommendPostponedAuthoritativeIds(nextPostponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
+
+        const hasManualPostponed = nextPostponed.some(p => p?.manuallyAdded);
+        const shouldSkipIncrementalScores = hadManualPostponed && !hasManualPostponed && currentRecommendMode === 'priority';
+        if (options.refreshScores !== false && !shouldSkipIncrementalScores) {
+            await requestRecommendScoreUpdatesByIds(uniqueRemovedIds, { chunkSize: 200 });
+        }
+
+        return { success: true, removedIds: uniqueRemovedIds };
     } catch (e) {
-        console.error('[稍后] 取消推迟失败:', e);
-        return false;
+        console.error('[稍后] 批量取消推迟失败:', e);
+        return { success: false, removedIds: [], error: e };
     }
 }
 
@@ -30464,9 +30577,7 @@ function initAddDomainModal() {
             }
 
             if (selectedDomains.length > 0) {
-                for (const domain of selectedDomains) {
-                    await blockDomain(domain);
-                }
+                await blockDomains(selectedDomains);
                 hideModal();
                 await loadBlockedLists();
                 await refreshRecommendCards();
@@ -30965,94 +31076,160 @@ async function isTrackingBlocked(bookmark) {
 
 // 屏蔽/恢复书签（时间追踪）
 async function blockTrackingBookmark(bookmarkId) {
-    try {
-        const blocked = await getTrackingBlocked();
-        if (!blocked.bookmarks.includes(bookmarkId)) {
-            blocked.bookmarks.push(bookmarkId);
-            await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        }
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await addTrackingBlockedEntries({ bookmarkIds: [bookmarkId] });
+    return result.success === true;
 }
 
 async function unblockTrackingBookmark(bookmarkId) {
-    try {
-        const blocked = await getTrackingBlocked();
-        blocked.bookmarks = blocked.bookmarks.filter(id => id !== bookmarkId);
-        await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await removeTrackingBlockedEntries({ bookmarkIds: [bookmarkId] });
+    return result.success === true;
 }
 
 // 屏蔽/恢复文件夹（时间追踪）
 async function blockTrackingFolder(folderId) {
-    try {
-        const blocked = await getTrackingBlocked();
-        if (!blocked.folders.includes(folderId)) {
-            blocked.folders.push(folderId);
-            await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        }
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await addTrackingBlockedEntries({ folderIds: [folderId] });
+    return result.success === true;
 }
 
 async function unblockTrackingFolder(folderId) {
-    try {
-        const blocked = await getTrackingBlocked();
-        blocked.folders = blocked.folders.filter(id => id !== folderId);
-        await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await removeTrackingBlockedEntries({ folderIds: [folderId] });
+    return result.success === true;
 }
 
 // 屏蔽/恢复域名（时间追踪）
 async function blockTrackingDomain(domain) {
-    try {
-        const blocked = await getTrackingBlocked();
-        const normalized = buildTrackingBlockedDomainBaseEntry(domain);
-        if (!normalized) return false;
-        if (!blocked.domains.includes(normalized)) {
-            blocked.domains.push(normalized);
-            await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        }
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await addTrackingBlockedEntries({ domains: [domain] });
+    return result.success === true;
 }
 
 async function unblockTrackingDomain(domain) {
-    try {
-        const blocked = await getTrackingBlocked();
-        const normalizedRaw = normalizeTrackingBlockedDomainEntry(domain);
-        if (!normalizedRaw) return false;
+    const result = await removeTrackingBlockedEntries({ domains: [domain] });
+    return result.success === true;
+}
 
-        const removeSet = new Set([normalizedRaw]);
+function normalizeTrackingBlockedListIds(list = []) {
+    return Array.from(new Set(
+        (Array.isArray(list) ? list : [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+    ));
+}
+
+function normalizeTrackingBlockedState(blocked) {
+    const source = blocked && typeof blocked === 'object' ? blocked : {};
+    return {
+        bookmarks: normalizeTrackingBlockedListIds(source.bookmarks),
+        folders: normalizeTrackingBlockedListIds(source.folders),
+        domains: Array.from(new Set(
+            (Array.isArray(source.domains) ? source.domains : [])
+                .map(domain => normalizeTrackingBlockedDomainEntry(domain))
+                .filter(Boolean)
+        ))
+    };
+}
+
+async function saveTrackingBlocked(blocked) {
+    const normalized = normalizeTrackingBlockedState(blocked);
+    await browserAPI.storage.local.set({ timetracking_blocked: normalized });
+    return normalized;
+}
+
+function collectTrackingDomainRemovalEntries(domains = [], currentDomains = []) {
+    const removeSet = new Set();
+    const normalizedCurrentDomains = normalizeTrackingBlockedState({ domains: currentDomains }).domains;
+
+    for (const domain of Array.isArray(domains) ? domains : []) {
+        const normalizedRaw = normalizeTrackingBlockedDomainEntry(domain);
+        if (!normalizedRaw) continue;
+
+        removeSet.add(normalizedRaw);
         const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
-        if (!isExplicitBase) {
-            const hasExactRule = (Array.isArray(blocked.domains) ? blocked.domains : [])
-                .some(entry => normalizeTrackingBlockedDomainEntry(entry) === normalizedRaw);
-            if (!hasExactRule) {
-                const normalizedBase = normalizeTrackingBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
-                if (normalizedBase) removeSet.add(normalizedBase);
+        if (isExplicitBase) continue;
+
+        const hasExactRule = normalizedCurrentDomains.some(entry => normalizeTrackingBlockedDomainEntry(entry) === normalizedRaw);
+        if (!hasExactRule) {
+            const normalizedBase = normalizeTrackingBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+            if (normalizedBase) removeSet.add(normalizedBase);
+        }
+    }
+
+    return removeSet;
+}
+
+async function addTrackingBlockedEntries({ bookmarkIds = [], folderIds = [], domains = [] } = {}) {
+    try {
+        const blocked = normalizeTrackingBlockedState(await getTrackingBlocked());
+        let changed = false;
+
+        for (const id of normalizeTrackingBlockedListIds(bookmarkIds)) {
+            if (!blocked.bookmarks.includes(id)) {
+                blocked.bookmarks.push(id);
+                changed = true;
             }
         }
+
+        for (const id of normalizeTrackingBlockedListIds(folderIds)) {
+            if (!blocked.folders.includes(id)) {
+                blocked.folders.push(id);
+                changed = true;
+            }
+        }
+
+        for (const domain of Array.isArray(domains) ? domains : []) {
+            const normalized = normalizeTrackingBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+            if (!normalized || blocked.domains.includes(normalized)) continue;
+            blocked.domains.push(normalized);
+            changed = true;
+        }
+
+        if (changed) {
+            await saveTrackingBlocked(blocked);
+        }
+        return { success: true, changed };
+    } catch (e) {
+        return { success: false, changed: false, error: e };
+    }
+}
+
+async function removeTrackingBlockedEntries({ bookmarkIds = [], folderIds = [], domains = [] } = {}) {
+    try {
+        const blocked = normalizeTrackingBlockedState(await getTrackingBlocked());
+        const bookmarkRemoveSet = new Set(normalizeTrackingBlockedListIds(bookmarkIds));
+        const folderRemoveSet = new Set(normalizeTrackingBlockedListIds(folderIds));
+        const domainRemoveSet = collectTrackingDomainRemovalEntries(domains, blocked.domains);
+        let changed = false;
+
+        blocked.bookmarks = blocked.bookmarks.filter((id) => {
+            if (bookmarkRemoveSet.has(id)) {
+                changed = true;
+                return false;
+            }
+            return true;
+        });
+
+        blocked.folders = blocked.folders.filter((id) => {
+            if (folderRemoveSet.has(id)) {
+                changed = true;
+                return false;
+            }
+            return true;
+        });
+
         blocked.domains = blocked.domains.filter((entry) => {
             const normalized = normalizeTrackingBlockedDomainEntry(entry);
-            return !normalized || !removeSet.has(normalized);
+            if (normalized && domainRemoveSet.has(normalized)) {
+                changed = true;
+                return false;
+            }
+            return true;
         });
-        await browserAPI.storage.local.set({ timetracking_blocked: blocked });
-        return true;
+
+        if (changed) {
+            await saveTrackingBlocked(blocked);
+        }
+        return { success: true, changed };
     } catch (e) {
-        return false;
+        return { success: false, changed: false, error: e };
     }
 }
 
@@ -31539,9 +31716,7 @@ function initAddTrackingBlockDomainModal() {
             }
 
             if (selectedDomains.length > 0) {
-                for (const domain of selectedDomains) {
-                    await blockTrackingDomain(domain);
-                }
+                await addTrackingBlockedEntries({ domains: selectedDomains });
                 hideModal();
                 await loadTrackingBlockedLists();
             } else {
@@ -31838,14 +32013,9 @@ function initAddTrackingBlockBookmarkModal() {
                 return;
             }
 
-            // 遍历选中项，根据ID或URL来屏蔽
-            for (const key of trackingBlockBookmarkSelected) {
-                // 如果key是书签ID格式（数字字符串），则按ID屏蔽
-                // 否则按URL生成的域名屏蔽（简化处理：直接屏蔽书签ID）
-                if (key) {
-                    await blockTrackingBookmark(key);
-                }
-            }
+            await addTrackingBlockedEntries({
+                bookmarkIds: Array.from(trackingBlockBookmarkSelected)
+            });
 
             hideModal();
             await loadTrackingBlockedLists();
@@ -34182,16 +34352,26 @@ async function clearPostponedArchiveItems(items = []) {
     );
     if (ids.size === 0) return;
 
-    const postponed = await getPostponedBookmarks();
-    const expectedVersion = getRecommendStateVersion(postponed);
     const now = Date.now();
-    const nextPostponed = postponed.filter((item) => {
-        const id = String(item?.bookmarkId || '').trim();
-        return !ids.has(id) || !isPostponedArchiveItem(item, now);
+    await cancelPostponedBookmarks(Array.from(ids), {
+        shouldRemove: (item) => isPostponedArchiveItem(item, now)
     });
-    attachRecommendListStateVersion(nextPostponed, expectedVersion);
-    const savedPostponed = await savePostponedBookmarks(nextPostponed);
-    await schedulePostponedExpiryRefresh(savedPostponed);
+    await loadPostponedList();
+    await refreshRecommendCards();
+}
+
+async function clearPostponedSectionItems(sectionKey, items = []) {
+    const ids = normalizeRecommendBookmarkIds(
+        (Array.isArray(items) ? items : [])
+            .map(item => item?.bookmarkId)
+    );
+    if (ids.length === 0) return;
+
+    const now = Date.now();
+    const removeArchiveItems = sectionKey === 'archive';
+    await cancelPostponedBookmarks(ids, {
+        shouldRemove: (item) => isPostponedArchiveItem(item, now) === removeArchiveItems
+    });
     await loadPostponedList();
     await refreshRecommendCards();
 }
@@ -34349,8 +34529,8 @@ async function loadPostponedList() {
                 items.length,
                 {
                     collapsed,
-                    clearable: sectionKey === 'archive' && items.length > 0,
-                    onClear: () => clearPostponedArchiveItems(items)
+                    clearable: items.length > 0,
+                    onClear: () => clearPostponedSectionItems(sectionKey, items)
                 }
             );
             if (entries.length === 0) {
@@ -34481,9 +34661,7 @@ async function renderPostponedGroup(container, groupId, group, orderIndex = null
     // 取消全部
     cancelBtn.onclick = async (e) => {
         e.stopPropagation();
-        for (const p of group.items) {
-            await cancelPostpone(p.bookmarkId);
-        }
+        await cancelPostponedBookmarks(group.items.map(p => p?.bookmarkId));
         await loadPostponedList();
         await refreshRecommendCards();
     };
@@ -34792,19 +34970,17 @@ function renderBlockedDomainUnifiedGroup(container, group) {
     };
     cancelBtn.onclick = async (e) => {
         e.stopPropagation();
+        const domainsToRestore = [];
         if (group.domainBlocked) {
             const exactBlockedSet = group.blockedExactDomains instanceof Set ? group.blockedExactDomains : new Set();
             const baseBlockedSet = group.blockedBaseDomains instanceof Set ? group.blockedBaseDomains : new Set();
-            for (const domain of exactBlockedSet) {
-                await unblockDomain(domain);
-            }
-            for (const domain of baseBlockedSet) {
-                await unblockDomain(`${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${domain}`);
-            }
+            domainsToRestore.push(...Array.from(exactBlockedSet));
+            domainsToRestore.push(...Array.from(baseBlockedSet).map(domain => `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${domain}`));
         }
-        for (const id of group.directBlockedIds) {
-            await unblockBookmark(id);
-        }
+        await unblockBlockedEntries({
+            domains: domainsToRestore,
+            bookmarkIds: Array.from(group.directBlockedIds || [])
+        });
         await loadBlockedLists();
         await refreshRecommendCards();
     };
@@ -34933,10 +35109,10 @@ async function renderBlockedBookmarkDomainSubgroups(container, bookmarks = []) {
         cancelBtn.onclick = async (e) => {
             e.stopPropagation();
             const directIds = sortedItems.map(bookmark => String(bookmark?.id || '').trim()).filter(Boolean);
-            for (const id of directIds) {
-                await unblockBookmark(id);
-            }
-            await unblockDomain(domain);
+            await unblockBlockedEntries({
+                bookmarkIds: directIds,
+                domains: [domain]
+            });
             await loadBlockedLists();
             await refreshRecommendCards();
         };
@@ -35044,9 +35220,9 @@ async function renderBlockedBookmarkDomainGroup(container, domain, group) {
     };
     cancelBtn.onclick = async (e) => {
         e.stopPropagation();
-        for (const entry of group) {
-            await unblockBookmark(entry.bookmarkId);
-        }
+        await unblockBlockedEntries({
+            bookmarkIds: group.map(entry => entry?.bookmarkId)
+        });
         await loadBlockedLists();
         await refreshRecommendCards();
     };
@@ -35156,9 +35332,9 @@ async function renderBlockedBookmarkGroup(container, title, group) {
     };
     cancelBtn.onclick = async (e) => {
         e.stopPropagation();
-        for (const entry of group) {
-            await unblockBookmark(entry.bookmarkId);
-        }
+        await unblockBlockedEntries({
+            bookmarkIds: group.map(entry => entry?.bookmarkId)
+        });
         await loadBlockedLists();
         await refreshRecommendCards();
     };
@@ -35395,9 +35571,7 @@ async function loadBlockedDomainsList(domains, container = null) {
         };
         cancelBtn.onclick = async (e) => {
             e.stopPropagation();
-            for (const blockedDomain of blockedDomains) {
-                await unblockDomain(blockedDomain);
-            }
+            await unblockBlockedEntries({ domains: blockedDomains });
             await loadBlockedLists();
             await refreshRecommendCards();
         };
@@ -35421,62 +35595,39 @@ async function blockFolder(folderId) {
 }
 
 async function unblockFolder(folderId) {
-    try {
-        const blocked = await getBlockedBookmarks();
-        blocked.folders = blocked.folders.filter(id => id !== folderId);
-        await saveBlockedBookmarks(blocked);
-        await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderId });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await unblockBlockedEntries({ folderIds: [folderId] });
+    return result.success === true;
 }
 
 // 屏蔽/恢复域名
 async function blockDomain(domain) {
-    try {
-        const normalized = buildBlockedDomainBaseEntry(domain);
-        if (!normalized) return false;
+    const result = await blockDomains([domain]);
+    return result.success === true;
+}
 
+async function blockDomains(domains = []) {
+    try {
         const blocked = await getBlockedBookmarks();
-        if (!blocked.domains.includes(normalized)) {
+        const scoreDomainUpdates = [];
+        for (const domain of Array.isArray(domains) ? domains : []) {
+            const normalized = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+            if (!normalized || blocked.domains.includes(normalized)) continue;
             blocked.domains.push(normalized);
-            await saveBlockedBookmarks(blocked);
+            scoreDomainUpdates.push(normalized);
         }
-        return true;
+        if (scoreDomainUpdates.length > 0) {
+            await saveBlockedBookmarks(blocked);
+            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domains: scoreDomainUpdates });
+        }
+        return { success: true, addedDomains: scoreDomainUpdates };
     } catch (e) {
-        return false;
+        return { success: false, addedDomains: [], error: e };
     }
 }
 
 async function unblockDomain(domain) {
-    try {
-        const normalizedRaw = normalizeBlockedDomainEntry(domain);
-        if (!normalizedRaw) return false;
-
-        const blocked = await getBlockedBookmarks();
-        const removeSet = new Set([normalizedRaw]);
-        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
-        if (!isExplicitBase) {
-            const hasExactRule = (Array.isArray(blocked.domains) ? blocked.domains : [])
-                .some(entry => normalizeBlockedDomainEntry(entry) === normalizedRaw);
-            if (!hasExactRule) {
-                const normalizedBase = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
-                if (normalizedBase) removeSet.add(normalizedBase);
-            }
-        }
-        blocked.domains = blocked.domains.filter((entry) => {
-            const normalized = normalizeBlockedDomainEntry(entry);
-            return !normalized || !removeSet.has(normalized);
-        });
-        await saveBlockedBookmarks(blocked);
-        for (const domainEntry of removeSet) {
-            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domain: domainEntry });
-        }
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const result = await unblockBlockedEntries({ domains: [domain] });
+    return result.success === true;
 }
 
 // =============================================================================
