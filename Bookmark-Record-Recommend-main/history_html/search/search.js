@@ -166,6 +166,7 @@ window.SearchContextManager = {
      * @param {string} [subTab] - 三级标签 (history, ranking, related)
      */
     updateContext(view, tab = null, subTab = null) {
+        const prev = this.currentContext || { view: 'additions', tab: null, subTab: null };
         const next = { view, tab, subTab };
         const key = `${String(view || '')}::${String(tab || '')}::${String(subTab || '')}`;
         const changed = key !== this._lastContextKey;
@@ -249,22 +250,41 @@ window.SearchContextManager = {
     }
 };
 
+function getActiveSearchContextFromDom() {
+    const view = (typeof window.currentView === 'string' && window.currentView)
+        ? window.currentView
+        : ((typeof currentView === 'string' && currentView) ? currentView : 'additions');
+
+    let tab = null;
+    let subTab = null;
+
+    if (view === 'additions') {
+        const activeTab = document.querySelector('.additions-tab.active[data-tab]');
+        tab = activeTab?.dataset?.tab || localStorage.getItem('additionsActiveTab') || 'review';
+
+        if (tab === 'browsing') {
+            const activeSubTab = document.querySelector('.browsing-sub-tab.active[data-sub-tab]');
+            subTab = activeSubTab?.dataset?.subTab || localStorage.getItem('browsingActiveSubTab') || 'history';
+        }
+    }
+
+    return { view, tab, subTab };
+}
+
+function getLiveSearchContext() {
+    try {
+        if (typeof getActiveSearchContextFromDom === 'function') {
+            return getActiveSearchContextFromDom();
+        }
+    } catch (_) { }
+    return (window.SearchContextManager && window.SearchContextManager.currentContext) || {};
+}
+
 function syncSearchContextFromCurrentUI(reason = 'sync') {
     try {
         if (!window.SearchContextManager || typeof window.SearchContextManager.updateContext !== 'function') return;
 
-        const view = (typeof window.currentView === 'string' && window.currentView)
-            ? window.currentView
-            : 'additions';
-
-        let tab = null;
-        let subTab = null;
-        if (view === 'additions') {
-            tab = localStorage.getItem('additionsActiveTab') || 'review';
-            if (tab === 'browsing') {
-                subTab = localStorage.getItem('browsingActiveSubTab') || 'history';
-            }
-        }
+        const { view, tab, subTab } = getActiveSearchContextFromDom();
 
         window.SearchContextManager.updateContext(view, tab, subTab);
         try {
@@ -277,6 +297,7 @@ function syncSearchContextFromCurrentUI(reason = 'sync') {
 
 try {
     window.syncSearchContextFromCurrentUI = syncSearchContextFromCurrentUI;
+    window.getActiveSearchContextFromDom = getActiveSearchContextFromDom;
 } catch (_) { }
 
 // Ensure correct placeholder after refresh.
@@ -696,16 +717,18 @@ let recommendSearchIndexState = {
     builtAt: 0,
     bookmarkCount: 0,
     scoreCount: 0,
+    scoresReady: null,
     items: [],
     buildPromise: null
 };
 
-let recommendSearchComputeTriggered = false;
+let recommendSearchScoresReadyPromise = null;
 
 function invalidateRecommendSearchIndex() {
     recommendSearchIndexState.builtAt = 0;
     recommendSearchIndexState.bookmarkCount = 0;
     recommendSearchIndexState.scoreCount = 0;
+    recommendSearchIndexState.scoresReady = null;
     recommendSearchIndexState.items = [];
 }
 
@@ -765,6 +788,49 @@ function updateRecommendSearchScoreCache(bookmarkId, newS) {
     } catch (_) { }
 
     return updated;
+}
+
+async function ensureRecommendSearchScoresReady(reason = 'recommend-search') {
+    if (recommendSearchScoresReadyPromise) {
+        return recommendSearchScoresReadyPromise;
+    }
+    recommendSearchScoresReadyPromise = (async () => {
+        try {
+            if (!browserAPI?.runtime || typeof browserAPI.runtime.sendMessage !== 'function') {
+                return { success: false, ready: false, error: 'runtime_unavailable' };
+            }
+            const response = await browserAPI.runtime.sendMessage({
+                action: 'ensureRecommendScoresReady',
+                reason
+            });
+            return response || { success: false, ready: false };
+        } catch (error) {
+            return {
+                success: false,
+                ready: false,
+                error: error?.message || String(error)
+            };
+        }
+    })().finally(() => {
+        recommendSearchScoresReadyPromise = null;
+    });
+
+    return recommendSearchScoresReadyPromise;
+}
+
+function getRecommendSearchPreparingText(scoresReady = null) {
+    const isZh = currentLang === 'zh_CN';
+    const mode = String(scoresReady?.mode || scoresReady?.reason || '');
+    if (mode === 'bulk-pending') {
+        return isZh ? '书签正在批量更新，推荐分数稍后可搜索' : 'Bookmarks are updating in bulk. Recommendation scores will be searchable shortly.';
+    }
+    if (mode === 'computing') {
+        return isZh ? '推荐分数正在计算，请稍后再试' : 'Recommendation scores are computing. Please try again shortly.';
+    }
+    if (mode === 'empty-tree') {
+        return isZh ? '暂无可推荐书签' : 'No bookmarks available for recommendation.';
+    }
+    return isZh ? '推荐分数正在准备，请稍后再试' : 'Recommendation scores are preparing. Please try again shortly.';
 }
 
 try {
@@ -911,6 +977,7 @@ async function buildRecommendSearchIndex(options = {}) {
     }
 
     recommendSearchIndexState.buildPromise = (async () => {
+        const scoresReady = await ensureRecommendSearchScoresReady('recommend-search-index');
         let bookmarks = [];
         try {
             if (typeof getAllBookmarksFlat === 'function') {
@@ -951,6 +1018,7 @@ async function buildRecommendSearchIndex(options = {}) {
         recommendSearchIndexState.builtAt = Date.now();
         recommendSearchIndexState.bookmarkCount = bookmarks.length;
         recommendSearchIndexState.scoreCount = Object.keys(scoresCache).length;
+        recommendSearchIndexState.scoresReady = scoresReady;
         recommendSearchIndexState.items = items;
 
         return recommendSearchIndexState;
@@ -976,17 +1044,11 @@ async function searchBookmarkRecommendAndRender(query) {
     }
 
     if (idx && idx.bookmarkCount > 0 && idx.scoreCount === 0) {
-        if (!recommendSearchComputeTriggered) {
-            recommendSearchComputeTriggered = true;
-            try {
-                browserAPI.runtime.sendMessage({ action: 'computeBookmarkScores' }, () => { });
-            } catch (_) { }
-        }
-
-        const msg = currentLang === 'zh_CN'
-            ? 'S 值缓存为空，已触发后台计算，请稍后再试'
-            : 'S cache is empty. Triggered background computation, please try again later.';
-        renderSearchResultsPanel([], { view, query: q, emptyText: msg });
+        renderSearchResultsPanel([], {
+            view,
+            query: q,
+            emptyText: getRecommendSearchPreparingText(idx.scoresReady)
+        });
         return;
     }
 
@@ -1066,7 +1128,7 @@ function activateRecommendSearchResult(index) {
  */
 function searchBookmarkAdditionsAndRender(query) {
     // [Fixed] 根据上下文分发搜索请求 (Search Isolation)
-    const ctx = (window.SearchContextManager && window.SearchContextManager.currentContext) || {};
+    const ctx = getLiveSearchContext();
 
     // 1. 浏览记录 Tab (Browsing History)
     if (ctx.tab === 'browsing') {
@@ -1372,7 +1434,6 @@ function searchBookmarkAdditionsAndRender(query) {
 
     // 2. Keyword Search (Content & Loose Date)
     const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
-
     // [Fixed] Collect matching bookmarks grouped by date (not just dates)
     const matchingDates = new Set();
     const filteredBookmarksByDate = new Map(); // dateKey -> [matching bookmarks]
@@ -1599,7 +1660,10 @@ function activateAdditionsSearchResult(index) {
     if (!item) return;
 
     // Dispatch to Browsing History if applicable
-    if (item.type && item.type.startsWith('browsing-')) {
+    if (item.type && (
+        item.type.startsWith('browsing-') ||
+        item.type === 'calendar-dates-group' && String(item.id || '').includes(':browsing:')
+    )) {
         activateBrowsingHistorySearchResult(index);
         return;
     }
@@ -2144,6 +2208,97 @@ async function hydrateBrowsingDateMapForDateMeta(calendar, dateMeta) {
     return changed;
 }
 
+async function hydrateBrowsingDateMapForKeyword(calendar, tokens) {
+    if (!calendar || !calendar.bookmarksByDate || typeof readHistoryCacheRange !== 'function') {
+        return false;
+    }
+    if (!Array.isArray(tokens) || !tokens.length) return false;
+    if (
+        typeof calendar.buildBookmarkClickReferenceSets !== 'function' ||
+        typeof calendar.isBookmarkClickRecord !== 'function'
+    ) {
+        return false;
+    }
+
+    let cached = null;
+    try {
+        cached = await readHistoryCacheRange(null, null);
+    } catch (_) {
+        return false;
+    }
+
+    if (!cached || !Array.isArray(cached.records) || !cached.records.length) return false;
+
+    const refs = await calendar.buildBookmarkClickReferenceSets();
+    let changed = false;
+    let processed = 0;
+    const shouldYield = typeof shouldYieldBrowsingClickDerivation === 'function'
+        ? shouldYieldBrowsingClickDerivation
+        : () => false;
+    const yieldToBrowser = typeof yieldBrowsingClickDerivation === 'function'
+        ? yieldBrowsingClickDerivation
+        : async () => {};
+
+    for (const entry of cached.records) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+
+        const dateKeyRaw = entry[0];
+        const recordsRaw = entry[1];
+        const normalizedDateKey = normalizeDateKey(dateKeyRaw);
+        if (!normalizedDateKey || !Array.isArray(recordsRaw) || !recordsRaw.length) continue;
+
+        const incoming = [];
+        for (const rawRecord of recordsRaw) {
+            processed += 1;
+            const record = normalizeBrowsingCacheRecord(rawRecord);
+            if (
+                record &&
+                (checkMatch(record.title, tokens) || checkMatch(record.url, tokens)) &&
+                calendar.isBookmarkClickRecord(record, refs)
+            ) {
+                if (typeof calendar.normalizeBookmarkClickRecord === 'function') {
+                    incoming.push(calendar.normalizeBookmarkClickRecord(record));
+                } else {
+                    incoming.push(record);
+                }
+            }
+            if (shouldYield(processed)) {
+                await yieldToBrowser();
+            }
+        }
+
+        if (!incoming.length) continue;
+
+        const existing = calendar.bookmarksByDate.get(normalizedDateKey);
+        if (!Array.isArray(existing) || existing.length === 0) {
+            calendar.bookmarksByDate.set(normalizedDateKey, incoming);
+            changed = true;
+            continue;
+        }
+
+        const seen = new Set(existing.map((record) => {
+            const t = typeof record.visitTime === 'number'
+                ? record.visitTime
+                : (record.dateAdded instanceof Date ? record.dateAdded.getTime() : 0);
+            return `${record.url || ''}|${t || 0}`;
+        }));
+
+        let merged = false;
+        incoming.forEach((record) => {
+            const sig = `${record.url || ''}|${record.visitTime || 0}`;
+            if (seen.has(sig)) return;
+
+            existing.push(record);
+            seen.add(sig);
+            merged = true;
+        });
+
+        if (merged) changed = true;
+    }
+
+    return changed;
+}
+
 // ==================== Phase 4: 浏览记录搜索 (Browsing History) ====================
 
 /**
@@ -2469,6 +2624,11 @@ async function searchBrowsingHistoryAndRender(query) {
 
     // 2. Keyword Search (Content & Loose Date)
     const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!dateMeta && !multiDayMeta && tokens.length) {
+        try {
+            await hydrateBrowsingDateMapForKeyword(cal, tokens);
+        } catch (_) { }
+    }
 
     // [Fixed] Collect matching bookmarks grouped by date (not just dates)
     const matchingDates = new Set();
@@ -2954,8 +3114,8 @@ function getEmptyQuerySuggestionsPrefKey() {
     // Preference should be isolated per page/context.
     // - currentView is the primary dimension
     // - for additions, tab/subTab further refine behavior
-    const view = (typeof window.currentView === 'string' && window.currentView) ? window.currentView : 'unknown';
-    const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+    const ctx = getLiveSearchContext();
+    const view = (ctx && ctx.view) || ((typeof window.currentView === 'string' && window.currentView) ? window.currentView : 'unknown');
     const tab = (view === 'additions' && ctx && ctx.tab) ? String(ctx.tab) : '';
     const subTab = (view === 'additions' && ctx && ctx.subTab) ? String(ctx.subTab) : '';
     return `${EMPTY_QUERY_SUGGESTIONS_PREF_KEY_PREFIX}::${view}::${tab}::${subTab}`;
@@ -3127,7 +3287,7 @@ function handleSearchInputFocus(e) {
         }
 
         // 有文字就触发搜索显示候选列表（Additions 子标签分发）
-        const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+        const ctx = getLiveSearchContext();
 
         if (ctx.tab === 'browsing') {
             if (ctx.subTab === 'history') {
@@ -3153,8 +3313,8 @@ function renderEmptyQuerySuggestions() {
     if (!panel) return;
 
     const isZh = currentLang === 'zh_CN';
-    const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
-    const guidance = getSearchGuidanceByContext({ view: currentView, ctx });
+    const ctx = getLiveSearchContext();
+    const guidance = getSearchGuidanceByContext({ view: ctx.view || currentView, ctx });
 
     const prefKey = getEmptyQuerySuggestionsPrefKey();
 
@@ -3635,7 +3795,7 @@ function initSearchEvents() {
                     const q = (searchInput.value || '').trim();
                     if (q) return; // Input not empty, do nothing
 
-                    const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+                    const ctx = getLiveSearchContext();
                     if (!ctx || ctx.view !== 'additions') return;
 
                     // Check if in ranking or related sub-tab with active filter

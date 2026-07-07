@@ -124,15 +124,8 @@ function notifyBrowsingCalibrationInteraction(type, payload = {}) {
     } catch (_) { }
 }
 
-// 浏览记录保留时长（天）
-// 0 表示不做时间窗口限制，由浏览器自身的历史保留策略决定。
-const BROWSING_HISTORY_LOOKBACK_DAYS = 0;
-const BROWSING_HISTORY_MAX_VISITS_PER_URL = 400; // 单个站点最多缓存多少次点击
 const BROWSING_HISTORY_CACHE_KEY = 'bb_cache_browsing_history_v1';
 const BROWSING_HISTORY_LIBRARY_SCHEMA_VERSION = 2;
-const BROWSING_HISTORY_INCREMENTAL_PADDING_MS = 60 * 1000; // 增量同步时回溯1分钟
-const BROWSING_HISTORY_SEARCH_PAGE_SIZE = 5000;
-const BROWSING_HISTORY_SEARCH_MAX_ITEMS = 50000;
 const BROWSING_HISTORY_CACHE_DB_NAME = 'BookmarkBrowsingHistoryCacheDB_v2';
 const BROWSING_HISTORY_CACHE_DB_VERSION = 1;
 const BROWSING_HISTORY_CACHE_DB_STORE = 'records';

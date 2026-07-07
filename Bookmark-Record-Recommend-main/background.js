@@ -3973,6 +3973,12 @@ async function recordInteractionForCalibration(payload = {}) {
 
 function notifyBrowsingHistoryCacheChanged(reason = 'history-cache-updated', clearOnly = false) {
   try {
+    if (!clearOnly) {
+      queueRecommendScoresCacheRepair(`history-cache:${reason || 'updated'}`);
+    }
+  } catch (_) { }
+
+  try {
     const maybePromise = browserAPI.runtime.sendMessage({
       action: 'browsingCalibrationCompleted',
       payload: { reason, clearOnly }
