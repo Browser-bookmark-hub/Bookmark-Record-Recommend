@@ -61,7 +61,10 @@
 - 更多详情请参考：[隐私政策 (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
 
 ### 相关文档
-- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](Bookmark-Record-Recommend-main/docs/other%20docs/RECOMMEND_POOLS_V6_2.md)：推荐池模型与流转规则（v6.2）
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)：当前项目结构与模块定位
+- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md)：当前 S 值算法 v6.4、维护桶与推送结构
+- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md)：限制与实现妥协
+- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md)：历史计划归档与删除候选
 
 
 ## English
@@ -122,7 +125,10 @@ Bookmark Record and Recommend/
 - For more details, please refer to our [Privacy Policy (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
 
 ### Docs
-- [`docs/other docs/RECOMMEND_POOLS_V6_2.md`](Bookmark-Record-Recommend-main/docs/other%20docs/RECOMMEND_POOLS_V6_2.md): recommendation pool model and flow rules (v6.2)
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md): current project structure and module map
+- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md): current S-score v6.4, maintained buckets, and push structure
+- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md): limitations and implementation compromises
+- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md): historical archive index and deletion candidates
 
 ---
 

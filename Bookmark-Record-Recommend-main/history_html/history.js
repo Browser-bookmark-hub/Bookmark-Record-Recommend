@@ -3534,6 +3534,9 @@ const i18n = {pageTitle: {
     },navRecommend: {
         'zh_CN': '书签推荐',
         'en': 'Bookmark Recommend'
+    },navRecommendShort: {
+        'zh_CN': '书签推荐',
+        'en': 'Bookmark Rec.'
     },navWidgets: {
         'zh_CN': '小组件',
         'en': 'Widgets'
@@ -3546,6 +3549,9 @@ const i18n = {pageTitle: {
     },sidePanelTitleRecommend: {
         'zh_CN': '推荐',
         'en': 'Recommend'
+    },sidePanelTitleRecommendShort: {
+        'zh_CN': '推荐',
+        'en': 'Rec.'
     },sidePanelTitleAdditions: {
         'zh_CN': '记录',
         'en': 'Record'
@@ -5203,6 +5209,8 @@ function getViewTitleText(view = currentView) {
 }
 
 let sidePanelHeaderTitleAlignRaf = null;
+let responsiveRecommendLabelRaf = null;
+let responsiveRecommendLabelObservers = [];
 
 function syncSidePanelHeaderTitleAlignment() {
     if (!isSidePanelMode) return;
@@ -5224,13 +5232,97 @@ function updatePageHeaderTitle(view = currentView) {
     const pageTitleEl = document.getElementById('pageTitle');
     if (!pageTitleEl) return;
 
-    pageTitleEl.textContent = getViewTitleText(view);
+    const titleText = getViewTitleText(view);
+    pageTitleEl.textContent = titleText;
+    pageTitleEl.title = titleText;
+    updateResponsiveRecommendLabels(view);
 
     if (isSidePanelMode) {
         scheduleSidePanelHeaderTitleAlignment();
     }
 
     updateWidgetsSmartSortToggleUI(view);
+}
+
+function shouldUseAbbreviatedRecommendPageTitle(view = currentView) {
+    if (currentLang !== 'en' || view !== 'recommend') return false;
+
+    const header = document.querySelector('.history-header');
+    const headerWidth = header?.getBoundingClientRect?.().width
+        || document.documentElement.clientWidth
+        || window.innerWidth
+        || 0;
+
+    return headerWidth > 0 && headerWidth <= (isSidePanelMode ? 430 : 500);
+}
+
+function shouldUseAbbreviatedRecommendNavLabel() {
+    if (currentLang !== 'en') return false;
+
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar || sidebar.classList.contains('compact') || sidebar.classList.contains('hidden') || sidebar.classList.contains('collapsed')) {
+        return false;
+    }
+
+    const sidebarWidth = sidebar.getBoundingClientRect?.().width || 0;
+    if (sidebarWidth > 0 && sidebarWidth <= 198) return true;
+
+    const rootWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+    return rootWidth > 0 && rootWidth <= 520 && sidebarWidth > 0 && sidebarWidth <= 220;
+}
+
+function updateResponsiveRecommendLabels(view = currentView) {
+    const recommendNavText = document.getElementById('navRecommendText');
+    const fullNavText = i18n.navRecommend?.[currentLang] || '';
+    const shortNavText = i18n.navRecommendShort?.[currentLang] || fullNavText;
+    if (recommendNavText) {
+        recommendNavText.textContent = shouldUseAbbreviatedRecommendNavLabel() ? shortNavText : fullNavText;
+        recommendNavText.title = fullNavText;
+        const recommendNavTab = recommendNavText.closest('.nav-tab');
+        if (recommendNavTab) {
+            recommendNavTab.title = fullNavText;
+        }
+    }
+
+    const pageTitleEl = document.getElementById('pageTitle');
+    if (pageTitleEl && view === 'recommend') {
+        const fullTitleText = getViewTitleText(view);
+        const shortTitleText = i18n.sidePanelTitleRecommendShort?.[currentLang] || fullTitleText;
+        pageTitleEl.textContent = shouldUseAbbreviatedRecommendPageTitle(view) ? shortTitleText : fullTitleText;
+        pageTitleEl.title = fullTitleText;
+    }
+}
+
+function scheduleResponsiveRecommendLabelsUpdate() {
+    if (responsiveRecommendLabelRaf != null) return;
+
+    responsiveRecommendLabelRaf = window.requestAnimationFrame(() => {
+        responsiveRecommendLabelRaf = null;
+        updateResponsiveRecommendLabels(currentView);
+    });
+}
+
+function initResponsiveRecommendLabelObservers() {
+    if (document.documentElement.dataset.responsiveRecommendLabelsBound === 'true') {
+        scheduleResponsiveRecommendLabelsUpdate();
+        return;
+    }
+
+    document.documentElement.dataset.responsiveRecommendLabelsBound = 'true';
+    window.addEventListener('resize', scheduleResponsiveRecommendLabelsUpdate);
+
+    if (typeof ResizeObserver === 'function') {
+        const observer = new ResizeObserver(scheduleResponsiveRecommendLabelsUpdate);
+        ['sidebar', 'pageTitle'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) observer.observe(el);
+        });
+        const header = document.querySelector('.history-header');
+        if (header) observer.observe(header);
+        responsiveRecommendLabelObservers.push(observer);
+    }
+
+    scheduleResponsiveRecommendLabelsUpdate();
 }
 
 function applyLanguage() {
@@ -5273,6 +5365,7 @@ function applyLanguage() {
     if (navWidgetsText) navWidgetsText.textContent = i18n.navWidgets[currentLang];
     const navSyncText = document.getElementById('navSyncText');
     if (navSyncText) navSyncText.textContent = i18n.navSync[currentLang];
+    updateResponsiveRecommendLabels(currentView);
 
     const syncViewTitle = document.getElementById('syncViewTitle');
     if (syncViewTitle) syncViewTitle.textContent = i18n.syncViewTitle[currentLang];
@@ -5534,11 +5627,11 @@ function applyLanguage() {
 
     const openHistoryPageTooltip = document.getElementById('openHistoryPageTooltip');
     if (openHistoryPageTooltip) {
-        openHistoryPageTooltip.textContent = isEn ? 'Open HTML Page' : '打开 HTML 页面';
+        openHistoryPageTooltip.textContent = isEn ? 'HTML Page' : 'HTML 页面';
     }
     const openHistoryPageBtn = document.getElementById('openHistoryPageBtn');
     if (openHistoryPageBtn) {
-        const label = isEn ? 'Open HTML Page' : '打开 HTML 页面';
+        const label = isEn ? 'HTML Page' : 'HTML 页面';
         openHistoryPageBtn.setAttribute('aria-label', label);
     }
     const titleSidePanelToggleTooltip = document.getElementById('titleSidePanelToggleTooltip');
@@ -6377,6 +6470,7 @@ function initializeUI() {
 
     initBrowsingCalibrationMenu();
     updateMainSearchVisibility();
+    initResponsiveRecommendLabelObservers();
 
 
 }

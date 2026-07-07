@@ -1425,6 +1425,18 @@ html.side-panel-mode .tool-buttons .open-html-btn {
     order: 100;
 }
 
+html.side-panel-mode .tool-buttons .widgets-smart-sort-toggle,
+html.side-panel-mode .tool-buttons .quick-review-btn,
+html.side-panel-mode .tool-buttons .settings-btn,
+html.side-panel-mode .tool-buttons .open-html-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    min-height: 30px;
+    flex: 0 0 30px;
+    border-radius: 7px;
+}
+
 .tool-btn {
     width: 36px;
     height: 36px;
@@ -2474,13 +2486,22 @@ html.layout-resizing *::after {
     transition: all 0.2s ease;
     text-align: left;
     width: 100%;
+    min-width: 0;
     box-sizing: border-box;
 }
 
 .nav-tab i {
     font-size: 16px;
     width: 20px;
+    flex: 0 0 20px;
     text-align: center;
+}
+
+.nav-tab span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .nav-tab:hover {
