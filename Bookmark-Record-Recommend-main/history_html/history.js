@@ -95,6 +95,7 @@ let currentView = (() => {
 
 let syncViewBound = false;
 let syncViewInitialized = false;
+let syncInitialRuleDocEnsured = false;
 let syncConfigState = null;
 let syncDocsState = [];
 let syncCurrentDocId = null;
@@ -154,261 +155,17 @@ const SYNC_GITHUB_INPUT_DOCS_SUBDIR = 'ai/input-docs';
 const SYNC_GITHUB_DATA_SNAPSHOTS_ROOT = 'data/snapshots';
 const SYNC_AGENT_DOC_ID = '__agent_rules__';
 const SYNC_DEFAULT_RULE_PREVIEW_ID = '__default_rule_preview__';
+const SYNC_AGENT_TEMPLATE_PATHS = Object.freeze({
+    zh_CN: 'AGENTS_template/AGENTS_template_zh.md',
+    en: 'AGENTS_template/AGENTS_template_en.md'
+});
+const SYNC_AGENT_TEMPLATE_REPO_URL = 'https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/tree/main/Bookmark-Record-Recommend-main/history_html/AGENTS_template';
+const SYNC_PROJECT_PULLS_URL = 'https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/pulls';
 const SYNC_FILES_PAGE_SIZE = 10;
 const SYNC_AGENT_DOC_NAME = 'AGENTS.md';
 const SYNC_DOC_KIND_AGENT = 'agent';
 const SYNC_DOC_KIND_INPUT = 'input';
 const SYNC_DOC_KIND_RESULT = 'result';
-const SYNC_AGENT_FORMAT_GUIDE_ZH = `## 11. 结果 Markdown 格式（必须遵循本地格式工具）
-- 结果文件（ai/results/**/*.md）必须兼容本地渲染与格式工具，不输出额外方言语法。
-- 标题：\`#\`、\`##\`、\`###\`
-- 加粗：\`**文本**\`
-- 斜体：\`*文本*\`
-- 高亮：\`==文本==\`
-- 删除线：\`~~文本~~\`
-- 行内代码：\`\`代码\`\`
-- 代码块：\`\`\` ... \`\`\`
-- 无序列表：\`- 项目\`
-- 有序列表：\`1. 项目\`
-- 任务列表：\`- [ ] 项目\` / \`- [x] 项目\`
-- 引用：\`> 引用\`
-- 链接：\`[文本](https://...)\`
-- Callout：
-  \`> [!note] 标题\`
-  \`> 内容\`
-- 不使用 \`[[wikilink]]\` 双链语法。`;
-const SYNC_AGENT_FORMAT_GUIDE_EN = `## 11. Result Markdown Format (Must Follow Local Formatting Tools)
-- Result files (ai/results/**/*.md) must remain compatible with local renderer and formatting tools.
-- Headings: \`#\`, \`##\`, \`###\`
-- Bold: \`**text**\`
-- Italic: \`*text*\`
-- Highlight: \`==text==\`
-- Strikethrough: \`~~text~~\`
-- Inline code: \`\`code\`\`
-- Code block: \`\`\` ... \`\`\`
-- Bullet list: \`- item\`
-- Numbered list: \`1. item\`
-- Task list: \`- [ ] item\` / \`- [x] item\`
-- Quote: \`> quote\`
-- Link: \`[text](https://...)\`
-- Callout:
-  \`> [!note] Title\`
-  \`> Content\`
-- Do not use \`[[wikilink]]\` syntax.`;
-const SYNC_AGENT_DOC_TEMPLATE = `# Bookmark Record and Recommend AI 规则
-
-## 1. 身份与目标
-我是你的书签助理。目标：
-- 按日/周/月总结阅读活动
-- 基于 S 计算池给出"值得打开 / 值得复习 / 可屏蔽"的建议
-- 打开任意书签时，能还原它的上下文
-
-## 2. 可读输入（路径白名单 + Git）
-所有同步文件都位于 GitHub 仓库的 \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` 文件夹下；下面路径均相对该文件夹。
-- data/manifest.json                # AI 入口索引：pushId、文件列表、hash、读取顺序
-- data/packages/bookmark-record.json
-- data/packages/bookmark-recommend.json
-- data/raw-native/bookmarks-tree.json
-- data/raw-native/history-visits.jsonl
-- AGENTS.md                         # 本文件（产品文件夹固定规则文件）
-- ai/input-docs/...                 # 用户本地草稿
-- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}
-- GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
-- GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
-- Web Search                        # 用于补充同类别推荐、背景核验和外部资料来源
-
-## 3. Git 优先流程（按 pushId 聚合 commits）
-1. 先读取 \`data/manifest.json\`，记录 \`pushId\` 与 \`readOrder\`。
-2. 读取仓库最近 commits（建议最近 30 条），按 commit message 中的 \`[sync:<pushId>]\` 聚合同一次用户推送。
-3. 对同一 pushId 的 commit group：compare base = 最早 commit 的 parent，head = 最晚 commit。
-4. 从 compare 结果判断哪些业务文件变化；需要正文时再按 manifest.readOrder 读取。
-5. 输出结论时，必须标注引用的 pushId、短 commit SHA 与对应路径。
-
-## 4. 数据口径与边界
-- \`bookmark-record.data.clickRecords\` 是由当前书签树 + 浏览历史事实源派生出的书签点击记录，只包含能匹配当前书签的访问记录。匹配方式、原始来源与原始记录数看 \`bookmark-record.data.clickRecords.meta\` 和 manifest。
-- \`data/raw-native/history-visits.jsonl\` 是完整浏览访问事实源；bookmarkId 只有在能匹配当前书签时才存在，不能假设每条记录都对应书签，也不要把它直接当作书签点击记录。
-- 时间捕捉只使用 \`bookmark-record.data.timeTracking.rankings\` 里已导出的当前时间排行；正在捕捉的活跃会话不会进入推送包，不要假设它存在，也不要从原始 tracking 明细重算一套排行。
-- 推荐分数缓存状态看 \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`：包括 \`recommendScoresTime\`、\`staleMeta\`、\`ensureResult\`、\`templateScoreCount\`、\`templateScoreRatio\`。template 分是临时可用分，解释优先级时要标注不确定性。
-- \`recommend_reviews_similar\` 可能为 null；必须查看 \`recommend_reviews_similar_meta\` 的 \`available/source/skippedReason\`，不要把“未生成相似候选”解释成“没有相似书签”。
-- 四个数据文件的分工：\`bookmark-recommend.json\` 是评分与候选层（S 池 / 复习 / 屏蔽 / 跳过 / 翻卡 信号）；\`bookmark-record.json\` 是行为证据层（点击 / 添加 / 时间捕捉排行）；\`bookmarks-tree.json\` 是当前书签树的事实源（文件夹路径与层级）；\`history-visits.jsonl\` 是访问明细的事实源。同一 bookmarkId 串起四者。系统性分析、周期复盘、模糊推荐时优先读前两个包的 signals 再按 bookmarkId 反查原生包；轻量问答、单次查找、泛谈话题时可直接用标题 / URL / 域名 / 文件夹路径 / 关键词在任一文件里匹配，不必拘泥顺序。
-
-## 5. 分析结果输出（路径白名单）
-同步 push/pull 本身只负责传输数据包与 Markdown 文档；AI 代理执行分析时，将结果写入以下路径。
-- ai/results/latest.md                       # 覆盖写，仅在确实需要生成结果时写入
-- ai/results/daily/<YYYY-MM-DD>.md           # 日报
-- ai/results/weekly/<YYYY-Www>.md            # 周报
-- ai/results/monthly/<YYYY-MM>.md            # 月报
-- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # 追加写运行日志（可选）
-
-是否生成结果文件取决于用户当前意图：普通交流、单次查找、轻量问答 → 直接回答，不写 ai/results；用户明确要求生成报告/分析，或请求属于系统性分析、周期复盘、模糊推荐、清理建议 → 才写 ai/results。需要生成时：latest.md 覆盖写；周期报告只需生成与推送范围对应的一种，推送范围见 \`data/manifest.json\` 的 \`timeRange.range\`：
-- day → 日报
-- week → 周报
-- month / year / all → 月报
-无需同时输出所有粒度的报告。
-
-## 6. 重要性权重（对"重要"的定义）
-1. **待复习**（recommend_reviews / recommend_postponed）= 最高优先级。
-   这是用户提前标注过的"我喜欢这类内容"的强信号；
-   如果 recommend_reviews_similar_meta.available=true，recommend_reviews_similar 已按文件夹 + 标题相似度给出候选，请优先引用；否则说明 skippedReason。
-2. 高频点击 + 当前时间排行（bookmark-record.data.timeTracking.rankings.composite）= 次高。
-3. 近 7 天新加但未打开（bookmark-record.data.additionsRecords vs clickRecords）= 需要提醒。
-4. 屏蔽（bookmark-recommend.data.recommendEvents.recommend_blocked）= 永远排除。
-5. 软负向信号（\`skippedTargets\` / \`postponedTargets\` / \`flippedTargets\`）= 不硬性排除，但在排序与解释里降低优先级，并在“信号来源”中标注用户的负反馈历史。
-6. 上次已推荐过（\`ai/results/latest.md\` 或 \`ai/results/runs/<近 24h>/*.md\` 中出现过的 bookmarkId）= 本轮在“值得打开”列表中降权或替换，除非用户明确要求“重看”。
-
-执行优先级（先于本节其余规则）：判断用户当前意图——普通交流、想法讨论、单次查找、轻量问答 → 直接回答，不启用下面完整流程，也不写 ai/results；明确关键词、URL、域名、文件夹、bookmarkId 或时间范围 → 直接定向查找/分析，仅命中相关 signals 与原始记录；系统性分析、周期复盘、模糊推荐、清理建议 → 启用下面完整推荐分析流程。
-
-分析同步数据包时按下面基础步骤进行，不要线性通读原始大文件：
-1. 先看用户本次问题；如果用户指定主题、域名、文件夹、bookmarkId 或时间范围，先按该目标缩小范围。
-2. 读取 \`data/manifest.json\`，确认 \`pushId\`、可用文件、记录数、截断状态与 \`readOrder\`。
-3. 优先读取 \`bookmark-recommend.json\` 的 \`summary\` 与 \`data.signals\`，先处理 \`blockedSummary\`、\`reviewTargets\`、\`postponedTargets\`、\`currentCards\`、\`scoreLeaders\`、\`skippedTargets\`。
-4. 再读取 \`bookmark-record.json\` 的 \`summary\` 与 \`data.signals\`，用 \`recentClicks\`、\`unopenedAdditions\`、\`recentUnopenedAdditions\`、\`topClickedDomains\`、\`topClickedFolders\`、\`topAddedFolders\`、\`timeTracking.rankings\` 补充行为证据。
-5. 用 \`bookmarkId\` 作为跨包主键时必须先确认字段存在，不要用标题做跨文件匹配：\`bookmark-recommend.signals.*.items[].id\`、\`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`、\`bookmarks-tree.records[].id\` 都等于纯 bookmarkId；\`history-visits.jsonl[].bookmarkId\` 只有在原记录有真实 bookmarkId 时才存在，后台校准记录可能为 null；\`bookmark-record.clickRecords.rows[].id\` 可能是复合 visit id，不要把它直接当 bookmarkId。精确对位访问记录时优先用 \`bookmarkId + visitTime\`，bookmarkId 缺失时退回 \`url + visitTime\`。\`bookmarks-tree.json\` 与 \`history-visits.jsonl\` 只用于核验和补字段。
-6. 输出时说明每个建议来自哪些本地信号；需要判断外部价值、时效或替代方案时，再按第 7 节进行网络搜索。
-
-## 7. 网络搜索作为第二证据层
-- 本地同步数据回答“用户保存过、点击过、复习过什么”；网络搜索回答“这些内容在外部世界是否仍有价值、有哪些替代或延伸”。推荐结论应优先结合两者，而不是只在本地信息不足时才搜索。
-- 对“待复习、高频点击、当前时间排行靠前、近 7 天新加但未打开”的候选，若需要判断是否值得现在打开、是否过时、是否有更好的替代，应主动搜索官方文档、项目主页、权威资料、近期讨论或同类工具。
-- 搜索提示词优先使用书签标题、URL 域名、文件夹路径、页面关键词和用户问题；可加入“替代方案 / 教程 / review / benchmark / changelog / docs / forum”等词，避免只搜泛泛类别。
-- 学术、论文、法律、医学、金融等高风险或专业主题，优先使用论文数据库、官方文档、法规/机构网站、专业指南等权威来源；论坛或社区讨论只能作为辅助线索。
-- 输出时明确区分“本地同步数据事实”“基于本地数据的推断”“网络搜索补充”，给出来源或简短依据；不要把搜索结果写成用户已收藏、已点击或已复习的事实。
-
-## 8. 复杂任务的自主拆分与核验
-- 是否使用 subagents、并行检索或其他高级工具，由模型根据任务规模、可用工具、成本、时效和置信度自行判断；不要把 subagents 当成必须启用或必须避免的固定流程。
-- 当问题涉及多类数据源（推荐包、记录包、raw-native、Git diff、输入文档、外部资料）或结论风险较高时，可将任务拆成相互独立的小检查，再由主流程统一合并、去重和校验。
-- 如果当前环境没有 subagents 或高级并行能力，使用普通工具逐项完成同样的核验目标；不要因为工具不可用就跳过关键证据。
-- 输出结论时优先说明证据链和不确定性；只有当区分来源有助于用户判断时，才说明哪些结论来自并行检查或外部搜索。
-
-## 9. 输出模板
-- latest.md 使用一级标题：\`现在该看什么\`
-- latest.md 必须包含二级标题：\`复习优先（基于待复习 + 相似推荐）\`
-- latest.md 必须包含二级标题：\`值得打开的新书签\`
-- latest.md 必须包含二级标题：\`建议屏蔽 / 跳过\`
-- latest.md 必须包含二级标题：\`信号来源（简要）\`
-
-### 周期报告（日报 / 周报 / 月报）
-根据第 5 节的推送范围对应关系，只生成匹配的一种周期报告；按第 6-8 节的重要性权重、网络搜索策略和复杂任务核验原则输出。
-
-## 10. 风格与禁忌
-- 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。
-- 引用书签时给出：\`(bookmarkId)\` + \`[标题](URL)\` + 所在文件夹路径；只要有 URL，标题必须渲染成可点击的 Markdown 链接。
-- 参考 bookmark-recommend.data.recommendPool.recommendMode.activeMode 理解当前模式（default/archaeology/consolidate/wander/priority），
-  不同模式的"重要"定义会略有偏移。
-- 不泄露 Token / Owner / Repo 等同步配置字段。
-
-${SYNC_AGENT_FORMAT_GUIDE_ZH}
-`;
-const SYNC_AGENT_DOC_TEMPLATE_ZH = SYNC_AGENT_DOC_TEMPLATE;
-const SYNC_AGENT_DOC_TEMPLATE_EN = `# Bookmark Record and Recommend AI Rules
-
-## 1. Role & Goal
-You are the bookmark assistant. Goals:
-- Summarize browsing activity daily/weekly/monthly
-- Recommend what to open/review/block using S-score signals
-- Recover context for any selected bookmark
-
-## 2. Readable Inputs (Path Allowlist + Git)
-All sync files live under the \`{{SYNC_CLOUD_ROOT_FOLDER}}/\` folder in the GitHub repository. Paths below are relative to that folder.
-- data/manifest.json                # AI entry index: pushId, files, hashes, read order
-- data/packages/bookmark-record.json
-- data/packages/bookmark-recommend.json
-- data/raw-native/bookmarks-tree.json
-- data/raw-native/history-visits.jsonl
-- AGENTS.md                         # this required rule file in the product folder
-- ai/input-docs/...                 # local user drafts
-- GitHub Commits API                # /repos/{owner}/{repo}/commits?sha={branch}
-- GitHub Compare API                # /repos/{owner}/{repo}/compare/{base}...{head}
-- GitHub Commit API                 # /repos/{owner}/{repo}/commits/{sha}
-- Web Search                        # supplement related recommendations, context checks, and external sources
-
-## 3. Git-First Workflow (group commits by pushId)
-1. Read \`data/manifest.json\` first and capture \`pushId\` plus \`readOrder\`.
-2. Read recent repository commits (recommend latest 30) and group commits that share \`[sync:<pushId>]\` in the message.
-3. For one pushId group: compare base = earliest commit parent, head = latest commit.
-4. Use compare to identify changed business files; read package bodies only when needed, in manifest.readOrder.
-5. Always cite pushId, short commit SHA, and file paths in conclusions.
-
-## 4. Data Semantics and Limits
-- \`bookmark-record.data.clickRecords\` is derived from the current bookmark tree plus the browsing-history fact source. It contains only visits that match current bookmarks. Check \`bookmark-record.data.clickRecords.meta\` and manifest for match methods, raw source, and raw record counts.
-- \`data/raw-native/history-visits.jsonl\` is the complete browsing-visit fact source; bookmarkId exists only when the visit can be matched to a current bookmark. Do not treat it directly as bookmark click records.
-- For time tracking, use only the exported current ranking at \`bookmark-record.data.timeTracking.rankings\`. Active in-progress capture sessions are intentionally not pushed; do not assume they exist, and do not recompute a separate ranking from raw tracking details.
-- For recommendation score freshness, read \`bookmark-recommend.data.recommendPool.scoreCacheMeta\`: \`recommendScoresTime\`, \`staleMeta\`, \`ensureResult\`, \`templateScoreCount\`, and \`templateScoreRatio\`. Template scores are temporary usable scores; mark uncertainty when interpreting priority.
-- \`recommend_reviews_similar\` may be null. Always inspect \`recommend_reviews_similar_meta.available/source/skippedReason\`; do not treat missing similar candidates as proof that no similar bookmarks exist.
-- Roles of the four data files: \`bookmark-recommend.json\` is the scoring & candidates layer (S-pool / review / block / skip / flip signals); \`bookmark-record.json\` is the behavior-evidence layer (clicks / additions / time-tracking ranking); \`bookmarks-tree.json\` is the truth source of the current bookmark tree (folder paths & hierarchy); \`history-visits.jsonl\` is the truth source of visit details. The same bookmarkId stitches all four together. For systematic analysis, periodic reviews, or fuzzy recommendations, read the signals in the first two packages first and then look up the raw-native files by bookmarkId. For lightweight Q&A, single lookups, or casual chats, plain title / URL / domain / folder-path / keyword matching across any file is fine—no need to enforce that order.
-
-## 5. Analysis Result Outputs (Path Allowlist)
-Sync push/pull only transfers data packages and Markdown documents. When an AI agent runs analysis, write results to these paths.
-- ai/results/latest.md                       # overwrite, only when a result file is actually needed
-- ai/results/daily/<YYYY-MM-DD>.md           # daily report
-- ai/results/weekly/<YYYY-Www>.md            # weekly report
-- ai/results/monthly/<YYYY-MM>.md            # monthly report
-- ai/results/runs/<YYYY-MM-DD>/<HHmmss>.md   # append-only run log (optional)
-
-Whether to write a result file depends on the user's current intent: casual chat, single lookup, or lightweight Q&A → answer directly, do not write ai/results; the user explicitly asks for a report/analysis, or the request is a systematic analysis, periodic review, fuzzy recommendation, or cleanup suggestion → then write ai/results. When generating: latest.md is overwritten; for periodic reports generate only the one matching the push time range in \`data/manifest.json\` under \`timeRange.range\`:
-- day \u2192 daily report
-- week \u2192 weekly report
-- month / year / all \u2192 monthly report
-There is no need to output all granularities at once.
-
-## 6. Importance Weights
-1. Review queue (recommend_reviews / recommend_postponed) = highest priority
-   If recommend_reviews_similar_meta.available=true, cite recommend_reviews_similar; otherwise explain skippedReason.
-2. High clicks + exported current time-ranking signals = second priority
-3. Newly added but unopened in last 7 days = reminder candidates
-4. Blocked bookmarks/folders/domains = always excluded
-5. Soft negative signals (\`skippedTargets\` / \`postponedTargets\` / \`flippedTargets\`) = not hard-excluded, but lower their priority in ranking and explanations, and call out the user's negative feedback history in the signal sources.
-6. Already recommended recently (bookmarkIds cited in \`ai/results/latest.md\` or \`ai/results/runs/<last 24h>/*.md\`) = down-weight or replace them in the "Worth Opening" list, unless the user explicitly asks to revisit.
-
-Execution priority (overrides the rest of this section): judge the user's current intent——casual chat, idea discussion, single lookup, lightweight Q&A → answer directly, do not run the full flow below and do not write ai/results; explicit keyword, URL, domain, folder, bookmarkId, or time range → run a targeted lookup/analysis hitting only the relevant signals and raw records; systematic analysis, periodic review, fuzzy recommendation, cleanup suggestion → enable the full recommendation analysis flow below.
-
-When analyzing a sync data package, follow this basic flow instead of linearly reading raw large files:
-1. Start from the user's current question. If the user specifies a topic, domain, folder, bookmarkId, or time range, narrow the scope to that target first.
-2. Read \`data/manifest.json\` to confirm \`pushId\`, available files, record counts, truncation status, and \`readOrder\`.
-3. Read \`bookmark-recommend.json\` \`summary\` and \`data.signals\` first, handling \`blockedSummary\`, \`reviewTargets\`, \`postponedTargets\`, \`currentCards\`, \`scoreLeaders\`, and \`skippedTargets\`.
-4. Then read \`bookmark-record.json\` \`summary\` and \`data.signals\`, using \`recentClicks\`, \`unopenedAdditions\`, \`recentUnopenedAdditions\`, \`topClickedDomains\`, \`topClickedFolders\`, \`topAddedFolders\`, and \`timeTracking.rankings\` as behavioral evidence.
-5. Use \`bookmarkId\` as a cross-package key only after confirming the field exists; never match by title across files. \`bookmark-recommend.signals.*.items[].id\`, \`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]\`, and \`bookmarks-tree.records[].id\` are plain bookmarkIds. \`history-visits.jsonl[].bookmarkId\` exists only when the source row has a real bookmarkId; background-calibrated rows may be null. \`bookmark-record.clickRecords.rows[].id\` may be a composite visit id, so do not treat it directly as bookmarkId. To align a visit precisely, prefer \`bookmarkId + visitTime\`; when bookmarkId is missing, fall back to \`url + visitTime\`. \`bookmarks-tree.json\` and \`history-visits.jsonl\` are only for verification and missing fields.
-6. In the output, explain which local signals support each suggestion. When external value, freshness, or alternatives matter, use web search according to section 7.
-
-## 7. Web Search as a Second Evidence Layer
-- Local sync data answers what the user saved, clicked, or reviewed. Web search answers whether those items are still valuable externally, and what alternatives or follow-up resources exist. Recommendations should combine both when useful, not search only when local context is thin.
-- For candidates in the review queue, high-click items, top current time-ranking items, or newly added but unopened bookmarks, search proactively when judging whether to open them now, whether they are outdated, or whether better alternatives exist.
-- Build search queries from bookmark titles, URL domains, folder paths, page keywords, and the user's question; add terms such as alternatives, tutorial, review, benchmark, changelog, docs, or forum instead of searching only broad categories.
-- For academic, paper, legal, medical, financial, or other high-stakes topics, prioritize authoritative sources such as paper databases, official docs, regulations, institutional sites, and professional guidelines. Treat forums or community discussions as secondary signals.
-- In outputs, clearly separate local sync-data facts, inferences from local data, and web-sourced additions. Include the source or brief rationale, and do not present web search results as bookmarks the user has saved, clicked, or reviewed.
-
-## 8. Autonomous Decomposition and Verification
-- Whether to use subagents, parallel retrieval, or other advanced tools is up to the model based on task size, available tools, cost, urgency, and confidence. Do not treat subagents as a fixed step that must always be used or always be avoided.
-- When a question spans multiple data sources (recommendation package, record package, raw-native files, Git diff, input docs, or external sources), or when the conclusion has higher risk, split the work into independent checks and let the main flow merge, deduplicate, and verify the results.
-- If subagents or advanced parallel capabilities are unavailable in the current environment, use normal tools to complete the same verification goals step by step; do not skip key evidence just because a tool is unavailable.
-- In the final output, prioritize the evidence chain and uncertainty. Mention which conclusions came from parallel checks or web search only when that helps the user judge reliability.
-
-## 9. Output Structure
-- latest.md uses the level-1 heading: \`What to Read Now\`
-- latest.md must include the level-2 heading: \`Review First\`
-- latest.md must include the level-2 heading: \`Worth Opening\`
-- latest.md must include the level-2 heading: \`Skip / Block Suggestions\`
-- latest.md must include the level-2 heading: \`Signal Sources\`
-
-### Periodic Report (daily / weekly / monthly)
-Generate only the periodic report matching the push range per section 5. Follow the same importance, web-search, and verification principles in sections 6-8.
-
-## 10. Style & Safety
-- Output Markdown only
-- Include (bookmarkId), \`[title](URL)\`, and folder path when citing bookmarks. When a URL exists, the title must be a clickable Markdown link.
-- Respect recommend mode (default / archaeology / consolidate / wander / priority)
-- Never leak token/owner/repo sync settings
-
-${SYNC_AGENT_FORMAT_GUIDE_EN}
-`;
-
-function getDefaultSyncAgentDocTemplate(lang = currentLang) {
-    const rootFolder = getSyncCloudRootFolderName(lang);
-    const template = String(lang || '').toLowerCase() === 'en'
-        ? SYNC_AGENT_DOC_TEMPLATE_EN
-        : SYNC_AGENT_DOC_TEMPLATE_ZH;
-    return template.replace(/\{\{SYNC_CLOUD_ROOT_FOLDER\}\}/g, rootFolder);
-}
-
 const SYNC_GITHUB_OBSOLETE_DATA_LATEST_PATH = 'data/latest.json';
 const SYNC_GITHUB_DATA_MANIFEST_PATH = 'data/manifest.json';
 const SYNC_GITHUB_PACKAGE_BOOKMARK_RECORD_PATH = 'data/packages/bookmark-record.json';
@@ -423,6 +180,30 @@ const SYNC_CLOUD_ROOT_FOLDER_EN = 'Bookmark Record and Recommend';
 const SYNC_OUTPUT_NAMING_LEGACY = 'legacy-v1';
 const SYNC_OUTPUT_NAMING_RANGE = 'range-v2';
 const SYNC_RANGE_NAMING_MIN_VERSION = '0.3.9';
+const SYNC_AGENT_TEMPLATE_FALLBACKS = Object.freeze({
+    zh_CN: `# Bookmark Record and Recommend AI 规则
+
+## 1. 身份与目标
+我是你的书签助理。请优先读取 {{SYNC_CLOUD_ROOT_FOLDER}}/data/manifest.json，再按 manifest.readOrder 分析同步数据。
+
+## 2. 安全边界
+- data/** 是插件生成的事实源，只读。
+- 只在用户要求时写入 ai/results/**、ai/input-docs/** 或 AGENTS.md。
+- 不泄露 Token / Owner / Repo 等同步配置。
+`,
+    en: `# Bookmark Record and Recommend AI Rules
+
+## 1. Role & Goal
+You are the bookmark assistant. Read {{SYNC_CLOUD_ROOT_FOLDER}}/data/manifest.json first, then analyze sync data in manifest.readOrder.
+
+## 2. Safety Boundaries
+- data/** is a plugin-generated fact source and must be treated as read-only.
+- Write only to ai/results/**, ai/input-docs/**, or AGENTS.md when the user asks.
+- Never leak token / owner / repo sync settings.
+`
+});
+let syncAgentTemplateCache = { zh_CN: '', en: '' };
+let syncAgentTemplateLoadPromise = null;
 
 const SYNC_DEFAULT_CONFIG = Object.freeze({
     remoteProvider: SYNC_PROVIDER_GITHUB,
@@ -10392,6 +10173,45 @@ function getSyncCloudRootFolderName(lang = currentLang) {
     return normalizeSyncDownloadPathSegment(isEnglish ? SYNC_CLOUD_ROOT_FOLDER_EN : SYNC_CLOUD_ROOT_FOLDER_ZH);
 }
 
+function normalizeSyncAgentTemplateLang(lang = currentLang) {
+    return String(lang || '').trim().toLowerCase() === 'en' ? 'en' : 'zh_CN';
+}
+
+function resolveSyncAgentTemplatePath(lang = currentLang) {
+    const key = normalizeSyncAgentTemplateLang(lang);
+    return SYNC_AGENT_TEMPLATE_PATHS[key] || SYNC_AGENT_TEMPLATE_PATHS.zh_CN;
+}
+
+async function loadDefaultSyncAgentDocTemplates() {
+    if (syncAgentTemplateLoadPromise) return syncAgentTemplateLoadPromise;
+    syncAgentTemplateLoadPromise = (async () => {
+        const entries = Object.keys(SYNC_AGENT_TEMPLATE_PATHS);
+        await Promise.all(entries.map(async (key) => {
+            const templatePath = resolveSyncAgentTemplatePath(key);
+            try {
+                const response = await fetch(templatePath, { cache: 'no-cache' });
+                if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
+                const text = await response.text();
+                syncAgentTemplateCache[key] = String(text || '');
+            } catch (error) {
+                console.warn('[SyncAgentTemplate] failed to load default template:', templatePath, error);
+                syncAgentTemplateCache[key] = SYNC_AGENT_TEMPLATE_FALLBACKS[key] || SYNC_AGENT_TEMPLATE_FALLBACKS.zh_CN;
+            }
+        }));
+        return syncAgentTemplateCache;
+    })();
+    return syncAgentTemplateLoadPromise;
+}
+
+function getDefaultSyncAgentDocTemplate(lang = currentLang) {
+    const key = normalizeSyncAgentTemplateLang(lang);
+    const rootFolder = getSyncCloudRootFolderName(key);
+    const template = syncAgentTemplateCache[key]
+        || SYNC_AGENT_TEMPLATE_FALLBACKS[key]
+        || SYNC_AGENT_TEMPLATE_FALLBACKS.zh_CN;
+    return String(template || '').replace(/\{\{SYNC_CLOUD_ROOT_FOLDER\}\}/g, rootFolder);
+}
+
 function buildSyncRepoPaths(repoConfig, timestamp = Date.now()) {
     const rootFolder = getSyncCloudRootFolderName(currentLang);
     return {
@@ -10477,25 +10297,56 @@ function updateSyncPathInfoText() {
     }
 }
 
-function buildSyncFilesPathNoteText() {
+function appendSyncHintLink(parent, text, href) {
+    const link = document.createElement('a');
+    link.className = 'sync-info-link';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = text;
+    parent.appendChild(link);
+    return link;
+}
+
+function renderSyncFilesPathHint(container) {
+    if (!container) return;
+    container.textContent = '';
     const paths = buildSyncRepoPaths(buildSyncRepoConfig(syncConfigState), Date.now());
     const ruleExamplePath = joinSyncRelativePath(paths.rootFolder, SYNC_AGENT_DOC_NAME);
     const manifestPath = paths.dataManifestPath;
-    return currentLang === 'zh_CN'
-        ? `路径说明：${SYNC_AGENT_DOC_NAME} 会固定写入 ${ruleExamplePath}。AI 入口为 ${manifestPath}，变化分析来自 GitHub commits/compare。`
-        : `Path note: ${SYNC_AGENT_DOC_NAME} is always written to ${ruleExamplePath}. AI entry is ${manifestPath}; change analysis comes from GitHub commits/compare.`;
+    const isZh = currentLang === 'zh_CN';
+
+    const line1 = document.createElement('div');
+    line1.textContent = isZh
+        ? `AI 指南文件说明：${SYNC_AGENT_DOC_NAME} 会固定写入 ${ruleExamplePath}，用于提供约束、介绍及规范，引导 AI 分析推送包、读取 ${manifestPath}、按 pushId/Git commits 判断变化。`
+        : `AI guide file: ${SYNC_AGENT_DOC_NAME} is always written to ${ruleExamplePath}. It provides constraints, context, and rules for AI analysis of pushed packages, ${manifestPath}, and pushId/Git commit changes.`;
+
+    const line2 = document.createElement('div');
+    line2.className = 'sync-info-link-row';
+    line2.appendChild(document.createTextNode(isZh ? '文档共建：' : 'Docs collaboration: '));
+    appendSyncHintLink(line2, isZh ? '默认指南模板' : 'Default guide template', SYNC_AGENT_TEMPLATE_REPO_URL);
+    line2.appendChild(document.createTextNode(isZh ? '，或参与其他功能 ' : ', or contribute other features via '));
+    appendSyncHintLink(line2, 'PR', SYNC_PROJECT_PULLS_URL);
+    line2.appendChild(document.createTextNode('。'));
+
+    container.append(line1, line2);
 }
 
 function updateSyncPullPolicyInfoText() {
     const infoText = document.getElementById('syncPullPolicyInfoText');
     if (!infoText) return;
+    infoText.textContent = '';
+    renderSyncFilesPathHint(infoText);
     const pullPolicyText = getSyncText(
         'syncPullPolicyInfoText',
         currentLang === 'zh_CN'
             ? '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。'
             : 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
     );
-    infoText.textContent = `${buildSyncFilesPathNoteText()}\n${pullPolicyText}`;
+    const policyLine = document.createElement('div');
+    policyLine.className = 'sync-info-policy-line';
+    policyLine.textContent = pullPolicyText;
+    infoText.appendChild(policyLine);
 }
 
 function positionSyncInfoPopover(panel) {
@@ -13235,6 +13086,13 @@ async function createSyncRuleDoc({ focusDoc = true } = {}) {
     return !!saved;
 }
 
+async function ensureInitialSyncRuleDoc() {
+    if (syncInitialRuleDocEnsured) return false;
+    syncInitialRuleDocEnsured = true;
+    if (getSyncRuleDoc()) return false;
+    return await createSyncRuleDoc({ focusDoc: true });
+}
+
 function getSyncDocDisplayPath(doc = null) {
     if (!doc || typeof doc !== 'object') return '';
     const kind = normalizeSyncDocKind(doc.kind || (doc.id === SYNC_AGENT_DOC_ID ? SYNC_DOC_KIND_AGENT : SYNC_DOC_KIND_INPUT));
@@ -13481,20 +13339,67 @@ function setSyncEditModeEnabled(enabled) {
     btn.setAttribute('aria-pressed', next ? 'true' : 'false');
 }
 
-function focusSyncEditorToEnd() {
+function captureSyncMarkdownScrollSnapshot() {
+    const contentArea = document.querySelector('.content-area');
+    const editorEl = document.getElementById('syncMarkdownEditor');
+    const renderEl = document.getElementById('syncMarkdownRender');
+    return {
+        contentTop: contentArea ? contentArea.scrollTop : null,
+        editorTop: editorEl ? editorEl.scrollTop : null,
+        renderTop: renderEl ? renderEl.scrollTop : null
+    };
+}
+
+function restoreSyncMarkdownScrollSnapshot(snapshot = null) {
+    if (!snapshot) return;
+    const restore = () => {
+        const contentArea = document.querySelector('.content-area');
+        const editorEl = document.getElementById('syncMarkdownEditor');
+        const renderEl = document.getElementById('syncMarkdownRender');
+        if (contentArea && snapshot.contentTop != null) contentArea.scrollTop = snapshot.contentTop;
+        if (editorEl && snapshot.editorTop != null) editorEl.scrollTop = snapshot.editorTop;
+        if (renderEl && snapshot.renderTop != null) renderEl.scrollTop = snapshot.renderTop;
+    };
+    restore();
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(restore);
+    }
+}
+
+function focusSyncEditorToEnd({ preventScroll = false } = {}) {
     const activeEditor = document.getElementById('syncMarkdownEditor');
     if (!activeEditor || activeEditor.hidden) return false;
-    activeEditor.focus();
+    try {
+        activeEditor.focus(preventScroll ? { preventScroll: true } : undefined);
+    } catch (_) {
+        activeEditor.focus();
+    }
     const cursor = String(activeEditor.value || '').length;
     activeEditor.setSelectionRange(cursor, cursor);
     return true;
 }
 
-function enterSyncEditModeFromPanel() {
+async function ensureSyncEditableDocForInteraction() {
+    if (getSyncCurrentDoc()) return true;
+    const hasDocs = Array.isArray(syncDocsState) && syncDocsState.length > 0;
+    const isDefaultRulePreview = syncCurrentDocId === SYNC_DEFAULT_RULE_PREVIEW_ID || (!hasDocs && !getSyncRuleDoc());
+    if (!isDefaultRulePreview || getSyncRuleDoc()) return false;
+    return createSyncRuleDoc({ focusDoc: true });
+}
+
+function enterSyncEditModeFromPanel(options = {}) {
+    const focusEditor = options.focusEditor !== false;
+    const preserveScroll = !!options.preserveScroll;
+    const scrollSnapshot = preserveScroll ? captureSyncMarkdownScrollSnapshot() : null;
     if (SYNC_REALTIME_MARKDOWN_RENDER) {
         if (!getSyncCurrentDoc()) return false;
+        if (normalizeSyncMarkdownViewMode(syncMarkdownViewMode) === 'render') {
+            syncMarkdownViewMode = 'split';
+            persistSyncMarkdownViewMode();
+        }
         renderSyncMarkdown();
-        focusSyncEditorToEnd();
+        if (focusEditor) focusSyncEditorToEnd({ preventScroll: preserveScroll });
+        restoreSyncMarkdownScrollSnapshot(scrollSnapshot);
         return true;
     }
     if (isSyncEditModeEnabled()) return true;
@@ -13502,7 +13407,8 @@ function enterSyncEditModeFromPanel() {
     setSyncEditModeEnabled(true);
     updateSyncSaveButtonState();
     renderSyncMarkdown();
-    focusSyncEditorToEnd();
+    if (focusEditor) focusSyncEditorToEnd({ preventScroll: preserveScroll });
+    restoreSyncMarkdownScrollSnapshot(scrollSnapshot);
     return true;
 }
 
@@ -14756,6 +14662,10 @@ async function maybeUpgradeSyncAgentDocTemplate(storedHash) {
     }
 
     if (!storedHash) {
+        if (agentDoc.localEdited === true) {
+            await syncStorageSet({ [SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY]: contentHash });
+            return false;
+        }
         if (isSyncAgentDocLikelyDefaultTemplate(agentDoc.markdown)) {
             return await applySyncAgentDocUpgrade(currentLang);
         }
@@ -18402,11 +18312,25 @@ function bindSyncViewEvents() {
 
     const editorEl = document.getElementById('syncMarkdownEditor');
     if (editorEl) {
+        const ensureEditorWritableFromInteraction = async (event = null) => {
+            if (!editorEl.readOnly) return true;
+            if (event && typeof event.preventDefault === 'function') {
+                event.preventDefault();
+            }
+            const hasEditableDoc = await ensureSyncEditableDocForInteraction();
+            if (!hasEditableDoc) return false;
+            enterSyncEditModeFromPanel({ preserveScroll: true });
+            return true;
+        };
         const syncCursorLineToPreview = (scrollPreview) => {
             syncSyncMarkdownActiveLine({
                 scrollPreview: !!scrollPreview
             });
         };
+        editorEl.addEventListener('pointerdown', (event) => {
+            if (!editorEl.readOnly) return;
+            void ensureEditorWritableFromInteraction(event);
+        });
         editorEl.addEventListener('input', () => {
             resizeSyncMarkdownEditorForViewMode();
             updateSyncSaveButtonState();
@@ -18415,6 +18339,10 @@ function bindSyncViewEvents() {
             scheduleSyncEditorAutoSave(220);
         });
         editorEl.addEventListener('focus', () => {
+            if (editorEl.readOnly) {
+                void ensureEditorWritableFromInteraction();
+                return;
+            }
             syncCursorLineToPreview(false);
         });
         editorEl.addEventListener('click', () => {
@@ -18466,18 +18394,20 @@ function bindSyncViewEvents() {
 
     const renderPanel = document.querySelector('#syncView .sync-render-panel');
     if (renderPanel) {
-        renderPanel.addEventListener('click', (event) => {
+        renderPanel.addEventListener('click', async (event) => {
             const target = event.target;
             if (!(target instanceof Element)) return;
-            if (!getSyncCurrentDoc()) return;
 
             if (SYNC_REALTIME_MARKDOWN_RENDER) {
                 if (!target.closest('#syncMarkdownRender')) return;
                 if (target.closest('a[href]')) return;
-                const editor = document.getElementById('syncMarkdownEditor');
-                if (editor && !editor.hidden) editor.focus();
+                const hasEditableDoc = await ensureSyncEditableDocForInteraction();
+                if (!hasEditableDoc) return;
+                enterSyncEditModeFromPanel({ focusEditor: false, preserveScroll: true });
                 return;
             }
+
+            if (!getSyncCurrentDoc()) return;
 
             if (isSyncEditModeEnabled()) return;
 
@@ -18498,7 +18428,7 @@ function bindSyncViewEvents() {
             if (target.closest('a[href]')) {
                 event.preventDefault();
             }
-            enterSyncEditModeFromPanel();
+            enterSyncEditModeFromPanel({ focusEditor: false, preserveScroll: true });
         });
     }
 }
@@ -18507,7 +18437,9 @@ async function renderSyncView() {
     ensureSyncPackageOptionElements();
     hydrateAndApplySyncControlPanelLayout();
     if (!syncViewInitialized) {
+        await loadDefaultSyncAgentDocTemplates();
         await loadSyncStateFromStorage();
+        await ensureInitialSyncRuleDoc();
         syncViewInitialized = true;
     }
     hydrateSyncMarkdownViewMode();
@@ -44003,4 +43935,3 @@ function highlightAllRelatedHistoryItems(retryCount = 0) {
         showNoRecordToast();
     }
 }
-

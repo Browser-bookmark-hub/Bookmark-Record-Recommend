@@ -3984,7 +3984,7 @@ body.dark-theme .sync-push-custom-range-input {
 
 .sync-files-info-popover {
     position: absolute;
-    bottom: calc(100% + 8px);
+    top: calc(100% + 8px);
     left: 50%;
     width: min(320px, calc(100vw - 24px));
     padding: 8px 10px;
@@ -3998,6 +3998,17 @@ body.dark-theme .sync-push-custom-range-input {
     z-index: 1200;
     white-space: normal;
     transform: translateX(-50%);
+}
+
+.sync-files-info-popover .sync-info-policy-line {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+}
+
+.sync-files-info-popover .sync-info-link-row {
+    margin-top: 5px;
+    word-break: break-all;
 }
 
 .sync-files-header .view-action-btn {
@@ -4095,6 +4106,38 @@ body.dark-theme .sync-push-custom-range-input {
     color: var(--text-tertiary);
     line-height: 1.35;
     word-break: break-word;
+}
+
+.sync-files-path-hint:empty {
+    display: none;
+}
+
+.sync-files-path-hint a,
+.sync-files-info-popover a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-weight: 600;
+}
+
+html[data-theme="dark"] .sync-files-path-hint a,
+html[data-theme="dark"] .sync-files-info-popover a,
+body.dark-theme .sync-files-path-hint a,
+body.dark-theme .sync-files-info-popover a {
+    color: #60a5fa;
+}
+
+.sync-files-path-hint a:hover,
+.sync-files-info-popover a:hover {
+    color: #1d4ed8;
+    text-decoration-thickness: 2px;
+}
+
+html[data-theme="dark"] .sync-files-path-hint a:hover,
+html[data-theme="dark"] .sync-files-info-popover a:hover,
+body.dark-theme .sync-files-path-hint a:hover,
+body.dark-theme .sync-files-info-popover a:hover {
+    color: #93c5fd;
 }
 
 .sync-file-list {
