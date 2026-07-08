@@ -1,3 +1,24 @@
+// =================================================================================
+// TABLE OF CONTENTS (目录索引)
+// =================================================================================
+// I.     GLOBAL CONSTANTS & VARIABLES (全局变量、常量与脚本加载初始化)
+// II.    LOCALIZATION & TRANSLATIONS (国际化文本定义)
+// III.   CORE DATA UTILITIES & HELPERS (核心数据库/数据加载服务与 URL 辅助函数)
+// IV.    TIME TRACKING & COMPOSITE RANKINGS (时间追踪与综合点击排行计算)
+// V.     DATA CALIBRATION & AUTO-REFRESH (历史记录校准与自动刷新管理)
+// VI.    MAIN APP CONTROL & INITIALIZATION (主程序路由、视图切换、侧边栏/标题栏控制)
+// VII.   VIEW: SYNC & AI ANALYSIS (子视图：同步与 AI 分析)
+// VIII.  VIEW: WIDGETS & STATS (子视图：小组件与统计渲染)
+// IX.    VIEW: RECOMMENDATION & REVIEW (子视图：书签推荐、SM-2 算法与温故)
+// X.     DIALOGS & DIALOG MANAGEMENT (全局弹窗管理器 - 复习/屏蔽/清除记录)
+// XI.    EVENT LISTENERS & MESSAGE LISTENERS (全局 API/消息监听与实时更新)
+// XII.   BOOKMARK ASSOCIATION & HISTORY DETAIL (书签关联记录与历史详情)
+// =================================================================================
+
+// =================================================================================
+// I. GLOBAL CONSTANTS & VARIABLES (全局变量、常量与脚本加载初始化)
+// =================================================================================
+
 // =============================================================================
 // 全局变量和常量
 // =============================================================================
@@ -1473,6 +1494,1249 @@ function cancelScheduledBrowsingHistoryCacheRefresh() {
     clearTimeout(browsingHistoryCacheRefreshTimer);
     browsingHistoryCacheRefreshTimer = null;
 }
+
+// =================================================================================
+// II. LOCALIZATION & TRANSLATIONS (国际化文本定义) - MOVED TO history_i18n.js
+// =================================================================================
+
+
+// =================================================================================
+// III. CORE DATA UTILITIES & HELPERS (核心数据库/数据加载服务与 URL 辅助函数)
+// =================================================================================
+
+
+// =============================================================================
+// 辅助函数 - URL 处理
+// =============================================================================
+
+// 安全地获取网站图标 URL（同步版本，用于兼容旧代码）
+// 注意：这个函数会触发后台异步加载，初次调用返回fallbackIcon
+function getFaviconUrl(url) {
+    if (!url) return fallbackIcon;
+
+    // 验证是否是有效的 HTTP/HTTPS URL
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return fallbackIcon;
+    }
+
+    // 检查是否是无效URL
+    if (FaviconCache.isInvalidUrl(url)) {
+        return fallbackIcon;
+    }
+
+    try {
+        const hostname = FaviconCache._getHostnameFromUrl(url);
+        if (!hostname) return fallbackIcon;
+
+        // 【关键修复】先检查内存缓存（已预热）
+        if (FaviconCache.memoryCache.has(hostname)) {
+            const cached = FaviconCache.memoryCache.get(hostname);
+            // 不阻塞渲染：命中时也允许后台偶发刷新并覆盖回写。
+            FaviconCache.fetch(url, {
+                allowOccasionalRefresh: true,
+                skipDbRead: true
+            }).then(dataUrl => {
+                if (dataUrl && dataUrl !== fallbackIcon && dataUrl !== cached) {
+                    updateFaviconImages(url, dataUrl);
+                }
+            }).catch(() => { });
+            return cached;
+        }
+
+        // 检查失败缓存
+        if (FaviconCache._isFailureDomainActive(hostname)) {
+            FaviconCache.fetch(url, {
+                ignoreFailureCache: true,
+                skipDbRead: true
+            }).then(dataUrl => {
+                if (dataUrl && dataUrl !== fallbackIcon) {
+                    updateFaviconImages(url, dataUrl);
+                }
+            }).catch(() => { });
+            return fallbackIcon;
+        }
+
+        // 触发后台异步加载（不等待结果）
+        // 注意：由于已预热缓存，
+        // 这里只是作为兜底机制，处理动态添加的书签
+        FaviconCache.fetch(url, { allowOccasionalRefresh: true }).then(dataUrl => {
+            // 加载完成后，查找并更新所有使用这个URL的img标签
+            if (dataUrl && dataUrl !== fallbackIcon) {
+                updateFaviconImages(url, dataUrl);
+            }
+        });
+
+        // 立即返回 fallback 图标作为占位符
+        return fallbackIcon;
+    } catch (error) {
+        return fallbackIcon;
+    }
+}
+
+function resolveFaviconBindingUrlFromElement(element) {
+    if (!element) return '';
+
+    const readFrom = (node) => {
+        if (!node) return '';
+        if (node.dataset) {
+            if (node.dataset.bookmarkUrl) return node.dataset.bookmarkUrl;
+            if (node.dataset.nodeUrl) return node.dataset.nodeUrl;
+            if (node.dataset.url) return node.dataset.url;
+            if (node.dataset.faviconUrl) return node.dataset.faviconUrl;
+        }
+        if (typeof node.getAttribute === 'function') {
+            return node.getAttribute('data-bookmark-url')
+                || node.getAttribute('data-node-url')
+                || node.getAttribute('data-url')
+                || node.getAttribute('data-favicon-url')
+                || '';
+        }
+        return '';
+    };
+
+    let itemUrl = readFrom(element);
+    if (!itemUrl && typeof element.closest === 'function') {
+        const item = element.closest('[data-node-url], [data-bookmark-url], [data-url]');
+        itemUrl = readFrom(item);
+    }
+    return typeof itemUrl === 'string' ? itemUrl.trim() : '';
+}
+
+// 更新页面上所有指定URL的favicon图片
+function updateFaviconImages(url, dataUrl) {
+    let updatedCount = 0;
+    try {
+        const domain = FaviconCache._getHostnameFromUrl(url);
+        if (!domain) return 0;
+
+        const allImages = document.querySelectorAll(
+            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img.bookmark-favicon, img.card-favicon, img.recommend-search-favicon, img[class*="favicon"], img[data-bookmark-url], img[data-node-url], img[data-url], img[data-favicon-url], image.widgets-pie-slice-icon[data-bookmark-url]'
+        );
+
+        allImages.forEach(img => {
+            const itemUrl = resolveFaviconBindingUrlFromElement(img);
+            if (!itemUrl) return;
+
+            try {
+                const itemDomain = FaviconCache._getHostnameFromUrl(itemUrl);
+                if (itemDomain !== domain) return;
+
+                const tagName = String(img.tagName || '').toLowerCase();
+                if (tagName === 'image') {
+                    img.setAttribute('href', dataUrl);
+                    if (typeof img.setAttributeNS === 'function') {
+                        img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', dataUrl);
+                    }
+                    updatedCount++;
+                    return;
+                }
+
+                img.src = dataUrl;
+                if (img.style.display === 'none') {
+                    img.style.display = '';
+                    const prevSibling = img.previousElementSibling;
+                    if (prevSibling && prevSibling.classList.contains('search-result-icon-box-inline')) {
+                        prevSibling.style.display = 'none';
+                    } else {
+                        const parent = img.parentElement;
+                        if (parent) {
+                            const inlineFallbackIcon = parent.querySelector('.search-result-icon-box-inline');
+                            if (inlineFallbackIcon) {
+                                inlineFallbackIcon.style.display = 'none';
+                            }
+                        }
+                    }
+                }
+
+                updatedCount++;
+            } catch (_) {
+                // 忽略无效URL
+            }
+        });
+    } catch (_) {
+        // 静默处理
+    }
+    return updatedCount;
+}
+
+// 全局图片错误处理（使用事件委托，避免CSP内联事件处理器）
+function setupGlobalImageErrorHandler() {
+    document.addEventListener('error', (e) => {
+        if (e.target.tagName !== 'IMG') return;
+
+        const classNames = e.target.classList ? Array.from(e.target.classList) : [];
+        const hasKnownIconClass = (
+            e.target.classList.contains('addition-icon') ||
+            e.target.classList.contains('tracking-favicon') ||
+            e.target.classList.contains('card-favicon') ||
+            e.target.classList.contains('ranking-favicon') ||
+            e.target.classList.contains('add-result-favicon') ||
+            e.target.classList.contains('add-bookmark-favicon') ||
+            e.target.classList.contains('block-item-icon') ||
+            e.target.classList.contains('postponed-item-icon') ||
+            e.target.classList.contains('heatmap-detail-favicon') ||
+            e.target.classList.contains('search-result-favicon') ||
+            e.target.classList.contains('recommend-search-favicon') ||
+            e.target.classList.contains('bookmark-favicon') ||
+            e.target.classList.contains('related-history-favicon') ||
+            e.target.classList.contains('widgets-pie-tooltip-icon')
+        );
+        const hasGenericFaviconClass = classNames.some((className) => String(className || '').includes('favicon'));
+        if (!hasKnownIconClass && !hasGenericFaviconClass) return;
+
+        // 只在src不是fallbackIcon时才替换，避免无限循环
+        // fallbackIcon 是 data URL，不会加载失败
+        if (e.target.src !== fallbackIcon && !e.target.src.startsWith('data:image/svg+xml')) {
+            e.target.src = fallbackIcon;
+        }
+    }, true); // 使用捕获阶段
+}
+
+// 异步获取favicon（推荐使用，支持完整缓存）
+async function getFaviconUrlAsync(url, options = {}) {
+    if (!url) return fallbackIcon;
+
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return fallbackIcon;
+    }
+
+    return await FaviconCache.fetch(url, options);
+}
+
+// Fallback 图标 - 星标书签图标
+const fallbackIcon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E';
+
+// Edge/Chrome 内置页面 scheme 不同（仅用于展示/跳转提示）
+const internalScheme = (navigator.userAgent || '').includes('Edg/') ? 'edge://' : 'chrome://';
+
+// =================================================================================
+// IV. TIME TRACKING & COMPOSITE RANKINGS (时间追踪与综合点击排行计算)
+// =================================================================================
+
+
+// =============================================================================
+// 时间捕捉小组件更新
+// =============================================================================
+
+let timeTrackingWidgetInterval = null;
+
+async function updateTimeTrackingWidget() {
+    const widgetList = document.getElementById('timeTrackingWidgetList');
+    const widgetTitle = document.getElementById('timeTrackingWidgetTitle');
+
+    if (!widgetList) return;
+
+    const emptyText = i18n.timeTrackingWidgetEmpty[currentLang];
+
+    // 检查追踪是否开启
+    let isTrackingEnabled = true;
+    try {
+        const enabledResponse = await browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' });
+        if (enabledResponse && enabledResponse.success) {
+            isTrackingEnabled = enabledResponse.enabled;
+        }
+    } catch (e) {
+        console.warn('[时间捕捉小组件] 检查追踪状态失败:', e);
+    }
+
+    // [New] Determine Widget Mode (Tracking vs Ranking)
+    // Logic: User preference overrides default. Default depends on tracking state.
+    let widgetOneMode = localStorage.getItem('timeTrackingWidgetMode'); // 'tracking' or 'ranking'
+
+    // If no preference, default based on tracking state
+    if (!widgetOneMode) {
+        widgetOneMode = isTrackingEnabled ? 'tracking' : 'ranking';
+    }
+
+    if (widgetOneMode === 'tracking') {
+        // 模式：时间追踪 (Live OR Disabled)
+        if (widgetTitle) widgetTitle.textContent = i18n.timeTrackingWidgetTitle[currentLang];
+
+        // Check widget reference
+        const w = document.getElementById('timeTrackingWidget');
+        if (w) w.dataset.mode = 'tracking';
+
+        if (isTrackingEnabled) {
+            // 追踪开启: 显示实时列表 (Live)
+            try {
+                const response = await browserAPI.runtime.sendMessage({
+                    action: 'getCurrentActiveSessions'
+                });
+
+                if (response && response.success && response.sessions && response.sessions.length > 0) {
+                    const sessions = response.sessions;
+
+                    // 按标题分组
+                    const groupedSessions = new Map();
+                    for (const session of sessions) {
+                        const key = session.title || session.url;
+                        if (!groupedSessions.has(key)) {
+                            groupedSessions.set(key, []);
+                        }
+                        groupedSessions.get(key).push(session);
+                    }
+
+                    // 转换为显示数据
+                    const displayItems = [];
+                    for (const [groupKey, groupSessions] of groupedSessions) {
+                        const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
+                        const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
+                        const bestState = groupSessions.reduce((best, s) => {
+                            const bestIdx = stateOrder.indexOf(best);
+                            const currIdx = stateOrder.indexOf(s.state);
+                            return currIdx < bestIdx ? s.state : best;
+                        }, 'sleeping');
+
+                        displayItems.push({
+                            title: groupSessions[0].title,
+                            url: groupSessions[0].url,
+                            state: bestState,
+                            compositeMs: totalCompositeMs,
+                            count: groupSessions.length
+                        });
+                    }
+
+                    const maxShow = 5;
+                    const showItems = displayItems.slice(0, maxShow);
+                    const remaining = displayItems.length - maxShow;
+
+                    widgetList.innerHTML = '';
+
+                    showItems.forEach(item => {
+                        const el = document.createElement('div');
+                        el.className = 'time-tracking-widget-item';
+
+                        const stateIcon = document.createElement('span');
+                        stateIcon.className = 'item-state';
+                        stateIcon.textContent = item.state === 'active' ? '🟢' :
+                            (item.state === 'sleeping' ? '💤' :
+                                (item.state === 'background' ? '⚪' :
+                                    (item.state === 'visible' ? '🔵' : '🟡')));
+
+                        const title = document.createElement('span');
+                        title.className = 'item-title';
+                        let titleText = item.title || new URL(item.url).hostname;
+                        if (item.count > 1) titleText += ` (${item.count})`;
+                        title.textContent = titleText;
+                        title.title = item.title || item.url;
+
+                        const time = document.createElement('span');
+                        time.className = 'item-time';
+                        time.textContent = formatActiveTime(item.compositeMs);
+
+                        el.appendChild(stateIcon);
+                        el.appendChild(title);
+                        el.appendChild(time);
+                        el.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (!item.url) return;
+                            if (typeof window.openBookmarkNewTab === 'function') {
+                                window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
+                            } else if (browserAPI?.tabs?.create) {
+                                browserAPI.tabs.create({ url: item.url });
+                            } else {
+                                window.open(item.url, '_blank');
+                            }
+                        });
+                        widgetList.appendChild(el);
+                    });
+
+                    if (remaining > 0) {
+                        const moreEl = document.createElement('div');
+                        moreEl.className = 'time-tracking-widget-more';
+                        moreEl.textContent = i18n.timeTrackingWidgetMore[currentLang].replace('{count}', remaining);
+                        widgetList.appendChild(moreEl);
+                    }
+                } else {
+                    showEmptyState();
+                }
+            } catch (error) {
+                console.warn('[时间捕捉小组件] 获取数据失败:', error);
+                showEmptyState();
+            }
+        } else {
+            // 追踪关闭: 显示已停用状态 (Disabled)
+            widgetList.innerHTML = '';
+
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'time-tracking-widget-empty';
+            emptyDiv.style.flexDirection = 'column';
+            emptyDiv.style.gap = '8px';
+
+            const text = document.createElement('span');
+            text.textContent = currentLang === 'zh_CN' ? '时间追踪已关闭' : 'Time Tracking Disabled';
+
+            emptyDiv.appendChild(text);
+            widgetList.appendChild(emptyDiv);
+        }
+    } else {
+        // 追踪关闭 / 强制排行：显示点击排行
+        if (widgetTitle) widgetTitle.textContent = i18n.timeTrackingWidgetRankingTitle ? i18n.timeTrackingWidgetRankingTitle[currentLang] : (currentLang === 'zh_CN' ? '点击排行' : 'Click Ranking');
+
+        // Check widget reference
+        const w = document.getElementById('timeTrackingWidget');
+        if (w) w.dataset.mode = 'ranking';
+
+        try {
+            // Initialize User Preference Range
+            if (!window.timeTrackingWidgetRankingRange) {
+                window.timeTrackingWidgetRankingRange = localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
+            }
+            const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange);
+            const stats = await ensureBrowsingClickRankingStats(currentRange);
+
+            // Map range to localized text and count key
+            const rangeConfig = {
+                'day': { text: currentLang === 'zh_CN' ? '当日' : 'Today', key: 'dayCount' },
+                'week': { text: currentLang === 'zh_CN' ? '当周' : 'Week', key: 'weekCount' },
+                'month': { text: currentLang === 'zh_CN' ? '当月' : 'Month', key: 'monthCount' },
+                'year': { text: currentLang === 'zh_CN' ? '当年' : 'Year', key: 'yearCount' },
+                'all': { text: currentLang === 'zh_CN' ? '全部' : 'All', key: 'allCount' }
+            };
+            const activeConfig = rangeConfig[currentRange] || rangeConfig['day'];
+
+            // Fetch Items
+            let items = [];
+            if (stats && !stats.error && stats.items) {
+                items = getBrowsingRankingItemsForRangeFromStats(stats, currentRange);
+            }
+
+            widgetList.innerHTML = '';
+
+            if (items && items.length > 0) {
+                const top5 = items.slice(0, 5);
+                top5.forEach((item, index) => {
+                    const el = document.createElement('div');
+                    el.className = 'time-tracking-widget-item ranking-item';
+
+                    const rankNum = document.createElement('span');
+                    rankNum.className = 'item-rank';
+                    rankNum.textContent = `${index + 1}`;
+
+                    const title = document.createElement('span');
+                    title.className = 'item-title';
+                    try {
+                        title.textContent = item.title || new URL(item.url).hostname;
+                    } catch {
+                        title.textContent = item.title || item.url;
+                    }
+                    title.title = item.title || item.url;
+
+                    const count = document.createElement('span');
+                    count.className = 'item-time';
+                    count.textContent = `${item[activeConfig.key]}${currentLang === 'zh_CN' ? '次' : 'x'}`;
+
+                    el.appendChild(rankNum);
+                    el.appendChild(title);
+                    el.appendChild(count);
+
+                    // Specific click: Open URL
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (!item.url) return;
+                        if (typeof window.openBookmarkNewTab === 'function') {
+                            window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
+                        } else if (browserAPI?.tabs?.create) {
+                            browserAPI.tabs.create({ url: item.url });
+                        } else {
+                            window.open(item.url, '_blank');
+                        }
+                    });
+
+                    widgetList.appendChild(el);
+                });
+            } else {
+                // Empty State within Ranking
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'time-tracking-widget-empty';
+                emptyDiv.innerHTML = `<span>${emptyText}</span>`;
+                widgetList.appendChild(emptyDiv);
+            }
+
+            // Always show range switcher at bottom
+            const rangeHint = document.createElement('div');
+            rangeHint.className = 'time-tracking-widget-hint';
+            rangeHint.textContent = `${activeConfig.text} >`; // Arrow to indicate switchable
+            rangeHint.title = currentLang === 'zh_CN' ? '点击切换时间范围' : 'Click to switch range';
+
+            rangeHint.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Cycle ranges: day -> week -> month -> year -> all -> day
+                const ranges = ['day', 'week', 'month', 'year', 'all'];
+                let idx = ranges.indexOf(window.timeTrackingWidgetRankingRange);
+                if (idx < 0) idx = 0;
+                const nextIdx = (idx + 1) % ranges.length;
+
+                window.timeTrackingWidgetRankingRange = ranges[nextIdx];
+                localStorage.setItem('timeTrackingWidgetRankingRange', window.timeTrackingWidgetRankingRange);
+
+                updateTimeTrackingWidget();
+            });
+
+            widgetList.appendChild(rangeHint);
+
+        } catch (error) {
+            console.warn('[时间捕捉小组件] 获取点击排行数据失败:', error);
+            showEmptyState();
+        }
+    }
+
+    function showEmptyState() {
+        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
+    }
+}
+
+function formatActiveTime(ms) {
+    if (!ms || ms < 1000) return '0s';
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
+}
+
+function startTimeTrackingWidgetRefresh() {
+    const legacyWidgetList = document.getElementById('timeTrackingWidgetList');
+    if (!legacyWidgetList) {
+        stopTimeTrackingWidgetRefresh();
+        return;
+    }
+
+    if (timeTrackingWidgetInterval) {
+        clearInterval(timeTrackingWidgetInterval);
+    }
+    updateTimeTrackingWidget();
+    timeTrackingWidgetInterval = setInterval(() => {
+        if (document.body.classList.contains('sidebar-resizing')) return;
+        if (document.documentElement.classList.contains('layout-resizing')) return;
+        updateTimeTrackingWidget();
+    }, 1000);  // 1秒刷新，更实时
+}
+
+function stopTimeTrackingWidgetRefresh() {
+    if (timeTrackingWidgetInterval) {
+        clearInterval(timeTrackingWidgetInterval);
+        timeTrackingWidgetInterval = null;
+
+    }
+}
+
+function initTimeTrackingWidget() {
+    const widget = document.getElementById('timeTrackingWidget');
+    if (!widget) return;
+
+    widget.addEventListener('click', (e) => {
+        // Prevent if clicking specific interactive elements that didn't stop propagation (though most should)
+        if (e.target.closest('.widget-header-action-btn') ||
+            e.target.closest('.time-tracking-widget-hint') ||
+            e.target.closest('.time-tracking-widget-item') ||
+            e.target.closest('a')) return;
+
+        switchView('additions');
+        setTimeout(() => {
+            const mode = widget.dataset.mode;
+            if (mode === 'ranking') {
+                // Navigate to Click Ranking View
+                const range = window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
+                try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
+                const browsingTab = document.getElementById('additionsTabBrowsing');
+                if (browsingTab) {
+                    browsingTab.click();
+                    setTimeout(() => {
+                        const rankingTab = document.getElementById('browsingTabRanking');
+                        if (rankingTab) rankingTab.click();
+                    }, 50);
+                }
+            } else {
+                // Default: Navigate to Time Tracking View
+                const trackingTab = document.getElementById('additionsTabTracking');
+                if (trackingTab) {
+                    trackingTab.click();
+                }
+            }
+        }, 100);
+    });
+
+    // [New] Toggle Button
+    const toggleViewBtn = document.getElementById('timeTrackingToggleViewBtn');
+    if (toggleViewBtn) {
+        toggleViewBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent widget click navigation
+
+            // Determine current mode to flip
+            let currentMode = localStorage.getItem('timeTrackingWidgetMode');
+            if (!currentMode) {
+                // Check if widget has dataset mode updated by updateTimeTrackingWidget
+                const w = document.getElementById('timeTrackingWidget');
+                if (w && w.dataset.mode) {
+                    currentMode = w.dataset.mode;
+                } else {
+                    currentMode = 'tracking'; // Fallback
+                }
+            }
+
+            const newMode = currentMode === 'ranking' ? 'tracking' : 'ranking';
+            localStorage.setItem('timeTrackingWidgetMode', newMode);
+
+            updateTimeTrackingWidget();
+        });
+    }
+
+    // 检查侧边栏状态，只有展开时才启动刷新
+    const sidebar = document.getElementById('sidebar');
+    const collapseState = sidebar?.dataset?.collapseState || (sidebar?.classList?.contains('compact')
+        ? 'compact'
+        : (sidebar?.classList?.contains('hidden') || sidebar?.classList?.contains('collapsed') ? 'hidden' : 'expanded'));
+    if (collapseState === 'expanded') {
+        startTimeTrackingWidgetRefresh();
+    } else {
+
+    }
+}
+
+
+// =============================================================================
+// 综合排行
+// =============================================================================
+
+function normalizeTrackingRankingRange(range) {
+    const safe = String(range || '').toLowerCase();
+    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
+        return safe;
+    }
+    return 'all';
+}
+
+function getTrackingRankingRangeBounds(range) {
+    const safeRange = normalizeTrackingRankingRange(range);
+    const now = Date.now();
+
+    if (safeRange === 'all') {
+        return { range: safeRange, startTime: 0, endTime: now };
+    }
+
+    const current = new Date(now);
+    const dayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate());
+    const start = new Date(dayStart);
+
+    if (safeRange === 'week') {
+        const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // zh: Monday, en: Sunday
+        let diff = dayStart.getDay() - weekStartDay;
+        if (diff < 0) diff += 7;
+        start.setDate(dayStart.getDate() - diff);
+    } else if (safeRange === 'month') {
+        start.setDate(1);
+    } else if (safeRange === 'year') {
+        start.setMonth(0, 1);
+    }
+
+    return {
+        range: safeRange,
+        startTime: start.getTime(),
+        endTime: now
+    };
+}
+
+function getTrackingSessionCompositeMs(session) {
+    if (!session || typeof session !== 'object') return 0;
+
+    const directComposite = Number(session.compositeMs);
+    if (Number.isFinite(directComposite) && directComposite > 0) {
+        return directComposite;
+    }
+
+    const activeMs = Number(session.activeMs) || 0;
+    const idleFocusMs = Number(session.idleFocusMs || session.pauseTotalMs) || 0;
+    const visibleMs = Number(session.visibleMs) || 0;
+    const backgroundMs = Number(session.backgroundMs) || 0;
+
+    const fallbackComposite = activeMs + (idleFocusMs * 0.8) + (visibleMs * 0.5) + (backgroundMs * 0.1);
+    return Number.isFinite(fallbackComposite) && fallbackComposite > 0 ? fallbackComposite : 0;
+}
+
+function getTrackingSessionWakeCount(session) {
+    if (!session || typeof session !== 'object') return 0;
+    const wakes = Number(session.wakeCount);
+    return Number.isFinite(wakes) && wakes > 0 ? wakes : 0;
+}
+
+function getTrackingRankingAggregateKey(item) {
+    if (!item || typeof item !== 'object') return '';
+
+    const bookmarkId = String(item.bookmarkId || '').trim();
+    if (bookmarkId) return `bookmark:${bookmarkId}`;
+
+    const url = String(item.url || '').trim();
+    if (url) return `url:${url}`;
+
+    const title = String(item.title || '').trim();
+    if (title) return `title:${title}`;
+
+    return '';
+}
+
+function getTrackingSessionBounds(session, fallbackEndTime) {
+    if (!session || typeof session !== 'object') return null;
+
+    const safeFallbackEnd = Number(fallbackEndTime) || Date.now();
+    const rawStart = Number(session.startTime || session.originalStartTime || 0);
+    const rawEnd = Number(session.endTime || session.lastUpdate || 0);
+    const rawTotal = Number(session.totalMs || 0);
+
+    let start = Number.isFinite(rawStart) && rawStart > 0 ? rawStart : 0;
+    let end = Number.isFinite(rawEnd) && rawEnd > 0 ? rawEnd : 0;
+    const totalMs = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
+
+    if (start <= 0 && end > 0 && totalMs > 0) {
+        start = Math.max(1, end - totalMs);
+    } else if (start > 0 && end <= 0 && totalMs > 0) {
+        end = start + totalMs;
+    } else if (start <= 0 && end <= 0 && totalMs > 0) {
+        end = safeFallbackEnd;
+        start = Math.max(1, end - totalMs);
+    }
+
+    if (start <= 0 && end > 0) {
+        start = end;
+    } else if (start > 0 && end <= 0) {
+        end = safeFallbackEnd > start ? safeFallbackEnd : (start + 1);
+    } else if (start <= 0 && end <= 0) {
+        start = safeFallbackEnd;
+        end = safeFallbackEnd + 1;
+    }
+
+    const normalizedStart = Math.max(1, start);
+    const normalizedEnd = Math.max(normalizedStart + 1, end);
+    return {
+        startTime: normalizedStart,
+        endTime: normalizedEnd,
+        durationMs: Math.max(1, normalizedEnd - normalizedStart)
+    };
+}
+
+function getTrackingSessionOverlapInfo(session, startTime, endTime) {
+    if (!session || typeof session !== 'object') {
+        return { ratio: 0, overlapMs: 0, durationMs: 1 };
+    }
+
+    const safeStartTime = Number(startTime) || 0;
+    const safeEndTime = Number(endTime) || Date.now();
+    const bounds = getTrackingSessionBounds(session, safeEndTime);
+    if (!bounds) {
+        return { ratio: 0, overlapMs: 0, durationMs: 1 };
+    }
+
+    if (safeStartTime <= 0) {
+        return {
+            ratio: 1,
+            overlapMs: bounds.durationMs,
+            durationMs: bounds.durationMs
+        };
+    }
+
+    const overlapStart = Math.max(bounds.startTime, safeStartTime);
+    const overlapEnd = Math.min(bounds.endTime, safeEndTime);
+    const overlap = overlapEnd - overlapStart;
+    if (overlap <= 0) {
+        return {
+            ratio: 0,
+            overlapMs: 0,
+            durationMs: bounds.durationMs
+        };
+    }
+
+    return {
+        ratio: Math.min(1, overlap / bounds.durationMs),
+        overlapMs: overlap,
+        durationMs: bounds.durationMs
+    };
+}
+
+async function loadActiveTimeRanking() {
+    const container = document.getElementById('trackingRankingList');
+    if (!container) return;
+    const hintEl = document.getElementById('trackingRankingHint');
+
+    // 排行榜刷新时，清除T值缓存，下次计算S值时会获取最新数据
+    clearTrackingRankingCache();
+
+    try {
+        // 获取排行类型（综合时间 / 唤醒次数）
+        const rankingTypeSelect = document.getElementById('trackingRankingType');
+        const rankingType = rankingTypeSelect ? rankingTypeSelect.value : 'composite';
+
+        // 获取时间范围
+        const rangeSelect = document.getElementById('trackingRankingRange');
+        const range = normalizeTrackingRankingRange(rangeSelect ? rangeSelect.value : 'all');
+        const { startTime, endTime } = getTrackingRankingRangeBounds(range);
+
+        // 并行获取：区间统计（all=累计总账，其它=区间账）+ 当前正在追踪的会话
+        const [statsResponse, activeSessionsResponse] = await Promise.all([
+            browserAPI.runtime.sendMessage({
+                action: 'getTrackingRankingStatsByRange',
+                range,
+                startTime,
+                endTime
+            }),
+            browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' })
+        ]);
+
+        // 合并数据：已保存统计（累计/区间）+ 当前活跃会话（仅未落盘部分）
+        const titleStats = new Map();
+        const upsertStat = (key, base = {}) => {
+            if (titleStats.has(key)) {
+                const stat = titleStats.get(key);
+                if (!stat.bookmarkId && base.bookmarkId) stat.bookmarkId = base.bookmarkId;
+                if (!stat.url && base.url) stat.url = base.url;
+                if (base.title && (!stat.title || stat.title === stat.url || stat.title === key)) {
+                    stat.title = base.title;
+                }
+                return stat;
+            }
+            const init = {
+                bookmarkId: base.bookmarkId || null,
+                url: base.url || '',
+                title: base.title || base.url || key,
+                totalCompositeMs: 0,
+                wakeCount: 0,
+                sessionCount: 0,
+                lastUpdate: 0
+            };
+            titleStats.set(key, init);
+            return init;
+        };
+
+        // 1. 已保存统计（all=累计总账；today/week/month/year=区间账）
+        const savedStats = (statsResponse?.success && statsResponse?.stats && typeof statsResponse.stats === 'object')
+            ? statsResponse.stats
+            : {};
+        const statsStartedAt = Number(statsResponse?.startedAt || 0);
+        if (hintEl) {
+            if (range === 'all') {
+                hintEl.textContent = '';
+                hintEl.style.display = 'none';
+            } else if (statsStartedAt > 0) {
+                const dateLabel = (() => {
+                    try {
+                        const dt = new Date(statsStartedAt);
+                        if (currentLang === 'zh_CN') {
+                            return dt.toLocaleDateString('zh-CN');
+                        }
+                        return dt.toLocaleDateString('en-US');
+                    } catch (_) {
+                        return String(statsStartedAt);
+                    }
+                })();
+                hintEl.textContent = i18n.trackingRangeDataHintFrom[currentLang].replace('{date}', dateLabel);
+                hintEl.style.display = '';
+            } else {
+                hintEl.textContent = i18n.trackingRangeDataHintPending[currentLang];
+                hintEl.style.display = '';
+            }
+        }
+        for (const rawStat of Object.values(savedStats)) {
+            if (!rawStat || typeof rawStat !== 'object') continue;
+            const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId) : '';
+            const key = getTrackingRankingAggregateKey({
+                bookmarkId,
+                url: rawStat?.url || '',
+                title: rawStat?.title || ''
+            });
+            if (!key) continue;
+
+            const stat = upsertStat(key, {
+                bookmarkId: bookmarkId || null,
+                url: rawStat.url || '',
+                title: rawStat.title || rawStat.url || key
+            });
+            stat.totalCompositeMs += Math.max(
+                0,
+                Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0
+            );
+            stat.wakeCount += Math.max(
+                0,
+                Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0
+            );
+            stat.sessionCount += Math.max(0, Number(rawStat.sessionCount || 0) || 0);
+            stat.lastUpdate = Math.max(
+                stat.lastUpdate,
+                Number(rawStat.lastUpdate || 0) || 0
+            );
+        }
+
+        // 2. 当前活跃会话（只加未落盘部分，避免与历史会话重复）
+        const activeSessions = (activeSessionsResponse?.success && Array.isArray(activeSessionsResponse.sessions))
+            ? activeSessionsResponse.sessions
+            : [];
+        if (activeSessions.length > 0) {
+            const groupedByKey = new Map();
+            for (const session of activeSessions) {
+                const bookmarkId = session?.bookmarkId != null ? String(session.bookmarkId) : '';
+                const key = getTrackingRankingAggregateKey({
+                    bookmarkId,
+                    url: session?.url || '',
+                    title: session?.title || ''
+                });
+                if (!key) continue;
+                if (!groupedByKey.has(key)) {
+                    groupedByKey.set(key, {
+                        bookmarkId: bookmarkId || null,
+                        url: session.url || '',
+                        title: session.title || session.url || key,
+                        unsavedCompositeMs: 0,
+                        unsavedWakeCount: 0
+                    });
+                }
+
+                const unsavedCompositeRaw = Number(session.unsavedCompositeMs);
+                const unsavedWakeRaw = Number(session.unsavedWakeCount);
+                const unsavedCompositeMs = (Number.isFinite(unsavedCompositeRaw) && unsavedCompositeRaw >= 0)
+                    ? unsavedCompositeRaw
+                    : getTrackingSessionCompositeMs(session);
+                const unsavedWakeCount = (Number.isFinite(unsavedWakeRaw) && unsavedWakeRaw >= 0)
+                    ? unsavedWakeRaw
+                    : getTrackingSessionWakeCount(session);
+
+                if (unsavedCompositeMs <= 0 && unsavedWakeCount <= 0) continue;
+
+                // 对活跃会话也按区间做重叠折算（缺失起始时间时按当前区间全计入）
+                const overlapInfo = getTrackingSessionOverlapInfo({
+                    startTime: session.startTime || session.originalStartTime || endTime,
+                    endTime
+                }, startTime, endTime);
+                if (overlapInfo.ratio <= 0) continue;
+
+                const scaledUnsavedComposite = unsavedCompositeMs * overlapInfo.ratio;
+                const boundedUnsavedComposite = overlapInfo.overlapMs > 0
+                    ? Math.min(scaledUnsavedComposite, overlapInfo.overlapMs)
+                    : scaledUnsavedComposite;
+
+                const group = groupedByKey.get(key);
+                group.unsavedCompositeMs += Math.max(0, boundedUnsavedComposite);
+                group.unsavedWakeCount += Math.max(0, unsavedWakeCount * overlapInfo.ratio);
+            }
+
+            // 合并到排行榜
+            for (const [key, group] of groupedByKey) {
+                if (group.unsavedCompositeMs <= 0 && group.unsavedWakeCount <= 0) continue;
+                const stat = upsertStat(key, {
+                    bookmarkId: group.bookmarkId || null,
+                    url: group.url,
+                    title: group.title
+                });
+                stat.totalCompositeMs += group.unsavedCompositeMs;
+                stat.wakeCount += group.unsavedWakeCount;
+                stat.sessionCount += 1;
+                stat.lastUpdate = Math.max(stat.lastUpdate, endTime);
+            }
+        }
+
+        // 防御性兜底：单条目在当前区间内不应超过区间总时长（例如 today <= 24h）。
+        if (startTime > 0 && endTime > startTime) {
+            const maxCompositePerItem = endTime - startTime;
+            for (const stat of titleStats.values()) {
+                stat.totalCompositeMs = Math.min(stat.totalCompositeMs, maxCompositePerItem);
+            }
+        }
+
+        if (titleStats.size === 0) {
+            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
+            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
+            return;
+        }
+
+        // 过滤掉被时间追踪屏蔽的项目
+        const blockedSets = await getTrackingBlockedSets();
+        const cache = await getTrackingBookmarkCache();
+        const items = Array.from(titleStats.values());
+        const blockedFlags = await Promise.all(
+            items.map(item => isTrackingItemBlocked(item, blockedSets, cache))
+        );
+
+        // 根据排行类型排序，并过滤掉被屏蔽的项目
+        const sorted = items
+            .filter((_, index) => !blockedFlags[index])
+            .sort((a, b) => {
+                if (rankingType === 'wakes') {
+                    return b.wakeCount - a.wakeCount;
+                }
+                return b.totalCompositeMs - a.totalCompositeMs;
+            })
+            .slice(0, 10);
+
+        // Expose to global for Search (Phase 4)
+        window.activeTimeRankingStats = { items: sorted };
+
+        if (sorted.length === 0) {
+            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
+            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
+            return;
+        }
+
+        // 计算最大值用于进度条（根据排行类型）
+        const maxValue = rankingType === 'wakes'
+            ? sorted[0].wakeCount
+            : sorted[0].totalCompositeMs;
+
+        // 截断标题函数
+        const truncateTitle = (title, maxLen = 45) => {
+            if (!title) return '';
+            return title.length > maxLen ? title.substring(0, maxLen) + '...' : title;
+        };
+
+        // 唤醒次数高频阈值（根据时间范围）
+        const wakeThresholds = {
+            'today': 15,
+            'week': 50,
+            'month': 100,
+            'year': 500,
+            'all': 1000
+        };
+        const wakeThreshold = wakeThresholds[range] || 15;
+
+        // 渲染列表
+        container.innerHTML = sorted.map((item, index) => {
+            const compositeTime = formatActiveTime(item.totalCompositeMs);
+            const displayWakeCount = Math.max(0, Math.round(item.wakeCount || 0));
+            // 根据排行类型计算进度条宽度
+            const barWidth = maxValue > 0
+                ? ((rankingType === 'wakes' ? item.wakeCount : item.totalCompositeMs) / maxValue * 100)
+                : 0;
+            const displayTitle = truncateTitle(item.title || item.url);
+            const faviconUrl = getFaviconUrl(item.url);
+
+            // 高亮逻辑：根据排行类型选择主要指标的高亮
+            let wakeHighlight = '';
+            let timeHighlight = '';
+            if (rankingType === 'wakes') {
+                // 唤醒次数排行：唤醒次数用强调色（primary），时间正常显示
+                wakeHighlight = 'ranking-primary';
+                timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)}`;
+            } else {
+                // 综合时间排行：高频唤醒用橙色，时间用梯度蓝色
+                wakeHighlight = displayWakeCount >= wakeThreshold ? 'wakes-highlight' : '';
+                timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)} ranking-primary`;
+            }
+
+            return `
+                <div class="tracking-ranking-item" data-url="${escapeHtml(item.url)}" data-bookmark-url="${escapeHtml(item.url)}">
+                    <span class="ranking-number">${index + 1}</span>
+                    <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${faviconUrl}" alt="">
+                    <div class="ranking-info">
+                        <div class="ranking-title" title="${escapeHtml(item.title || item.url)}">${escapeHtml(displayTitle)}</div>
+                        <div class="ranking-bar">
+                            <div class="ranking-bar-fill" style="width: ${barWidth}%"></div>
+                        </div>
+                    </div>
+                    <span class="ranking-wakes ${wakeHighlight}">${displayWakeCount}${currentLang === 'en' ? 'x' : '次'}</span>
+                    <span class="ranking-time ${timeHighlight}">${compositeTime}</span>
+                </div>
+            `;
+        }).join('');
+
+        // 点击打开对应URL
+        container.querySelectorAll('.tracking-ranking-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const url = item.dataset.url;
+                if (url) {
+                    browserAPI.tabs.create({ url });
+                }
+            });
+        });
+
+        // Phase 4.7: 重新应用搜索高亮（列表刷新后保持筛选状态）
+        if (isTrackingRankingSearchActive()) {
+            highlightTrackingRankingMatches();
+        }
+
+    } catch (error) {
+        console.error('[综合排行] 加载失败:', error);
+        if (hintEl) {
+            hintEl.textContent = '';
+            hintEl.style.display = 'none';
+        }
+        container.innerHTML = `<div class="tracking-empty">${i18n.trackingLoadFailed[currentLang]}</div>`;
+    }
+}
+
+// 获取综合时间的梯度级别（用于蓝色深浅）
+// range: 'today', 'week', 'month', 'year', 'all', 'current'（正在追踪）
+// Level 0-4: 正常梯度蓝色，Level 5: 极端使用（深紫色）
+function getTimeGradientLevel(ms, range = 'today') {
+    const minutes = (ms || 0) / 60000;
+    const hours = minutes / 60;
+
+    // 根据时间范围使用不同的阈值
+    if (range === 'week') {
+        // 本周：30分钟、2小时、5小时、10小时、20小时（极端）
+        if (minutes < 30) return 0;
+        if (hours < 2) return 1;
+        if (hours < 5) return 2;
+        if (hours < 10) return 3;
+        if (hours < 20) return 4;
+        return 5;  // 极端：20小时+
+    } else if (range === 'month') {
+        // 本月：2小时、10小时、30小时、60小时、100小时（极端）
+        if (hours < 2) return 0;
+        if (hours < 10) return 1;
+        if (hours < 30) return 2;
+        if (hours < 60) return 3;
+        if (hours < 100) return 4;
+        return 5;  // 极端：100小时+
+    } else if (range === 'year' || range === 'all') {
+        // 本年/全部：10小时、50小时、150小时、300小时、500小时（极端）
+        if (hours < 10) return 0;
+        if (hours < 50) return 1;
+        if (hours < 150) return 2;
+        if (hours < 300) return 3;
+        if (hours < 500) return 4;
+        return 5;  // 极端：500小时+
+    } else {
+        // 今日/正在追踪（current）：1分钟、5分钟、15分钟、30分钟、2小时（极端）
+        if (minutes < 1) return 0;
+        if (minutes < 5) return 1;
+        if (minutes < 15) return 2;
+        if (minutes < 30) return 3;
+        if (hours < 2) return 4;
+        return 5;  // 极端：2小时+
+    }
+}
+
+
+// =============================================================================
+// 时间捕捉搜索筛选 (Phase 4.7)
+// =============================================================================
+
+// 时间捕捉搜索状态
+let trackingRankingSearchQuery = '';
+let trackingRankingSearchTokens = null;
+
+/**
+ * 检查时间捕捉搜索是否激活
+ */
+function isTrackingRankingSearchActive() {
+    return Boolean(trackingRankingSearchTokens && trackingRankingSearchTokens.length > 0);
+}
+
+/**
+ * 应用时间捕捉关键词筛选
+ */
+function applyTrackingRankingKeywordFilter(query, tokens) {
+    trackingRankingSearchQuery = String(query || '').trim();
+    trackingRankingSearchTokens = Array.isArray(tokens) ? tokens : null;
+
+    // 高亮匹配项
+    highlightTrackingRankingMatches();
+
+    // 更新指示器状态
+    applyTrackingRankingIndicatorState();
+
+    // 更新退出按钮
+    if (typeof window.updateSearchFilterExitButton === 'function') {
+        window.updateSearchFilterExitButton();
+    }
+}
+
+/**
+ * 清除时间捕捉搜索筛选
+ */
+function clearTrackingRankingSearchFilter() {
+    trackingRankingSearchQuery = '';
+    trackingRankingSearchTokens = null;
+
+    // 清除高亮
+    clearTrackingRankingHighlight();
+
+    // 更新指示器状态
+    applyTrackingRankingIndicatorState();
+
+    // 更新退出按钮
+    if (typeof window.updateSearchFilterExitButton === 'function') {
+        window.updateSearchFilterExitButton();
+    }
+}
+
+/**
+ * 在列表中高亮匹配项
+ */
+function highlightTrackingRankingMatches() {
+    const container = document.getElementById('trackingRankingList');
+    if (!container) return;
+
+    const tokens = trackingRankingSearchTokens;
+    if (!tokens || tokens.length === 0) {
+        clearTrackingRankingHighlight();
+        return;
+    }
+
+    const items = container.querySelectorAll('.tracking-ranking-item');
+    let firstMatch = null;
+
+    items.forEach(item => {
+        const url = (item.dataset.url || '').toLowerCase();
+        const titleEl = item.querySelector('.ranking-title');
+        const title = (titleEl ? titleEl.textContent : '').toLowerCase();
+
+        const isMatch = tokens.every(token =>
+            url.includes(token) || title.includes(token)
+        );
+
+        if (isMatch) {
+            item.classList.add('search-match-highlight');
+            if (!firstMatch) firstMatch = item;
+        } else {
+            item.classList.remove('search-match-highlight');
+        }
+    });
+
+    // 滚动到第一个匹配项
+    if (firstMatch) {
+        firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    // 更新列表容器的边框样式
+    setListSearchFilterHighlight('trackingRankingList', true);
+}
+
+/**
+ * 清除时间捕捉高亮
+ */
+function clearTrackingRankingHighlight() {
+    const container = document.getElementById('trackingRankingList');
+    if (!container) return;
+
+    container.querySelectorAll('.tracking-ranking-item').forEach(item => {
+        item.classList.remove('search-match-highlight');
+    });
+
+    setListSearchFilterHighlight('trackingRankingList', false);
+}
+
+/**
+ * 更新时间捕捉搜索指示器状态
+ */
+function applyTrackingRankingIndicatorState() {
+    try {
+        const active = isTrackingRankingSearchActive();
+        setListSearchFilterHighlight('trackingRankingList', active);
+
+        // 可选：在 header 中添加指示器（如果需要）
+    } catch (_) { }
+}
+
+// 导出到 window
+try {
+    window.isTrackingRankingSearchActive = isTrackingRankingSearchActive;
+    window.applyTrackingRankingKeywordFilter = applyTrackingRankingKeywordFilter;
+    window.clearTrackingRankingSearchFilter = clearTrackingRankingSearchFilter;
+} catch (_) { }
+
+// =================================================================================
+// V. DATA CALIBRATION & AUTO-REFRESH (历史记录校准与自动刷新管理)
+// =================================================================================
+
 
 // =============================================================================
 // 浏览记录校准
@@ -3272,1472 +4536,863 @@ function getCacheStorageArea() {
     return null;
 }
 
+
 // =============================================================================
-// 辅助函数 - URL 处理
+// 自动刷新设置
 // =============================================================================
 
-// 安全地获取网站图标 URL（同步版本，用于兼容旧代码）
-// 注意：这个函数会触发后台异步加载，初次调用返回fallbackIcon
-function getFaviconUrl(url) {
-    if (!url) return fallbackIcon;
+const DEFAULT_REFRESH_SETTINGS = {
+    refreshEveryNOpens: 3,      // 默认每3次打开刷新
+    refreshAfterHours: 0,       // 0=禁用
+    refreshAfterDays: 0,        // 0=禁用
+    lastRefreshTime: 0,
+    openCountSinceRefresh: 0,
+    sidePanelOpenCountSinceRefresh: 0
+};
 
-    // 验证是否是有效的 HTTP/HTTPS URL
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        return fallbackIcon;
-    }
+function normalizeRefreshOpenSource(source) {
+    return source === 'sidepanel' ? 'sidepanel' : 'page';
+}
 
-    // 检查是否是无效URL
-    if (FaviconCache.isInvalidUrl(url)) {
-        return fallbackIcon;
-    }
+function getRefreshOpenCountField(source) {
+    return normalizeRefreshOpenSource(source) === 'sidepanel'
+        ? 'sidePanelOpenCountSinceRefresh'
+        : 'openCountSinceRefresh';
+}
 
+function getRefreshOpenCount(settings, source) {
+    const field = getRefreshOpenCountField(source);
+    const raw = Number(settings && settings[field]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function setRefreshOpenCount(settings, source, count) {
+    const field = getRefreshOpenCountField(source);
+    const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
+    settings[field] = safeCount;
+}
+
+async function getRefreshSettings() {
     try {
-        const hostname = FaviconCache._getHostnameFromUrl(url);
-        if (!hostname) return fallbackIcon;
-
-        // 【关键修复】先检查内存缓存（已预热）
-        if (FaviconCache.memoryCache.has(hostname)) {
-            const cached = FaviconCache.memoryCache.get(hostname);
-            // 不阻塞渲染：命中时也允许后台偶发刷新并覆盖回写。
-            FaviconCache.fetch(url, {
-                allowOccasionalRefresh: true,
-                skipDbRead: true
-            }).then(dataUrl => {
-                if (dataUrl && dataUrl !== fallbackIcon && dataUrl !== cached) {
-                    updateFaviconImages(url, dataUrl);
-                }
-            }).catch(() => { });
-            return cached;
-        }
-
-        // 检查失败缓存
-        if (FaviconCache._isFailureDomainActive(hostname)) {
-            FaviconCache.fetch(url, {
-                ignoreFailureCache: true,
-                skipDbRead: true
-            }).then(dataUrl => {
-                if (dataUrl && dataUrl !== fallbackIcon) {
-                    updateFaviconImages(url, dataUrl);
-                }
-            }).catch(() => { });
-            return fallbackIcon;
-        }
-
-        // 触发后台异步加载（不等待结果）
-        // 注意：由于已预热缓存，
-        // 这里只是作为兜底机制，处理动态添加的书签
-        FaviconCache.fetch(url, { allowOccasionalRefresh: true }).then(dataUrl => {
-            // 加载完成后，查找并更新所有使用这个URL的img标签
-            if (dataUrl && dataUrl !== fallbackIcon) {
-                updateFaviconImages(url, dataUrl);
-            }
-        });
-
-        // 立即返回 fallback 图标作为占位符
-        return fallbackIcon;
-    } catch (error) {
-        return fallbackIcon;
+        const result = await browserAPI.storage.local.get(RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY);
+        return { ...DEFAULT_REFRESH_SETTINGS, ...result[RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY] };
+    } catch (e) {
+        console.error('[刷新设置] 读取失败:', e);
+        return { ...DEFAULT_REFRESH_SETTINGS };
     }
 }
 
-function resolveFaviconBindingUrlFromElement(element) {
-    if (!element) return '';
+async function saveRefreshSettings(settings) {
+    try {
+        await browserAPI.storage.local.set({ [RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]: settings });
 
-    const readFrom = (node) => {
-        if (!node) return '';
-        if (node.dataset) {
-            if (node.dataset.bookmarkUrl) return node.dataset.bookmarkUrl;
-            if (node.dataset.nodeUrl) return node.dataset.nodeUrl;
-            if (node.dataset.url) return node.dataset.url;
-            if (node.dataset.faviconUrl) return node.dataset.faviconUrl;
+    } catch (e) {
+        console.error('[刷新设置] 保存失败:', e);
+    }
+}
+
+async function getReviewReminderPopupEnabled() {
+    try {
+        const result = await browserAPI.storage.local.get(RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY);
+        return result?.[RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY] !== false;
+    } catch (e) {
+        console.error('[待复习提醒] 读取失败:', e);
+        return true;
+    }
+}
+
+async function saveReviewReminderPopupEnabled(enabled) {
+    try {
+        await browserAPI.storage.local.set({
+            [RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY]: enabled === true
+        });
+    } catch (e) {
+        console.error('[待复习提醒] 保存失败:', e);
+    }
+}
+
+// checkAutoRefresh 已移除：S值通过增量更新机制保持最新，不再需要定时全量重算
+// 保留刷新设置UI用于记录上次刷新时间
+
+function showRefreshSettingsModal() {
+    initRefreshSettingsModal();
+    const modal = document.getElementById('refreshSettingsModal');
+    if (!modal) return;
+
+    loadRefreshSettingsToUI();
+    modal.classList.add('show');
+    startShortcutsLiveSync();
+}
+
+function hideRefreshSettingsModal() {
+    const modal = document.getElementById('refreshSettingsModal');
+    if (modal) {
+        modal.classList.remove('show');
+    }
+    stopShortcutsLiveSyncIfIdle();
+}
+
+function setRefreshQuickReviewModeButtons(mode) {
+    const normalized = normalizeQuickReviewOpenMode(mode);
+    const singleBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
+    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+
+    if (singleBtn) {
+        const active = normalized !== 'new_tab';
+        singleBtn.classList.toggle('active', active);
+        singleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+
+    if (newTabBtn) {
+        const active = normalized === 'new_tab';
+        newTabBtn.classList.toggle('active', active);
+        newTabBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+}
+
+function getRefreshQuickReviewModeFromUI() {
+    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+    if (newTabBtn && newTabBtn.classList.contains('active')) {
+        return 'new_tab';
+    }
+    return 'single_tab';
+}
+
+async function loadRefreshSettingsToUI() {
+    const settings = await getRefreshSettings();
+    const reminderEnabled = await getReviewReminderPopupEnabled();
+
+    // 每N次打开
+    const everyNEnabled = document.getElementById('refreshEveryNOpensEnabled');
+    const everyNValue = document.getElementById('refreshEveryNOpensValue');
+    if (everyNEnabled) everyNEnabled.checked = settings.refreshEveryNOpens > 0;
+    if (everyNValue) everyNValue.value = settings.refreshEveryNOpens || 3;
+
+    // 超过X小时
+    const hoursEnabled = document.getElementById('refreshAfterHoursEnabled');
+    const hoursValue = document.getElementById('refreshAfterHoursValue');
+    if (hoursEnabled) hoursEnabled.checked = settings.refreshAfterHours > 0;
+    if (hoursValue) hoursValue.value = settings.refreshAfterHours || 1;
+
+    // 超过X天
+    const daysEnabled = document.getElementById('refreshAfterDaysEnabled');
+    const daysValue = document.getElementById('refreshAfterDaysValue');
+    if (daysEnabled) daysEnabled.checked = settings.refreshAfterDays > 0;
+    if (daysValue) daysValue.value = settings.refreshAfterDays || 1;
+
+    setRefreshQuickReviewModeButtons(readQuickReviewOpenMode());
+    updateQuickReviewShortcutDisplay();
+
+    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
+    if (reminderEnabledInput) reminderEnabledInput.checked = reminderEnabled;
+
+    // 更新状态显示
+    updateRefreshSettingsStatus(settings);
+}
+
+async function saveRefreshSettingsFromUI() {
+    const settings = await getRefreshSettings();
+
+    // 每N次打开
+    const everyNEnabled = document.getElementById('refreshEveryNOpensEnabled');
+    const everyNValue = document.getElementById('refreshEveryNOpensValue');
+    settings.refreshEveryNOpens = everyNEnabled?.checked ? parseInt(everyNValue?.value) || 3 : 0;
+
+    // 超过X小时
+    const hoursEnabled = document.getElementById('refreshAfterHoursEnabled');
+    const hoursValue = document.getElementById('refreshAfterHoursValue');
+    settings.refreshAfterHours = hoursEnabled?.checked ? parseInt(hoursValue?.value) || 1 : 0;
+
+    // 超过X天
+    const daysEnabled = document.getElementById('refreshAfterDaysEnabled');
+    const daysValue = document.getElementById('refreshAfterDaysValue');
+    settings.refreshAfterDays = daysEnabled?.checked ? parseInt(daysValue?.value) || 1 : 0;
+
+    await saveRefreshSettings(settings);
+    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
+    await saveReviewReminderPopupEnabled(reminderEnabledInput?.checked === true);
+    quickReviewOpenMode = writeQuickReviewOpenMode(getRefreshQuickReviewModeFromUI());
+    hideRefreshSettingsModal();
+}
+
+function updateRefreshSettingsStatus(settings) {
+    const statusEl = document.getElementById('refreshSettingsStatus');
+    if (!statusEl) return;
+
+    const isZh = currentLang !== 'en';
+    const parts = [];
+
+    // 上次刷新时间
+    if (settings.lastRefreshTime > 0) {
+        const elapsed = Date.now() - settings.lastRefreshTime;
+        const minutes = Math.floor(elapsed / 60000);
+        const hours = Math.floor(elapsed / 3600000);
+        const days = Math.floor(elapsed / 86400000);
+
+        let timeStr;
+        if (days > 0) {
+            timeStr = isZh ? `${days} 天前` : `${days} day${days > 1 ? 's' : ''} ago`;
+        } else if (hours > 0) {
+            timeStr = isZh ? `${hours} 小时前` : `${hours} hour${hours > 1 ? 's' : ''} ago`;
+        } else {
+            timeStr = isZh ? `${minutes} 分钟前` : `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
         }
-        if (typeof node.getAttribute === 'function') {
-            return node.getAttribute('data-bookmark-url')
-                || node.getAttribute('data-node-url')
-                || node.getAttribute('data-url')
-                || node.getAttribute('data-favicon-url')
-                || '';
+        parts.push(isZh ? `上次刷新: ${timeStr}` : `Last refresh: ${timeStr}`);
+    } else {
+        parts.push(isZh ? '尚未刷新' : 'Not refreshed yet');
+    }
+
+    // 打开次数
+    if (settings.refreshEveryNOpens > 0) {
+        const source = isSidePanelMode ? 'sidepanel' : 'page';
+        const count = getRefreshOpenCount(settings, source);
+        if (source === 'sidepanel') {
+            parts.push(isZh
+                ? `侧边栏已打开 ${count} / ${settings.refreshEveryNOpens} 次`
+                : `Side panel opened ${count} / ${settings.refreshEveryNOpens} times`);
+        } else {
+            parts.push(isZh
+                ? `已打开 ${count} / ${settings.refreshEveryNOpens} 次`
+                : `Opened ${count} / ${settings.refreshEveryNOpens} times`);
         }
-        return '';
+    }
+
+    statusEl.textContent = parts.join(' | ');
+}
+
+function initRefreshSettingsModal() {
+    const modal = document.getElementById('refreshSettingsModal');
+    if (!modal) return;
+    if (modal.dataset.bound === 'true') return;
+    modal.dataset.bound = 'true';
+
+    // 关闭按钮
+    const closeBtn = document.getElementById('refreshSettingsClose');
+    if (closeBtn) {
+        closeBtn.onclick = hideRefreshSettingsModal;
+    }
+
+    // 点击背景关闭
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            hideRefreshSettingsModal();
+        }
     };
 
-    let itemUrl = readFrom(element);
-    if (!itemUrl && typeof element.closest === 'function') {
-        const item = element.closest('[data-node-url], [data-bookmark-url], [data-url]');
-        itemUrl = readFrom(item);
+    // 保存按钮
+    const saveBtn = document.getElementById('refreshSettingsSaveBtn');
+    if (saveBtn) {
+        saveBtn.onclick = saveRefreshSettingsFromUI;
     }
-    return typeof itemUrl === 'string' ? itemUrl.trim() : '';
+
+    const openShortcutsBtn = document.getElementById('refreshQuickReviewOpenShortcutsBtn');
+    if (openShortcutsBtn) {
+        openShortcutsBtn.onclick = () => {
+            openBrowserShortcutsSettingsPage();
+        };
+    }
+
+    const singleModeBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
+    const newTabModeBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
+    if (singleModeBtn) {
+        singleModeBtn.onclick = () => setRefreshQuickReviewModeButtons('single_tab');
+    }
+    if (newTabModeBtn) {
+        newTabModeBtn.onclick = () => setRefreshQuickReviewModeButtons('new_tab');
+    }
 }
 
-// 更新页面上所有指定URL的favicon图片
-function updateFaviconImages(url, dataUrl) {
-    let updatedCount = 0;
+function initBrowsingCalibrationMenu() {
+    const mainBtn = document.getElementById('browsingCalibrationBtn');
+    if (!mainBtn) return;
+    if (mainBtn.hasAttribute('data-calibration-bound')) return;
+    mainBtn.setAttribute('data-calibration-bound', 'true');
+
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showBrowsingCalibrationSettingsModal();
+    });
+
+    initBrowsingCalibrationSettingsModal();
+}
+
+async function updateBrowsingHistoryStatsUI() {
+    const daysEl = document.getElementById('dbStatsDays');
+    const countEl = document.getElementById('dbStatsCount');
+    const sizeEl = document.getElementById('dbStatsSize');
+    if (!daysEl || !countEl || !sizeEl) return;
+
     try {
-        const domain = FaviconCache._getHostnameFromUrl(url);
-        if (!domain) return 0;
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'getBrowsingHistoryStats' }, (response) => {
+                if (response && response.success) {
+                    daysEl.textContent = `${response.daysCount || 0} 天`;
+                    countEl.textContent = `${response.recordsCount || 0} 条`;
+                    const sizeMB = ((response.estimatedBytes || 0) / (1024 * 1024)).toFixed(2);
+                    sizeEl.textContent = `${sizeMB} MB`;
+                } else {
+                    daysEl.textContent = '读取失败';
+                    countEl.textContent = '读取失败';
+                    sizeEl.textContent = '读取失败';
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('[Calibration] 载入统计失败:', e);
+    }
+}
 
-        const allImages = document.querySelectorAll(
-            'img.addition-icon, img.tracking-favicon, img.ranking-favicon, img.add-result-favicon, img.heatmap-detail-favicon, img.search-result-favicon, img.block-item-icon, img.postponed-item-icon, img.add-bookmark-favicon, img.related-history-favicon, img.widgets-pie-tooltip-icon, img.bookmark-favicon, img.card-favicon, img.recommend-search-favicon, img[class*="favicon"], img[data-bookmark-url], img[data-node-url], img[data-url], img[data-favicon-url], image.widgets-pie-slice-icon[data-bookmark-url]'
-        );
+function showBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (!panel) return;
+    loadBrowsingCalibrationSettingsToUI();
+    panel.hidden = false;
+    updateBrowsingCalibrationCounts();
+    updateBrowsingHistoryStatsUI();
+    try {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (_) { }
+}
 
-        allImages.forEach(img => {
-            const itemUrl = resolveFaviconBindingUrlFromElement(img);
-            if (!itemUrl) return;
+function hideBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (panel) {
+        panel.hidden = true;
+    }
+}
+
+async function loadBrowsingCalibrationSettingsToUI() {
+    const settings = await getBrowsingCalibrationSettings();
+
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    if (deleteEnabled) deleteEnabled.checked = settings.deleteThreshold > 0;
+    if (deleteValue) {
+        deleteValue.value = settings.deleteThreshold > 0
+            ? settings.deleteThreshold
+            : BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold;
+    }
+
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    if (openEnabled) openEnabled.checked = settings.openThreshold > 0;
+    if (openValue) {
+        openValue.value = settings.openThreshold > 0
+            ? settings.openThreshold
+            : BROWSING_CALIBRATION_RECOMMENDED.openThreshold;
+    }
+
+    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
+    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
+    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
+    if (scheduleEnabled) scheduleEnabled.checked = settings.scheduledCalibrationEnabled !== false;
+    if (scheduleTime) scheduleTime.value = normalizeBrowsingCalibrationTime(settings.scheduledCalibrationTime);
+    if (idleEnabled) idleEnabled.checked = settings.scheduledCalibrationRequireIdle === true;
+    updateBrowsingCalibrationCounts();
+}
+
+async function saveBrowsingCalibrationSettingsFromUI() {
+    const settings = await getBrowsingCalibrationSettings();
+
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    settings.deleteThreshold = deleteEnabled?.checked
+        ? Math.max(1, parseInt(deleteValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold)
+        : 0;
+
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    settings.openThreshold = openEnabled?.checked
+        ? Math.max(1, parseInt(openValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.openThreshold)
+        : 0;
+    delete settings.clickThreshold;
+
+    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
+    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
+    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
+    settings.scheduledCalibrationEnabled = scheduleEnabled?.checked !== false;
+    settings.scheduledCalibrationTime = normalizeBrowsingCalibrationTime(scheduleTime?.value || DEFAULT_BROWSING_CALIBRATION_SETTINGS.scheduledCalibrationTime);
+    settings.scheduledCalibrationRequireIdle = idleEnabled?.checked === true;
+
+    await saveBrowsingCalibrationSettings(settings);
+    hideBrowsingCalibrationSettingsModal();
+
+    if (typeof showToast === 'function') {
+        const msg = currentLang === 'zh_CN' ? '自动校准设置已保存' : 'Calibration settings saved';
+        showToast(msg, 2000);
+    }
+}
+
+function initBrowsingCalibrationSettingsModal() {
+    const panel = document.getElementById('browsingCalibrationSettingsPanel');
+    if (!panel) return;
+    if (panel.hasAttribute('data-calibration-settings-bound')) return;
+    panel.setAttribute('data-calibration-settings-bound', 'true');
+
+    const closeBtn = document.getElementById('browsingCalibrationSettingsClose');
+    if (closeBtn) {
+        closeBtn.onclick = hideBrowsingCalibrationSettingsModal;
+    }
+
+    const manualBtn = document.getElementById('browsingCalibrationManualActionBtn');
+    if (manualBtn) {
+        manualBtn.onclick = async () => {
+            manualBtn.disabled = true;
+            const ok = await runBrowsingCalibration({ reason: 'manual', showToast: true });
+            manualBtn.disabled = false;
+            if (ok) {
+                updateBrowsingHistoryStatsUI();
+                // 刷新历史图表页面
+                if (typeof refreshBrowsingHistoryFromCache === 'function') {
+                    refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
+                }
+            }
+        };
+    }
+
+    const saveBtn = document.getElementById('browsingCalibrationSettingsSaveBtn');
+    if (saveBtn) {
+        saveBtn.onclick = saveBrowsingCalibrationSettingsFromUI;
+    }
+
+    const purgeInfoBtn = document.getElementById('historyPurgeInfoBtn');
+    const purgeInfoPanel = document.getElementById('historyPurgeInfoPanel');
+    if (purgeInfoBtn && purgeInfoPanel) {
+        purgeInfoBtn.onclick = () => {
+            const nextHidden = !purgeInfoPanel.hidden;
+            purgeInfoPanel.hidden = nextHidden;
+            purgeInfoBtn.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
+        };
+    }
+
+    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
+    if (deleteValue) {
+        deleteValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
+    }
+    const openValue = document.getElementById('browsingCalibrationOpenValue');
+    if (openValue) {
+        openValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
+    }
+    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
+    if (deleteEnabled) {
+        deleteEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
+    }
+    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
+    if (openEnabled) {
+        openEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
+    }
+
+    const purgeBtn = document.getElementById('historyPurgeBtn');
+    if (purgeBtn) {
+        purgeBtn.onclick = async () => {
+            const rangeSelect = document.getElementById('historyPurgeRange');
+            const range = rangeSelect ? rangeSelect.value : '';
+
+            const purgeRangeOptions = {
+                keep_2years: {
+                    days: 730,
+                    zh: '2年前的本地记录',
+                    en: 'local records older than 2 years'
+                },
+                keep_1year: {
+                    days: 365,
+                    zh: '1年前的本地记录',
+                    en: 'local records older than 1 year'
+                },
+                keep_180days: {
+                    days: 180,
+                    zh: '180天前的本地记录',
+                    en: 'local records older than 180 days'
+                },
+                keep_90days: {
+                    days: 90,
+                    zh: '90天前的本地记录',
+                    en: 'local records older than 90 days'
+                }
+            };
+            const purgeOption = purgeRangeOptions[range];
+            if (!purgeOption) {
+                if (typeof showToast === 'function') {
+                    showToast(currentLang === 'zh_CN' ? '未选择需要清理的范围' : 'No purge range selected', 2000);
+                }
+                return;
+            }
+
+            const now = Date.now();
+            let cutoffDateKey = null;
+            const rangeText = currentLang === 'zh_CN' ? purgeOption.zh : purgeOption.en;
+            const date = new Date(now - purgeOption.days * 24 * 60 * 60 * 1000);
+            cutoffDateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+            const confirmMsg = currentLang === 'zh_CN' 
+                ? `确定要清理扩展本地记录库中${rangeText}吗？此操作不可逆，但不会删除浏览器自身的历史记录。`
+                : `Clean ${rangeText} from the extension's local database? This cannot be undone, but it will not delete browser history.`;
+            
+            if (!confirm(confirmMsg)) return;
+
+            purgeBtn.disabled = true;
+            const originalText = purgeBtn.textContent;
+            purgeBtn.textContent = currentLang === 'zh_CN' ? '清理中...' : 'Purging...';
 
             try {
-                const itemDomain = FaviconCache._getHostnameFromUrl(itemUrl);
-                if (itemDomain !== domain) return;
-
-                const tagName = String(img.tagName || '').toLowerCase();
-                if (tagName === 'image') {
-                    img.setAttribute('href', dataUrl);
-                    if (typeof img.setAttributeNS === 'function') {
-                        img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', dataUrl);
-                    }
-                    updatedCount++;
-                    return;
-                }
-
-                img.src = dataUrl;
-                if (img.style.display === 'none') {
-                    img.style.display = '';
-                    const prevSibling = img.previousElementSibling;
-                    if (prevSibling && prevSibling.classList.contains('search-result-icon-box-inline')) {
-                        prevSibling.style.display = 'none';
-                    } else {
-                        const parent = img.parentElement;
-                        if (parent) {
-                            const inlineFallbackIcon = parent.querySelector('.search-result-icon-box-inline');
-                            if (inlineFallbackIcon) {
-                                inlineFallbackIcon.style.display = 'none';
+                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                    chrome.runtime.sendMessage({ 
+                        action: 'purgeBrowsingHistoryCache', 
+                        payload: { cutoffDateKey } 
+                    }, async (response) => {
+                        purgeBtn.disabled = false;
+                        purgeBtn.textContent = originalText;
+                        if (response && response.success) {
+                            const successMsg = currentLang === 'zh_CN'
+                                ? `清理成功！共删除 ${response.deletedCount || 0} 条记录。`
+                                : `Purged successfully! Deleted ${response.deletedCount || 0} records.`;
+                            if (typeof showToast === 'function') {
+                                showToast(successMsg, 3000);
+                            }
+                            updateBrowsingHistoryStatsUI();
+                            
+                            // 刷新历史图表页面
+                            if (typeof refreshBrowsingHistoryFromCache === 'function') {
+                                refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
+                            }
+                        } else {
+                            if (typeof showToast === 'function') {
+                                showToast(currentLang === 'zh_CN' ? '清理失败' : 'Purge failed', 2000);
                             }
                         }
-                    }
+                    });
+                }
+            } catch (err) {
+                purgeBtn.disabled = false;
+                purgeBtn.textContent = originalText;
+                console.warn('[Purge] 发生异常:', err);
+            }
+        };
+    }
+}
+
+let addBlockDomainSelected = new Set();
+let addBlockDomainData = [];
+
+// 初始化添加域名弹窗（旧：已屏蔽域名子项 +）
+function initAddDomainModal() {
+    const modal = document.getElementById('addDomainModal');
+    if (!modal) return;
+
+    const closeBtn = document.getElementById('addDomainModalClose');
+    const cancelBtn = document.getElementById('addDomainCancelBtn');
+    const confirmBtn = document.getElementById('addDomainConfirmBtn');
+    const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
+
+    const hideModal = () => {
+        modal.classList.remove('show');
+        if (searchInput) searchInput.value = '';
+    };
+
+    const localRoot = getBlockUnifiedDomRoot(modal);
+    const searchInputInsideModal = localRoot.querySelector('#addBlockLegacyDomainSearchInput');
+    const listElInsideModal = localRoot.querySelector('#addBlockLegacyDomainList');
+    const selectedCountInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedCount');
+    const selectedTextInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedText');
+    if (selectedTextInsideModal) {
+        selectedTextInsideModal.textContent = i18n.addDomainSelectedText[currentLang];
+    }
+
+    if (closeBtn) closeBtn.onclick = hideModal;
+    if (cancelBtn) cancelBtn.onclick = hideModal;
+
+    modal.onclick = (e) => {
+        if (e.target === modal) hideModal();
+    };
+
+    // 搜索输入
+    let searchTimer = null;
+    if (searchInputInsideModal) {
+        searchInputInsideModal.oninput = () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => {
+                filterBlockDomainList(searchInputInsideModal.value);
+            }, 200);
+        };
+        // Allow Enter to confirm
+        searchInputInsideModal.onkeypress = (e) => {
+            if (e.key === 'Enter') confirmBtn.click();
+        };
+    }
+
+    if (confirmBtn) {
+        confirmBtn.onclick = async () => {
+            const selectedDomains = Array.from(addBlockDomainSelected);
+
+            // Allow manual entry if not in list
+            const inputVal = searchInputInsideModal ? searchInputInsideModal.value.trim() : '';
+            if (inputVal && !addBlockDomainSelected.has(inputVal)) {
+                if (inputVal.includes('.') || inputVal.includes('localhost')) {
+                    selectedDomains.push(buildBlockedDomainBaseEntry(inputVal));
+                }
+            }
+
+            if (selectedDomains.length > 0) {
+                await blockDomains(selectedDomains);
+                hideModal();
+                await loadBlockedLists();
+                await refreshRecommendCards();
+            } else {
+                const isZh = currentLang === 'zh_CN';
+                alert(isZh ? '请选择或输入要屏蔽的域名' : 'Please select or enter a domain to block');
+            }
+        };
+    }
+}
+
+// 初始化选择文件夹弹窗
+function initSelectFolderModal() {
+    const modal = document.getElementById('selectFolderModal');
+    if (!modal) return;
+
+    const closeBtn = document.getElementById('selectFolderModalClose');
+
+    const hideModal = () => {
+        modal.classList.remove('show');
+    };
+
+    if (closeBtn) closeBtn.onclick = hideModal;
+
+    modal.onclick = (e) => {
+        if (e.target === modal) hideModal();
+    };
+}
+
+// 显示添加域名弹窗
+async function showAddDomainModal() {
+    const modal = document.getElementById('addDomainModal');
+    if (modal) {
+        addBlockDomainSelected.clear();
+        updateBlockDomainCount();
+        const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
+        if (searchInput) {
+            searchInput.value = '';
+            searchInput.focus();
+        }
+
+        modal.classList.add('show');
+        await loadBlockDomainList();
+    }
+}
+
+// 加载屏蔽域名列表
+async function loadBlockDomainList() {
+    const modal = document.getElementById('addDomainModal');
+    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
+    if (!listEl) return;
+
+    const isZh = currentLang === 'zh_CN';
+    listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载中...' : 'Loading...'}</div>`;
+
+    try {
+        const allBookmarks = await getAllBookmarksFlat();
+        const blocked = await getBlockedBookmarks();
+        const blockedDomains = new Set(
+            (blocked.domains || [])
+                .map(d => parseBlockedDomainEntry(d))
+                .filter(entry => entry?.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE)
+                .map(entry => entry.entry)
+                .filter(Boolean)
+        );
+
+        const domainMap = new Map();
+        for (const b of allBookmarks) {
+            if (!b.url) continue;
+            try {
+                const url = new URL(b.url);
+                const domain = getRecommendBaseDomainFromHost(url.hostname);
+                if (!domainMap.has(domain)) {
+                    domainMap.set(domain, { count: 0 });
+                }
+                domainMap.get(domain).count++;
+            } catch { }
+        }
+
+        const validDomains = [];
+        for (const [domain, data] of domainMap.entries()) {
+            if (!blockedDomains.has(buildBlockedDomainBaseEntry(domain))) {
+                validDomains.push([domain, data]);
+            }
+        }
+
+        addBlockDomainData = validDomains.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
+        renderBlockDomainList(addBlockDomainData);
+
+    } catch (e) {
+        console.error('Failed to load domains', e);
+        const isZh = currentLang === 'zh_CN';
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载失败' : 'Failed to load'}</div>`;
+    }
+}
+
+// 渲染屏蔽域名列表
+function renderBlockDomainList(domains) {
+    const modal = document.getElementById('addDomainModal');
+    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
+    if (!listEl) return;
+
+    const displayDomains = domains.slice(0, 100);
+    const isZh = currentLang === 'zh_CN';
+
+    if (displayDomains.length === 0) {
+        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '没有可屏蔽的新域名' : 'No new domains to block'}</div>`;
+        return;
+    }
+
+    listEl.innerHTML = displayDomains.map(([domain, data]) => {
+        const domainUrl = getRecommendDomainFaviconUrl(domain);
+        return `
+        <div class="add-domain-item ${addBlockDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
+            <input type="checkbox" ${addBlockDomainSelected.has(domain) ? 'checked' : ''}>
+            <div class="add-domain-info">
+                <div class="add-domain-title-row">
+                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
+                    <div class="add-domain-name">${escapeHtml(domain)}</div>
+                </div>
+                <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
+            </div>
+        </div>
+    `;
+    }).join('');
+
+    listEl.querySelectorAll('.add-domain-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const domain = item.dataset.domain;
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            if (addBlockDomainSelected.has(domain)) {
+                addBlockDomainSelected.delete(domain);
+                item.classList.remove('selected');
+                checkbox.checked = false;
+            } else {
+                addBlockDomainSelected.add(domain);
+                item.classList.add('selected');
+                checkbox.checked = true;
+            }
+            updateBlockDomainCount();
+        });
+    });
+}
+
+// 过滤屏蔽域名列表
+function filterBlockDomainList(keyword) {
+    if (!keyword.trim()) {
+        renderBlockDomainList(addBlockDomainData);
+        return;
+    }
+    const keywordLower = keyword.toLowerCase();
+    const filtered = addBlockDomainData.filter(([domain]) =>
+        domain.toLowerCase().includes(keywordLower)
+    );
+    renderBlockDomainList(filtered);
+}
+
+// 更新选中数量
+function updateBlockDomainCount() {
+    const modal = document.getElementById('addDomainModal');
+    const el = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainSelectedCount');
+    if (el) el.textContent = addBlockDomainSelected.size;
+}
+
+// 显示选择文件夹弹窗
+async function showSelectFolderModal() {
+    const modal = document.getElementById('selectFolderModal');
+    const container = document.getElementById('folderTreeContainer');
+    if (!modal || !container) return;
+
+    // 获取已屏蔽的文件夹
+    const blocked = await getBlockedBookmarks();
+    const blockedFolderSet = new Set(blocked.folders);
+
+    // 获取所有文件夹
+    const tree = await new Promise(resolve => {
+        browserAPI.bookmarks.getTree(resolve);
+    });
+
+    // 生成文件夹树HTML
+    container.innerHTML = '';
+
+    function countSubpaths(node) {
+        if (!node || !Array.isArray(node.children)) return 0;
+        let count = 0;
+        for (const child of node.children) {
+            if (!child) continue;
+            if (child.url) {
+                count += 1;
+            } else {
+                count += 1 + countSubpaths(child);
+            }
+        }
+        return count;
+    }
+
+    const unitState = { firstRowRendered: false };
+
+    function renderFolders(nodes, parentEl, depth = 0, sharedUnitState = unitState) {
+        const isZh = currentLang === 'zh_CN';
+        const locale = isZh ? 'zh-CN' : 'en-US';
+        const unnamedFolder = i18n.unnamedFolderLabel ? i18n.unnamedFolderLabel[currentLang] : '未命名文件夹';
+        for (const node of nodes) {
+            if (!node.url && node.children) { // 是文件夹
+                if (blockedFolderSet.has(node.id)) continue; // 已屏蔽的不显示
+
+                const subpathCount = countSubpaths(node);
+                const showUnitLabel = sharedUnitState.firstRowRendered !== true;
+                if (showUnitLabel) sharedUnitState.firstRowRendered = true;
+                const countText = showUnitLabel
+                    ? `${subpathCount.toLocaleString(locale)}（${isZh ? '子路径数量' : 'sub-paths'}）`
+                    : `${subpathCount.toLocaleString(locale)}`;
+
+                // 创建节点包装
+                const nodeWrapper = document.createElement('div');
+                nodeWrapper.className = 'folder-tree-node';
+
+                const item = document.createElement('div');
+                item.className = 'folder-tree-item';
+                item.innerHTML = `
+                    <i class="fas fa-folder"></i>
+                    <span>${escapeHtml(node.title || unnamedFolder)}</span>
+                    <span class="folder-count">${countText}</span>
+                `;
+                item.onclick = async () => {
+                    await blockFolder(node.id);
+                    modal.classList.remove('show');
+                    await loadBlockedLists();
+                    await refreshRecommendCards();
+                };
+                nodeWrapper.appendChild(item);
+
+                // 检查是否有子文件夹
+                const childFolders = node.children.filter(c => !c.url && c.children && !blockedFolderSet.has(c.id));
+                if (childFolders.length > 0) {
+                    const childrenContainer = document.createElement('div');
+                    childrenContainer.className = 'folder-tree-children';
+                    renderFolders(node.children, childrenContainer, depth + 1, sharedUnitState);
+                    nodeWrapper.appendChild(childrenContainer);
                 }
 
-                updatedCount++;
-            } catch (_) {
-                // 忽略无效URL
+                parentEl.appendChild(nodeWrapper);
             }
-        });
-    } catch (_) {
-        // 静默处理
-    }
-    return updatedCount;
-}
-
-// 全局图片错误处理（使用事件委托，避免CSP内联事件处理器）
-function setupGlobalImageErrorHandler() {
-    document.addEventListener('error', (e) => {
-        if (e.target.tagName !== 'IMG') return;
-
-        const classNames = e.target.classList ? Array.from(e.target.classList) : [];
-        const hasKnownIconClass = (
-            e.target.classList.contains('addition-icon') ||
-            e.target.classList.contains('tracking-favicon') ||
-            e.target.classList.contains('card-favicon') ||
-            e.target.classList.contains('ranking-favicon') ||
-            e.target.classList.contains('add-result-favicon') ||
-            e.target.classList.contains('add-bookmark-favicon') ||
-            e.target.classList.contains('block-item-icon') ||
-            e.target.classList.contains('postponed-item-icon') ||
-            e.target.classList.contains('heatmap-detail-favicon') ||
-            e.target.classList.contains('search-result-favicon') ||
-            e.target.classList.contains('recommend-search-favicon') ||
-            e.target.classList.contains('bookmark-favicon') ||
-            e.target.classList.contains('related-history-favicon') ||
-            e.target.classList.contains('widgets-pie-tooltip-icon')
-        );
-        const hasGenericFaviconClass = classNames.some((className) => String(className || '').includes('favicon'));
-        if (!hasKnownIconClass && !hasGenericFaviconClass) return;
-
-        // 只在src不是fallbackIcon时才替换，避免无限循环
-        // fallbackIcon 是 data URL，不会加载失败
-        if (e.target.src !== fallbackIcon && !e.target.src.startsWith('data:image/svg+xml')) {
-            e.target.src = fallbackIcon;
         }
-    }, true); // 使用捕获阶段
+    }
+
+    renderFolders(tree, container);
+    modal.classList.add('show');
 }
 
-// 异步获取favicon（推荐使用，支持完整缓存）
-async function getFaviconUrlAsync(url, options = {}) {
-    if (!url) return fallbackIcon;
-
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        return fallbackIcon;
-    }
-
-    return await FaviconCache.fetch(url, options);
+// 初始化屏蔽管理添加按钮
+function initBlockManageButtons() {
+    // 已迁移到 initAddToBlockModal 统一处理。
 }
 
-// Fallback 图标 - 星标书签图标
-const fallbackIcon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath fill=%22%23999%22 d=%22M8 0l2.8 5.5 6.2 0.5-4.5 4 1.5 6-5.5-3.5-5.5 3.5 1.5-6-4.5-4 6.2-0.5z%22/%3E%3C/svg%3E';
+// =================================================================================
+// VI. MAIN APP CONTROL & INITIALIZATION (主程序路由、视图切换、侧边栏/标题栏控制)
+// =================================================================================
 
-// Edge/Chrome 内置页面 scheme 不同（仅用于展示/跳转提示）
-const internalScheme = (navigator.userAgent || '').includes('Edg/') ? 'edge://' : 'chrome://';
-
-// =============================================================================
-// 国际化文本
-// =============================================================================
-
-const i18n = {pageTitle: {
-        'zh_CN': '推荐 & 记录',
-        'en': 'Recommend & Record'
-    },pageSubtitle: {
-        'zh_CN': '',
-        'en': ''
-    },searchPlaceholder: {
-        'zh_CN': '搜索书签、文件夹...',
-        'en': 'Search bookmarks, folders...'
-    },searchNoResults: {
-        'zh_CN': '没有找到匹配的记录',
-        'en': 'No results'
-    },helpTooltip: {
-        'zh_CN': '问题反馈与快捷键',
-        'en': 'Feedback & Shortcuts'
-    },settingsQuickReviewText: {
-        'zh_CN': '快捷复习设置',
-        'en': 'Quick Review Settings'
-    },quickReviewShortcutLabel: {
-        'zh_CN': '当前快捷键',
-        'en': 'Current Shortcut'
-    },openShortcutsSettingsText: {
-        'zh_CN': '读取中...',
-        'en': 'Loading...'
-    },quickReviewShortcutUnset: {
-        'zh_CN': '未设置',
-        'en': 'Not Set'
-    },quickReviewShortcutRefreshHint: {
-        'zh_CN': '如修改了浏览器快捷键，请关闭并重新打开本设置弹窗以刷新显示。',
-        'en': 'After changing browser shortcuts, close and reopen this settings dialog to refresh.'
-    },quickReviewOpenModeLabel: {
-        'zh_CN': '打开模式',
-        'en': 'Open Mode'
-    },quickReviewModeSingleText: {
-        'zh_CN': '固定单页',
-        'en': 'Fixed Tab'
-    },quickReviewModeNewTabText: {
-        'zh_CN': '新标签',
-        'en': 'New Tab'
-    },quickReviewTooltip: {
-        'zh_CN': '快捷复习',
-        'en': 'Quick Review'
-    },headerToggleCollapseTooltip: {
-        'zh_CN': '收起标题栏',
-        'en': 'Collapse header'
-    },headerToggleExpandTooltip: {
-        'zh_CN': '展开标题栏',
-        'en': 'Expand header'
-    },navAdditions: {
-        'zh_CN': '书签记录',
-        'en': 'Bookmark Record'
-    },navRecommend: {
-        'zh_CN': '书签推荐',
-        'en': 'Bookmark Recommend'
-    },navRecommendShort: {
-        'zh_CN': '书签推荐',
-        'en': 'Bookmark Rec.'
-    },navWidgets: {
-        'zh_CN': '小组件',
-        'en': 'Widgets'
-    },navSync: {
-        'zh_CN': '推送与分析',
-        'en': 'Push & Analysis'
-    },sidePanelTitleWidgets: {
-        'zh_CN': '小组件',
-        'en': 'Widgets'
-    },sidePanelTitleRecommend: {
-        'zh_CN': '推荐',
-        'en': 'Recommend'
-    },sidePanelTitleRecommendShort: {
-        'zh_CN': '推荐',
-        'en': 'Rec.'
-    },sidePanelTitleAdditions: {
-        'zh_CN': '记录',
-        'en': 'Record'
-    },sidePanelTitleSync: {
-        'zh_CN': '同步',
-        'en': 'Sync'
-    },syncViewTitle: {
-        'zh_CN': '推送与分析',
-        'en': 'Push & Analysis'
-    },syncViewDescription: {
-        'zh_CN': '手动推送推荐/记录数据，并同步可查看的 Markdown。',
-        'en': 'Manually push recommendation/record data and sync visible Markdown files.'
-    },syncControlPanelCollapseBtnText: {
-        'zh_CN': '折叠',
-        'en': 'Collapse'
-    },syncControlPanelExpandBtnText: {
-        'zh_CN': '展开',
-        'en': 'Expand'
-    },syncRepoSettingsTitle: {
-        'zh_CN': '配置方式',
-        'en': 'Configuration'
-    },syncProviderLabel: {
-        'zh_CN': '同步方式',
-        'en': 'Sync Provider'
-    },syncProviderGithubOption: {
-        'zh_CN': 'GitHub Repo',
-        'en': 'GitHub Repo'
-    },syncProviderLocalOption: {
-        'zh_CN': '本地快照（仅本机）',
-        'en': 'Local Snapshot (Local Only)'
-    },syncGithubTokenLabel: {
-        'zh_CN': 'GitHub Token',
-        'en': 'GitHub Token'
-    },syncGithubOwnerLabel: {
-        'zh_CN': '仓库 Owner',
-        'en': 'Repository Owner'
-    },syncGithubRepoLabel: {
-        'zh_CN': '仓库名',
-        'en': 'Repository Name'
-    },syncGithubBranchLabel: {
-        'zh_CN': '分支',
-        'en': 'Branch'
-    },syncRepoTestBtnText: {
-        'zh_CN': '测试连接',
-        'en': 'Test Connection'
-    },syncRepoOpenHtmlBtnText: {
-        'zh_CN': '配置说明',
-        'en': 'Guide'
-    },syncRepoStatusIdle: {
-        'zh_CN': '等待配置',
-        'en': 'Waiting for configuration'
-    },syncSettingsTitle: {
-        'zh_CN': '推送数据包',
-        'en': 'Push Bundles'
-    },syncPushPackageInfoBtnText: {
-        'zh_CN': '说明',
-        'en': 'Info'
-    },syncPushPackagePathTitle: {
-        'zh_CN': '推送到云端路径结构',
-        'en': 'Cloud Path Layout'
-    },syncPushPackageBookmarkRecommendText: {
-        'zh_CN': '书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）',
-        'en': 'Bookmark recommendation bundle (S-score/candidates/review/block/skip/flip)'
-    },syncPushPackageBookmarkRecordText: {
-        'zh_CN': '书签记录包（新增/点击/排行/关联/时间排行）',
-        'en': 'Bookmark record bundle (additions/clicks/ranking/related/time ranking)'
-    },syncPushPackageRawNativeText: {
-        'zh_CN': '原生真相源包（书签树/浏览访问事实源）',
-        'en': 'Raw-native source bundle (bookmark tree/browsing visit facts)'
-    },syncPushPackageRecommendText: {
-        'zh_CN': '书签推荐包（S 池/候选/复习/屏蔽/跳过/翻卡）',
-        'en': 'Bookmark recommendation bundle (S-score/candidates/review/block/skip/flip)'
-    },syncPushPackageRecordsText: {
-        'zh_CN': '书签记录包（新增/点击/排行/关联/时间排行）',
-        'en': 'Bookmark record bundle (additions/clicks/ranking/related/time ranking)'
-    },syncPushPackageWidgetsText: {
-        'zh_CN': '推荐行为事件（复习/翻卡/跳过/屏蔽）',
-        'en': 'Recommendation events (review/flip/skip/block)'
-    },syncPushPackageTrackingText: {
-        'zh_CN': '时间捕捉（按天/周/月统计）',
-        'en': 'Time tracking (daily/weekly/monthly stats)'
-    },syncPushTimeRangeLabel: {
-        'zh_CN': '推送范围',
-        'en': 'Push Range'
-    },syncPushTimeRangeDay: {
-        'zh_CN': '今天',
-        'en': 'Today'
-    },syncPushTimeRangeWeek: {
-        'zh_CN': '本周',
-        'en': 'This Week'
-    },syncPushTimeRangeMonth: {
-        'zh_CN': '本月',
-        'en': 'This Month'
-    },syncPushTimeRangeQuarter: {
-        'zh_CN': '本季',
-        'en': 'This Quarter'
-    },syncPushTimeRangeYear: {
-        'zh_CN': '本年',
-        'en': 'This Year'
-    },syncPushTimeRangeAll: {
-        'zh_CN': '全部',
-        'en': 'All'
-    },syncPushTimeRangeCustom: {
-        'zh_CN': '自定义',
-        'en': 'Custom'
-    },syncPushCustomRangeStartLabel: {
-        'zh_CN': '开始日期',
-        'en': 'Start Date'
-    },syncPushCustomRangeEndLabel: {
-        'zh_CN': '结束日期',
-        'en': 'End Date'
-    },syncPushCustomRangeConfirmBtn: {
-        'zh_CN': '确认',
-        'en': 'Confirm'
-    },syncPushCustomRangeCancelBtn: {
-        'zh_CN': '取消',
-        'en': 'Cancel'
-    },syncPushCustomRangeInvalid: {
-        'zh_CN': '请选择有效的开始和结束日期',
-        'en': 'Please select a valid start and end date'
-    },syncPullPolicyInfoBtnLabel: {
-        'zh_CN': '说明',
-        'en': 'Info'
-    },syncPullPolicyInfoText: {
-        'zh_CN': '拉取策略：最新修改版本取胜，不做复杂 MERGE 合并。比对依据为本地文档修改时间与云端文档最新提交时间。',
-        'en': 'Pull policy: latest modified version wins, without complex MERGE. Comparison uses local edit time and latest cloud commit time.'
-    },syncFilesPrevText: {
-        'zh_CN': '上一页',
-        'en': 'Previous page'
-    },syncFilesNextText: {
-        'zh_CN': '下一页',
-        'en': 'Next page'
-    },syncPullBtnText: {
-        'zh_CN': '拉取更新',
-        'en': 'Pull'
-    },syncPullBtnLoadingText: {
-        'zh_CN': '拉取中...',
-        'en': 'Pulling...'
-    },syncPullBtnSuccessText: {
-        'zh_CN': '拉取完成',
-        'en': 'Pulled'
-    },syncPullBtnErrorText: {
-        'zh_CN': '拉取失败',
-        'en': 'Pull Failed'
-    },syncPushBtnText: {
-        'zh_CN': '推送当前',
-        'en': 'Push'
-    },syncPushBtnLoadingText: {
-        'zh_CN': '推送中...',
-        'en': 'Pushing...'
-    },syncPushBtnSuccessText: {
-        'zh_CN': '推送完成',
-        'en': 'Pushed'
-    },syncPushBtnErrorText: {
-        'zh_CN': '推送失败',
-        'en': 'Push Failed'
-    },syncRepoCollapseBtnCollapseText: {
-        'zh_CN': '折叠配置方式',
-        'en': 'Collapse Config'
-    },syncRepoCollapseBtnExpandText: {
-        'zh_CN': '展开配置方式',
-        'en': 'Expand Config'
-    },syncFilesTitle: {
-        'zh_CN': '查看',
-        'en': 'View'
-    },syncNewFileText: {
-        'zh_CN': '新建',
-        'en': 'New'
-    },syncEditModeText: {
-        'zh_CN': '编辑',
-        'en': 'Edit'
-    },syncEditModeDoneText: {
-        'zh_CN': '完成',
-        'en': 'Done'
-    },syncFileItemEditText: {
-        'zh_CN': '编辑',
-        'en': 'Edit'
-    },syncFileItemPinText: {
-        'zh_CN': '置顶',
-        'en': 'Pin'
-    },syncFileItemUnpinText: {
-        'zh_CN': '取消置顶',
-        'en': 'Unpin'
-    },syncFileItemDeleteText: {
-        'zh_CN': '删除',
-        'en': 'Delete'
-    },syncMarkdownToolsLabel: {
-        'zh_CN': '格式工具',
-        'en': 'Format Tools'
-    },syncSaveDocBtnText: {
-        'zh_CN': '保存',
-        'en': 'Save'
-    },syncMarkdownEmpty: {
-        'zh_CN': '暂无 Markdown 文件。点击“拉取”或“新建”。',
-        'en': 'No Markdown files yet. Click Pull or New.'
-    },syncStatusIdle: {
-        'zh_CN': '状态：未同步',
-        'en': 'Status: Not synced'
-    },syncStatusLoaded: {
-        'zh_CN': '状态：已加载本地同步数据',
-        'en': 'Status: Loaded local sync data'
-    },syncStatusPushed: {
-        'zh_CN': '状态：已推送到云端快照',
-        'en': 'Status: Pushed to cloud snapshot'
-    },syncStatusPulled: {
-        'zh_CN': '状态：已从云端拉取并更新',
-        'en': 'Status: Pulled and updated from cloud snapshot'
-    },syncStatusNoCloud: {
-        'zh_CN': '状态：云端暂无可拉取快照',
-        'en': 'Status: No cloud snapshot to pull'
-    },widgetsViewTitle: {
-        'zh_CN': '小组件',
-        'en': 'Widgets'
-    },widgetsViewDescription: {
-        'zh_CN': '',
-        'en': ''
-    },widgetsTrackingWidgetTitle: {
-        'zh_CN': '时间捕捉',
-        'en': 'Time Tracking'
-    },widgetsTrackingWidgetEmpty: {
-        'zh_CN': '暂无追踪中的书签',
-        'en': 'No bookmarks being tracked'
-    },widgetsRankingWidgetTitle: {
-        'zh_CN': '点击排行',
-        'en': 'Click Ranking'
-    },widgetsRankingWidgetTitleCompact: {
-        'zh_CN': '点击排行',
-        'en': 'Ranking'
-    },widgetsRankingWidgetEmpty: {
-        'zh_CN': '暂无点击记录',
-        'en': 'No click records'
-    },widgetsTimeRankingWidgetTitle: {
-        'zh_CN': '时间排行',
-        'en': 'Time Ranking'
-    },widgetsTimeRankingWidgetEmpty: {
-        'zh_CN': '暂无时间排行数据',
-        'en': 'No time ranking data'
-    },widgetsTimeRankingTypeComposite: {
-        'zh_CN': '时长',
-        'en': 'Time'
-    },widgetsTimeRankingTypeWakes: {
-        'zh_CN': '次数',
-        'en': 'Wakes'
-    },widgetsRankingRangeToggle: {
-        'zh_CN': '切换范围',
-        'en': 'Switch range'
-    },widgetsRankingModeToggle: {
-        'zh_CN': '切换模式',
-        'en': 'Switch mode'
-    },widgetsRankingModeBookmark: {
-        'zh_CN': '书签',
-        'en': 'Bmk'
-    },widgetsRankingModeFolder: {
-        'zh_CN': '文件夹',
-        'en': 'Fld'
-    },widgetsRankingModeDomain: {
-        'zh_CN': '全域',
-        'en': 'Dom'
-    },widgetsRankingModeSubdomain: {
-        'zh_CN': '子域',
-        'en': 'Sub'
-    },widgetsRecommendWidgetTitle: {
-        'zh_CN': '书签推荐',
-        'en': 'Bookmark Recommend'
-    },widgetsAdditionsWeekWidgetTitle: {
-        'zh_CN': '添加记录',
-        'en': 'Additions'
-    },widgetsAdditionsWeekWidgetEmpty: {
-        'zh_CN': '暂无本周添加记录',
-        'en': 'No additions this week'
-    },widgetsHistoryWeekWidgetTitle: {
-        'zh_CN': '点击记录',
-        'en': 'Click History'
-    },widgetsHistoryWeekWidgetEmpty: {
-        'zh_CN': '暂无本周点击记录',
-        'en': 'No clicks this week'
-    },widgetsChartViewToggle: {
-        'zh_CN': '切换视图',
-        'en': 'Switch view'
-    },widgetsChartViewLine: {
-        'zh_CN': '曲线',
-        'en': 'Line'
-    },widgetsChartViewWeekGrid: {
-        'zh_CN': '周格',
-        'en': 'Grid'
-    },widgetsChartViewMonthGrid: {
-        'zh_CN': '月格',
-        'en': 'M-Grid'
-    },widgetsChartViewYearGrid: {
-        'zh_CN': '年格',
-        'en': 'Y-Grid'
-    },widgetsChartRangeToggle: {
-        'zh_CN': '切换范围',
-        'en': 'Switch range'
-    },widgetsChartRangeWeek: {
-        'zh_CN': '本周',
-        'en': 'Week'
-    },widgetsChartRangeMonth: {
-        'zh_CN': '本月',
-        'en': 'Month'
-    },widgetsChartRangeYear: {
-        'zh_CN': '当年',
-        'en': 'Year'
-    },widgetsChartRangeMonth30: {
-        'zh_CN': '本月',
-        'en': 'Month'
-    },widgetsRankingVisualToggle: {
-        'zh_CN': '切换图表',
-        'en': 'Switch chart'
-    },widgetsRankingVisualList: {
-        'zh_CN': '列表',
-        'en': 'List'
-    },widgetsRankingVisualPie: {
-        'zh_CN': '饼图',
-        'en': 'Pie'
-    },widgetsPieOther: {
-        'zh_CN': '其他',
-        'en': 'Other'
-    },widgetsWeekTotal: {
-        'zh_CN': '本周共 {count} 条',
-        'en': '{count} this week'
-    },widgetsRelatedWidgetTitle: {
-        'zh_CN': '关联记录',
-        'en': 'Related Records'
-    },widgetsRelatedLevel1: {
-        'zh_CN': '一级目录',
-        'en': 'Level 1'
-    },widgetsRelatedLevel2: {
-        'zh_CN': '二级目录',
-        'en': 'Level 2'
-    },widgetsRelatedEmpty: {
-        'zh_CN': '暂无目录记录',
-        'en': 'No folder records'
-    },widgetsRelatedComputing: {
-        'zh_CN': '正在计算…',
-        'en': 'Calculating...'
-    },widgetsCardRefreshText: {
-        'zh_CN': '刷新推荐',
-        'en': 'Refresh Cards'
-    },widgetsQuickReviewText: {
-        'zh_CN': '添加待复习',
-        'en': 'Add to Review'
-    },widgetsSmartSortToggle: {
-        'zh_CN': '智能排序',
-        'en': 'Smart Sort'
-    },widgetsSmartSortEnabled: {
-        'zh_CN': '智能排序：开启',
-        'en': 'Smart Sort: On'
-    },widgetsSmartSortDisabled: {
-        'zh_CN': '智能排序：关闭',
-        'en': 'Smart Sort: Off'
-    },widgetsSortPanelTitle: {
-        'zh_CN': '小组件排序',
-        'en': 'Widget Order'
-    },widgetsSortMoveUp: {
-        'zh_CN': '上移',
-        'en': 'Move Up'
-    },widgetsSortMoveDown: {
-        'zh_CN': '下移',
-        'en': 'Move Down'
-    },widgetsSmartSortInfoBtn: {
-        'zh_CN': '智能排序说明',
-        'en': 'Smart Sort Help'
-    },widgetsSortInfoPanelTitle: {
-        'zh_CN': '智能排序说明',
-        'en': 'How Smart Sort Works'
-    },widgetsSortInfoLine1: {
-        'zh_CN': '待复习到期时，「书签推荐」会自动置顶。',
-        'en': 'Bookmark Recommend goes to top when review-later items are due.'
-    },widgetsSortInfoLine2: {
-        'zh_CN': '其余小组件会根据数据变化自动上浮。',
-        'en': 'Other widgets move up when data changes.'
-    },widgetsSortInfoLine3: {
-        'zh_CN': '关闭智能排序后，顺序按手动排序结果展示。',
-        'en': 'When smart sort is off, manual order is used.'
-    },widgetsSortOpenMaskToggle: {
-        'zh_CN': '显示“正在排序”遮罩',
-        'en': 'Show "Sorting" Overlay'
-    },widgetsSortManualLockedHint: {
-        'zh_CN': '智能排序开启时，手动排序已锁定',
-        'en': 'Manual order is locked while Smart Sort is on'
-    },additionsTabReview: {
-        'zh_CN': '书签添加记录',
-        'en': 'Bookmark additions'
-    },additionsTabBrowsing: {
-        'zh_CN': '书签浏览记录',
-        'en': 'Browsing History'
-    },additionsTabTracking: {
-        'zh_CN': '时间捕捉',
-        'en': 'Time Tracking'
-    },trackingPanelDesc: {
-        'zh_CN': '追踪书签页面的活跃浏览时间',
-        'en': 'Track active browsing time on bookmark pages'
-    },clearTrackingText: {
-        'zh_CN': '清除',
-        'en': 'Clear'
-    },browsingTabHistory: {
-        'zh_CN': '点击记录',
-        'en': 'Click History'
-    },browsingTabRanking: {
-        'zh_CN': '点击排行',
-        'en': 'Click Ranking'
-    },browsingTabRelated: {
-        'zh_CN': '关联记录',
-        'en': 'Related History'
-    },browsingCalibrationText: {
-        'zh_CN': '校准与清理',
-        'en': 'Calibrate & Clean'
-    },browsingCalibrationManual: {
-        'zh_CN': '手动校准',
-        'en': 'Manual calibrate'
-    },browsingCalibrationSettings: {
-        'zh_CN': '自动校准设置',
-        'en': 'Auto calibration settings'
-    },browsingCalibrationSettingsTitle: {
-        'zh_CN': '自动校准设置',
-        'en': 'Auto calibration settings'
-    },browsingCalibrationSettingsDesc1: {
-        'zh_CN': '说明：校准只维护扩展自己的<span class="calibration-desc-highlight">本地浏览历史库</span>；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。',
-        'en': 'Note: calibration only maintains the extension-owned <span class="calibration-desc-highlight">local browsing history library</span>. Click records, rankings, and related history are matched against the current bookmark library when read.'
-    },browsingCalibrationSettingsDesc3: {
-        'zh_CN': '首次启用当前本地库版本时，会丢弃旧版本的历史缓存，并通过浏览器 History API 建立最近约 90 天的基线；之后校准只重新对齐最近热区，同时保留本版本后续沉淀的 90 天前冷数据。每日后台定时校准按固定时间执行；如果错过时间，后台启动或打开插件页面时会补检查。下方空闲选项只影响后台定时校准，手动校准和打开页面校准不受影响。',
-        'en': 'The first run of the current local library version discards legacy history cache data and seeds a roughly 90-day baseline through the browser History API. Later calibration realigns only the recent hot window while preserving cold data accumulated by this library version. Daily background calibration runs at the selected time. If the time is missed, the background startup or extension page open checks whether it should catch up. The idle option below only affects background scheduled calibration; manual and page-open calibration are unaffected.'
-    },historyPurgeRangeLabel: {
-        'zh_CN': '清理本地记录:',
-        'en': 'Clean local records:'
-    },historyPurgeInfoTitle: {
-        'zh_CN': '清理规则说明',
-        'en': 'Cleanup rules'
-    },historyPurgeInfoText: {
-        'zh_CN': '浏览器 History API 通常只能回查最近约 90 天的浏览记录；首次启用当前本地库版本时，扩展会丢弃旧版本历史缓存并用 API 建立最近约 90 天的基线。之后，为支持更久的点击排行、关联记录和导出，扩展会维护自己的本地浏览历史库。本地库保存浏览器访问事实，不会因为书签被删除或 URL 被修改而删除；点击记录、点击排行和关联记录会在读取时再与当前书签库匹配。本地记录库会监听浏览器历史删除事件并做同步；浏览器清空全部历史时，本地记录也会清空。浏览器只删除部分历史时，本地库只同步最近 90 天窗口，避免误删本版本后续沉淀的冷数据。这里的“立即清理”只清理扩展自己的本地记录库，不会删除 Chrome/Edge 的浏览器历史。',
-        'en': 'The browser History API usually only lets extensions query roughly the most recent 90 days of browsing records. On the first run of the current local library version, this extension discards legacy history cache data and seeds a roughly 90-day baseline from the API. After that, the extension maintains its own local browsing history library to support longer click ranking, related records, and exports. The local library stores browser visit facts and is not deleted just because a bookmark is removed or its URL changes. Click records, rankings, and related history are matched against the current bookmark library when read. The local library listens to browser history deletion events and syncs them. If the browser clears all history, local records are cleared too. If the browser deletes only part of history, the local library syncs only the recent 90-day window to protect cold data accumulated by this library version. “Clean now” only cleans this extension’s local records and does not delete Chrome/Edge browser history.'
-    },historyPurgeOptionKeep2Years: {
-        'zh_CN': '清理2年前记录',
-        'en': 'Clean records older than 2 years'
-    },historyPurgeOptionKeep1Year: {
-        'zh_CN': '清理1年前记录',
-        'en': 'Clean records older than 1 year'
-    },historyPurgeOptionKeep180Days: {
-        'zh_CN': '清理180天前记录',
-        'en': 'Clean records older than 180 days'
-    },historyPurgeOptionKeep90Days: {
-        'zh_CN': '清理90天前记录',
-        'en': 'Clean records older than 90 days'
-    },browsingCalibrationSettingsSave: {
-        'zh_CN': '保存',
-        'en': 'Save'
-    },browsingCalibrationDeleteLabel: {
-        'zh_CN': '累计删除',
-        'en': 'Auto calibrate after'
-    },browsingCalibrationDeleteUnit: {
-        'zh_CN': '次后自动校准',
-        'en': 'deletions'
-    },browsingCalibrationOpenLabel: {
-        'zh_CN': '浏览历史相关打开/点击',
-        'en': 'Auto calibrate after'
-    },browsingCalibrationOpenUnit: {
-        'zh_CN': '次后自动校准',
-        'en': 'history-related opens/clicks'
-    },browsingCalibrationScheduleLabel: {
-        'zh_CN': '每天',
-        'en': 'Every day at'
-    },browsingCalibrationScheduleUnit: {
-        'zh_CN': '自动校准',
-        'en': 'auto calibrate'
-    },browsingCalibrationIdleLabel: {
-        'zh_CN': '后台定时校准遇到浏览器忙碌时延后',
-        'en': 'Delay background scheduled calibration while the browser is busy'
-    },browsingRankingTitle: {
-        'zh_CN': '点击排行',
-        'en': 'Click Ranking'
-    },browsingRankingDescription: {
-        'zh_CN': '基于浏览器历史记录，按点击次数统计当前书签的热门程度。',
-        'en': 'Based on browser history, rank your bookmarks by click counts.'
-    },browsingRelatedTitle: {
-        'zh_CN': '关联记录',
-        'en': 'Related History'
-    },browsingRelatedDescription: {
-        'zh_CN': '显示浏览器历史记录，并用绿色边框凸显书签相关的记录。',
-        'en': 'Shows browser history, highlighting bookmark-related entries with green borders.'
-    },browsingRelatedBadgeText: {
-        'zh_CN': '书签',
-        'en': 'Bookmark'
-    },browsingRelatedLoadingText: {
-        'zh_CN': '正在读取历史记录...',
-        'en': 'Loading history...'
-    },browsingRelatedComputingOpen: {
-        'zh_CN': '正在打开关联记录…',
-        'en': 'Opening related history...'
-    },browsingRelatedComputingCalc: {
-        'zh_CN': '正在计算关联记录…',
-        'en': 'Calculating related history...'
-    },browsingRelatedComputingApply: {
-        'zh_CN': '正在应用筛选…',
-        'en': 'Applying filters...'
-    },browsingRelatedComputingReuse: {
-        'zh_CN': '正在复用上次结果…',
-        'en': 'Reusing last snapshot...'
-    },browsingRelatedFilterDay: {
-        'zh_CN': '当天',
-        'en': 'Today'
-    },browsingRelatedFilterWeek: {
-        'zh_CN': '当周',
-        'en': 'This Week'
-    },browsingRelatedFilterMonth: {
-        'zh_CN': '当月',
-        'en': 'This Month'
-    },browsingRelatedFilterYear: {
-        'zh_CN': '当年',
-        'en': 'This Year'
-    },browsingRelatedFilterAll: {
-        'zh_CN': '全部',
-        'en': 'All'
-    },calendarWeek: {
-        'zh_CN': '第{0}周',
-        'en': 'Week {0}'
-    },calendarWeekLabel: {
-        'zh_CN': '周',
-        'en': 'Week'
-    },calendarMonth: {
-        'zh_CN': '{0}月',
-        'en': 'Month {0}'
-    },calendarMonthDay: {
-        'zh_CN': '{0}月{1}日',
-        'en': '{0}/{1}'
-    },calendarYear: {
-        'zh_CN': '{0}年',
-        'en': 'Year {0}'
-    },calendarYearMonthDay: {
-        'zh_CN': '{0}年{1}月{2}日',
-        'en': '{0}/{1}/{2}'
-    },calendarWeekdays: {
-        'zh_CN': ['周日', '周一', '周二', '周三', '周四', '周五', '周六'],
-        'en': ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    },calendarWeekdaysFull: {
-        'zh_CN': ['周日', '周一', '周二', '周三', '周四', '周五', '周六'],
-        'en': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-    },calendarMonthNames: {
-        'zh_CN': ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
-        'en': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-    },calendarYearMonth: {
-        'zh_CN': '{0}年{1}',
-        'en': '{1} {0}'
-    },calendarBookmarkCount: {
-        'zh_CN': '{0}个',
-        'en': '{0}'
-    },calendarBookmarksCount: {
-        'zh_CN': '{0}个书签',
-        'en': '{0} bookmarks'
-    },calendarTotalThisMonth: {
-        'zh_CN': '本月共 {0} 个书签',
-        'en': 'Total {0} bookmarks this month'
-    },calendarTotalThisWeek: {
-        'zh_CN': '本周共 {0} 个书签',
-        'en': 'Total {0} bookmarks this week'
-    },calendarTotalThisDay: {
-        'zh_CN': '共 {0} 个书签',
-        'en': 'Total {0} bookmarks'
-    },calendarNoBookmarksThisMonth: {
-        'zh_CN': '本月暂无书签',
-        'en': 'No bookmarks this month'
-    },calendarNoBookmarksThisDay: {
-        'zh_CN': '当天暂无书签',
-        'en': 'No bookmarks this day'
-    },calendarExpandMore: {
-        'zh_CN': '展开更多 (还有{0}个)',
-        'en': 'Show more ({0} more)'
-    },browsingRankingFilterToday: {
-        'zh_CN': '当天',
-        'en': 'Today'
-    },browsingRankingFilterWeek: {
-        'zh_CN': '当周',
-        'en': 'This week'
-    },browsingRankingFilterMonth: {
-        'zh_CN': '当月',
-        'en': 'This month'
-    },browsingRankingFilterYear: {
-        'zh_CN': '当年',
-        'en': 'This year'
-    },browsingRankingFilterAll: {
-        'zh_CN': '全部',
-        'en': 'All'
-    },browsingRankingEmptyTitle: {
-        'zh_CN': '暂无点击记录',
-        'en': 'No click records found'
-    },browsingRankingEmptyDescription: {
-        'zh_CN': '当前时间范围内尚未找到这些书签的访问记录。',
-        'en': 'No visit records for your bookmarks were found in the selected time range.'
-    },browsingRankingNotSupportedTitle: {
-        'zh_CN': '当前环境不支持历史记录统计',
-        'en': 'History statistics are not available in this environment'
-    },browsingRankingNotSupportedDesc: {
-        'zh_CN': '请确认扩展已获得浏览器的历史记录权限。',
-        'en': 'Please ensure the extension has permission to access browser history.'
-    },browsingRankingNoBookmarksTitle: {
-        'zh_CN': '暂无书签可统计',
-        'en': 'No bookmarks to analyze'
-    },browsingCalendarLoading: {
-        'zh_CN': '正在加载日历...',
-        'en': 'Loading calendar...'
-    },timeTrackingWidgetTitle: {
-        'zh_CN': '时间捕捉',
-        'en': 'Time Tracking'
-    },timeTrackingWidgetEmpty: {
-        'zh_CN': '暂无追踪中的书签',
-        'en': 'No bookmarks being tracked'
-    },timeTrackingWidgetMore: {
-        'zh_CN': '还有 {count} 个...',
-        'en': '{count} more...'
-    },timeTrackingWidgetRankingTitle: {
-        'zh_CN': '点击排行',
-        'en': 'Click Ranking'
-    },shortcutsModalTitle: {
-        'zh_CN': '问题反馈与快捷键',
-        'en': 'Feedback & Shortcuts'
-    },openSourceGithubLabel: {
-        'zh_CN': 'GitHub 仓库:',
-        'en': 'GitHub Repository:'
-    },openSourceIssueLabel: {
-        'zh_CN': '问题反馈:',
-        'en': 'Feedback / Issues:'
-    },openSourceIssueText: {
-        'zh_CN': '提交问题',
-        'en': 'Submit Issue'
-    },shortcutsTitle: {
-        'zh_CN': '当前可用快捷键',
-        'en': 'Available Shortcuts'
-    },shortcutsRefreshHint: {
-        'zh_CN': '如修改了浏览器快捷键，请关闭并重新打开本窗口以刷新显示。',
-        'en': 'After changing browser shortcuts, close and reopen this window to refresh.'
-    },shortcutsTableHeaderKey: {
-        'zh_CN': '按键',
-        'en': 'Key'
-    },shortcutsTableHeaderAction: {
-        'zh_CN': '功能',
-        'en': 'Action'
-    },shortcutsSettingsTooltip: {
-        'zh_CN': '在浏览器中管理快捷键',
-        'en': 'Manage shortcuts in browser'
-    },shortcutSidePanel: {
-        'zh_CN': '激活扩展 / 打开侧栏',
-        'en': 'Activate extension / open side panel'
-    },shortcutAdditions: {
-        'zh_CN': '打开「书签记录」视图',
-        'en': 'Open "Bookmark Record" view'
-    },shortcutRecommend: {
-        'zh_CN': '打开「书签推荐」视图',
-        'en': 'Open "Bookmark Recommend" view'
-    },shortcutQuickReviewNext: {
-        'zh_CN': '快捷复习：开始或下一张',
-        'en': 'Quick review: start or next card'
-    },closeShortcutsText: {
-        'zh_CN': '关闭',
-        'en': 'Close'
-    },error: {
-        'zh_CN': '失败',
-        'en': 'Error'
-    },bookmarks: {
-        'zh_CN': '书签',
-        'en': 'bookmarks'
-    },emptyAdditions: {
-        'zh_CN': '暂无书签记录',
-        'en': 'No bookmark records'
-    },loading: {
-        'zh_CN': '加载中...',
-        'en': 'Loading...'
-    },calendarLoading: {
-        'zh_CN': '正在加载日历...',
-        'en': 'Loading calendar...'
-    },currentAscending: {
-        'zh_CN': '当前：正序',
-        'en': 'Current: Ascending'
-    },currentDescending: {
-        'zh_CN': '当前：倒序',
-        'en': 'Current: Descending'
-    },themeTooltip: {
-        'zh_CN': '切换主题',
-        'en': 'Toggle Theme'
-    },langTooltip: {
-        'zh_CN': '切换语言',
-        'en': 'Switch Language'
-    },bookmarkToolboxTitle: {
-        'zh_CN': '书签工具箱',
-        'en': 'Bookmark Toolbox'
-    },trackingToggleOn: {
-        'zh_CN': '开启',
-        'en': 'On'
-    },trackingToggleOff: {
-        'zh_CN': '关闭',
-        'en': 'Off'
-    },trackingClearBtn: {
-        'zh_CN': '清除记录',
-        'en': 'Clear Records'
-    },trackingBlockBtn: {
-        'zh_CN': '屏蔽',
-        'en': 'Block'
-    },trackingBlockModalTitle: {
-        'zh_CN': '时间追踪屏蔽',
-        'en': 'Time Tracking Block'
-    },trackingBlockedBookmarksTitle: {
-        'zh_CN': '已屏蔽书签',
-        'en': 'Blocked Bookmarks'
-    },trackingBlockedFoldersTitle: {
-        'zh_CN': '已屏蔽文件夹',
-        'en': 'Blocked Folders'
-    },trackingBlockedDomainsTitle: {
-        'zh_CN': '已屏蔽域名',
-        'en': 'Blocked Domains'
-    },trackingBlockedBookmarksEmpty: {
-        'zh_CN': '暂无已屏蔽书签',
-        'en': 'No blocked bookmarks'
-    },trackingBlockedFoldersEmpty: {
-        'zh_CN': '暂无已屏蔽文件夹',
-        'en': 'No blocked folders'
-    },trackingBlockedDomainsEmpty: {
-        'zh_CN': '暂无已屏蔽域名',
-        'en': 'No blocked domains'
-    },addTrackingBlockDomainModalTitle: {
-        'zh_CN': '添加屏蔽域名（时间追踪）',
-        'en': 'Add Block Domain (Time Tracking)'
-    },selectTrackingBlockFolderModalTitle: {
-        'zh_CN': '选择要屏蔽的文件夹（时间追踪）',
-        'en': 'Select Folder to Block (Time Tracking)'
-    },addTrackingBlockBookmarkModalTitle: {
-        'zh_CN': '添加屏蔽书签（时间追踪）',
-        'en': 'Add Block Bookmark (Time Tracking)'
-    },trackingBlockBookmarkTabTracking: {
-        'zh_CN': '正在追踪',
-        'en': 'Tracking'
-    },trackingBlockBookmarkTabRanking: {
-        'zh_CN': '综合排行',
-        'en': 'Ranking'
-    },trackingBlockBookmarkTabTree: {
-        'zh_CN': '搜索',
-        'en': 'Search'
-    },trackingCurrentTitle: {
-        'zh_CN': '正在追踪的书签',
-        'en': 'Currently Tracking'
-    },trackingNoActive: {
-        'zh_CN': '暂无正在追踪的书签',
-        'en': 'No active tracking sessions'
-    },trackingHeaderState: {
-        'zh_CN': '状态',
-        'en': 'Status'
-    },trackingStateHelpTitle: {
-        'zh_CN': '状态说明',
-        'en': 'State guide'
-    },trackingHeaderTitle: {
-        'zh_CN': '书签',
-        'en': 'Bookmark'
-    },trackingHeaderTime: {
-        'zh_CN': '综合时长（当前）',
-        'en': 'Composite Duration (Current)'
-    },trackingHeaderWakes: {
-        'zh_CN': '唤醒',
-        'en': 'Wakes'
-    },trackingHeaderRatio: {
-        'zh_CN': '活跃',
-        'en': 'Active'
-    },trackingRankingTitle: {
-        'zh_CN': '综合排行',
-        'en': 'Ranking'
-    },trackingRankingTypeComposite: {
-        'zh_CN': '综合时长',
-        'en': 'Composite Duration'
-    },trackingRankingTypeWakes: {
-        'zh_CN': '唤醒次数',
-        'en': 'Wake Count'
-    },trackingRangeToday: {
-        'zh_CN': '今天',
-        'en': 'Today'
-    },trackingRangeWeek: {
-        'zh_CN': '本周',
-        'en': 'Week'
-    },trackingRangeMonth: {
-        'zh_CN': '本月',
-        'en': 'Month'
-    },trackingRangeYear: {
-        'zh_CN': '当年',
-        'en': 'Year'
-    },trackingRangeAll: {
-        'zh_CN': '全部',
-        'en': 'All'
-    },trackingNoData: {
-        'zh_CN': '暂无活跃时间数据',
-        'en': 'No active time data'
-    },trackingNoDataRange: {
-        'zh_CN': '该时间范围暂无数据（旧数据请查看“全部”）',
-        'en': 'No data in this range yet (older data is available in "All").'
-    },trackingRangeDataHintFrom: {
-        'zh_CN': '区间统计起始于 {date}（旧数据仅计入“全部”）',
-        'en': 'Range stats start from {date} (older data is available in "All" only).'
-    },trackingRangeDataHintPending: {
-        'zh_CN': '区间统计仅记录新版本后的数据（旧数据仅计入“全部”）',
-        'en': 'Range stats only include data after this version update (older data is in "All" only).'
-    },trackingClearRangeConfirm: {
-        'zh_CN': '确定要清除{range}以前的综合排行数据吗？',
-        'en': 'Are you sure you want to clear ranking data older than {range}?'
-    },trackingClearCurrentConfirm: {
-        'zh_CN': '确定要清除正在追踪的会话吗？',
-        'en': 'Are you sure you want to clear current tracking sessions?'
-    },trackingClearRange: {
-        'zh_CN': { week: '一周', month: '一个月', year: '一年', all: '全部' },
-        'en': { week: '1 week', month: '1 month', year: '1 year', all: 'all' }
-    },trackingClearedCount: {
-        'zh_CN': '已清除 {count} 条记录',
-        'en': 'Cleared {count} records'
-    },trackingLoadFailed: {
-        'zh_CN': '排行加载失败',
-        'en': 'Failed to load ranking'
-    },recommendViewTitle: {
-        'zh_CN': '书签推荐',
-        'en': 'Bookmark Recommendations'
-    },recommendHelpTooltip: {
-        'zh_CN': '帮助',
-        'en': 'Help'
-    },legendScore: {
-        'zh_CN': '推荐分数',
-        'en': 'Score'
-    },legendRecall: {
-        'zh_CN': '记忆度',
-        'en': 'Recall'
-    },recallDesc: {
-        'zh_CN': '（FSRS遗忘曲线：复习后锐减，逐渐恢复）',
-        'en': ' (FSRS curve: drops after review, gradually recovers)'
-    },legendFreshness: {
-        'zh_CN': '新鲜度',
-        'en': 'Freshness'
-    },legendColdness: {
-        'zh_CN': '冷门度',
-        'en': 'Coldness'
-    },legendTimeDegree: {
-        'zh_CN': '时间度',
-        'en': 'Time Degree'
-    },thresholdFreshnessLabel: {
-        'zh_CN': '添加天数',
-        'en': 'Days since added'
-    },thresholdColdnessLabel: {
-        'zh_CN': '点击数',
-        'en': 'Click count'
-    },thresholdTimeDegreeLabel: {
-        'zh_CN': '综合时间',
-        'en': 'Composite time'
-    },thresholdMinutesUnit: {
-        'zh_CN': '分钟',
-        'en': ' min'
-    },thresholdForgettingLabel: {
-        'zh_CN': '未访问',
-        'en': 'Unvisited'
-    },thresholdDaysUnit: {
-        'zh_CN': '天',
-        'en': ' days'
-    },legendForgetting: {
-        'zh_CN': '遗忘度',
-        'en': 'Forgetting'
-    },legendLaterReview: {
-        'zh_CN': '待复习',
-        'en': 'Later Review'
-    },laterReviewDesc: {
-        'zh_CN': '（手动添加后=1）',
-        'en': '(=1 when manually added)'
-    },presetDefault: {
-        'zh_CN': '默认模式',
-        'en': 'Default'
-    },presetDefaultTip: {
-        'zh_CN': '均衡推荐',
-        'en': 'Balanced recommendation'
-    },presetArchaeology: {
-        'zh_CN': '考古模式',
-        'en': 'Archaeology'
-    },presetArchaeologyTip: {
-        'zh_CN': '挖掘尘封已久的书签',
-        'en': 'Dig up long-forgotten bookmarks'
-    },presetConsolidate: {
-        'zh_CN': '巩固模式',
-        'en': 'Consolidate'
-    },presetConsolidateTip: {
-        'zh_CN': '经常访问但还没深入阅读的',
-        'en': 'Frequently visited but not deeply read'
-    },presetPriority: {
-        'zh_CN': '优先巩固',
-        'en': 'Priority'
-    },presetPriorityTip: {
-        'zh_CN': '优先复习手动添加的书签',
-        'en': 'Prioritize manually added bookmarks'
-    },presetWander: {
-        'zh_CN': '漫游模式',
-        'en': 'Wander'
-    },presetWanderTip: {
-        'zh_CN': '随机探索发现',
-        'en': 'Random exploration'
-    },resetFormulaText: {
-        'zh_CN': '恢复默认',
-        'en': 'Reset'
-    },cardRefreshText: {
-        'zh_CN': '刷新推荐',
-        'en': 'Refresh'
-    },cardQuickReviewText: {
-        'zh_CN': '快捷复习',
-        'en': 'Quick Review'
-    },refreshSettingsTitle: {
-        'zh_CN': '书签推荐设置',
-        'en': 'Bookmark Recommend Settings'
-    },widgetSettingsTooltip: {
-        'zh_CN': '设置',
-        'en': 'Settings'
-    },settingsAutoRefreshText: {
-        'zh_CN': '自动刷新设置',
-        'en': 'Auto Refresh'
-    },refreshEveryNOpensLabel: {
-        'zh_CN': '每打开',
-        'en': 'Every'
-    },refreshEveryNOpensUnit: {
-        'zh_CN': '次刷新',
-        'en': 'opens, refresh'
-    },refreshAfterHoursLabel: {
-        'zh_CN': '距上次刷新超过',
-        'en': 'After'
-    },refreshAfterHoursUnit: {
-        'zh_CN': '小时',
-        'en': 'hours'
-    },refreshAfterDaysLabel: {
-        'zh_CN': '距上次刷新超过',
-        'en': 'After'
-    },refreshAfterDaysUnit: {
-        'zh_CN': '天',
-        'en': 'days'
-    },refreshSettingsSave: {
-        'zh_CN': '保存',
-        'en': 'Save'
-    },settingsReviewReminderText: {
-        'zh_CN': '待复习提醒',
-        'en': 'Review Reminder'
-    },reviewReminderPopupLabel: {
-        'zh_CN': '待复习到期时弹出提醒窗口',
-        'en': 'Show a reminder window when review items are due'
-    },reviewReminderPopupHint: {
-        'zh_CN': '独立提醒窗口会在书签到期后弹出，需要手动关闭。',
-        'en': 'A standalone reminder window opens when bookmarks become due and stays open until closed.'
-    },heatmapTitle: {
-        'zh_CN': '复习热力图',
-        'en': 'Review Heatmap'
-    },heatmapLoading: {
-        'zh_CN': '热力图数据加载中...',
-        'en': 'Loading heatmap data...'
-    },postponedTitle: {
-        'zh_CN': '待复习',
-        'en': 'To Review'
-    },priorityModeBadge: {
-        'zh_CN': '⚡优先',
-        'en': '⚡Priority'
-    },postponedEmptyText: {
-        'zh_CN': '暂无待复习的书签',
-        'en': 'No bookmarks to review'
-    },addPostponedModalTitle: {
-        'zh_CN': '添加到待复习',
-        'en': 'Add to Review'
-    },postponedAddBtnTitle: {
-        'zh_CN': '添加书签到待复习',
-        'en': 'Add bookmarks to review'
-    },cardLaterTitle: {
-        'zh_CN': '待复习',
-        'en': 'To Review'
-    },cardSkipTitle: {
-        'zh_CN': '跳过',
-        'en': 'Skip'
-    },recommendSearchModalTitle: {
-        'zh_CN': '推荐候选',
-        'en': 'Recommendation Candidate'
-    },recommendSearchDebugTitle: {
-        'zh_CN': '诊断',
-        'en': 'Debug'
-    },recommendSearchLaterText: {
-        'zh_CN': '待复习',
-        'en': 'To Review'
-    },recommendSearchSkipText: {
-        'zh_CN': '跳过',
-        'en': 'Skip'
-    },recommendSearchBlockText: {
-        'zh_CN': '屏蔽',
-        'en': 'Block'
-    },recommendSearchReviewText: {
-        'zh_CN': '标记已复习',
-        'en': 'Mark Reviewed'
-    },recommendSearchOpenText: {
-        'zh_CN': '打开',
-        'en': 'Open'
-    },recommendSearchCloseText: {
-        'zh_CN': '关闭',
-        'en': 'Close'
-    },addTabFolder: {
-        'zh_CN': '随机',
-        'en': 'Random'
-    },addTabTree: {
-        'zh_CN': '树',
-        'en': 'Tree'
-    },addTabSearch: {
-        'zh_CN': '搜索',
-        'en': 'Search'
-    },addTabDomain: {
-        'zh_CN': '域名',
-        'en': 'Domain'
-    },addFolderLabel: {
-        'zh_CN': '选择文件夹：',
-        'en': 'Choose folder:'
-    },addCountLabel: {
-        'zh_CN': '抽取数量：',
-        'en': 'Count:'
-    },addSelectAllLabel: {
-        'zh_CN': '全部',
-        'en': 'All'
-    },addModeLabel: {
-        'zh_CN': '抽取方式：',
-        'en': 'Mode:'
-    },addModeRandom: {
-        'zh_CN': '随机',
-        'en': 'Random'
-    },addModeSequential: {
-        'zh_CN': '顺序',
-        'en': 'Sequential'
-    },addIncludeSubfolders: {
-        'zh_CN': '包含子文件夹',
-        'en': 'Include subfolders'
-    },addSearchPlaceholder: {
-        'zh_CN': '搜索书签标题或URL...',
-        'en': 'Search title or URL...'
-    },addSearchEmpty: {
-        'zh_CN': '输入关键词搜索书签',
-        'en': 'Enter keyword to search bookmarks'
-    },addSearchSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addTreeSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addDomainSearchPlaceholder: {
-        'zh_CN': '搜索域名...',
-        'en': 'Search domain...'
-    },addDomainLoading: {
-        'zh_CN': '加载域名列表中...',
-        'en': 'Loading domain list...'
-    },addDomainSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addDomainSelectedLabel: {
-        'zh_CN': '个域名',
-        'en': 'domains'
-    },addPostponedCancelText: {
-        'zh_CN': '取消',
-        'en': 'Cancel'
-    },addPostponedConfirmText: {
-        'zh_CN': '添加',
-        'en': 'Add'
-    },blockManageTitle: {
-        'zh_CN': '屏蔽',
-        'en': 'Block'
-    },blockAddBtnTitle: {
-        'zh_CN': '添加到屏蔽',
-        'en': 'Add to block'
-    },addBlockModalTitle: {
-        'zh_CN': '添加到屏蔽',
-        'en': 'Add to Block'
-    },addBlockConfirmText: {
-        'zh_CN': '添加屏蔽',
-        'en': 'Add Block'
-    },addBlockTabTree: {
-        'zh_CN': '树',
-        'en': 'Tree'
-    },addBlockTabSearch: {
-        'zh_CN': '搜索',
-        'en': 'Search'
-    },addBlockTabDomain: {
-        'zh_CN': '域名',
-        'en': 'Domain'
-    },addBlockTreeHint: {
-        'zh_CN': '',
-        'en': ''
-    },addBlockSearchHint: {
-        'zh_CN': '',
-        'en': ''
-    },addBlockDomainHint: {
-        'zh_CN': '域名按 A-Z 排序；已在待复习中的书签会自动跳过。',
-        'en': 'Domains are sorted A-Z. Bookmarks already in review are skipped.'
-    },addBlockTreeSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addBlockSearchSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addBlockUnifiedDomainSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },addBlockUnifiedDomainSelectedLabel: {
-        'zh_CN': '个域名',
-        'en': 'domains'
-    },addBlockFooterSelectedText: {
-        'zh_CN': '已选择',
-        'en': 'Selected'
-    },blockedUnifiedEmptyText: {
-        'zh_CN': '暂无屏蔽项',
-        'en': 'No blocked items'
-    },addDomainModalTitle: {
-        'zh_CN': '添加屏蔽域名',
-        'en': 'Add Blocked Domain'
-    },addDomainModalDesc: {
-        'zh_CN': '输入要屏蔽的域名（如 example.com）：',
-        'en': 'Enter domain to block (e.g. example.com):'
-    },addDomainCancelBtn: {
-        'zh_CN': '取消',
-        'en': 'Cancel'
-    },addDomainConfirmBtn: {
-        'zh_CN': '添加',
-        'en': 'Add'
-    },selectFolderModalTitle: {
-        'zh_CN': '选择要屏蔽的文件夹',
-        'en': 'Select Folder to Block'
-    },unnamedFolderLabel: {
-        'zh_CN': '未命名文件夹',
-        'en': 'Untitled folder'
-    },laterPresetText: {
-        'zh_CN': '快捷时间',
-        'en': 'Quick Times'
-    },laterModalTitle: {
-        'zh_CN': '稍后复习',
-        'en': 'Review Later'
-    },laterIn1Hour: {
-        'zh_CN': '1小时后',
-        'en': 'In 1 hour'
-    },laterTomorrow: {
-        'zh_CN': '明天',
-        'en': 'Tomorrow'
-    },laterIn3Days: {
-        'zh_CN': '3天后',
-        'en': 'In 3 days'
-    },laterIn1Week: {
-        'zh_CN': '1周后',
-        'en': 'In 1 week'
-    },laterCustomTimeLabel: {
-        'zh_CN': '自定义时间',
-        'en': 'Custom time'
-    },laterCustomSubmit: {
-        'zh_CN': '确定',
-        'en': 'Confirm'
-    },laterCustomTimeHint: {
-        'zh_CN': '输入一个未来时间，到期后进入待复习。',
-        'en': 'Enter a future time. It will enter the review queue when due.'
-    }
-,exportTooltip: {
-        'zh_CN': '导出书签添加记录',
-        'en': 'Export Bookmark Addition Records'
-    },exportModalTitle: {
-        'zh_CN': '导出书签添加记录',
-        'en': 'Export Bookmark Addition Records'
-    },exportScopeCurrent: {
-        'zh_CN': '当前视图: ',
-        'en': 'Current View: '
-    },exportBtnProcessing: {
-        'zh_CN': '正在处理...',
-        'en': 'Processing...'
-    },exportSuccessCopy: {
-        'zh_CN': '已复制到剪贴板',
-        'en': 'Copied to clipboard'
-    },exportErrorNoFormat: {
-        'zh_CN': '请至少选择一种导出格式',
-        'en': 'Please select at least one format'
-    },exportErrorNoData: {
-        'zh_CN': '当前范围内没有可导出的书签',
-        'en': 'No bookmarks to export in current scope'
-    },exportRootTitle: {
-        'zh_CN': '书签记录与推荐',
-        'en': 'Bookmark Record and Recommend'
-    },calendarSelectMode: {
-        'zh_CN': '勾选',
-        'en': 'Select'
-    },calendarLocateToday: {
-        'zh_CN': '定位至今天',
-        'en': 'Locate Today'
-    },browsingExportTooltip: {
-        'zh_CN': '导出书签点击记录',
-        'en': 'Export Bookmark Click Records'
-    },browsingExportModalTitle: {
-        'zh_CN': '导出书签点击记录',
-        'en': 'Export Bookmark Click Records'
-    }
-};
-window.i18n = i18n; // 暴露给其他模块使用
 
 // =============================================================================
 // 初始化
@@ -5106,6 +5761,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
 });
+
 
 // =============================================================================
 // 用户设置
@@ -6183,6 +6839,7 @@ function applyLanguage() {
     }
 }
 
+
 // =============================================================================
 // UI 初始化
 // =============================================================================
@@ -6474,6 +7131,7 @@ function initializeUI() {
 
 
 }
+
 // =============================================================================
 // 数据加载
 // =============================================================================
@@ -6642,387 +7300,6 @@ function flattenBookmarkTree(node, parentPath = '', ancestorFolderIds = []) {
     return bookmarks;
 }
 
-// =============================================================================
-// 时间捕捉小组件更新
-// =============================================================================
-
-let timeTrackingWidgetInterval = null;
-
-async function updateTimeTrackingWidget() {
-    const widgetList = document.getElementById('timeTrackingWidgetList');
-    const widgetTitle = document.getElementById('timeTrackingWidgetTitle');
-
-    if (!widgetList) return;
-
-    const emptyText = i18n.timeTrackingWidgetEmpty[currentLang];
-
-    // 检查追踪是否开启
-    let isTrackingEnabled = true;
-    try {
-        const enabledResponse = await browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' });
-        if (enabledResponse && enabledResponse.success) {
-            isTrackingEnabled = enabledResponse.enabled;
-        }
-    } catch (e) {
-        console.warn('[时间捕捉小组件] 检查追踪状态失败:', e);
-    }
-
-    // [New] Determine Widget Mode (Tracking vs Ranking)
-    // Logic: User preference overrides default. Default depends on tracking state.
-    let widgetOneMode = localStorage.getItem('timeTrackingWidgetMode'); // 'tracking' or 'ranking'
-
-    // If no preference, default based on tracking state
-    if (!widgetOneMode) {
-        widgetOneMode = isTrackingEnabled ? 'tracking' : 'ranking';
-    }
-
-    if (widgetOneMode === 'tracking') {
-        // 模式：时间追踪 (Live OR Disabled)
-        if (widgetTitle) widgetTitle.textContent = i18n.timeTrackingWidgetTitle[currentLang];
-
-        // Check widget reference
-        const w = document.getElementById('timeTrackingWidget');
-        if (w) w.dataset.mode = 'tracking';
-
-        if (isTrackingEnabled) {
-            // 追踪开启: 显示实时列表 (Live)
-            try {
-                const response = await browserAPI.runtime.sendMessage({
-                    action: 'getCurrentActiveSessions'
-                });
-
-                if (response && response.success && response.sessions && response.sessions.length > 0) {
-                    const sessions = response.sessions;
-
-                    // 按标题分组
-                    const groupedSessions = new Map();
-                    for (const session of sessions) {
-                        const key = session.title || session.url;
-                        if (!groupedSessions.has(key)) {
-                            groupedSessions.set(key, []);
-                        }
-                        groupedSessions.get(key).push(session);
-                    }
-
-                    // 转换为显示数据
-                    const displayItems = [];
-                    for (const [groupKey, groupSessions] of groupedSessions) {
-                        const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
-                        const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
-                        const bestState = groupSessions.reduce((best, s) => {
-                            const bestIdx = stateOrder.indexOf(best);
-                            const currIdx = stateOrder.indexOf(s.state);
-                            return currIdx < bestIdx ? s.state : best;
-                        }, 'sleeping');
-
-                        displayItems.push({
-                            title: groupSessions[0].title,
-                            url: groupSessions[0].url,
-                            state: bestState,
-                            compositeMs: totalCompositeMs,
-                            count: groupSessions.length
-                        });
-                    }
-
-                    const maxShow = 5;
-                    const showItems = displayItems.slice(0, maxShow);
-                    const remaining = displayItems.length - maxShow;
-
-                    widgetList.innerHTML = '';
-
-                    showItems.forEach(item => {
-                        const el = document.createElement('div');
-                        el.className = 'time-tracking-widget-item';
-
-                        const stateIcon = document.createElement('span');
-                        stateIcon.className = 'item-state';
-                        stateIcon.textContent = item.state === 'active' ? '🟢' :
-                            (item.state === 'sleeping' ? '💤' :
-                                (item.state === 'background' ? '⚪' :
-                                    (item.state === 'visible' ? '🔵' : '🟡')));
-
-                        const title = document.createElement('span');
-                        title.className = 'item-title';
-                        let titleText = item.title || new URL(item.url).hostname;
-                        if (item.count > 1) titleText += ` (${item.count})`;
-                        title.textContent = titleText;
-                        title.title = item.title || item.url;
-
-                        const time = document.createElement('span');
-                        time.className = 'item-time';
-                        time.textContent = formatActiveTime(item.compositeMs);
-
-                        el.appendChild(stateIcon);
-                        el.appendChild(title);
-                        el.appendChild(time);
-                        el.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            if (!item.url) return;
-                            if (typeof window.openBookmarkNewTab === 'function') {
-                                window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
-                            } else if (browserAPI?.tabs?.create) {
-                                browserAPI.tabs.create({ url: item.url });
-                            } else {
-                                window.open(item.url, '_blank');
-                            }
-                        });
-                        widgetList.appendChild(el);
-                    });
-
-                    if (remaining > 0) {
-                        const moreEl = document.createElement('div');
-                        moreEl.className = 'time-tracking-widget-more';
-                        moreEl.textContent = i18n.timeTrackingWidgetMore[currentLang].replace('{count}', remaining);
-                        widgetList.appendChild(moreEl);
-                    }
-                } else {
-                    showEmptyState();
-                }
-            } catch (error) {
-                console.warn('[时间捕捉小组件] 获取数据失败:', error);
-                showEmptyState();
-            }
-        } else {
-            // 追踪关闭: 显示已停用状态 (Disabled)
-            widgetList.innerHTML = '';
-
-            const emptyDiv = document.createElement('div');
-            emptyDiv.className = 'time-tracking-widget-empty';
-            emptyDiv.style.flexDirection = 'column';
-            emptyDiv.style.gap = '8px';
-
-            const text = document.createElement('span');
-            text.textContent = currentLang === 'zh_CN' ? '时间追踪已关闭' : 'Time Tracking Disabled';
-
-            emptyDiv.appendChild(text);
-            widgetList.appendChild(emptyDiv);
-        }
-    } else {
-        // 追踪关闭 / 强制排行：显示点击排行
-        if (widgetTitle) widgetTitle.textContent = i18n.timeTrackingWidgetRankingTitle ? i18n.timeTrackingWidgetRankingTitle[currentLang] : (currentLang === 'zh_CN' ? '点击排行' : 'Click Ranking');
-
-        // Check widget reference
-        const w = document.getElementById('timeTrackingWidget');
-        if (w) w.dataset.mode = 'ranking';
-
-        try {
-            // Initialize User Preference Range
-            if (!window.timeTrackingWidgetRankingRange) {
-                window.timeTrackingWidgetRankingRange = localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
-            }
-            const currentRange = normalizeWidgetsRankingRange(window.timeTrackingWidgetRankingRange);
-            const stats = await ensureBrowsingClickRankingStats(currentRange);
-
-            // Map range to localized text and count key
-            const rangeConfig = {
-                'day': { text: currentLang === 'zh_CN' ? '当日' : 'Today', key: 'dayCount' },
-                'week': { text: currentLang === 'zh_CN' ? '当周' : 'Week', key: 'weekCount' },
-                'month': { text: currentLang === 'zh_CN' ? '当月' : 'Month', key: 'monthCount' },
-                'year': { text: currentLang === 'zh_CN' ? '当年' : 'Year', key: 'yearCount' },
-                'all': { text: currentLang === 'zh_CN' ? '全部' : 'All', key: 'allCount' }
-            };
-            const activeConfig = rangeConfig[currentRange] || rangeConfig['day'];
-
-            // Fetch Items
-            let items = [];
-            if (stats && !stats.error && stats.items) {
-                items = getBrowsingRankingItemsForRangeFromStats(stats, currentRange);
-            }
-
-            widgetList.innerHTML = '';
-
-            if (items && items.length > 0) {
-                const top5 = items.slice(0, 5);
-                top5.forEach((item, index) => {
-                    const el = document.createElement('div');
-                    el.className = 'time-tracking-widget-item ranking-item';
-
-                    const rankNum = document.createElement('span');
-                    rankNum.className = 'item-rank';
-                    rankNum.textContent = `${index + 1}`;
-
-                    const title = document.createElement('span');
-                    title.className = 'item-title';
-                    try {
-                        title.textContent = item.title || new URL(item.url).hostname;
-                    } catch {
-                        title.textContent = item.title || item.url;
-                    }
-                    title.title = item.title || item.url;
-
-                    const count = document.createElement('span');
-                    count.className = 'item-time';
-                    count.textContent = `${item[activeConfig.key]}${currentLang === 'zh_CN' ? '次' : 'x'}`;
-
-                    el.appendChild(rankNum);
-                    el.appendChild(title);
-                    el.appendChild(count);
-
-                    // Specific click: Open URL
-                    el.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        if (!item.url) return;
-                        if (typeof window.openBookmarkNewTab === 'function') {
-                            window.openBookmarkNewTab(item.url, { title: item.title || '', source: 'time_tracking_widget' });
-                        } else if (browserAPI?.tabs?.create) {
-                            browserAPI.tabs.create({ url: item.url });
-                        } else {
-                            window.open(item.url, '_blank');
-                        }
-                    });
-
-                    widgetList.appendChild(el);
-                });
-            } else {
-                // Empty State within Ranking
-                const emptyDiv = document.createElement('div');
-                emptyDiv.className = 'time-tracking-widget-empty';
-                emptyDiv.innerHTML = `<span>${emptyText}</span>`;
-                widgetList.appendChild(emptyDiv);
-            }
-
-            // Always show range switcher at bottom
-            const rangeHint = document.createElement('div');
-            rangeHint.className = 'time-tracking-widget-hint';
-            rangeHint.textContent = `${activeConfig.text} >`; // Arrow to indicate switchable
-            rangeHint.title = currentLang === 'zh_CN' ? '点击切换时间范围' : 'Click to switch range';
-
-            rangeHint.addEventListener('click', (e) => {
-                e.stopPropagation();
-                // Cycle ranges: day -> week -> month -> year -> all -> day
-                const ranges = ['day', 'week', 'month', 'year', 'all'];
-                let idx = ranges.indexOf(window.timeTrackingWidgetRankingRange);
-                if (idx < 0) idx = 0;
-                const nextIdx = (idx + 1) % ranges.length;
-
-                window.timeTrackingWidgetRankingRange = ranges[nextIdx];
-                localStorage.setItem('timeTrackingWidgetRankingRange', window.timeTrackingWidgetRankingRange);
-
-                updateTimeTrackingWidget();
-            });
-
-            widgetList.appendChild(rangeHint);
-
-        } catch (error) {
-            console.warn('[时间捕捉小组件] 获取点击排行数据失败:', error);
-            showEmptyState();
-        }
-    }
-
-    function showEmptyState() {
-        widgetList.innerHTML = `<div class="time-tracking-widget-empty"><span>${emptyText}</span></div>`;
-    }
-}
-
-function formatActiveTime(ms) {
-    if (!ms || ms < 1000) return '0s';
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return `${hours}h ${remainingMinutes}m`;
-}
-
-function startTimeTrackingWidgetRefresh() {
-    const legacyWidgetList = document.getElementById('timeTrackingWidgetList');
-    if (!legacyWidgetList) {
-        stopTimeTrackingWidgetRefresh();
-        return;
-    }
-
-    if (timeTrackingWidgetInterval) {
-        clearInterval(timeTrackingWidgetInterval);
-    }
-    updateTimeTrackingWidget();
-    timeTrackingWidgetInterval = setInterval(() => {
-        if (document.body.classList.contains('sidebar-resizing')) return;
-        if (document.documentElement.classList.contains('layout-resizing')) return;
-        updateTimeTrackingWidget();
-    }, 1000);  // 1秒刷新，更实时
-}
-
-function stopTimeTrackingWidgetRefresh() {
-    if (timeTrackingWidgetInterval) {
-        clearInterval(timeTrackingWidgetInterval);
-        timeTrackingWidgetInterval = null;
-
-    }
-}
-
-function initTimeTrackingWidget() {
-    const widget = document.getElementById('timeTrackingWidget');
-    if (!widget) return;
-
-    widget.addEventListener('click', (e) => {
-        // Prevent if clicking specific interactive elements that didn't stop propagation (though most should)
-        if (e.target.closest('.widget-header-action-btn') ||
-            e.target.closest('.time-tracking-widget-hint') ||
-            e.target.closest('.time-tracking-widget-item') ||
-            e.target.closest('a')) return;
-
-        switchView('additions');
-        setTimeout(() => {
-            const mode = widget.dataset.mode;
-            if (mode === 'ranking') {
-                // Navigate to Click Ranking View
-                const range = window.timeTrackingWidgetRankingRange || localStorage.getItem('timeTrackingWidgetRankingRange') || 'week';
-                try { localStorage.setItem('browsingRankingActiveRange', range); } catch (_) { }
-                const browsingTab = document.getElementById('additionsTabBrowsing');
-                if (browsingTab) {
-                    browsingTab.click();
-                    setTimeout(() => {
-                        const rankingTab = document.getElementById('browsingTabRanking');
-                        if (rankingTab) rankingTab.click();
-                    }, 50);
-                }
-            } else {
-                // Default: Navigate to Time Tracking View
-                const trackingTab = document.getElementById('additionsTabTracking');
-                if (trackingTab) {
-                    trackingTab.click();
-                }
-            }
-        }, 100);
-    });
-
-    // [New] Toggle Button
-    const toggleViewBtn = document.getElementById('timeTrackingToggleViewBtn');
-    if (toggleViewBtn) {
-        toggleViewBtn.addEventListener('click', (e) => {
-            e.stopPropagation(); // Prevent widget click navigation
-
-            // Determine current mode to flip
-            let currentMode = localStorage.getItem('timeTrackingWidgetMode');
-            if (!currentMode) {
-                // Check if widget has dataset mode updated by updateTimeTrackingWidget
-                const w = document.getElementById('timeTrackingWidget');
-                if (w && w.dataset.mode) {
-                    currentMode = w.dataset.mode;
-                } else {
-                    currentMode = 'tracking'; // Fallback
-                }
-            }
-
-            const newMode = currentMode === 'ranking' ? 'tracking' : 'ranking';
-            localStorage.setItem('timeTrackingWidgetMode', newMode);
-
-            updateTimeTrackingWidget();
-        });
-    }
-
-    // 检查侧边栏状态，只有展开时才启动刷新
-    const sidebar = document.getElementById('sidebar');
-    const collapseState = sidebar?.dataset?.collapseState || (sidebar?.classList?.contains('compact')
-        ? 'compact'
-        : (sidebar?.classList?.contains('hidden') || sidebar?.classList?.contains('collapsed') ? 'hidden' : 'expanded'));
-    if (collapseState === 'expanded') {
-        startTimeTrackingWidgetRefresh();
-    } else {
-
-    }
-}
 
 // =============================================================================
 // 侧边栏收起功能
@@ -8005,6 +8282,7 @@ function initSidebarToggle() {
     }, true);
 }
 
+
 // =============================================================================
 // 标题栏折叠与上下停靠
 // =============================================================================
@@ -8586,6 +8864,7 @@ function initHeaderToggle() {
     });
 }
 
+
 // =============================================================================
 // 视图切换
 // =============================================================================
@@ -8767,6 +9046,433 @@ function renderCurrentView() {
             break;
     }
 }
+
+
+// =============================================================================
+// 主题和语言切换
+// =============================================================================
+
+// 主题和语言切换 - 独立设置，主UI优先
+// 设置覆盖后会显示重置按钮
+
+function toggleTheme() {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
+
+    // 设置覆盖标志
+    try {
+        localStorage.setItem('historyViewerHasCustomTheme', 'true');
+        localStorage.setItem('historyViewerCustomTheme', currentTheme);
+
+    } catch (e) {
+        console.error('[History Viewer] 无法保存主题覆盖:', e);
+    }
+
+    // 更新图标
+    const icon = document.querySelector('#themeToggle i');
+    if (icon) {
+        icon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
+    const settingsIcon = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
+    if (settingsIcon) {
+        settingsIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
+}
+
+function toggleLanguage() {
+    currentLang = currentLang === 'zh_CN' ? 'en' : 'zh_CN';
+    window.currentLang = currentLang; // 同步到 window
+
+    // 设置覆盖标志
+    try {
+        localStorage.setItem('historyViewerHasCustomLang', 'true');
+        localStorage.setItem('historyViewerCustomLang', currentLang);
+
+    } catch (e) {
+        console.error('[History Viewer] 无法保存语言覆盖:', e);
+    }
+
+    applyLanguage();
+    refreshTrackingRankingAfterLanguageChange();
+
+    // 只更新界面文字，不重新渲染内容（避免图标重新加载）
+    // renderCurrentView();
+
+    // 手动更新需要多语言的UI元素（不涉及书签树内容）
+    updateLanguageDependentUI();
+
+    // [User Request] 更新搜索组件语言
+    if (typeof window.updateSearchUILanguage === 'function') {
+        window.updateSearchUILanguage();
+    }
+
+    // 复习热力图：重新加载一次以应用当前语言
+    // 只影响热力图容器，不会重新加载书签图标
+    try {
+        loadHeatmapData();
+    } catch (e) {
+        console.warn('[Heatmap] 语言切换时重载失败:', e);
+    }
+
+    // 刷新书签关联记录列表（更新badge文字）
+    refreshBrowsingRelatedHistory();
+}
+
+function refreshTrackingRankingAfterLanguageChange() {
+    if (currentView !== 'additions') return;
+    const trackingPanel = document.getElementById('additionsTrackingPanel');
+    if (!trackingPanel || !trackingPanel.classList.contains('active')) return;
+    loadActiveTimeRanking();
+}
+
+// 更新依赖语言的UI元素（不重新渲染内容，避免图标重新加载）
+function updateLanguageDependentUI() {
+    const isEn = currentLang === 'en';
+
+    // 更新加载文本（如果存在）
+    const loadingTexts = document.querySelectorAll('.loading');
+    loadingTexts.forEach(el => {
+        if (el.textContent.includes('Loading') || el.textContent.includes('加载中')) {
+            el.textContent = i18n.loading[currentLang];
+        }
+    });
+
+    // 更新空状态文本
+    const emptyStates = document.querySelectorAll('.empty-state');
+    emptyStates.forEach(el => {
+        if (el.textContent.includes('No') || el.textContent.includes('没有')) {
+            el.textContent = isEn ? 'No data' : '没有数据';
+        }
+    });
+
+    // 5. 更新书签关联记录排序按钮的tooltip
+    const relatedSortBtn = document.getElementById('browsingRelatedSortBtn');
+    if (relatedSortBtn) {
+        const tooltip = relatedSortBtn.querySelector('.btn-tooltip');
+        if (tooltip) {
+            tooltip.textContent = browsingRelatedSortAsc
+                ? (i18n.currentAscending?.[currentLang] || (isEn ? 'Current: Ascending' : '当前：正序'))
+                : (i18n.currentDescending?.[currentLang] || (isEn ? 'Current: Descending' : '当前：倒序'));
+        }
+    }
+
+
+}
+
+
+// ============================================================================
+// 返回按钮功能
+// ============================================================================
+
+// 显示返回按钮
+function showBackButton() {
+    // 如果已存在，先移除（但不清除 jumpSourceInfo）
+    const existingBtn = document.getElementById('jumpBackBtn');
+    if (existingBtn) existingBtn.remove();
+
+
+
+    const btn = document.createElement('button');
+    btn.id = 'jumpBackBtn';
+    btn.className = 'jump-back-btn';
+    btn.innerHTML = '<i class="fas fa-arrow-left"></i>';
+    btn.title = typeof currentLang !== 'undefined' && currentLang === 'zh_CN' ? '返回' : 'Go Back';
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        goBackToSource();
+    });
+
+    document.body.appendChild(btn);
+
+    // 显示动画
+    setTimeout(() => {
+        btn.style.opacity = '1';
+        btn.style.transform = 'translateY(0)';
+    }, 50);
+}
+
+// 隐藏返回按钮（可选是否清除来源信息）
+function hideBackButton(clearSource = true) {
+    const btn = document.getElementById('jumpBackBtn');
+    if (btn) {
+        btn.remove();
+    }
+    if (clearSource) {
+        jumpSourceInfo = null;
+    }
+}
+
+// 返回到跳转来源
+async function goBackToSource() {
+    if (!jumpSourceInfo) {
+        console.warn('[goBackToSource] jumpSourceInfo 为空');
+        return;
+    }
+
+    const { type, url, scrollTop } = jumpSourceInfo;
+
+
+    // 先隐藏返回按钮
+    const btn = document.getElementById('jumpBackBtn');
+    if (btn) btn.remove();
+
+    // 清除来源信息（在使用完之后立即清除）
+    jumpSourceInfo = null;
+
+    if (type === 'browsingHistory') {
+        // 返回点击记录 - 需要切换到「点击记录」子标签
+        const historyTab = document.getElementById('browsingTabHistory');
+        if (historyTab) {
+            historyTab.click();
+
+        }
+
+        // 恢复滚动位置并高亮
+        setTimeout(() => {
+            const contentArea = document.querySelector('.content-area');
+            if (contentArea && scrollTop) {
+                contentArea.scrollTop = scrollTop;
+            }
+            highlightSourceBookmark(url);
+        }, 500);
+
+    } else if (type === 'bookmarkAdditions') {
+        // 返回书签添加记录 - 需要切换到「书签添加记录」标签
+        const reviewTab = document.getElementById('additionsTabReview');
+        if (reviewTab) {
+            reviewTab.click();
+
+        }
+
+        // 恢复滚动位置并高亮
+        setTimeout(() => {
+            const contentArea = document.querySelector('.content-area');
+            if (contentArea && scrollTop) {
+                contentArea.scrollTop = scrollTop;
+            }
+            highlightSourceBookmark(url);
+        }, 500);
+
+    } else if (type === 'clickRanking') {
+        // 返回点击排行 - 需要切换到「点击排行」子标签
+        const rankingTab = document.getElementById('browsingTabRanking');
+        if (rankingTab) {
+            rankingTab.click();
+
+        }
+
+        // 恢复滚动位置并高亮
+        setTimeout(() => {
+            const contentArea = document.querySelector('.content-area');
+            if (contentArea && scrollTop) {
+                contentArea.scrollTop = scrollTop;
+            }
+            highlightSourceRankingItem(url);
+        }, 500);
+    }
+}
+
+// 高亮来源书签
+function highlightSourceBookmark(url) {
+    // 在整个内容区域查找匹配的书签项
+    const contentArea = document.querySelector('.content-area');
+    if (!contentArea) {
+        console.warn('[highlightSourceBookmark] 未找到 content-area');
+        return;
+    }
+
+    // 查找所有匹配URL的书签项
+    const items = contentArea.querySelectorAll('[data-bookmark-url]');
+
+
+    let found = false;
+
+    items.forEach(item => {
+        if (item.dataset.bookmarkUrl === url && !found) {
+            found = true;
+
+            item.classList.add('highlight-source');
+            item.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+            // 3秒后移除高亮
+            setTimeout(() => {
+                item.classList.remove('highlight-source');
+            }, 3000);
+        }
+    });
+
+    if (!found) {
+        console.warn('[highlightSourceBookmark] 未找到匹配的书签');
+    }
+}
+
+// 高亮点击排行中的来源书签
+function highlightSourceRankingItem(url) {
+    const listContainer = document.getElementById('browsingRankingList');
+    if (!listContainer) {
+        console.warn('[highlightSourceRankingItem] 未找到 browsingRankingList');
+        return;
+    }
+
+    // 查找所有排行项
+    const items = listContainer.querySelectorAll('.ranking-item');
+
+
+    let found = false;
+
+    items.forEach(item => {
+        // 通过跳转按钮的 data-url 来匹配
+        const jumpBtn = item.querySelector('.jump-to-related-btn');
+        if (jumpBtn && jumpBtn.dataset.url === url && !found) {
+            found = true;
+
+            item.classList.add('highlight-source');
+            item.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+            // 3秒后移除高亮
+            setTimeout(() => {
+                item.classList.remove('highlight-source');
+            }, 3000);
+        }
+    });
+
+    if (!found) {
+        console.warn('[highlightSourceRankingItem] 未找到匹配的排行项');
+    }
+}
+
+// 工具函数
+// =============================================================================
+
+async function renderTreeView() {
+    // 记录/推荐版不使用书签树视图，仅用于兼容共享菜单模块
+}
+
+async function openBookmarkNewTab(url, meta = {}) {
+    try {
+        const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
+        if (browserAPI?.tabs?.create) {
+            const tab = await browserAPI.tabs.create({ url });
+            if (tab && tab.id != null) {
+                await reportExtensionBookmarkOpen({
+                    tabId: tab.id,
+                    url,
+                    title: meta.title || '',
+                    bookmarkId: meta.bookmarkId || null,
+                    source: meta.source || 'history_ui'
+                });
+            }
+        } else {
+            window.open(url, '_blank');
+        }
+    } catch (e) {
+        console.warn('[openBookmarkNewTab] 打开失败:', e);
+        try { window.open(url, '_blank'); } catch (_) { }
+    }
+}
+async function reportExtensionBookmarkOpen({ tabId, url, title = '', bookmarkId = null, source = 'history_ui' } = {}) {
+    try {
+        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) return;
+        if (typeof tabId !== 'number') return;
+        if (!url || typeof url !== 'string') return;
+        await chrome.runtime.sendMessage({
+            action: 'extensionBookmarkOpen',
+            tabId,
+            url,
+            title,
+            bookmarkId,
+            source
+        });
+    } catch (_) { }
+}
+if (typeof window !== 'undefined') {
+    window.openBookmarkNewTab = openBookmarkNewTab;
+}
+
+function formatTime(timestamp) {
+    const date = new Date(timestamp);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showLoading() {
+    document.querySelectorAll('.view.active .additions-container').forEach(el => {
+        el.innerHTML = `<div class="loading">${i18n.loading[currentLang]}</div>`;
+    });
+}
+
+function showError(message) {
+    const container = document.querySelector('.view.active > div:last-child');
+    if (container) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="empty-state-title">${escapeHtml(message)}</div>
+            </div>
+        `;
+    }
+}
+
+function showToast(message) {
+    // 简单的提示功能
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        background: var(--accent-primary);
+        color: white;
+        border-radius: 8px;
+        box-shadow: var(--shadow-lg);
+        z-index: 10000;
+        animation: slideIn 0.3s ease;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 2000);
+}
+
+
+
+// 添加动画样式
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
+
+// =================================================================================
+// VII. VIEW: SYNC & AI ANALYSIS (子视图：同步与 AI 分析)
+// =================================================================================
+
 
 // =============================================================================
 // 同步 / AI 分析视图
@@ -17818,6 +18524,11 @@ async function renderSyncView() {
     scheduleSyncFilesCardLayout(120);
 }
 
+// =================================================================================
+// VIII. VIEW: WIDGETS & STATS (子视图：小组件与统计渲染)
+// =================================================================================
+
+
 // =============================================================================
 // 小组件视图
 // =============================================================================
@@ -25660,6 +26371,11 @@ function renderWidgetsView() {
     startWidgetsViewRefresh();
 }
 
+// =================================================================================
+// IX. VIEW: RECOMMENDATION & REVIEW (子视图：书签推荐、SM-2 算法与温故)
+// =================================================================================
+
+
 // =============================================================================
 // 书签推荐视图
 // =============================================================================
@@ -26082,6 +26798,4310 @@ const presetModes = {
         }
     }
 };
+
+
+// =============================================================================
+// Phase 4: 权重公式计算 S = (w1×F + w2×C + w3×T + w4×D + w5×L) × R
+// S = Score（推荐分数），值越高越优先推荐
+// R = Recall（记忆度），基于遗忘曲线，复习后锐减，逐渐恢复
+// =============================================================================
+
+// ===== 书签推荐缓存机制（仅 storage.local） =====
+// 所有S值计算已迁移到 background.js
+// 这里只保留缓存读写函数
+
+// 从 storage.local 获取所有缓存的S值
+async function getScoresCache() {
+    try {
+        const result = await new Promise(resolve => {
+            browserAPI.storage.local.get(['recommend_scores_cache'], resolve);
+        });
+        return result.recommend_scores_cache || {};
+    } catch (e) {
+        console.warn('[缓存] 读取S值缓存失败:', e);
+        return {};
+    }
+}
+
+// 保存所有S值到 storage.local
+async function saveScoresCache(cache) {
+    try {
+        await browserAPI.storage.local.set({
+            recommend_scores_cache: cache,
+            recommend_scores_time: Date.now()
+        });
+
+    } catch (e) {
+        // 检测是否是配额问题
+        if (e.message && (e.message.includes('QUOTA') || e.message.includes('quota'))) {
+            console.warn('[缓存] 存储配额已满，尝试清理旧数据...');
+            await cleanupStorageQuota();
+            // 重试一次
+            try {
+                await browserAPI.storage.local.set({
+                    recommend_scores_cache: cache,
+                    recommend_scores_time: Date.now()
+                });
+
+            } catch (e2) {
+                console.error('[缓存] 清理后仍然失败，请手动清理浏览器数据');
+                showStorageFullWarning();
+            }
+        } else {
+            console.warn('[缓存] 保存S值缓存失败:', e);
+        }
+    }
+}
+
+// 清理存储配额（当存储满时调用）
+async function cleanupStorageQuota() {
+    try {
+        // 1. 清理超过1000条的已翻阅记录
+        await browserAPI.runtime.sendMessage({
+            action: 'trimRecommendFlippedBookmarks',
+            maxItems: 1000
+        });
+
+        // 2. 清理无效的稍后复习记录（保留到期待复习，直到用户复习/取消）
+        const postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
+        const validPostponed = postponed.filter(p => p && p.bookmarkId != null);
+        if (validPostponed.length < postponed.length) {
+            attachRecommendListStateVersion(validPostponed, expectedVersion);
+            await savePostponedBookmarks(validPostponed);
+
+        }
+
+    } catch (e) {
+        console.error('[清理] 清理存储失败:', e);
+    }
+}
+
+// 显示存储满警告
+function showStorageFullWarning() {
+    const isZh = currentLang === 'zh_CN';
+    const msg = isZh
+        ? '存储空间已满，部分数据可能无法保存。请在浏览器设置中清理扩展数据。'
+        : 'Storage is full. Some data may not be saved. Please clear extension data in browser settings.';
+
+    if (typeof showToast === 'function') {
+        showToast(msg, 5000);
+    } else {
+        console.error('[存储] ' + msg);
+    }
+}
+
+// 获取单个书签的缓存S值
+async function getCachedScore(bookmarkId) {
+    const cache = await getScoresCache();
+    return cache[bookmarkId] || null;
+}
+
+// 清除缓存
+async function clearScoresCache() {
+    await browserAPI.storage.local.remove(['recommend_scores_cache', 'recommend_scores_time']);
+
+}
+
+// ===== P1: 缓存机制 =====
+// 综合时间排行静态缓存（"全部"范围，按URL和标题+域名双索引）
+let trackingRankingCache = {
+    byTitleDomain: new Map(), // 标题+域名 -> { compositeMs, url }
+    byUrl: new Map(),     // URL -> { compositeMs, title }
+    loaded: false
+};
+let historyDataCache = null;
+let historyCacheTime = 0;
+const STATS_CACHE_TTL = 60000; // 1分钟缓存
+
+function getHistoryTitleDomainKeyForStats(title, url) {
+    const safeTitle = String(title || '').trim();
+    const domain = getSyncHistoryUrlDomain(url);
+    return safeTitle && domain ? `${safeTitle}|${domain}` : '';
+}
+
+function mergeVisitStatsIntoMap(map, key, data) {
+    if (!(map instanceof Map) || !key || !data) return;
+    const visitCount = Number(data.visitCount || 0) || 0;
+    const lastVisitTime = Number(data.lastVisitTime || 0) || 0;
+    const existing = map.get(key);
+    if (!existing) {
+        map.set(key, { visitCount, lastVisitTime });
+        return;
+    }
+    map.set(key, {
+        visitCount: (Number(existing.visitCount || 0) || 0) + visitCount,
+        lastVisitTime: Math.max(Number(existing.lastVisitTime || 0) || 0, lastVisitTime)
+    });
+}
+
+// ===== P0: 加载综合时间排行缓存（"全部"范围）=====
+async function loadTrackingRankingCache() {
+    if (trackingRankingCache.loaded) {
+        return trackingRankingCache;
+    }
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'getActiveSessions',
+            startTime: 0,  // 全部范围
+            endTime: Date.now()
+        });
+
+        if (response && response.success && response.sessions) {
+            // 按 URL 或标题+域名聚合综合时间，避免同标题跨站点误归因。
+            const sessionStats = new Map();
+            for (const session of response.sessions) {
+                const url = String(session.url || '').trim();
+                const title = String(session.title || url || '').trim();
+                const titleDomainKey = getHistoryTitleDomainKeyForStats(title, url);
+                const key = titleDomainKey || url || title;
+                if (!key) continue;
+                if (!sessionStats.has(key)) {
+                    sessionStats.set(key, {
+                        url,
+                        title: title || url,
+                        titleDomainKey,
+                        compositeMs: 0
+                    });
+                }
+                const stat = sessionStats.get(key);
+                const sessionComposite = session.compositeMs ||
+                    ((session.activeMs || 0) +
+                        (session.idleFocusMs || session.pauseTotalMs || 0) * 0.8 +
+                        (session.visibleMs || 0) * 0.5 +
+                        (session.backgroundMs || 0) * 0.1);
+                stat.compositeMs += sessionComposite;
+            }
+
+            // 构建双索引
+            trackingRankingCache.byTitleDomain.clear();
+            trackingRankingCache.byUrl.clear();
+            for (const [, stat] of sessionStats) {
+                if (stat.titleDomainKey) {
+                    trackingRankingCache.byTitleDomain.set(stat.titleDomainKey, stat);
+                }
+                if (stat.url) {
+                    trackingRankingCache.byUrl.set(stat.url, stat);
+                }
+            }
+            trackingRankingCache.loaded = true;
+
+        }
+    } catch (e) {
+        console.warn('[T值缓存] 加载失败:', e);
+    }
+    return trackingRankingCache;
+}
+
+// 清除T值缓存（在数据变化时调用）
+function clearTrackingRankingCache() {
+    trackingRankingCache.byTitleDomain.clear();
+    trackingRankingCache.byUrl.clear();
+    trackingRankingCache.loaded = false;
+}
+
+// ===== P0: 从静态缓存获取书签的综合时间（URL或标题+域名匹配）=====
+async function getTrackingDataFromDB() {
+    // 确保缓存已加载
+    await loadTrackingRankingCache();
+
+    // 返回兼容旧格式的对象（供 batchGetBookmarkStats 使用）
+    const result = {};
+    for (const [url, stat] of trackingRankingCache.byUrl) {
+        result[url] = {
+            compositeMs: stat.compositeMs,
+            title: stat.title
+        };
+    }
+    return result;
+}
+
+// 根据书签获取综合时间（URL优先，标题+域名兜底）
+async function getBookmarkCompositeTime(bookmark) {
+    await loadTrackingRankingCache();
+
+    // 优先URL匹配
+    if (bookmark.url && trackingRankingCache.byUrl.has(bookmark.url)) {
+        return trackingRankingCache.byUrl.get(bookmark.url).compositeMs;
+    }
+
+    const titleDomainKey = getHistoryTitleDomainKeyForStats(bookmark.title, bookmark.url);
+    if (titleDomainKey && trackingRankingCache.byTitleDomain.has(titleDomainKey)) {
+        return trackingRankingCache.byTitleDomain.get(titleDomainKey).compositeMs;
+    }
+
+    return 0;
+}
+
+// ===== P2: 批量获取历史记录（URL+标题同域名匹配，与点击记录一致）=====
+let historyDataLoadingPromise = null; // 防止并发加载
+
+async function getBatchHistoryData() {
+    const now = Date.now();
+    // 检查缓存
+    if (historyDataCache && (now - historyCacheTime) < STATS_CACHE_TTL) {
+        return historyDataCache;
+    }
+
+    // 如果正在加载，等待加载完成
+    if (historyDataLoadingPromise) {
+        return historyDataLoadingPromise;
+    }
+
+    // 开始加载，设置Promise锁
+    historyDataLoadingPromise = (async () => {
+        try {
+            const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, now);
+
+            const originalMap = new Map();  // URL映射
+            const titleDomainMap = new Map(); // 标题+域名映射
+            let processed = 0;
+
+            for (const [, records] of libraryRows.rows) {
+                for (const item of (Array.isArray(records) ? records : [])) {
+                    processed += 1;
+                    if (!item.url) {
+                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                        continue;
+                    }
+                    const visitTime = getBrowsingCacheRecordTimestamp(item);
+                    if (!visitTime) {
+                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                        continue;
+                    }
+                    const data = {
+                        visitCount: 1,
+                        lastVisitTime: visitTime
+                    };
+                    // URL映射
+                    const existingUrl = originalMap.get(item.url);
+                    originalMap.set(item.url, existingUrl
+                        ? {
+                            visitCount: existingUrl.visitCount + 1,
+                            lastVisitTime: Math.max(existingUrl.lastVisitTime, visitTime)
+                        }
+                        : data);
+
+                    const titleDomainKey = getHistoryTitleDomainKeyForStats(item.title, item.url);
+                    mergeVisitStatsIntoMap(titleDomainMap, titleDomainKey, data);
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                }
+            }
+
+            // 更新缓存（URL + 标题同域名，与点击记录一致）
+            historyDataCache = { original: originalMap, titleDomain: titleDomainMap };
+            historyCacheTime = Date.now();
+
+            return historyDataCache;
+        } catch (e) {
+            console.warn('[权重计算] 批量获取历史数据失败:', e);
+            return { original: new Map(), titleDomain: new Map() };
+        } finally {
+            historyDataLoadingPromise = null; // 清除锁
+        }
+    })();
+
+    return historyDataLoadingPromise;
+}
+
+// 获取书签的访问统计数据（保留用于单个查询场景）
+async function getBookmarkVisitStats(url) {
+    const normalizeVisitUrl = (value) => {
+        let safe = String(value || '').trim();
+        if (safe.length > 1 && safe.endsWith('/')) safe = safe.slice(0, -1);
+        return safe;
+    };
+    const targetUrl = normalizeVisitUrl(url);
+
+    try {
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, Date.now());
+        let visitCount = 0;
+        let lastVisitTime = 0;
+        let processed = 0;
+        for (const [, records] of libraryRows.rows) {
+            for (const record of (Array.isArray(records) ? records : [])) {
+                processed += 1;
+                if (normalizeVisitUrl(record?.url) !== targetUrl) {
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                    continue;
+                }
+                const visitTime = getBrowsingCacheRecordTimestamp(record);
+                if (!visitTime) {
+                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+                    continue;
+                }
+                visitCount += 1;
+                if (visitTime > lastVisitTime) lastVisitTime = visitTime;
+                if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
+            }
+        }
+        if (visitCount > 0) {
+            return { visitCount, lastVisitTime };
+        }
+
+        return { visitCount: 0, lastVisitTime: 0 };
+    } catch (e) {
+        return { visitCount: 0, lastVisitTime: 0 };
+    }
+}
+
+
+// =============================================================================
+// Phase 4.1: 复习曲线（简化版SM-2）
+// =============================================================================
+
+// 获取复习数据
+async function getReviewData() {
+    try {
+        const result = await browserAPI.storage.local.get('recommend_reviews');
+        return result.recommend_reviews || {};
+    } catch (e) {
+        console.error('[复习] 获取复习数据失败:', e);
+        return {};
+    }
+}
+
+// 获取书签的复习状态
+function getReviewStatus(bookmarkId, reviewData) {
+    const review = reviewData[bookmarkId];
+    if (!review) return { status: 'new', label: '新书签' };
+
+    const now = Date.now();
+    const daysSinceReview = (now - review.lastReview) / (1000 * 60 * 60 * 24);
+
+    if (now >= review.nextReview) {
+        return { status: 'due', label: '待复习', priority: 1.2 };
+    } else if (daysSinceReview >= review.interval * 0.7) {
+        return { status: 'soon', label: '即将到期', priority: 1.1 };
+    } else {
+        return { status: 'reviewed', label: '已复习', priority: 0.8 };
+    }
+}
+
+// 计算带复习状态的优先级（用于保存的卡片恢复）
+function calculatePriorityWithReview(basePriority, bookmarkId, reviewData, postponeData) {
+    let priority = basePriority;
+
+    // 复习状态加成
+    const reviewStatus = getReviewStatus(bookmarkId, reviewData);
+    priority *= reviewStatus.priority || 1.0;
+
+    // 惩罚因子：被多次推迟的书签降低优先级（不影响手动添加的）
+    if (postponeData) {
+        const postponeInfo = postponeData.find(p => p.bookmarkId === bookmarkId);
+        if (postponeInfo && !postponeInfo.manuallyAdded && postponeInfo.postponeCount > 0) {
+            const penaltyFactor = Math.pow(0.9, postponeInfo.postponeCount);
+            priority *= penaltyFactor;
+        }
+    }
+
+    return Math.min(priority, 1.5); // 最高1.5
+}
+
+// 启动时间捕捉实时刷新（当前会话1秒刷新，排行榜10秒刷新）
+function startTrackingRefresh() {
+    // 清除已有定时器
+    if (trackingRefreshInterval) {
+        clearInterval(trackingRefreshInterval);
+    }
+    if (rankingRefreshInterval) {
+        clearInterval(rankingRefreshInterval);
+    }
+
+    // 当前会话状态实时刷新（1秒）
+    trackingRefreshInterval = setInterval(() => {
+        if (currentView === 'additions') {
+            const trackingPanel = document.getElementById('additionsTrackingPanel');
+            if (trackingPanel && trackingPanel.classList.contains('active')) {
+                // 只刷新当前会话（实时显示计时）
+                loadCurrentTrackingSessions();
+            }
+        }
+    }, TRACKING_REFRESH_INTERVAL);
+
+    // 排行榜定时刷新（10秒）
+    rankingRefreshInterval = setInterval(() => {
+        if (currentView === 'additions') {
+            const trackingPanel = document.getElementById('additionsTrackingPanel');
+            if (trackingPanel && trackingPanel.classList.contains('active')) {
+                // 刷新排行榜
+                loadActiveTimeRanking();
+            }
+        }
+    }, RANKING_REFRESH_INTERVAL);
+}
+
+// 停止实时刷新
+function stopTrackingRefresh() {
+    if (trackingRefreshInterval) {
+        clearInterval(trackingRefreshInterval);
+        trackingRefreshInterval = null;
+    }
+    if (rankingRefreshInterval) {
+        clearInterval(rankingRefreshInterval);
+        rankingRefreshInterval = null;
+    }
+}
+
+function compareRecommendPriority(a, b) {
+    const aTemplate = a?.scoreTemplate === true;
+    const bTemplate = b?.scoreTemplate === true;
+    if (aTemplate !== bTemplate) {
+        return aTemplate ? 1 : -1;
+    }
+
+    const diff = (b?.priority ?? 0) - (a?.priority ?? 0);
+    if (Math.abs(diff) >= 0.01) return diff;
+    const bAdded = Number(b?.dateAdded || 0);
+    const aAdded = Number(a?.dateAdded || 0);
+    if (bAdded !== aAdded) return bAdded - aAdded;
+    const aTitle = String(a?.title || a?.name || '').toLowerCase();
+    const bTitle = String(b?.title || b?.name || '').toLowerCase();
+    if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+// 刷新推荐卡片（三卡并排）
+// 获取已翻过的书签ID列表
+async function getFlippedBookmarks() {
+    return new Promise((resolve) => {
+        browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY], (result) => {
+            resolve(result[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
+        });
+    });
+}
+
+async function refreshRecommendCards(force = false) {
+    const cardsRow = document.getElementById('cardsRow');
+    if (!cardsRow) return;
+
+    const cards = cardsRow.querySelectorAll('.recommend-card');
+
+    // 清除所有卡片的 flipped 状态
+    cards.forEach(card => card.classList.remove('flipped'));
+
+    let prefetchedCurrentCards = null;
+    if (isSidePanelMode && !force) {
+        try {
+            prefetchedCurrentCards = await getHistoryCurrentCards();
+            if (Array.isArray(prefetchedCurrentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(prefetchedCurrentCards.cardData);
+            }
+            const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(prefetchedCurrentCards);
+            if (!needsVersionedRound) {
+                const snapshot = readRecommendCardsSnapshot();
+                if (snapshot) {
+                    const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(
+                        snapshot.cards,
+                        prefetchedCurrentCards?.cardData
+                    );
+                    const snapshotCards = mergedSnapshotCards.length > 0
+                        ? mergedSnapshotCards
+                        : snapshot.cards;
+                    applyRecommendSnapshotToCardRows({
+                        ...snapshot,
+                        cards: attachRecommendStateVersionToCards(snapshotCards, prefetchedCurrentCards)
+                    });
+                }
+            }
+        } catch (_) { }
+    }
+
+    try {
+        const currentCards = prefetchedCurrentCards || await getHistoryCurrentCards();
+        syncRecommendLastUpdatedFromState(currentCards);
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+        const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(currentCards);
+        if (needsVersionedRound) {
+            recommendCards = [];
+            cards.forEach((card) => {
+                setCardEmpty(card);
+            });
+        }
+
+        const syncRefreshSettingsAfterForce = async () => {
+            if (!force) return;
+
+            let marked = false;
+            try {
+                const response = await browserAPI.runtime.sendMessage({ action: 'markRecommendRefreshExecuted' });
+                if (response && response.success && response.settings) {
+                    updateRefreshSettingsStatus({ ...DEFAULT_REFRESH_SETTINGS, ...response.settings });
+                    marked = true;
+                }
+            } catch (_) { }
+
+            if (!marked) {
+                const settings = await getRefreshSettings();
+                settings.lastRefreshTime = Date.now();
+                settings.openCountSinceRefresh = 0;
+                settings.sidePanelOpenCountSinceRefresh = 0;
+                await saveRefreshSettings(settings);
+                updateRefreshSettingsStatus(settings);
+            }
+        };
+
+        // 有保存的当前轮次就直接显示，不额外做前端聚合计算。
+        if (!needsVersionedRound && currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
+            const normalizedFlipped = Array.isArray(currentCards.flippedIds)
+                ? currentCards.flippedIds.map(id => String(id || ''))
+                : [];
+            const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
+
+            if (!allFlipped) {
+                const savedCards = hydrateRecommendCardsFromCurrentCardsState(currentCards);
+                if (savedCards.length > 0) {
+                    recommendCards = savedCards;
+                    const flippedSet = new Set(normalizedFlipped.map(id => String(id || '').trim()));
+                    cards.forEach((card, index) => {
+                        if (index < recommendCards.length) {
+                            const bookmark = recommendCards[index];
+                            updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
+                        } else {
+                            hideUnusedRecommendCardSlot(card);
+                        }
+                    });
+
+                    try {
+                        writeRecommendCardsSnapshot(recommendCards, normalizedFlipped);
+                    } catch (_) { }
+                    return;
+                }
+            }
+        }
+
+        // 统一使用后台选卡路径，和快捷复习共享同一套轮转/游标/过滤逻辑
+        const backendRound = await selectRecommendCardsRoundShared(force || needsVersionedRound);
+        if (backendRound && Array.isArray(backendRound.cards)) {
+            const backendReady = backendRound.success !== false
+                && backendRound.ready !== false
+                && backendRound.repairing !== true;
+            if (!backendReady && backendRound.cards.length === 0) {
+                // 后台仍在修复/准备阶段时，不覆盖当前轮次为“空”，避免误判成“全部已翻阅”。
+                if ((!recommendCards || recommendCards.length === 0) && cards.length > 0) {
+                    setRecommendCardsRowEmptyMessage(
+                        cards,
+                        currentLang === 'en' ? 'Recommendations are preparing...' : '推荐准备中...'
+                    );
+                }
+                return;
+            }
+
+            const backendCurrentCards = backendRound.currentCards && typeof backendRound.currentCards === 'object'
+                ? backendRound.currentCards
+                : null;
+            const normalizedCards = attachRecommendStateVersionToCards(
+                backendRound.cards
+                    .map(normalizeRecommendSnapshotCard)
+                    .filter(Boolean)
+                    .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
+                    .slice(0, RECOMMEND_BATCH_SIZE),
+                backendCurrentCards
+            );
+            const backendFlippedIds = Array.isArray(backendCurrentCards?.flippedIds)
+                ? backendCurrentCards.flippedIds.map(id => String(id || '')).filter(Boolean)
+                : [];
+            syncRecommendLastUpdatedFromState(backendCurrentCards);
+            markHistoryCurrentCardsSelfWrite(backendCurrentCards);
+
+            if (Array.isArray(backendCurrentCards?.cardData)) {
+                seedFaviconMemoryFromCardData(backendCurrentCards.cardData);
+            }
+
+            if (normalizedCards.length === 0) {
+                await saveHistoryCurrentCards([], []);
+                clearRecommendCardsSnapshot();
+                setRecommendCardsRowEmptyMessage(
+                    cards,
+                    currentLang === 'en' ? 'No recommendable bookmarks' : '暂无可推荐书签'
+                );
+                await syncRefreshSettingsAfterForce();
+                return;
+            }
+
+            recommendCards = normalizedCards;
+
+            try {
+                writeRecommendCardsSnapshot(recommendCards, backendFlippedIds);
+            } catch (_) { }
+
+            if (!Array.isArray(backendCurrentCards?.cardIds)) {
+                const newCardIds = recommendCards.map(item => String(item?.id || '')).filter(Boolean);
+                await saveHistoryCurrentCards(newCardIds, backendFlippedIds, recommendCards);
+            }
+
+            const preloadUrls = recommendCards.map(item => item.url).filter(Boolean);
+            preloadHighResFavicons(preloadUrls);
+            saveCardFaviconsToStorage(recommendCards);
+
+            const backendFlippedSet = new Set(backendFlippedIds);
+            cards.forEach((card, index) => {
+                if (index < recommendCards.length) {
+                    const bookmark = recommendCards[index];
+                    updateCardDisplay(card, bookmark, backendFlippedSet.has(String(bookmark?.id || '')));
+                } else {
+                    hideUnusedRecommendCardSlot(card);
+                }
+            });
+
+            await syncRefreshSettingsAfterForce();
+            return;
+        }
+
+        if (force || needsVersionedRound) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Refresh unavailable, please retry'
+                    : '后台刷新不可用，请重试');
+            } catch (_) { }
+        }
+        return;
+
+    } catch (error) {
+        console.error('[书签推荐] 刷新卡片失败:', error);
+        setRecommendCardsRowEmptyMessage(
+            cards,
+            currentLang === 'en' ? 'Load failed' : '加载失败'
+        );
+    }
+}
+
+// 缓存当前追踪列表的会话 ID，用于判断是否需要完整刷新
+let lastTrackingSessionIds = [];
+// 记录展开状态的分组
+let expandedTrackingGroups = new Set();
+
+async function loadCurrentTrackingSessions() {
+    const trackingCurrentList = document.getElementById('trackingCurrentList');
+    const trackingCurrentCount = document.getElementById('trackingCurrentCount');
+    if (!trackingCurrentList) return;
+
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'getCurrentActiveSessions'
+        });
+
+        if (response && response.success && response.sessions) {
+            let sessions = response.sessions;
+
+            // 过滤掉被时间追踪屏蔽的会话
+            const blockedSets = await getTrackingBlockedSets();
+            const cache = await getTrackingBookmarkCache();
+            const blockedFlags = await Promise.all(
+                sessions.map(session => isTrackingItemBlocked(session, blockedSets, cache))
+            );
+            sessions = sessions.filter((_, index) => !blockedFlags[index]);
+
+            // 更新计数
+            if (trackingCurrentCount) {
+                trackingCurrentCount.textContent = sessions.length;
+            }
+
+            if (sessions.length === 0) {
+                lastTrackingSessionIds = [];
+                trackingCurrentList.innerHTML = `
+                    <tr class="tracking-empty-row">
+                        <td colspan="5">${i18n.trackingNoActive[currentLang]}</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            // 按标题分组（标题相同视为同一书签）
+            const groupedSessions = new Map();
+            for (const session of sessions) {
+                const key = session.title || session.url;
+                if (!groupedSessions.has(key)) {
+                    groupedSessions.set(key, []);
+                }
+                groupedSessions.get(key).push(session);
+            }
+
+            // 检查会话列表是否有变化（新增/删除会话）
+            const currentIds = sessions.map(s => s.tabId).sort().join(',');
+            const lastIds = lastTrackingSessionIds.sort().join(',');
+            const needsFullRender = currentIds !== lastIds;
+
+            // 截断标题函数
+            const truncateTitle = (title, maxLen = 45) => {
+                if (!title) return '';
+                return title.length > maxLen ? title.substring(0, maxLen) + '...' : title;
+            };
+
+            if (needsFullRender) {
+                // 会话列表有变化，需要完整渲染
+                lastTrackingSessionIds = sessions.map(s => s.tabId);
+
+                let html = '';
+                for (const [groupKey, groupSessions] of groupedSessions) {
+                    const isMultiple = groupSessions.length > 1;
+                    const isExpanded = expandedTrackingGroups.has(groupKey);
+
+                    // 使用第一个会话作为代表
+                    const primarySession = groupSessions[0];
+
+                    // 计算分组的汇总数据
+                    const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
+                    const totalWakeCount = groupSessions.reduce((sum, s) => sum + (s.wakeCount || 0), 0);
+                    const avgActiveRatio = groupSessions.reduce((sum, s) => sum + (s.activeRatio || 0), 0) / groupSessions.length;
+
+                    // 确定显示的状态（优先显示最活跃的状态）
+                    const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
+                    const bestState = groupSessions.reduce((best, s) => {
+                        const bestIdx = stateOrder.indexOf(best);
+                        const currIdx = stateOrder.indexOf(s.state);
+                        return currIdx < bestIdx ? s.state : best;
+                    }, 'sleeping');
+
+                    const stateIcon = bestState === 'active' ? '🟢' :
+                        (bestState === 'sleeping' ? '💤' :
+                            (bestState === 'background' ? '⚪' :
+                                (bestState === 'visible' ? '🔵' : '🟡')));
+
+                    const compositeTime = formatActiveTime(totalCompositeMs);
+                    const activeRatio = Math.round(avgActiveRatio * 100);
+                    const displayTitle = truncateTitle(primarySession.title || primarySession.url);
+                    const faviconUrl = getFaviconUrl(primarySession.url);
+
+                    // 判断是否有任一会话处于挂机状态
+                    const hasIdle = groupSessions.some(s => s.isIdle);
+                    // 活跃率颜色：挂机=橙色，否则按梯度绿色
+                    const ratioColorClass = hasIdle ? 'ratio-idle' : `ratio-level-${Math.min(Math.floor(activeRatio / 20), 5)}`;
+                    // 唤醒次数高亮（≥15次用橙色）
+                    const wakesHighlight = totalWakeCount >= 15 ? 'wakes-highlight' : '';
+                    // 综合时间梯度蓝色
+                    const timeGradientClass = `time-level-${getTimeGradientLevel(totalCompositeMs)}`;
+
+                    // 主行（分组头）
+                    const groupBadge = isMultiple ?
+                        `<span class="tracking-group-badge" data-group-key="${escapeHtml(groupKey)}">${groupSessions.length}</span>` : '';
+                    const expandIcon = isMultiple ?
+                        `<span class="tracking-expand-icon ${isExpanded ? 'expanded' : ''}" data-group-key="${escapeHtml(groupKey)}">▶</span>` : '';
+
+                    html += `
+                        <tr class="tracking-group-header ${isMultiple ? 'has-children' : ''}"
+                            data-tab-id="${primarySession.tabId}"
+                            data-bookmark-url="${escapeHtml(primarySession.url)}"
+                            data-group-key="${escapeHtml(groupKey)}">
+                            <td><span class="tracking-state">${stateIcon}</span></td>
+                            <td>
+                                <div class="tracking-title-cell">
+                                    ${expandIcon}
+                                    <img class="tracking-favicon" data-bookmark-url="${escapeHtml(primarySession.url || '')}" src="${faviconUrl}" alt="">
+                                    <span class="tracking-title" title="${escapeHtml(primarySession.title || primarySession.url)}">${escapeHtml(displayTitle)}</span>
+                                    ${groupBadge}
+                                </div>
+                            </td>
+                            <td><span class="tracking-time ${timeGradientClass}">${compositeTime}</span></td>
+                            <td><span class="tracking-wakes ${wakesHighlight}">${totalWakeCount}${currentLang === 'en' ? 'x' : '次'}</span></td>
+                            <td>
+                                <div class="tracking-ratio-cell">
+                                    <span class="tracking-ratio ${ratioColorClass}">${activeRatio}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+
+                    // 展开的子行（仅当有多个且展开时显示）
+                    if (isMultiple && isExpanded) {
+                        for (const session of groupSessions) {
+                            const subStateIcon = session.state === 'active' ? '🟢' :
+                                (session.state === 'sleeping' ? '💤' :
+                                    (session.state === 'background' ? '⚪' :
+                                        (session.state === 'visible' ? '🔵' : '🟡')));
+                            const subCompositeTime = formatActiveTime(session.compositeMs || session.activeMs);
+                            const subActiveRatio = Math.round(session.activeRatio * 100);
+                            // 活跃率颜色：挂机=橙色，否则按梯度绿色
+                            const subRatioColorClass = session.isIdle ? 'ratio-idle' : `ratio-level-${Math.min(Math.floor(subActiveRatio / 20), 5)}`;
+                            // 唤醒次数高亮（≥15次用橙色）
+                            const subWakesHighlight = (session.wakeCount || 0) >= 15 ? 'wakes-highlight' : '';
+                            // 综合时间梯度蓝色
+                            const subTimeGradientClass = `time-level-${getTimeGradientLevel(session.compositeMs || session.activeMs)}`;
+
+                            // 计算会话开始时间
+                            const startTimestamp = Date.now() - (session.totalMs || 0);
+                            const startDate = new Date(startTimestamp);
+                            const month = startDate.getMonth() + 1;
+                            const day = startDate.getDate();
+                            const timeStr = startDate.toLocaleTimeString(currentLang === 'en' ? 'en-US' : 'zh-CN', {
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            });
+                            const dateTimeStr = currentLang === 'en'
+                                ? `${month}/${day} ${timeStr}`
+                                : `${month}月${day}日 ${timeStr}`;
+                            const startLabel = currentLang === 'en' ? `Started ${dateTimeStr}` : `开始于 ${dateTimeStr}`;
+
+                            html += `
+                                <tr class="tracking-group-child"
+                                    data-tab-id="${session.tabId}"
+                                    data-bookmark-url="${escapeHtml(session.url)}"
+                                    data-group-key="${escapeHtml(groupKey)}">
+                                    <td><span class="tracking-state">${subStateIcon}</span></td>
+                                    <td>
+                                        <div class="tracking-title-cell tracking-child-title">
+                                            <span class="tracking-window-label">${startLabel}</span>
+                                        </div>
+                                    </td>
+                                    <td><span class="tracking-time ${subTimeGradientClass}">${subCompositeTime}</span></td>
+                                    <td><span class="tracking-wakes ${subWakesHighlight}">${session.wakeCount || 0}${currentLang === 'en' ? 'x' : '次'}</span></td>
+                                    <td>
+                                        <div class="tracking-ratio-cell">
+                                            <span class="tracking-ratio ${subRatioColorClass}">${subActiveRatio}%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }
+                    }
+                }
+
+                trackingCurrentList.innerHTML = html;
+
+                // 点击展开/折叠分组
+                trackingCurrentList.querySelectorAll('.tracking-group-header.has-children').forEach(row => {
+                    row.addEventListener('click', (e) => {
+                        const groupKey = row.dataset.groupKey;
+                        // 如果点击的是展开图标或徽章，切换展开状态
+                        if (e.target.classList.contains('tracking-expand-icon') ||
+                            e.target.classList.contains('tracking-group-badge') ||
+                            e.target.classList.contains('tracking-title-cell')) {
+                            if (expandedTrackingGroups.has(groupKey)) {
+                                expandedTrackingGroups.delete(groupKey);
+                            } else {
+                                expandedTrackingGroups.add(groupKey);
+                            }
+                            // 重新渲染
+                            lastTrackingSessionIds = []; // 强制完整刷新
+                            loadCurrentTrackingSessions();
+                        } else {
+                            // 点击其他区域，切换到对应标签页
+                            const tabId = parseInt(row.dataset.tabId);
+                            if (tabId) {
+                                browserAPI.tabs.update(tabId, { active: true });
+                            }
+                        }
+                    });
+                });
+
+                // 点击子行切换到对应标签页
+                trackingCurrentList.querySelectorAll('.tracking-group-child').forEach(row => {
+                    row.addEventListener('click', () => {
+                        const tabId = parseInt(row.dataset.tabId);
+                        if (tabId) {
+                            browserAPI.tabs.update(tabId, { active: true });
+                        }
+                    });
+                });
+
+                // 单个会话的行也可以点击切换
+                trackingCurrentList.querySelectorAll('.tracking-group-header:not(.has-children)').forEach(row => {
+                    row.addEventListener('click', () => {
+                        const tabId = parseInt(row.dataset.tabId);
+                        if (tabId) {
+                            browserAPI.tabs.update(tabId, { active: true });
+                        }
+                    });
+                });
+            } else {
+                // 会话列表没变，只更新时间、状态等动态数据
+                for (const [groupKey, groupSessions] of groupedSessions) {
+                    const row = trackingCurrentList.querySelector(`tr.tracking-group-header[data-group-key="${CSS.escape(groupKey)}"]`);
+                    if (row) {
+                        const isMultiple = groupSessions.length > 1;
+
+                        // 计算分组的汇总数据
+                        const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
+                        const totalWakeCount = groupSessions.reduce((sum, s) => sum + (s.wakeCount || 0), 0);
+                        const avgActiveRatio = groupSessions.reduce((sum, s) => sum + (s.activeRatio || 0), 0) / groupSessions.length;
+
+                        // 确定显示的状态
+                        const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
+                        const bestState = groupSessions.reduce((best, s) => {
+                            const bestIdx = stateOrder.indexOf(best);
+                            const currIdx = stateOrder.indexOf(s.state);
+                            return currIdx < bestIdx ? s.state : best;
+                        }, 'sleeping');
+
+                        const stateIcon = bestState === 'active' ? '🟢' :
+                            (bestState === 'sleeping' ? '💤' :
+                                (bestState === 'background' ? '⚪' :
+                                    (bestState === 'visible' ? '🔵' : '🟡')));
+
+                        const compositeTime = formatActiveTime(totalCompositeMs);
+                        const activeRatio = Math.round(avgActiveRatio * 100);
+
+                        // 更新主行
+                        const stateEl = row.querySelector('.tracking-state');
+                        if (stateEl) stateEl.textContent = stateIcon;
+
+                        const timeEl = row.querySelector('.tracking-time');
+                        if (timeEl) timeEl.textContent = compositeTime;
+
+                        const wakesEl = row.querySelector('.tracking-wakes');
+                        if (wakesEl) wakesEl.textContent = `${totalWakeCount}${currentLang === 'en' ? 'x' : '次'}`;
+
+                        const ratioEl = row.querySelector('.tracking-ratio');
+                        if (ratioEl) ratioEl.textContent = `${activeRatio}%`;
+                    }
+
+                    // 更新子行
+                    if (expandedTrackingGroups.has(groupKey)) {
+                        for (const session of groupSessions) {
+                            const childRow = trackingCurrentList.querySelector(`tr.tracking-group-child[data-tab-id="${session.tabId}"]`);
+                            if (childRow) {
+                                const subStateIcon = session.state === 'active' ? '🟢' :
+                                    (session.state === 'sleeping' ? '💤' :
+                                        (session.state === 'background' ? '⚪' :
+                                            (session.state === 'visible' ? '🔵' : '🟡')));
+                                const subCompositeTime = formatActiveTime(session.compositeMs || session.activeMs);
+                                const subActiveRatio = Math.round(session.activeRatio * 100);
+
+                                const stateEl = childRow.querySelector('.tracking-state');
+                                if (stateEl) stateEl.textContent = subStateIcon;
+
+                                const timeEl = childRow.querySelector('.tracking-time');
+                                if (timeEl) timeEl.textContent = subCompositeTime;
+
+                                const wakesEl = childRow.querySelector('.tracking-wakes');
+                                if (wakesEl) wakesEl.textContent = `${session.wakeCount || 0}${currentLang === 'en' ? 'x' : '次'}`;
+
+                                const ratioEl = childRow.querySelector('.tracking-ratio');
+                                if (ratioEl) ratioEl.textContent = `${subActiveRatio}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('[书签推荐] 加载追踪会话失败:', error);
+    }
+}
+
+// HTML 转义函数
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// 使用全局tooltip元素，附加到body，避免层级问题
+let globalTooltipElement = null;
+let tooltipHideTimer = null;
+
+function initFastTooltips() {
+    // 创建全局tooltip元素（如果不存在）
+    if (!globalTooltipElement) {
+        globalTooltipElement = document.createElement('div');
+        globalTooltipElement.className = 'global-tooltip';
+        document.body.appendChild(globalTooltipElement);
+    }
+
+    const buttons = document.querySelectorAll('.diff-header .diff-edit-btn.icon-only[title]');
+
+    buttons.forEach(btn => {
+        // 保存原始title并移除（防止浏览器原生tooltip）
+        const tooltipText = btn.getAttribute('title');
+        btn.dataset.tooltipText = tooltipText;
+        btn.removeAttribute('title');
+
+        btn.addEventListener('mouseenter', (e) => {
+            if (tooltipHideTimer) {
+                clearTimeout(tooltipHideTimer);
+                tooltipHideTimer = null;
+            }
+
+            const text = btn.dataset.tooltipText;
+            if (!text) return;
+
+            globalTooltipElement.textContent = text;
+
+            // 计算位置（按钮上方居中）
+            const rect = btn.getBoundingClientRect();
+            const tooltipRect = globalTooltipElement.getBoundingClientRect();
+
+            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+            let top = rect.top - 8 - globalTooltipElement.offsetHeight;
+
+            // 确保不超出视口
+            if (left < 8) left = 8;
+            if (left + tooltipRect.width > window.innerWidth - 8) {
+                left = window.innerWidth - tooltipRect.width - 8;
+            }
+            if (top < 8) {
+                // 如果上方空间不足，显示在下方
+                top = rect.bottom + 8;
+            }
+
+            globalTooltipElement.style.left = left + 'px';
+            globalTooltipElement.style.top = top + 'px';
+            globalTooltipElement.classList.add('visible');
+        });
+
+        btn.addEventListener('mouseleave', () => {
+            tooltipHideTimer = setTimeout(() => {
+                globalTooltipElement.classList.remove('visible');
+            }, 100);
+        });
+
+        // 当按钮title动态更新时，同步更新dataset
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'title') {
+                    const newTitle = btn.getAttribute('title');
+                    if (newTitle) {
+                        btn.dataset.tooltipText = newTitle;
+                        btn.removeAttribute('title');
+                    }
+                }
+            });
+        });
+        observer.observe(btn, { attributes: true });
+    });
+}
+
+
+// =============================================================================
+// 复习热力图 (GitHub 风格，当前月份在左)
+// =============================================================================
+
+function getLocalDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function normalizeHeatmapBookmarkCounts(byBookmark = {}) {
+    const normalized = {};
+    const source = (byBookmark && typeof byBookmark === 'object') ? byBookmark : {};
+
+    Object.entries(source).forEach(([bookmarkId, count]) => {
+        const id = String(bookmarkId || '').trim();
+        const value = Number(count);
+        if (!id || !Number.isFinite(value) || value <= 0) return;
+        normalized[id] = Math.max(1, Math.floor(value));
+    });
+
+    return normalized;
+}
+
+function normalizeHeatmapDayRecords(records = []) {
+    return (Array.isArray(records) ? records : [])
+        .map((item) => {
+            const bookmarkId = String(item?.bookmarkId || '').trim();
+            const timestamp = Number(item?.timestamp || 0);
+            if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+                return null;
+            }
+            return { bookmarkId, timestamp };
+        })
+        .filter(Boolean)
+        .slice(-FLIP_HISTORY_DAY_RECORDS_MAX);
+}
+
+function normalizeHeatmapDayEntry(entry) {
+    const source = entry && typeof entry === 'object' ? entry : {};
+    const records = normalizeHeatmapDayRecords(source.records || []);
+    const byBookmark = normalizeHeatmapBookmarkCounts(source.byBookmark || {});
+
+    if (Object.keys(byBookmark).length === 0 && records.length > 0) {
+        records.forEach((record) => {
+            byBookmark[record.bookmarkId] = (byBookmark[record.bookmarkId] || 0) + 1;
+        });
+    }
+
+    const rawCount = Number(source.count);
+    const count = Number.isFinite(rawCount) && rawCount >= records.length
+        ? Math.floor(rawCount)
+        : records.length;
+
+    return {
+        count: Math.max(0, count),
+        byBookmark,
+        records
+    };
+}
+
+function normalizeHeatmapDailyIndex(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const sourceDays = source.days && typeof source.days === 'object' ? source.days : {};
+    const days = {};
+
+    Object.entries(sourceDays).forEach(([dateKey, value]) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+        days[dateKey] = normalizeHeatmapDayEntry(value);
+    });
+
+    return {
+        version: 1,
+        updatedAt: Number.isFinite(Number(source.updatedAt)) ? Number(source.updatedAt) : 0,
+        days
+    };
+}
+
+function pruneHeatmapDailyIndex(index) {
+    if (!index || typeof index !== 'object' || !index.days || typeof index.days !== 'object') return index;
+
+    const cutoff = new Date();
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() - FLIP_HISTORY_RETENTION_DAYS);
+    const cutoffKey = getLocalDateKey(cutoff);
+
+    Object.keys(index.days).forEach((dateKey) => {
+        if (dateKey < cutoffKey) {
+            delete index.days[dateKey];
+        }
+    });
+
+    return index;
+}
+
+function appendFlipEventToHeatmapIndex(index, event) {
+    const normalized = normalizeHeatmapDailyIndex(index);
+    const bookmarkId = String(event?.bookmarkId || '').trim();
+    const timestamp = Number(event?.timestamp || 0);
+
+    if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return normalized;
+    }
+
+    const dateKey = getLocalDateKey(new Date(timestamp));
+    const day = normalizeHeatmapDayEntry(normalized.days[dateKey]);
+
+    day.count += 1;
+    day.byBookmark[bookmarkId] = (day.byBookmark[bookmarkId] || 0) + 1;
+
+    day.records.push({ bookmarkId, timestamp });
+    if (day.records.length > FLIP_HISTORY_DAY_RECORDS_MAX) {
+        day.records = day.records.slice(day.records.length - FLIP_HISTORY_DAY_RECORDS_MAX);
+    }
+
+    normalized.days[dateKey] = day;
+    normalized.updatedAt = Date.now();
+
+    return pruneHeatmapDailyIndex(normalized);
+}
+
+function buildHeatmapDailyIndexFromFlipHistory(flipHistory = []) {
+    let index = normalizeHeatmapDailyIndex(null);
+
+    for (const flip of (Array.isArray(flipHistory) ? flipHistory : [])) {
+        index = appendFlipEventToHeatmapIndex(index, {
+            bookmarkId: String(flip?.bookmarkId || '').trim(),
+            timestamp: Number(flip?.timestamp || 0)
+        });
+    }
+
+    return pruneHeatmapDailyIndex(index);
+}
+
+async function getHeatmapDailyIndex(options = {}) {
+    const allowRebuild = options.allowRebuild !== false;
+
+    try {
+        const result = await browserAPI.storage.local.get([HEATMAP_DAILY_INDEX_STORAGE_KEY, FLIP_HISTORY_STORAGE_KEY]);
+        const existing = normalizeHeatmapDailyIndex(result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY]);
+        const normalized = pruneHeatmapDailyIndex(existing);
+
+        let index = normalized;
+        let changed = false;
+
+        if (allowRebuild && Object.keys(index.days).length === 0) {
+            const flipHistory = Array.isArray(result?.[FLIP_HISTORY_STORAGE_KEY])
+                ? result[FLIP_HISTORY_STORAGE_KEY]
+                : [];
+
+            if (flipHistory.length > 0) {
+                index = buildHeatmapDailyIndexFromFlipHistory(flipHistory);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            await browserAPI.storage.local.set({ [HEATMAP_DAILY_INDEX_STORAGE_KEY]: index });
+        }
+
+        return index;
+    } catch (error) {
+        console.warn('[热力图] 获取日索引失败:', error);
+        return normalizeHeatmapDailyIndex(null);
+    }
+}
+
+function buildHeatmapDailyCounts(index) {
+    const dailyCounts = new Map();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const daysToShow = 52 * 7 + today.getDay();
+    for (let i = daysToShow - 1; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const key = getLocalDateKey(date);
+        dailyCounts.set(key, 0);
+    }
+
+    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
+    Object.entries(sourceDays).forEach(([dateKey, day]) => {
+        if (!dailyCounts.has(dateKey)) return;
+        const count = Number(day?.count || 0);
+        dailyCounts.set(dateKey, Number.isFinite(count) && count > 0 ? Math.floor(count) : 0);
+    });
+
+    return dailyCounts;
+}
+
+function collectMonthBookmarkCountsFromHeatmapIndex(index, year, month) {
+    const stats = new Map();
+    const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+
+    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
+    Object.entries(sourceDays).forEach(([dateKey, day]) => {
+        if (!dateKey.startsWith(monthPrefix)) return;
+
+        const byBookmark = day?.byBookmark && typeof day.byBookmark === 'object'
+            ? day.byBookmark
+            : {};
+
+        Object.entries(byBookmark).forEach(([bookmarkId, count]) => {
+            const id = String(bookmarkId || '').trim();
+            const value = Number(count);
+            if (!id || !Number.isFinite(value) || value <= 0) return;
+
+            if (!stats.has(id)) {
+                stats.set(id, { count: 0 });
+            }
+            stats.get(id).count += Math.floor(value);
+        });
+    });
+
+    return stats;
+}
+
+async function loadHeatmapData() {
+    const container = document.getElementById('heatmapContainer');
+    if (!container) return;
+
+    try {
+        const index = await getHeatmapDailyIndex({ allowRebuild: true });
+        const dailyCounts = buildHeatmapDailyCounts(index);
+
+        // 渲染热力图（反转顺序，当前月份在左）
+        renderHeatmap(container, dailyCounts);
+
+    } catch (error) {
+        console.error('[热力图] 加载失败:', error);
+        container.innerHTML = `<div class="empty-state"><div class="empty-state-title">${currentLang === 'en' ? 'Failed to load heatmap' : '热力图加载失败'
+            }</div></div>`;
+    }
+}
+
+function renderHeatmap(container, dailyCounts) {
+    const isEn = currentLang === 'en';
+    const dayNames = isEn ? ['', 'Mon', '', 'Wed', '', 'Fri', ''] :
+        ['', '一', '', '三', '', '五', ''];
+    const monthNames = isEn ?
+        ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] :
+        ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+
+    // 找出最大值用于计算颜色深度
+    const counts = Array.from(dailyCounts.values());
+    const maxCount = Math.max(...counts, 1);
+    const totalReviews = counts.reduce((a, b) => a + b, 0);
+
+    // 计算今天的复习次数
+    const todayKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+    const todayReviews = dailyCounts.get(todayKey) || 0;
+
+    // 按月分组数据
+    const monthsData = new Map(); // year-month -> { year, month, days: [], totalCount }
+    const entries = Array.from(dailyCounts.entries()).sort();
+
+    for (const [dateStr, count] of entries) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        const dayOfWeek = date.getDay();
+        const monthKey = `${year}-${month}`;
+
+        if (!monthsData.has(monthKey)) {
+            monthsData.set(monthKey, { year, month, days: [], totalCount: 0 });
+        }
+
+        monthsData.get(monthKey).days.push({ date: dateStr, count, dayOfWeek, day });
+        monthsData.get(monthKey).totalCount += count;
+    }
+
+    // 构建显示顺序：当前月 + 今年12个月(1-12正序)
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+
+    const monthsArray = [];
+
+    // 第一个：当前月份
+    const currentMonthKey = `${currentYear}-${currentMonth}`;
+    const currentMonthData = monthsData.get(currentMonthKey) || { year: currentYear, month: currentMonth, days: [], totalCount: 0 };
+    monthsArray.push(currentMonthData);
+
+    // 后面12个：今年1月、2月、3月...12月（正序）
+    for (let m = 1; m <= 12; m++) {
+        const key = `${currentYear}-${m}`;
+        const data = monthsData.get(key) || { year: currentYear, month: m, days: [], totalCount: 0 };
+        monthsArray.push(data);
+    }
+
+
+
+    // 生成 HTML
+    let html = `<div class="heatmap-year-view">`;
+    html += `<div class="heatmap-scroll-container">`;
+    html += `<div class="heatmap-months-row">`;
+
+    for (let idx = 0; idx < monthsArray.length; idx++) {
+        const monthData = monthsArray[idx];
+        const { year, month, days, totalCount } = monthData;
+        const monthLabel = monthNames[month - 1];
+
+        // idx=1 时在当前月份后添加分隔线，后面每3个月添加分隔线
+        if (idx === 1) {
+            // 当前月份与12个月之间的分隔线
+            html += `<div class="heatmap-quarter-divider current-divider"></div>`;
+        } else if (idx > 1 && (idx - 1) % 3 === 0) {
+            // 12个月内部的季度分隔线（4月、7月、10月前）
+            html += `<div class="heatmap-quarter-divider"></div>`;
+        }
+
+        // 获取一周开始日(中文:周一=1, 英文:周日=0)，与书签添加记录日历保持一致
+        const weekStartDay = (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? 1 : 0;
+
+        // 获取这个月第一天是星期几
+        const firstDay = new Date(year, month - 1, 1);
+        const firstDayOfWeek = firstDay.getDay();
+
+        // 获取这个月的天数
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const dayCountMap = new Map(days.map(d => [d.day, d]));
+
+        // 构建日历网格（横向7列）
+        const calendarDays = [];
+
+        // 填充第一行前面的空白（根据周开始日调整）
+        const blankCells = (firstDayOfWeek - weekStartDay + 7) % 7;
+        for (let i = 0; i < blankCells; i++) {
+            calendarDays.push({ empty: true });
+        }
+
+        // 填充每一天
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dayData = dayCountMap.get(d);
+            if (dayData) {
+                calendarDays.push(dayData);
+            } else {
+                calendarDays.push({ date: `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`, count: 0, day: d });
+            }
+        }
+
+        // 填充最后一行的空白
+        while (calendarDays.length % 7 !== 0) {
+            calendarDays.push({ empty: true });
+        }
+
+        // 判断是否是当前月份
+        const isCurrentMonth = year === currentYear && month === currentMonth;
+        const currentClass = isCurrentMonth ? ' current-month' : '';
+
+        html += `<div class="heatmap-month-block${currentClass}" data-year="${year}" data-month="${month}">`;
+        html += `<div class="heatmap-month-header">${monthLabel}</div>`;
+        html += `<div class="heatmap-calendar">`;
+
+        // 当天日期字符串，用于判断是否高亮
+        const todayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+        // 按行输出（每行7个）
+        for (let i = 0; i < calendarDays.length; i += 7) {
+            html += '<div class="heatmap-row">';
+            for (let j = 0; j < 7; j++) {
+                const day = calendarDays[i + j];
+                if (!day || day.empty) {
+                    html += '<div class="heatmap-cell empty"></div>';
+                } else {
+                    // 固定阈值：0 / 1-15 / 16-50 / 51-150 / 151+
+                    const level = day.count === 0 ? 0 :
+                        day.count <= 15 ? 1 :
+                            day.count <= 50 ? 2 :
+                                day.count <= 150 ? 3 : 4;
+                    // 判断是否是当天
+                    const isToday = day.date === todayStr;
+                    const todayClass = isToday ? ' today' : '';
+                    if (day.count > 0) {
+                        const [y, m, dd] = day.date.split('-').map(Number);
+                        const tooltip = isEn ?
+                            `${day.count} review${day.count !== 1 ? 's' : ''}, ${m}-${dd}` :
+                            `${day.count}次, ${m}-${dd}`;
+                        html += `<div class="heatmap-cell level-${level}${todayClass}" data-date="${day.date}" data-tooltip="${tooltip}"></div>`;
+                    } else {
+                        html += `<div class="heatmap-cell level-0${todayClass}" data-date="${day.date}"></div>`;
+                    }
+                }
+            }
+            html += '</div>';
+        }
+
+        html += `</div>`;
+        html += `<div class="heatmap-month-count">${totalCount}</div>`;
+        html += `</div>`;
+    }
+
+    html += `</div></div>`;
+
+    // 底部统计和图例
+    html += `
+        <div class="heatmap-footer">
+            <span class="heatmap-stats">${isEn ? 'Today' : '今天'} ${todayReviews} ${isEn ? 'reviews' : '次'}</span>
+            <div class="heatmap-footer-right">
+                <div class="heatmap-legend">
+                    <span>${isEn ? 'Less' : '少'}</span>
+                    <div class="heatmap-cell level-0"></div>
+                    <div class="heatmap-cell level-1"></div>
+                    <div class="heatmap-cell level-2"></div>
+                    <div class="heatmap-cell level-3"></div>
+                    <div class="heatmap-cell level-4"></div>
+                    <span>${isEn ? 'More' : '多'}</span>
+                </div>
+                <button class="heatmap-help-btn" id="heatmapHelpBtn" title="${isEn ? 'Level description' : '等级说明'}">
+                    <i class="fas fa-question-circle"></i>
+                </button>
+            </div>
+        </div>
+    </div>`;
+
+    container.innerHTML = html;
+
+    // 确保滚动条在最左边，显示当前月份
+    const scrollContainer = container.querySelector('.heatmap-scroll-container');
+    if (scrollContainer) {
+        scrollContainer.scrollLeft = 0;
+    }
+
+    // 创建或获取全局tooltip元素
+    let globalTooltip = document.getElementById('heatmapGlobalTooltip');
+    if (!globalTooltip) {
+        globalTooltip = document.createElement('div');
+        globalTooltip.id = 'heatmapGlobalTooltip';
+        globalTooltip.className = 'heatmap-global-tooltip';
+        document.body.appendChild(globalTooltip);
+    }
+
+    // 绑定日期格子点击事件和tooltip事件
+    container.querySelectorAll('.heatmap-cell[data-date]').forEach(cell => {
+        cell.style.cursor = 'pointer';
+        cell.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 点击时隐藏tooltip
+            globalTooltip.classList.remove('visible');
+            const date = cell.dataset.date;
+            showHeatmapDateDetail(date);
+        });
+
+        // 鼠标进入时显示tooltip
+        cell.addEventListener('mouseenter', (e) => {
+            const tooltipText = cell.dataset.tooltip;
+            if (!tooltipText) return;
+
+            // 先设置内容并临时显示以获取正确尺寸
+            globalTooltip.textContent = tooltipText;
+            globalTooltip.style.visibility = 'hidden';
+            globalTooltip.style.display = 'block';
+
+            // 计算位置：在cell正上方居中
+            const rect = cell.getBoundingClientRect();
+            const tooltipRect = globalTooltip.getBoundingClientRect();
+            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+            let top = rect.top - tooltipRect.height - 8;
+
+            // 防止超出左右边界
+            if (left < 5) left = 5;
+            if (left + tooltipRect.width > window.innerWidth - 5) {
+                left = window.innerWidth - tooltipRect.width - 5;
+            }
+
+            // 如果上方空间不够，显示在下方
+            if (top < 5) {
+                top = rect.bottom + 8;
+            }
+
+            globalTooltip.style.left = left + 'px';
+            globalTooltip.style.top = top + 'px';
+            globalTooltip.style.visibility = '';
+            globalTooltip.style.display = '';
+            globalTooltip.classList.add('visible');
+        });
+
+        // 鼠标离开时隐藏tooltip
+        cell.addEventListener('mouseleave', () => {
+            globalTooltip.classList.remove('visible');
+        });
+    });
+
+    // 绑定月份点击事件（进入月视图）
+    container.querySelectorAll('.heatmap-month-block').forEach(block => {
+        block.style.cursor = 'pointer';
+        block.addEventListener('click', (e) => {
+            // 如果点击的是日期格子，不触发月份点击
+            if (e.target.closest('.heatmap-cell[data-date]')) return;
+            const year = parseInt(block.dataset.year);
+            const month = parseInt(block.dataset.month);
+            showHeatmapMonthDetail(year, month);
+        });
+    });
+
+    // 绑定帮助按钮点击事件
+    const helpBtn = document.getElementById('heatmapHelpBtn');
+    if (helpBtn) {
+        helpBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showHeatmapLevelHelp(helpBtn);
+        });
+    }
+}
+
+// 显示热力图等级说明
+function showHeatmapLevelHelp(anchorBtn) {
+    const isEn = currentLang === 'en';
+
+    // 如果已存在，先移除
+    const existing = document.getElementById('heatmapLevelPopup');
+    if (existing) {
+        existing.remove();
+        return;
+    }
+
+    const popup = document.createElement('div');
+    popup.id = 'heatmapLevelPopup';
+    popup.className = 'heatmap-level-popup';
+    popup.innerHTML = `
+        <div class="heatmap-level-title">${isEn ? 'Review Level' : '复习等级说明'}</div>
+        <div class="heatmap-level-list">
+            <div class="heatmap-level-row">
+                <div class="heatmap-cell level-0"></div>
+                <span>0 ${isEn ? 'reviews' : '次'}</span>
+            </div>
+            <div class="heatmap-level-row">
+                <div class="heatmap-cell level-1"></div>
+                <span>1-15 ${isEn ? 'reviews' : '次'}</span>
+            </div>
+            <div class="heatmap-level-row">
+                <div class="heatmap-cell level-2"></div>
+                <span>16-50 ${isEn ? 'reviews' : '次'}</span>
+            </div>
+            <div class="heatmap-level-row">
+                <div class="heatmap-cell level-3"></div>
+                <span>51-150 ${isEn ? 'reviews' : '次'}</span>
+            </div>
+            <div class="heatmap-level-row">
+                <div class="heatmap-cell level-4"></div>
+                <span>151+ ${isEn ? 'reviews' : '次'}</span>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(popup);
+
+    // 定位到按钮上方
+    const rect = anchorBtn.getBoundingClientRect();
+    popup.style.position = 'fixed';
+    popup.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+    popup.style.right = (window.innerWidth - rect.right) + 'px';
+
+    // 点击其他地方关闭
+    const closeHandler = (e) => {
+        if (!popup.contains(e.target) && e.target !== anchorBtn) {
+            popup.remove();
+            document.removeEventListener('click', closeHandler);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+async function getHeatmapDetailBookmarkMap() {
+    const now = Date.now();
+    if (heatmapBookmarkMapCache.map instanceof Map && now < Number(heatmapBookmarkMapCache.expiresAt || 0)) {
+        return heatmapBookmarkMapCache.map;
+    }
+
+    const nextMap = new Map();
+    try {
+        const bookmarks = await getAllBookmarksFlat();
+        bookmarks.forEach((item) => {
+            const id = String(item?.id || '').trim();
+            if (!id || !item?.url) return;
+            nextMap.set(id, item);
+        });
+    } catch (e) {
+        console.warn('[热力图] 获取书签失败:', e);
+    }
+
+    heatmapBookmarkMapCache = {
+        expiresAt: now + HEATMAP_BOOKMARK_MAP_CACHE_TTL_MS,
+        map: nextMap
+    };
+
+    return nextMap;
+}
+
+function invalidateHeatmapDetailBookmarkMapCache() {
+    heatmapBookmarkMapCache = {
+        expiresAt: 0,
+        map: null
+    };
+}
+
+// 显示热力图日期详情（二级UI）
+async function showHeatmapDateDetail(dateStr) {
+    const isEn = currentLang === 'en';
+    const container = document.getElementById('heatmapContainer');
+    if (!container) return;
+
+    const index = await getHeatmapDailyIndex({ allowRebuild: true });
+    const dayEntry = normalizeHeatmapDayEntry(index?.days?.[dateStr]);
+    const dayRecords = Array.isArray(dayEntry.records)
+        ? dayEntry.records.slice().sort((a, b) => b.timestamp - a.timestamp)
+        : [];
+    const totalCount = Math.max(dayRecords.length, Number(dayEntry.count || 0));
+
+    // 获取书签信息（短TTL缓存，避免重复全量遍历）
+    const bookmarkMap = await getHeatmapDetailBookmarkMap();
+
+    // 格式化日期
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const dateLabel = isEn ? `${month}/${day}/${year}` : `${year}年${month}月${day}日`;
+
+    const truncatedHint = totalCount > dayRecords.length
+        ? `<div class="heatmap-detail-empty">${isEn ? `Showing latest ${dayRecords.length} records` : `仅显示最近 ${dayRecords.length} 条记录`}</div>`
+        : '';
+
+    // 生成详情HTML
+    let html = `
+        <div class="heatmap-detail-view">
+            <div class="heatmap-detail-header">
+                <button class="heatmap-back-btn" id="heatmapBackBtn">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>${isEn ? 'Back' : '返回'}</span>
+                </button>
+                <span class="heatmap-detail-title">${dateLabel}</span>
+                <span class="heatmap-detail-count">${totalCount} ${isEn ? 'reviews' : '次复习'}</span>
+            </div>
+            <div class="heatmap-detail-list">
+                ${truncatedHint}
+    `;
+
+    if (dayRecords.length === 0) {
+        html += `<div class="heatmap-detail-empty">${isEn ? 'No reviews on this day' : '当天没有复习记录'}</div>`;
+    } else {
+        for (const record of dayRecords) {
+            const bookmark = bookmarkMap.get(String(record.bookmarkId || ''));
+            const time = new Date(record.timestamp);
+            const timeStr = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+
+            if (bookmark) {
+                html += `
+                    <div class="heatmap-detail-item" data-url="${escapeHtml(bookmark.url)}">
+                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
+                        <div class="heatmap-detail-info">
+                            <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
+                            <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
+                        </div>
+                        <span class="heatmap-detail-time">${timeStr}</span>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="heatmap-detail-item deleted">
+                        <i class="fas fa-bookmark heatmap-detail-favicon-icon"></i>
+                        <div class="heatmap-detail-info">
+                            <div class="heatmap-detail-item-title">${isEn ? 'Bookmark deleted' : '书签已删除'}</div>
+                            <div class="heatmap-detail-item-url">ID: ${record.bookmarkId}</div>
+                        </div>
+                        <span class="heatmap-detail-time">${timeStr}</span>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    html += `</div></div>`;
+
+    container.innerHTML = html;
+
+    // 绑定返回按钮
+    document.getElementById('heatmapBackBtn').addEventListener('click', () => {
+        loadHeatmapData();
+    });
+
+    // 绑定书签点击事件
+    container.querySelectorAll('.heatmap-detail-item[data-url]').forEach(item => {
+        item.style.cursor = 'pointer';
+        item.addEventListener('click', () => {
+            const url = item.dataset.url;
+            if (url) window.open(url, '_blank');
+        });
+    });
+}
+
+// 显示热力图月份详情（书签复习排行）
+async function showHeatmapMonthDetail(year, month) {
+    const isEn = currentLang === 'en';
+    const container = document.getElementById('heatmapContainer');
+    if (!container) return;
+
+    const index = await getHeatmapDailyIndex({ allowRebuild: true });
+
+    // 按书签ID统计当月次数
+    const bookmarkCountMap = collectMonthBookmarkCountsFromHeatmapIndex(index, year, month);
+
+    // 获取书签信息（短TTL缓存，避免重复全量遍历）
+    const bookmarkMap = await getHeatmapDetailBookmarkMap();
+
+    const monthNames = isEn ?
+        ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] :
+        ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+    const monthLabel = isEn ? `${monthNames[month - 1]} ${year}` : `${year}年${monthNames[month - 1]}`;
+
+    const totalCount = Array.from(bookmarkCountMap.values()).reduce((sum, s) => sum + (Number(s?.count || 0)), 0);
+
+    // 按复习次数排序
+    const sortedBookmarks = Array.from(bookmarkCountMap.entries())
+        .sort((a, b) => Number(b?.[1]?.count || 0) - Number(a?.[1]?.count || 0));
+
+    // 生成详情HTML
+    let html = `
+        <div class="heatmap-detail-view">
+            <div class="heatmap-detail-header">
+                <button class="heatmap-back-btn" id="heatmapBackBtn">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>${isEn ? 'Back' : '返回'}</span>
+                </button>
+                <span class="heatmap-detail-title">${monthLabel} ${isEn ? 'Ranking' : '复习排行'}</span>
+                <span class="heatmap-detail-count">${totalCount} ${isEn ? 'reviews' : '次复习'}</span>
+            </div>
+            <div class="heatmap-detail-list">
+    `;
+
+    if (sortedBookmarks.length === 0) {
+        html += `<div class="heatmap-detail-empty">${isEn ? 'No reviews this month' : '当月没有复习记录'}</div>`;
+    } else {
+        let rank = 0;
+        for (const [bookmarkId, stat] of sortedBookmarks) {
+            rank++;
+            const bookmark = bookmarkMap.get(String(bookmarkId || ''));
+
+            if (bookmark) {
+                html += `
+                    <div class="heatmap-detail-item heatmap-ranking-item" data-url="${escapeHtml(bookmark.url)}">
+                        <span class="heatmap-rank ${rank <= 3 ? 'top-' + rank : ''}">${rank}</span>
+                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
+                        <div class="heatmap-detail-info">
+                            <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
+                            <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
+                        </div>
+                        <span class="heatmap-review-count">${stat.count} ${isEn ? 'times' : '次'}</span>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="heatmap-detail-item heatmap-ranking-item deleted">
+                        <span class="heatmap-rank">${rank}</span>
+                        <i class="fas fa-bookmark heatmap-detail-favicon-icon"></i>
+                        <div class="heatmap-detail-info">
+                            <div class="heatmap-detail-item-title">${isEn ? 'Bookmark deleted' : '书签已删除'}</div>
+                            <div class="heatmap-detail-item-url">ID: ${bookmarkId}</div>
+                        </div>
+                        <span class="heatmap-review-count">${stat.count} ${isEn ? 'times' : '次'}</span>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    html += `</div></div>`;
+
+    container.innerHTML = html;
+
+    // 绑定返回按钮
+    document.getElementById('heatmapBackBtn').addEventListener('click', () => {
+        loadHeatmapData();
+    });
+
+    // 绑定书签点击事件
+    container.querySelectorAll('.heatmap-detail-item[data-url]').forEach(item => {
+        item.style.cursor = 'pointer';
+        item.addEventListener('click', () => {
+            const url = item.dataset.url;
+            if (url) window.open(url, '_blank');
+        });
+    });
+}
+
+
+// =============================================================================
+// 书签温故视图
+// =============================================================================
+
+function renderAdditionsView() {
+    const container = document.getElementById('additionsList');
+
+    // 【修复】容器已被删除（在UI重构中），直接返回
+    if (!container) {
+
+        return;
+    }
+
+    if (allBookmarks.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-bookmark"></i></div>
+                <div class="empty-state-title">${i18n.emptyAdditions[currentLang]}</div>
+            </div>
+        `;
+        return;
+    }
+
+    // 按时间范围分组（年、月、日）
+    const groupedByTime = groupBookmarksByTime(allBookmarks, currentTimeFilter);
+
+    // 过滤
+    const filtered = filterBookmarks(groupedByTime);
+
+    container.innerHTML = renderBookmarkGroups(filtered, currentTimeFilter);
+
+    // 绑定折叠/展开事件
+    attachAdditionGroupEvents();
+}
+
+// 初始化「书签温故」子视图标签和行为
+function initAdditionsSubTabs() {
+    const tabs = document.querySelectorAll('.additions-tab');
+    const reviewPanel = document.getElementById('additionsReviewPanel');
+    const browsingPanel = document.getElementById('additionsBrowsingPanel');
+    const trackingPanel = document.getElementById('additionsTrackingPanel');
+
+    if (!tabs.length || !reviewPanel || !browsingPanel) {
+        console.warn('[initAdditionsSubTabs] 主标签或面板缺失');
+        return;
+    }
+
+    let browsingHistoryInitialized = false;
+    let trackingInitialized = false;
+
+    // 标签切换函数
+    const switchToTab = (target, shouldSave = true) => {
+        // [Fixed] Exit Locate Mode when leaving the current view (Search Isolation)
+        // 1. Check Bookmark Calendar
+        if (window.bookmarkCalendarInstance && window.bookmarkCalendarInstance.selectMode) {
+            if (typeof window.bookmarkCalendarInstance.exitLocateMode === 'function') {
+                window.bookmarkCalendarInstance.exitLocateMode();
+            }
+        }
+        // 2. Check Browsing History Calendar
+        if (window.browsingHistoryCalendarInstance && window.browsingHistoryCalendarInstance.selectMode) {
+            if (typeof window.browsingHistoryCalendarInstance.exitLocateMode === 'function') {
+                window.browsingHistoryCalendarInstance.exitLocateMode();
+            }
+        }
+
+        // 切换标签高亮
+        tabs.forEach(t => t.classList.remove('active'));
+        const targetTab = document.querySelector(`.additions-tab[data-tab="${target}"]`);
+        if (targetTab) targetTab.classList.add('active');
+
+        // 切换子视图
+        reviewPanel.classList.remove('active');
+        browsingPanel.classList.remove('active');
+        if (trackingPanel) trackingPanel.classList.remove('active');
+
+        // [Fixed] Update Search Context immediately (for both click and restore)
+        // IMPORTANT: initAdditionsSubTabs() runs on page init even when the active view is not "additions".
+        // If we update context here unconditionally, it will overwrite the main search placeholder on refresh
+        if (window.SearchContextManager && currentView === 'additions') {
+            let subTab = null;
+            if (target === 'browsing') {
+                subTab = localStorage.getItem('browsingActiveSubTab') || 'history';
+            }
+            window.SearchContextManager.updateContext('additions', target, subTab);
+        }
+
+        if (target === 'review') {
+            reviewPanel.classList.add('active');
+            try {
+                if (typeof initBookmarkCalendar === 'function') {
+                    initBookmarkCalendar();
+                }
+                // If switching back to Review, force refresh might be good but just rendering is enough
+                // Note: The calendar's state is preserved unless refreshed.
+                // We exited locate mode above, so it will be clean.
+                renderAdditionsView();
+            } catch (error) {
+                console.warn('[initAdditionsSubTabs] 渲染书签添加记录失败:', error);
+            }
+        } else if (target === 'browsing') {
+            browsingPanel.classList.add('active');
+            if (currentView === 'additions') {
+                recordBrowsingCalibrationInteraction('open', { source: 'browsing-tab' });
+            }
+            // 初始化浏览记录日历（首次点击时）
+            if (!browsingHistoryInitialized) {
+                browsingHistoryInitialized = true;
+                try {
+                    initBrowsingHistoryCalendar();
+                } catch (e) {
+                    console.error('[Additions] 初始化浏览记录日历失败:', e);
+                }
+            } else {
+                refreshBrowsingHistoryData({ forceFull: false, silent: true });
+            }
+        } else if (target === 'tracking' && trackingPanel) {
+            trackingPanel.classList.add('active');
+            // 初始化时间捕捉（首次点击时）
+            if (!trackingInitialized) {
+                trackingInitialized = true;
+                initTrackingToggle();
+            }
+            // 每次切换到标签时加载最新数据
+            loadCurrentTrackingSessions();
+            loadActiveTimeRanking();
+            // 启动当前会话的实时刷新（排行榜不定时刷新）
+            startTrackingRefresh();
+        }
+
+        // 保存当前状态
+        if (shouldSave) {
+            localStorage.setItem('additionsActiveTab', target);
+        }
+    };
+
+    // 绑定点击事件
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            switchToTab(tab.dataset.tab, true);
+        });
+    });
+
+    // 恢复上次选中的标签
+    const savedTab = localStorage.getItem('additionsActiveTab');
+    if (savedTab && ['review', 'browsing', 'tracking'].includes(savedTab)) {
+        switchToTab(savedTab, false);
+    } else if (currentView === 'additions') {
+        switchToTab('review', false);
+    }
+
+    // 初始化浏览记录的子标签
+    initBrowsingSubTabs();
+}
+
+// 初始化浏览记录子标签
+function initBrowsingSubTabs() {
+    const subTabs = document.querySelectorAll('.browsing-sub-tab');
+    const historyPanel = document.getElementById('browsingHistoryPanel');
+    const rankingPanel = document.getElementById('browsingRankingPanel');
+    const relatedPanel = document.getElementById('browsingRelatedPanel');
+    let browsingRankingInitialized = false;
+    let browsingRelatedInitialized = false;
+
+    if (!subTabs.length || !historyPanel || !rankingPanel || !relatedPanel) {
+        console.warn('[initBrowsingSubTabs] 子标签或面板缺失');
+        return;
+    }
+
+    // 子标签切换函数
+    const switchToSubTab = (target, shouldSave = true) => {
+        // [Fixed] Exit Locate Mode when switching sub-tabs (Search Isolation)
+        if (window.browsingHistoryCalendarInstance && window.browsingHistoryCalendarInstance.selectMode) {
+            if (typeof window.browsingHistoryCalendarInstance.exitLocateMode === 'function') {
+                window.browsingHistoryCalendarInstance.exitLocateMode();
+            }
+        }
+
+        // 切换子标签高亮
+        subTabs.forEach(t => t.classList.remove('active'));
+        const targetTab = document.querySelector(`.browsing-sub-tab[data-sub-tab="${target}"]`);
+        if (targetTab) targetTab.classList.add('active');
+
+        // [Fixed] Update Search Context immediately (for both click and restore)
+        // Guard: only affect global search when "additions" view is active.
+        if (window.SearchContextManager && currentView === 'additions') {
+            window.SearchContextManager.updateContext('additions', 'browsing', target);
+        }
+
+        // 切换子面板
+        historyPanel.classList.remove('active');
+        rankingPanel.classList.remove('active');
+        relatedPanel.classList.remove('active');
+
+        if (target === 'history') {
+            historyPanel.classList.add('active');
+            refreshBrowsingHistoryData({ forceFull: false, silent: true });
+        } else if (target === 'ranking') {
+            rankingPanel.classList.add('active');
+            if (!browsingRankingInitialized) {
+                browsingRankingInitialized = true;
+                try {
+                    initBrowsingClickRanking();
+                } catch (e) {
+                    console.error('[initBrowsingSubTabs] 初始化点击排行失败:', e);
+                }
+            } else {
+                refreshBrowsingHistoryData({ forceFull: false, silent: true });
+                resetBrowsingRankingDerivedCache();
+                markWidgetsDirty(['ranking', 'related', 'historyWeek'], { schedule: false });
+                refreshActiveBrowsingRankingIfVisible();
+            }
+        } else if (target === 'related') {
+            relatedPanel.classList.add('active');
+            if (!browsingRelatedInitialized) {
+                browsingRelatedInitialized = true;
+                try {
+                    initBrowsingRelatedHistory();
+                } catch (e) {
+                    console.error('[initBrowsingSubTabs] 初始化书签关联记录失败:', e);
+                }
+            } else {
+                refreshBrowsingRelatedHistory({ userInitiated: true });
+            }
+        }
+
+        // 保存当前状态
+        if (shouldSave) {
+            localStorage.setItem('browsingActiveSubTab', target);
+        }
+    };
+
+    // 绑定点击事件
+    subTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            switchToSubTab(tab.dataset.subTab, true);
+        });
+    });
+
+    // 恢复上次选中的子标签
+    const savedSubTab = localStorage.getItem('browsingActiveSubTab');
+    if (savedSubTab && ['history', 'ranking', 'related'].includes(savedSubTab)) {
+        switchToSubTab(savedSubTab, false);
+    }
+}
+
+// 基于浏览器历史记录的「点击排行」（书签浏览记录子视图）
+
+function getBrowsingClickRankingBoundaries() {
+    const now = new Date();
+    const nowMs = now.getTime();
+
+    // 当天起始（本地时区）
+    const dayStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayStart = dayStartDate.getTime();
+
+    // 与「点击记录」日历保持一致：
+    // - 中文使用周一作为一周开始
+    // - 其他语言使用周日作为一周开始
+    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // 0=周日,1=周一,...
+    const weekStartDate = new Date(dayStartDate);
+    const currentDay = weekStartDate.getDay(); // 0-6 (周日-周六)
+    let diff = currentDay - weekStartDay;
+    if (diff < 0) diff += 7;
+    weekStartDate.setDate(weekStartDate.getDate() - diff);
+    const weekStart = weekStartDate.getTime();
+
+    // 当月起始
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    // 当年起始
+    const yearStart = new Date(now.getFullYear(), 0, 1).getTime();
+
+    return { now: nowMs, dayStart, weekStart, monthStart, yearStart };
+}
+
+function normalizeBrowsingRankingDomainHost(hostname) {
+    const safeHost = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+    return safeHost;
+}
+
+function getBrowsingRankingDomainPartsFromUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const childDomain = normalizeBrowsingRankingDomainHost(parsed.hostname);
+        if (!childDomain) return null;
+
+        const isIpLike = /^(\d{1,3}\.){3}\d{1,3}$/.test(childDomain) || childDomain.includes(':');
+        if (isIpLike || childDomain === 'localhost' || childDomain.endsWith('.local')) {
+            return { childDomain, parentDomain: childDomain };
+        }
+
+        const labels = childDomain.split('.').filter(Boolean);
+        if (labels.length <= 2) {
+            return { childDomain, parentDomain: childDomain };
+        }
+
+        const suffix2 = labels.slice(-2).join('.');
+        const multiPartSuffixes = new Set([
+            'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
+            'co.uk', 'org.uk', 'gov.uk', 'ac.uk',
+            'co.jp',
+            'com.au', 'net.au', 'org.au',
+            'co.nz',
+            'com.hk', 'com.tw', 'com.sg'
+        ]);
+
+        const parentDomain = (labels.length >= 3 && multiPartSuffixes.has(suffix2))
+            ? labels.slice(-3).join('.')
+            : labels.slice(-2).join('.');
+
+        return { childDomain, parentDomain };
+    } catch (_) {
+        return null;
+    }
+}
+
+function getBrowsingRankingDomainValue(domainParts, mode = 'domain') {
+    if (!domainParts) return '';
+    const child = String(domainParts.childDomain || '').trim();
+    const parent = String(domainParts.parentDomain || '').trim();
+    if (!child) return '';
+    if (mode === 'subdomain') return child;
+    return parent || child;
+}
+
+function isBrowsingHistoryCalendarReady(inst) {
+    if (!inst) return false;
+    if (inst.useNewArchitecture && inst.dbManager) {
+        if (inst.initCompleted === false) return false;
+        return true;
+    }
+    if (inst.loadedRangeKeys && inst.loadedRangeKeys.startKey && inst.loadedRangeKeys.endKey) return true;
+    if (inst.historyCacheRestored) return true;
+    if (inst.historyCacheMeta && typeof inst.historyCacheMeta.lastSyncTime === 'number' && inst.historyCacheMeta.lastSyncTime > 0) {
+        return true;
+    }
+    return !!inst.initCompleted;
+}
+
+function isBrowsingRankingTransientPending(calendar) {
+    if (!calendar) return true;
+    if (!calendar.bookmarksByDate || typeof calendar.bookmarksByDate.size !== 'number') return true;
+    if (calendar.bookmarksByDate.size === 0) return true;
+    if (calendar.initCompleted === false) return true;
+    if (calendar.useNewArchitecture && calendar.dbManager && calendar.initCompleted !== true) return true;
+    return false;
+}
+
+function clearBrowsingRankingTransientRetryTimer() {
+    if (!browsingClickRankingRetryTimer) return;
+    clearTimeout(browsingClickRankingRetryTimer);
+    browsingClickRankingRetryTimer = null;
+}
+
+function resetBrowsingRankingDerivedCache() {
+    browsingClickRankingStats = null;
+    if (browsingClickRankingStatsCache instanceof Map) {
+        browsingClickRankingStatsCache.clear();
+    } else {
+        browsingClickRankingStatsCache = new Map();
+    }
+    if (browsingClickRankingStatsPromises instanceof Map) {
+        browsingClickRankingStatsPromises.clear();
+    } else {
+        browsingClickRankingStatsPromises = new Map();
+    }
+    clearBrowsingRankingTransientRetryTimer();
+    clearWidgetsRankingFastItems();
+    clearWidgetsRelatedTimeBucketIndexCache();
+}
+
+function normalizeBrowsingRankingStatsRange(range = 'all') {
+    return normalizeWidgetsRankingRange(range || 'all');
+}
+
+function isBrowsingRankingStatsUsable(stats, range) {
+    if (!stats) return false;
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    if (stats.error === 'noBookmarks' && stats.transient === true) {
+        const expiresAt = Number(stats.expiresAt || 0);
+        if (!expiresAt || Date.now() >= expiresAt) return false;
+    }
+    if (stats.filteredRange && stats.filteredRange !== safeRange) return false;
+    return true;
+}
+
+function readBrowsingRankingStatsCache(range = 'all') {
+    if (!(browsingClickRankingStatsCache instanceof Map)) {
+        browsingClickRankingStatsCache = new Map();
+    }
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    const exact = browsingClickRankingStatsCache.get(safeRange);
+    if (isBrowsingRankingStatsUsable(exact, safeRange)) {
+        return exact;
+    }
+    if (exact) {
+        browsingClickRankingStatsCache.delete(safeRange);
+    }
+
+    if (safeRange !== 'all') {
+        const allStats = browsingClickRankingStatsCache.get('all');
+        if (isBrowsingRankingStatsUsable(allStats, 'all') && !allStats.filteredRange) {
+            return allStats;
+        }
+        if (allStats && !isBrowsingRankingStatsUsable(allStats, 'all')) {
+            browsingClickRankingStatsCache.delete('all');
+        }
+    }
+
+    return null;
+}
+
+function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSIENT_RETRY_MS) {
+    if (browsingClickRankingRetryTimer) return;
+    const safeDelay = Number.isFinite(Number(delayMs))
+        ? Math.max(120, Number(delayMs))
+        : BROWSING_RANKING_TRANSIENT_RETRY_MS;
+
+    browsingClickRankingRetryTimer = setTimeout(() => {
+        browsingClickRankingRetryTimer = null;
+        if (!browsingClickRankingStats) return;
+        if (browsingClickRankingStats.error !== 'noBookmarks' || browsingClickRankingStats.transient !== true) return;
+        resetBrowsingRankingDerivedCache();
+        markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
+        try {
+            refreshActiveBrowsingRankingIfVisible();
+            markBrowsingRelatedSnapshotStale('ranking-transient-retry');
+        } catch (_) { }
+    }, safeDelay);
+}
+
+function cacheBrowsingRankingError(error, options = {}) {
+    const safeError = String(error || 'unknown');
+    const transient = options.transient === true;
+    const safeRange = normalizeBrowsingRankingStatsRange(options.range || 'all');
+    const payload = {
+        items: [],
+        error: safeError,
+        rangeKey: safeRange
+    };
+    if (safeRange !== 'all') {
+        payload.filteredRange = safeRange;
+    }
+
+    if (transient) {
+        payload.transient = true;
+        payload.expiresAt = Date.now() + BROWSING_RANKING_TRANSIENT_CACHE_TTL_MS;
+        scheduleBrowsingRankingTransientRetry(options.retryMs);
+    }
+
+    browsingClickRankingStats = payload;
+    if (!(browsingClickRankingStatsCache instanceof Map)) {
+        browsingClickRankingStatsCache = new Map();
+    }
+    browsingClickRankingStatsCache.set(safeRange, payload);
+    return payload;
+}
+
+function shouldReuseBrowsingRankingStatsCache(range = 'all') {
+    return !!readBrowsingRankingStatsCache(range);
+}
+
+async function waitForBrowsingHistoryCalendar(options = {}) {
+    const {
+        timeout = 5000,
+        pollMs = 100
+    } = options;
+
+    try {
+        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+            initBrowsingHistoryCalendar();
+        }
+    } catch {
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        const inst = window.browsingHistoryCalendarInstance;
+        if (isBrowsingHistoryCalendarReady(inst)) {
+            return inst;
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+
+    return window.browsingHistoryCalendarInstance || null;
+}
+
+async function readBrowsingHistoryLibraryRowsForBoundsRaw(startTime = 0, endTime = Date.now()) {
+    const safeStart = Math.max(0, Number(startTime || 0) || 0);
+    const safeEnd = Math.max(safeStart, Number(endTime || Date.now()) || Date.now());
+    if (typeof readHistoryCacheRange !== 'function') {
+        return { rows: [], source: 'history-cache-unavailable', meta: { unavailable: true } };
+    }
+
+    const startKey = safeStart > 0 ? getSyncHistoryDateKey(safeStart) : '';
+    const endKey = getSyncHistoryDateKey(safeEnd);
+    let cached = null;
+    try {
+        cached = await readHistoryCacheRange(startKey, endKey);
+    } catch (error) {
+        console.warn('[BrowsingRanking] 读取浏览历史库失败:', error);
+        return { rows: [], source: 'history-cache-error', meta: { error: error?.message || String(error) } };
+    }
+
+    const rows = normalizeBrowsingCacheRowsForSync(cached);
+    const filteredRows = await filterBrowsingCacheRowsByTimeAsync(rows, safeStart, safeEnd);
+
+    return {
+        rows: filteredRows,
+        source: 'history-cache',
+        meta: {
+            lastSyncTime: Number(cached?.lastSyncTime || 0) || 0,
+            lastFullSyncTime: Number(cached?.lastFullSyncTime || cached?.lastSyncTime || 0) || 0,
+            recordCount: filteredRows.reduce((sum, [, records]) => sum + (Array.isArray(records) ? records.length : 0), 0)
+        }
+    };
+}
+
+function getBrowsingHistoryLibraryMetaSyncTime(meta = {}) {
+    const lastFullSyncTime = Number(meta.lastFullSyncTime || 0) || 0;
+    const lastSyncTime = Number(meta.lastSyncTime || 0) || 0;
+    return Math.max(lastFullSyncTime, lastSyncTime);
+}
+
+function isBrowsingHistoryLibraryReadUsable(result) {
+    if (!result || !result.meta || result.meta.unavailable || result.meta.error) {
+        return false;
+    }
+    if (Array.isArray(result.rows) && result.rows.length > 0) {
+        return true;
+    }
+    return getBrowsingHistoryLibraryMetaSyncTime(result.meta) > 0;
+}
+
+function shouldRefreshBrowsingHistoryLibraryInBackground(result, now = Date.now()) {
+    const syncTime = getBrowsingHistoryLibraryMetaSyncTime(result?.meta || {});
+    if (!syncTime) return false;
+    return now - syncTime > BROWSING_HISTORY_SEARCH_LIBRARY_STALE_MS;
+}
+
+async function runBrowsingHistorySearchCalibration({ reason = 'search-library-ready', requireIdle = false, quietFailure = false } = {}) {
+    if (browsingHistorySearchCalibrationPromise) {
+        return browsingHistorySearchCalibrationPromise;
+    }
+
+    browsingHistorySearchCalibrationLastRequestedAt = Date.now();
+    browsingHistorySearchCalibrationPromise = (async () => {
+        const result = await requestBrowsingHistoryBackgroundCalibration({
+            reason,
+            requireIdle
+        });
+        if (!result?.success) {
+            if (quietFailure) {
+                return result || { success: false };
+            }
+            throw new Error(result?.error || 'background_calibration_failed');
+        }
+        return result;
+    })().finally(() => {
+        browsingHistorySearchCalibrationPromise = null;
+    });
+
+    return browsingHistorySearchCalibrationPromise;
+}
+
+function scheduleBrowsingHistorySearchCalibration({ reason = 'search-library-stale' } = {}) {
+    if (browsingHistorySearchCalibrationPromise) return;
+    if (browsingHistorySearchCalibrationTimer) return;
+    const now = Date.now();
+    if (now - browsingHistorySearchCalibrationLastRequestedAt < BROWSING_HISTORY_SEARCH_CALIBRATION_COOLDOWN_MS) {
+        return;
+    }
+    browsingHistorySearchCalibrationTimer = setTimeout(() => {
+        browsingHistorySearchCalibrationTimer = null;
+        runBrowsingHistorySearchCalibration({ reason, requireIdle: true, quietFailure: true }).catch((error) => {
+            console.warn('[BrowsingHistory] 后台校准请求失败:', error);
+        });
+    }, 300);
+}
+
+async function ensureBrowsingHistorySearchLibraryReady(startTime = 0, endTime = Date.now(), options = {}) {
+    const reason = options.reason || 'search-library-ready';
+    const allowBlocking = options.blocking !== false;
+    const firstRead = await readBrowsingHistoryLibraryRowsForBoundsRaw(startTime, endTime);
+
+    if (isBrowsingHistoryLibraryReadUsable(firstRead)) {
+        if (options.refreshStale !== false && shouldRefreshBrowsingHistoryLibraryInBackground(firstRead)) {
+            scheduleBrowsingHistorySearchCalibration({ reason: `${reason}-stale` });
+        }
+        return firstRead;
+    }
+
+    if (firstRead?.meta?.unavailable || firstRead?.meta?.error || !allowBlocking) {
+        if (options.refreshStale !== false && !firstRead?.meta?.unavailable) {
+            scheduleBrowsingHistorySearchCalibration({ reason: `${reason}-missing` });
+        }
+        return firstRead;
+    }
+
+    try {
+        await runBrowsingHistorySearchCalibration({ reason, requireIdle: false });
+    } catch (error) {
+        console.warn('[BrowsingHistory] 搜索前校准失败:', error);
+        return firstRead;
+    }
+
+    const secondRead = await readBrowsingHistoryLibraryRowsForBoundsRaw(startTime, endTime);
+    return {
+        ...secondRead,
+        source: secondRead.source || firstRead.source,
+        meta: {
+            ...(secondRead.meta || {}),
+            searchCalibrationApplied: true
+        }
+    };
+}
+
+async function readBrowsingHistoryLibraryRowsForBounds(startTime = 0, endTime = Date.now(), options = {}) {
+    return ensureBrowsingHistorySearchLibraryReady(startTime, endTime, options);
+}
+
+function buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl) {
+    const bookmarkKeyMap = new Map();
+    const bookmarkInfoMap = new Map();
+    let bookmarkKeyCounter = 0;
+
+    for (const [url, info] of bookmarkInfoByUrl.entries()) {
+        const normalizedUrl = String(url || '').trim();
+        if (!normalizedUrl) continue;
+        const normalizedTitle = info && typeof info.title === 'string' ? info.title.trim() : '';
+        const normalizedDomain = getSyncHistoryUrlDomain(normalizedUrl);
+        const titleDomainKey = normalizedTitle && normalizedDomain
+            ? `titleDomain:${normalizedTitle}|${normalizedDomain}`
+            : '';
+
+        const bookmarkKey = `bm_${bookmarkKeyCounter++}`;
+        bookmarkKeyMap.set(`url:${normalizedUrl}`, bookmarkKey);
+        if (titleDomainKey && !bookmarkKeyMap.has(titleDomainKey)) {
+            bookmarkKeyMap.set(titleDomainKey, bookmarkKey);
+        }
+        bookmarkInfoMap.set(bookmarkKey, {
+            id: info?.id == null ? null : String(info.id),
+            url: normalizedUrl,
+            title: normalizedTitle || normalizedUrl,
+            folderPath: Array.isArray(info?.folderPath) ? info.folderPath : [],
+            urls: [normalizedUrl]
+        });
+    }
+
+    return { bookmarkKeyMap, bookmarkInfoMap };
+}
+
+function findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap) {
+    if (!record || !(bookmarkKeyMap instanceof Map)) return null;
+    const url = String(record?.url || '').trim();
+    if (!url) return null;
+
+    let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
+    if (bookmarkKey) {
+        return { bookmarkKey, matchType: 'exact_url' };
+    }
+
+    const title = typeof record?.title === 'string' && record.title.trim()
+        ? record.title.trim()
+        : '';
+    const domain = getSyncHistoryUrlDomain(url);
+    if (title && domain) {
+        bookmarkKey = bookmarkKeyMap.get(`titleDomain:${title}|${domain}`);
+        if (bookmarkKey) {
+            return { bookmarkKey, matchType: 'title_domain' };
+        }
+    }
+
+    return null;
+}
+
+async function buildBrowsingClickRankingStatsFromRows(rows, options = {}) {
+    const boundaries = options.boundaries || getBrowsingClickRankingBoundaries();
+    let bookmarkData = options.bookmarkData || null;
+    if (!bookmarkData) {
+        bookmarkData = await getBookmarkUrlsAndTitles();
+    }
+    const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
+    if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
+        return null;
+    }
+
+    const { bookmarkKeyMap, bookmarkInfoMap } = buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl);
+    const statsMap = new Map();
+    let processed = 0;
+
+    for (const [, records] of (Array.isArray(rows) ? rows : [])) {
+        for (const record of (Array.isArray(records) ? records : [])) {
+            processed += 1;
+            const url = String(record?.url || '').trim();
+            if (!url) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const t = getBrowsingCacheRecordTimestamp(record);
+            if (!t || t > boundaries.now) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+
+            const match = findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap);
+            if (!match) {
+                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                    await yieldBrowsingDerivedRows();
+                }
+                continue;
+            }
+            const bookmarkKey = match.bookmarkKey;
+
+            let stats = statsMap.get(bookmarkKey);
+            if (!stats) {
+                const info = bookmarkInfoMap.get(bookmarkKey);
+                stats = {
+                    url: info.url,
+                    title: info.title,
+                    lastVisitTime: 0,
+                    dayCount: 0,
+                    weekCount: 0,
+                    monthCount: 0,
+                    yearCount: 0,
+                    allCount: 0
+                };
+                statsMap.set(bookmarkKey, stats);
+            }
+
+            stats.allCount += 1;
+            if (t >= boundaries.dayStart) stats.dayCount += 1;
+            if (t >= boundaries.weekStart) stats.weekCount += 1;
+            if (t >= boundaries.monthStart) stats.monthCount += 1;
+            if (t >= boundaries.yearStart) stats.yearCount += 1;
+            if (t > stats.lastVisitTime) stats.lastVisitTime = t;
+            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
+                await yieldBrowsingDerivedRows();
+            }
+        }
+    }
+
+    return {
+        items: Array.from(statsMap.values()),
+        boundaries,
+        bookmarkKeyMap,
+        bookmarkInfoMap,
+        rows: Array.isArray(rows) ? rows : [],
+        source: options.source || 'history-cache',
+        meta: options.meta || null
+    };
+}
+
+async function ensureBrowsingClickRankingStats(range = 'all', options = {}) {
+    const safeRange = normalizeBrowsingRankingStatsRange(range);
+    const cachedStats = readBrowsingRankingStatsCache(safeRange);
+    if (cachedStats) {
+        browsingClickRankingStats = cachedStats;
+        return cachedStats;
+    }
+
+    if (typeof readHistoryCacheRange !== 'function') {
+        return cacheBrowsingRankingError('historyCacheUnavailable', { range: safeRange });
+    }
+
+    if (!(browsingClickRankingStatsPromises instanceof Map)) {
+        browsingClickRankingStatsPromises = new Map();
+    }
+    const existingPromise = browsingClickRankingStatsPromises.get(safeRange);
+    if (existingPromise) {
+        return existingPromise;
+    }
+
+    const loadPromise = (async () => {
+        try {
+            if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
+                initBrowsingHistoryCalendar();
+            }
+        } catch (e) {
+            console.warn('[BrowsingRanking] 初始化 BrowsingHistoryCalendar 失败:', e);
+        }
+
+        const boundaries = getBrowsingClickRankingBoundaries();
+        let bookmarkData;
+        try {
+            bookmarkData = await getBookmarkUrlsAndTitles();
+        } catch (error) {
+            console.warn('[BrowsingRanking] 获取书签URL和标题失败:', error);
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
+
+        const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
+        if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
+
+        const rangeStartMs = safeRange === 'all'
+            ? 0
+            : Math.max(0, getWidgetsRankingRangeStartMs(safeRange, boundaries));
+        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(rangeStartMs, boundaries.now, {
+            blocking: options.blocking !== false,
+            reason: options.reason || 'browsing-ranking'
+        });
+        if (!libraryRows.rows.length) {
+            const calendar = await waitForBrowsingHistoryCalendar({
+                timeout: currentView === 'widgets' ? 900 : 1500,
+                pollMs: currentView === 'widgets' ? 100 : 150
+            });
+            return cacheBrowsingRankingError('noBookmarks', {
+                transient: isBrowsingRankingTransientPending(calendar),
+                range: safeRange
+            });
+        }
+
+        const stats = await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
+            boundaries,
+            bookmarkData,
+            source: libraryRows.source,
+            meta: {
+                ...(libraryRows.meta || {}),
+                filteredRange: safeRange,
+                rangeStartTime: rangeStartMs,
+                rangeEndTime: boundaries.now
+            }
+        });
+        if (!stats || !Array.isArray(stats.items) || stats.items.length === 0) {
+            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
+        }
+
+        if (safeRange !== 'all') {
+            stats.filteredRange = safeRange;
+            stats.items = stats.items.map((item) => ({
+                ...item,
+                filteredCount: Number(item.allCount || 0)
+            }));
+        }
+
+        if (browsingClickRankingRetryTimer) {
+            clearBrowsingRankingTransientRetryTimer();
+        }
+        browsingClickRankingStats = stats;
+        browsingClickRankingStatsCache.set(safeRange, stats);
+        return stats;
+    })().finally(() => {
+        if (browsingClickRankingStatsPromises instanceof Map) {
+            browsingClickRankingStatsPromises.delete(safeRange);
+        }
+    });
+
+    browsingClickRankingStatsPromises.set(safeRange, loadPromise);
+    return loadPromise;
+}
+
+function getBrowsingRankingItemsForRange(range) {
+    const stats = readBrowsingRankingStatsCache(range) || browsingClickRankingStats;
+    return getBrowsingRankingItemsForRangeFromStats(stats, range);
+}
+
+function getBrowsingRankingItemsForRangeFromStats(stats, range) {
+    if (!stats || !Array.isArray(stats.items)) {
+        return [];
+    }
+
+    const safeRange = normalizeWidgetsRankingRange(range);
+    const hasFilteredRange = String(stats.filteredRange || '') === safeRange;
+    const key = hasFilteredRange
+        ? 'filteredCount'
+        : (safeRange === 'day'
+            ? 'dayCount'
+            : safeRange === 'week'
+                ? 'weekCount'
+                : safeRange === 'year'
+                    ? 'yearCount'
+                    : safeRange === 'all'
+                        ? 'allCount'
+                        : 'monthCount');
+
+    const getCount = (item) => {
+        if (hasFilteredRange) {
+            return Number(item?.filteredCount) || 0;
+        }
+        return getBrowsingRankingItemCountByRange(item, safeRange);
+    };
+
+    return stats.items
+        .filter((item) => getCount(item) > 0)
+        .sort((a, b) => {
+            const countDiff = getCount(b) - getCount(a);
+            if (countDiff !== 0) return countDiff;
+            return (Number(b?.lastVisitTime) || 0) - (Number(a?.lastVisitTime) || 0);
+        });
+}
+
+function getBrowsingRankingItemCountByRange(item, range) {
+    if (item && item.filteredCount !== undefined) {
+        return Number(item.filteredCount) || 0;
+    }
+    if (!item) return 0;
+    if (range === 'day') return Number(item.dayCount) || 0;
+    if (range === 'week') return Number(item.weekCount) || 0;
+    if (range === 'year') return Number(item.yearCount) || 0;
+    if (range === 'all') return Number(item.allCount) || 0;
+    return Number(item.monthCount) || 0;
+}
+
+// 渲染文件夹模式的点击排行列表
+async function renderBrowsingFolderRankingList(container, items, range, stats, options = {}) {
+    container.innerHTML = '';
+
+    const isZh = currentLang === 'zh_CN';
+
+    // 确保书签信息已加载（包含 folderPath）
+    await getBookmarkUrlsAndTitles();
+
+    if (!items.length) {
+        const title = isZh ? '暂无点击记录' : 'No click records found';
+        const desc = isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.';
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-folder"></i></div>
+                <div class="empty-state-title">${title}</div>
+                <div class="empty-state-description">${desc}</div>
+            </div>
+        `;
+        return;
+    }
+
+    const searchTokens = Array.isArray(options.searchTokens) ? options.searchTokens : null;
+    const folderDepthMode = normalizeBrowsingRankingFolderDepth(browsingRankingFolderDepth);
+
+    // 按文件夹聚合统计
+    const folderStats = new Map(); // folderPath -> { count, items: [] }
+
+    items.forEach(item => {
+        // 尝试从 getBookmarkUrlsAndTitles 获取 folderPath
+        let folderPath = [];
+        if (browsingRelatedBookmarkInfo && browsingRelatedBookmarkInfo.has(item.url)) {
+            folderPath = browsingRelatedBookmarkInfo.get(item.url).folderPath || [];
+        }
+
+        let groupedFolderPath = Array.isArray(folderPath) ? folderPath.slice() : [];
+        if (folderDepthMode === 'level1') {
+            groupedFolderPath = groupedFolderPath.slice(0, 1);
+        } else if (folderDepthMode === 'level2') {
+            groupedFolderPath = groupedFolderPath.slice(0, 2);
+        }
+
+        const folderKey = groupedFolderPath.length > 0 ? groupedFolderPath.join(' / ') : (isZh ? '未分类' : 'Uncategorized');
+        const folderName = groupedFolderPath.length > 0 ? groupedFolderPath[groupedFolderPath.length - 1] : folderKey;
+
+        if (!folderStats.has(folderKey)) {
+            folderStats.set(folderKey, {
+                name: folderName,
+                fullPath: folderKey,
+                folderPath: groupedFolderPath,
+                count: 0,
+                items: []
+            });
+        }
+
+        const folderData = folderStats.get(folderKey);
+        const itemCount = getBrowsingRankingItemCountByRange(item, range);
+        folderData.count += itemCount;
+
+        folderData.items.push({ ...item, count: itemCount, folderPath: groupedFolderPath });
+    });
+
+    // 按点击次数排序文件夹
+    let sortedFolders = Array.from(folderStats.values()).sort((a, b) => b.count - a.count);
+
+    // Phase 4.7: folder-mode keyword search
+    // - match folder name/path
+    // - OR match any bookmark in folder
+    if (searchTokens && searchTokens.length > 0) {
+        sortedFolders = sortedFolders.filter(folder => {
+            if (matchesTokens(folder.fullPath, searchTokens) || matchesTokens(folder.name, searchTokens)) {
+                return true;
+            }
+            if (Array.isArray(folder.items) && folder.items.length > 0) {
+                return folder.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
+            }
+            return false;
+        });
+    }
+
+    // 渲染文件夹列表
+    const rangeLabel = options.customRangeLabel || (() => {
+        if (range === 'day') return isZh ? '今天' : 'Today';
+        if (range === 'week') return isZh ? '本周' : 'This week';
+        if (range === 'year') return isZh ? '本年' : 'This year';
+        if (range === 'all') return isZh ? '全部' : 'All';
+        return isZh ? '本月' : 'This month';
+    })();
+
+    sortedFolders.forEach((folder, index) => {
+        const folderRow = document.createElement('div');
+        folderRow.className = 'ranking-item folder-ranking-item';
+        folderRow.style.cursor = 'pointer';
+
+        // 排名样式
+        let rankClass = '';
+        if (index === 0) rankClass = 'rank-gold';
+        else if (index === 1) rankClass = 'rank-silver';
+        else if (index === 2) rankClass = 'rank-bronze';
+
+        const header = document.createElement('div');
+        header.className = 'ranking-header';
+
+        // 排名数字
+        const rank = document.createElement('span');
+        rank.className = 'ranking-rank';
+        rank.textContent = index + 1;
+        if (rankClass) rank.classList.add(rankClass);
+        header.appendChild(rank);
+
+        // 文件夹图标和名称
+        const main = document.createElement('div');
+        main.className = 'ranking-main';
+        const pathDisplay = folder.fullPath !== folder.name ? folder.fullPath : '';
+        const safeFolderName = escapeHtml(folder.name);
+        const safeFolderFullPath = escapeHtml(folder.fullPath);
+        const safePathDisplay = escapeHtml(pathDisplay);
+        main.innerHTML = `
+            <div class="ranking-icon" style="color: var(--accent-primary);">
+                <i class="fas fa-folder"></i>
+            </div>
+            <div class="ranking-info">
+                <div class="ranking-title" title="${safeFolderFullPath}">${safeFolderName}</div>
+                <div class="ranking-meta">${pathDisplay ? `${safePathDisplay} · ` : ''}${isZh ? `${folder.items.length} 个书签` : `${folder.items.length} bookmarks`}</div>
+            </div>
+        `;
+        header.appendChild(main);
+
+        // 点击次数
+        const counts = document.createElement('div');
+        counts.className = 'ranking-counts';
+        if (rankClass) counts.classList.add(rankClass);
+        counts.textContent = folder.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
+        counts.dataset.tooltip = isZh ? `${rangeLabel}：${folder.count} 次` : `${rangeLabel}: ${folder.count} clicks`;
+        header.appendChild(counts);
+
+        folderRow.appendChild(header);
+
+        // 展开的书签列表
+        const bookmarkList = document.createElement('div');
+        bookmarkList.className = 'folder-bookmark-list';
+        bookmarkList.style.display = 'none';
+        bookmarkList.style.padding = '8px 0 8px 40px';
+        bookmarkList.style.borderTop = '1px solid var(--border-color)';
+        bookmarkList.style.marginTop = '8px';
+
+        // 按点击次数排序书签
+        folder.items.sort((a, b) => b.count - a.count);
+
+        folder.items.forEach(item => {
+            const bookmarkItem = document.createElement('div');
+            bookmarkItem.style.display = 'flex';
+            bookmarkItem.style.alignItems = 'center';
+            bookmarkItem.style.gap = '8px';
+            bookmarkItem.style.padding = '6px 8px';
+            bookmarkItem.style.marginBottom = '4px';
+            bookmarkItem.style.borderRadius = '4px';
+            bookmarkItem.style.cursor = 'pointer';
+            bookmarkItem.style.transition = 'background 0.2s';
+
+            const itemTitle = item.title || item.url || '';
+            const faviconSrc = getFaviconUrl(item.url);
+
+            bookmarkItem.innerHTML = `
+                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
+                      title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
+                <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
+            `;
+
+            bookmarkItem.addEventListener('mouseenter', () => {
+                bookmarkItem.style.background = 'var(--bg-tertiary)';
+            });
+            bookmarkItem.addEventListener('mouseleave', () => {
+                bookmarkItem.style.background = 'transparent';
+            });
+            bookmarkItem.addEventListener('click', (e) => {
+                e.stopPropagation();
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-folder', url: item.url });
+                try {
+                    const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
+                    if (browserAPI?.tabs?.create) {
+                        browserAPI.tabs.create({ url: item.url });
+                    } else {
+                        window.open(item.url, '_blank');
+                    }
+                } catch (err) {
+                    console.warn('[FolderRanking] 打开书签失败:', err);
+                }
+            });
+
+            bookmarkList.appendChild(bookmarkItem);
+        });
+
+        folderRow.appendChild(bookmarkList);
+
+        // 点击展开/收起
+        header.addEventListener('click', () => {
+            const isExpanded = bookmarkList.style.display === 'block';
+            bookmarkList.style.display = isExpanded ? 'none' : 'block';
+            const icon = main.querySelector('.fa-folder, .fa-folder-open');
+            if (icon) {
+                icon.classList.toggle('fa-folder', isExpanded);
+                icon.classList.toggle('fa-folder-open', !isExpanded);
+            }
+        });
+
+        container.appendChild(folderRow);
+    });
+}
+
+function renderBrowsingDomainRankingList(container, items, range, options = {}) {
+    container.innerHTML = '';
+
+    const isZh = currentLang === 'zh_CN';
+    const mode = options.mode === 'subdomain' ? 'subdomain' : 'domain';
+    const searchTokens = Array.isArray(options.searchTokens) ? options.searchTokens : null;
+
+    const domainStats = new Map();
+    items.forEach(item => {
+        const domainParts = getBrowsingRankingDomainPartsFromUrl(item.url);
+        const domainValue = getBrowsingRankingDomainValue(domainParts, mode);
+        if (!domainValue) return;
+
+        const key = String(domainValue).toLowerCase();
+        const itemCount = getBrowsingRankingItemCountByRange(item, range);
+        if (itemCount <= 0) return;
+
+        if (!domainStats.has(key)) {
+            const parentDomain = getBrowsingRankingDomainValue(domainParts, 'domain') || domainValue;
+            domainStats.set(key, {
+                key,
+                name: domainValue,
+                parentDomain,
+                count: 0,
+                lastVisitTime: 0,
+                items: []
+            });
+        }
+
+        const domainData = domainStats.get(key);
+        domainData.count += itemCount;
+        domainData.lastVisitTime = Math.max(domainData.lastVisitTime, Number(item.lastVisitTime) || 0);
+        domainData.items.push({ ...item, count: itemCount });
+    });
+
+    let sortedDomains = Array.from(domainStats.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        if (b.lastVisitTime !== a.lastVisitTime) return b.lastVisitTime - a.lastVisitTime;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    if (searchTokens && searchTokens.length > 0) {
+        sortedDomains = sortedDomains.filter(domain => {
+            if (matchesTokens(domain.name, searchTokens) || matchesTokens(domain.parentDomain, searchTokens)) {
+                return true;
+            }
+            if (Array.isArray(domain.items) && domain.items.length > 0) {
+                return domain.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
+            }
+            return false;
+        });
+    }
+
+    if (!sortedDomains.length) {
+        const title = i18n.browsingRankingEmptyTitle
+            ? i18n.browsingRankingEmptyTitle[currentLang]
+            : (isZh ? '暂无点击记录' : 'No click records found');
+        const desc = i18n.browsingRankingEmptyDescription
+            ? i18n.browsingRankingEmptyDescription[currentLang]
+            : (isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.');
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-globe"></i></div>
+                <div class="empty-state-title">${title}</div>
+                <div class="empty-state-description">${desc}</div>
+            </div>
+        `;
+        return;
+    }
+
+    const rangeLabel = options.customRangeLabel || (() => {
+        if (range === 'day') return isZh ? '今天' : 'Today';
+        if (range === 'week') return isZh ? '本周' : 'This week';
+        if (range === 'year') return isZh ? '本年' : 'This year';
+        if (range === 'all') return isZh ? '全部' : 'All';
+        return isZh ? '本月' : 'This month';
+    })();
+
+    sortedDomains.forEach((domain, index) => {
+        const domainRow = document.createElement('div');
+        domainRow.className = 'ranking-item folder-ranking-item domain-ranking-item';
+        domainRow.style.cursor = 'pointer';
+
+        let rankClass = '';
+        if (index === 0) rankClass = 'rank-gold';
+        else if (index === 1) rankClass = 'rank-silver';
+        else if (index === 2) rankClass = 'rank-bronze';
+
+        const header = document.createElement('div');
+        header.className = 'ranking-header';
+
+        const rank = document.createElement('span');
+        rank.className = 'ranking-rank';
+        rank.textContent = index + 1;
+        if (rankClass) rank.classList.add(rankClass);
+        header.appendChild(rank);
+
+        const main = document.createElement('div');
+        main.className = 'ranking-main';
+
+        const safeDomainName = escapeHtml(domain.name);
+        const safeParentDomain = escapeHtml(domain.parentDomain || domain.name);
+        const domainMeta = mode === 'subdomain' && domain.parentDomain && domain.parentDomain !== domain.name
+            ? (isZh ? `主域名：${safeParentDomain}` : `Parent: ${safeParentDomain}`)
+            : (mode === 'subdomain' ? (isZh ? '子域名' : 'Subdomain') : (isZh ? '主域名' : 'Domain'));
+
+        main.innerHTML = `
+            <div class="ranking-icon" style="color: var(--accent-primary);">
+                <i class="fas ${mode === 'subdomain' ? 'fa-sitemap' : 'fa-globe'}"></i>
+            </div>
+            <div class="ranking-info">
+                <div class="ranking-title" title="${safeDomainName}">${safeDomainName}</div>
+                <div class="ranking-meta">${domainMeta} · ${isZh ? `${domain.items.length} 个书签` : `${domain.items.length} bookmarks`}</div>
+            </div>
+        `;
+        header.appendChild(main);
+
+        const counts = document.createElement('div');
+        counts.className = 'ranking-counts';
+        if (rankClass) counts.classList.add(rankClass);
+        counts.textContent = domain.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
+        counts.dataset.tooltip = isZh ? `${rangeLabel}：${domain.count} 次` : `${rangeLabel}: ${domain.count} clicks`;
+        header.appendChild(counts);
+
+        domainRow.appendChild(header);
+
+        const bookmarkList = document.createElement('div');
+        bookmarkList.className = 'folder-bookmark-list';
+        bookmarkList.style.display = 'none';
+        bookmarkList.style.padding = '8px 0 8px 40px';
+        bookmarkList.style.borderTop = '1px solid var(--border-color)';
+        bookmarkList.style.marginTop = '8px';
+
+        domain.items.sort((a, b) => b.count - a.count);
+
+        domain.items.forEach(item => {
+            const bookmarkItem = document.createElement('div');
+            bookmarkItem.style.display = 'flex';
+            bookmarkItem.style.alignItems = 'center';
+            bookmarkItem.style.gap = '8px';
+            bookmarkItem.style.padding = '6px 8px';
+            bookmarkItem.style.marginBottom = '4px';
+            bookmarkItem.style.borderRadius = '4px';
+            bookmarkItem.style.cursor = 'pointer';
+            bookmarkItem.style.transition = 'background 0.2s';
+
+            const itemTitle = item.title || item.url || '';
+            const faviconSrc = getFaviconUrl(item.url);
+
+            bookmarkItem.innerHTML = `
+                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
+                      title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
+                <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
+            `;
+
+            bookmarkItem.addEventListener('mouseenter', () => {
+                bookmarkItem.style.background = 'var(--bg-tertiary)';
+            });
+            bookmarkItem.addEventListener('mouseleave', () => {
+                bookmarkItem.style.background = 'transparent';
+            });
+            bookmarkItem.addEventListener('click', (e) => {
+                e.stopPropagation();
+                recordBrowsingCalibrationInteraction('click', { source: mode === 'subdomain' ? 'browsing-ranking-subdomain' : 'browsing-ranking-domain', url: item.url });
+                try {
+                    const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
+                    if (browserAPI?.tabs?.create) {
+                        browserAPI.tabs.create({ url: item.url });
+                    } else {
+                        window.open(item.url, '_blank');
+                    }
+                } catch (err) {
+                    console.warn('[DomainRanking] 打开书签失败:', err);
+                }
+            });
+
+            bookmarkList.appendChild(bookmarkItem);
+        });
+
+        domainRow.appendChild(bookmarkList);
+
+        header.addEventListener('click', () => {
+            const isExpanded = bookmarkList.style.display === 'block';
+            bookmarkList.style.display = isExpanded ? 'none' : 'block';
+            const icon = main.querySelector('.fa-globe, .fa-sitemap');
+            if (icon) {
+                icon.classList.toggle('fa-globe', mode === 'domain');
+                icon.classList.toggle('fa-sitemap', mode === 'subdomain');
+            }
+        });
+
+        container.appendChild(domainRow);
+    });
+}
+
+function renderBrowsingClickRankingList(container, items, range, options = {}) {
+    container.innerHTML = '';
+
+    if (!items.length) {
+        const isZh = currentLang === 'zh_CN';
+        const title = i18n.browsingRankingEmptyTitle
+            ? i18n.browsingRankingEmptyTitle[currentLang]
+            : (isZh ? '暂无点击记录' : 'No click records found');
+        const desc = i18n.browsingRankingEmptyDescription
+            ? i18n.browsingRankingEmptyDescription[currentLang]
+            : (isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.');
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-clock"></i></div>
+                <div class="empty-state-title">${title}</div>
+                <div class="empty-state-description">${desc}</div>
+            </div>
+        `;
+        return;
+    }
+
+    const isZh = currentLang === 'zh_CN';
+    const rangeLabel = options.customRangeLabel || (() => {
+        if (range === 'day') return isZh ? '今天' : 'Today';
+        if (range === 'week') return isZh ? '本周' : 'This week';
+        if (range === 'year') return isZh ? '本年' : 'This year';
+        if (range === 'all') return isZh ? '全部' : 'All';
+        return isZh ? '本月' : 'This month';
+    })();
+
+    const PAGE_SIZE = 100; // 每次加载100条
+    let offset = 0;
+
+    const appendNextPage = () => {
+        const end = Math.min(offset + PAGE_SIZE, items.length);
+        for (let i = offset; i < end; i++) {
+            const entry = items[i];
+
+            const row = document.createElement('div');
+            row.className = 'addition-item ranking-item';
+            row.dataset.url = entry.url || '';
+            row.dataset.bookmarkUrl = entry.url || '';
+
+            const header = document.createElement('div');
+            header.className = 'ranking-item-header';
+
+            const main = document.createElement('div');
+            main.className = 'ranking-main';
+
+            const rankSpan = document.createElement('span');
+            rankSpan.className = 'ranking-index';
+            rankSpan.textContent = i + 1;
+            let rankClass = '';
+            if (i === 0) {
+                rankClass = 'gold';
+            } else if (i === 1) {
+                rankClass = 'silver';
+            } else if (i === 2) {
+                rankClass = 'bronze';
+            }
+            if (rankClass) {
+                rankSpan.classList.add(rankClass);
+            }
+
+            const icon = document.createElement('img');
+            icon.className = 'addition-icon';
+            icon.dataset.bookmarkUrl = entry.url || '';
+            icon.src = getFaviconUrl(entry.url);
+            icon.alt = '';
+
+            const info = document.createElement('div');
+            info.className = 'addition-info';
+
+            const titleLink = document.createElement('a');
+            titleLink.className = 'addition-title';
+            titleLink.href = entry.url;
+            titleLink.target = '_blank';
+            titleLink.rel = 'noopener noreferrer';
+            titleLink.textContent = entry.title;
+            titleLink.addEventListener('click', () => {
+                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-link', url: entry.url });
+            });
+
+            const urlDiv = document.createElement('div');
+            urlDiv.className = 'addition-url';
+            urlDiv.textContent = entry.url;
+
+            info.appendChild(titleLink);
+            info.appendChild(urlDiv);
+
+            main.appendChild(rankSpan);
+            main.appendChild(icon);
+            main.appendChild(info);
+
+            const counts = document.createElement('div');
+            counts.className = 'ranking-counts';
+
+            // 优先使用筛选后的次数（如果存在）
+            const value = entry.filteredCount !== undefined
+                ? entry.filteredCount
+                : (range === 'day'
+                    ? entry.dayCount
+                    : range === 'week'
+                        ? entry.weekCount
+                        : range === 'year'
+                            ? entry.yearCount
+                            : range === 'all'
+                                ? entry.allCount
+                                : entry.monthCount);
+            const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+            const formattedValue = typeof value === 'number'
+                ? value.toLocaleString(locale)
+                : String(value);
+            counts.textContent = formattedValue;
+
+            if (rankClass) {
+                counts.classList.add(rankClass);
+            }
+
+            const unitLabel = isZh ? '次' : (value === 1 ? 'click' : 'clicks');
+            const accessibleLabel = isZh
+                ? `${rangeLabel}：${value} ${unitLabel}`
+                : `${rangeLabel}: ${value} ${unitLabel}`;
+            counts.dataset.tooltip = accessibleLabel;
+            counts.setAttribute('aria-label', accessibleLabel);
+
+            header.appendChild(main);
+
+            // 跳转按钮容器（点击次数左边）
+            const jumpBtnContainer = document.createElement('div');
+            jumpBtnContainer.className = 'jump-to-related-btn-container';
+            jumpBtnContainer.style.display = 'flex';
+            jumpBtnContainer.style.alignItems = 'center';
+            jumpBtnContainer.style.flexShrink = '0';
+
+            const jumpBtn = document.createElement('button');
+            jumpBtn.className = 'jump-to-related-btn';
+            jumpBtn.dataset.tooltip = isZh ? '跳转至关联记录' : 'Jump to Related History';
+            jumpBtn.innerHTML = '<i class="fas fa-external-link-alt"></i>';
+            jumpBtn.dataset.url = entry.url;
+            jumpBtn.dataset.title = entry.title;
+            jumpBtn.dataset.range = range;
+
+            jumpBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (typeof jumpToRelatedHistoryFromRanking === 'function') {
+                    jumpToRelatedHistoryFromRanking(entry.url, entry.title, range);
+                }
+            });
+
+            // 容器也阻止事件冒泡
+            jumpBtnContainer.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+
+            jumpBtnContainer.appendChild(jumpBtn);
+            header.appendChild(jumpBtnContainer);
+
+            header.appendChild(counts);
+
+            const detail = document.createElement('div');
+            detail.className = 'ranking-detail';
+            detail.style.display = 'none';
+
+            const lastVisitText = entry.lastVisitTime
+                ? new Date(entry.lastVisitTime).toLocaleString()
+                : (isZh ? '无访问记录' : 'No visits');
+
+            const scopedStatsRange = options.stats && options.stats.filteredRange
+                ? normalizeWidgetsRankingRange(options.stats.filteredRange)
+                : '';
+            const isRangeScopedStats = scopedStatsRange && scopedStatsRange === normalizeWidgetsRankingRange(range);
+            if (isRangeScopedStats) {
+                const scopedCount = entry.filteredCount !== undefined ? entry.filteredCount : value;
+                detail.textContent = isZh
+                    ? `${rangeLabel}：${scopedCount} 次；最近访问：${lastVisitText}`
+                    : `${rangeLabel}: ${scopedCount} clicks; Last visit: ${lastVisitText}`;
+            } else if (isZh) {
+                detail.textContent =
+                    `今天：${entry.dayCount} 次，本周：${entry.weekCount} 次，本月：${entry.monthCount} 次，本年：${entry.yearCount} 次；` +
+                    `最近访问：${lastVisitText}`;
+            } else {
+                detail.textContent =
+                    `Today: ${entry.dayCount} clicks, This week: ${entry.weekCount} clicks, ` +
+                    `This month: ${entry.monthCount} clicks, This year: ${entry.yearCount} clicks; ` +
+                    `Last visit: ${lastVisitText}`;
+            }
+
+            row.appendChild(header);
+            row.appendChild(detail);
+
+            // 整行可点击：展开/收起详细统计，同时打开书签
+            row.addEventListener('click', (e) => {
+                // 如果直接点击的是标题链接，让浏览器默认打开，不拦截
+                if (e.target === titleLink) {
+                    return;
+                }
+
+                // 如果点击的是跳转按钮或其容器，不执行打开书签操作
+                if (e.target.closest('.jump-to-related-btn-container') ||
+                    e.target.closest('.jump-to-related-btn')) {
+                    return;
+                }
+
+                e.preventDefault();
+
+                const visible = detail.style.display === 'block';
+                detail.style.display = visible ? 'none' : 'block';
+
+                try {
+                    recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking', url: entry.url });
+                    if (browserAPI && browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
+                        browserAPI.tabs.create({ url: entry.url });
+                    } else {
+                        window.open(entry.url, '_blank');
+                    }
+                } catch (err) {
+                    console.warn('[BrowsingRanking] 打开书签失败:', err);
+                }
+            });
+
+            container.appendChild(row);
+        }
+
+        offset = end;
+    };
+
+    appendNextPage();
+
+    // 找到真正的滚动容器（.content-area）
+    const scrollContainer = container.closest('.content-area') || container;
+
+    const onScroll = () => {
+        if (offset >= items.length) return;
+        // 提前加载：使用视口高度的3倍作为阈值，至少1500px
+        const threshold = Math.max(1500, scrollContainer.clientHeight * 3);
+        if (scrollContainer.scrollTop + scrollContainer.clientHeight + threshold >= scrollContainer.scrollHeight) {
+            appendNextPage();
+        }
+    };
+
+    // 清理旧的监听器
+    if (scrollContainer.__browsingRankingScrollHandler) {
+        scrollContainer.removeEventListener('scroll', scrollContainer.__browsingRankingScrollHandler);
+    }
+    scrollContainer.addEventListener('scroll', onScroll);
+    scrollContainer.__browsingRankingScrollHandler = onScroll;
+
+    // 暴露懒加载状态和函数，供跳转功能使用
+    container.__lazyLoadState = {
+        totalItems: items.length,
+        getLoadedCount: () => offset,
+        loadMore: appendNextPage,
+        loadAll: () => {
+            while (offset < items.length) {
+                appendNextPage();
+            }
+        }
+    };
+}
+
+async function loadBrowsingClickRanking(range) {
+    const listContainer = document.getElementById('browsingRankingList');
+    if (!listContainer) return;
+
+    // 显示加载状态
+    const isZh = currentLang === 'zh_CN';
+    const loadingText = isZh ? '正在读取历史记录...' : 'Loading history...';
+    listContainer.innerHTML = `
+        <div class="empty-state">
+            <div class="empty-state-icon"><i class="fas fa-clock"></i></div>
+            <div class="empty-state-title">${loadingText}</div>
+        </div>
+    `;
+
+    try {
+        const stats = await ensureBrowsingClickRankingStats(range);
+
+        if (stats.error === 'noHistoryApi') {
+            const title = i18n.browsingRankingNotSupportedTitle
+                ? i18n.browsingRankingNotSupportedTitle[currentLang]
+                : (isZh ? '当前环境不支持历史记录统计' : 'History statistics are not available in this environment');
+            const desc = i18n.browsingRankingNotSupportedDesc
+                ? i18n.browsingRankingNotSupportedDesc[currentLang]
+                : (isZh ? '请确认扩展已获得浏览器的历史记录权限。' : 'Please ensure the extension has permission to access browser history.');
+
+            listContainer.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i class="fas fa-ban"></i></div>
+                    <div class="empty-state-title">${title}</div>
+                    <div class="empty-state-description">${desc}</div>
+                </div>
+            `;
+            return;
+        }
+
+        if (stats.error === 'noBookmarks') {
+            const title = i18n.browsingRankingNoBookmarksTitle
+                ? i18n.browsingRankingNoBookmarksTitle[currentLang]
+                : (isZh ? '暂无书签可统计' : 'No bookmarks to analyze');
+
+            listContainer.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i class="fas fa-bookmark"></i></div>
+                    <div class="empty-state-title">${title}</div>
+                </div>
+            `;
+            return;
+        }
+
+        // Ensure view mode is up-to-date before applying keyword logic
+        initBrowsingRankingViewMode();
+
+        let items = [];
+        let customRangeLabel = null;
+
+        // Phase 4.7: If custom date range is active, compute filteredCount from calendar data.
+        if (browsingRankingCustomRange && typeof getBrowsingRankingItemsForCustomRange === 'function') {
+            customRangeLabel = browsingRankingCustomRange.label || null;
+            items = await getBrowsingRankingItemsForCustomRange(browsingRankingCustomRange.startTime, browsingRankingCustomRange.endTime);
+        } else {
+            items = getBrowsingRankingItemsForRangeFromStats(stats, range);
+
+            // 应用二级菜单时间筛选
+            if (browsingRankingTimeFilter && items.length > 0) {
+                items = filterRankingItemsByTime(items, browsingRankingTimeFilter, stats.boundaries, stats);
+            }
+        }
+
+        // Phase 4.7: Keyword filter
+        // - bookmark mode: filter items directly
+        // - folder/domain/subdomain mode: renderer 内执行分组搜索
+        let folderSearchTokens = null;
+        let domainSearchTokens = null;
+        if (browsingRankingSearchTokens && browsingRankingSearchTokens.length > 0) {
+            if (browsingRankingViewMode === 'folder') {
+                folderSearchTokens = browsingRankingSearchTokens;
+            } else if (browsingRankingViewMode === 'domain' || browsingRankingViewMode === 'subdomain') {
+                domainSearchTokens = browsingRankingSearchTokens;
+            } else {
+                items = items.filter(item => matchesTokens(item.title, browsingRankingSearchTokens) || matchesTokens(item.url, browsingRankingSearchTokens));
+            }
+        }
+
+        // 根据视图模式渲染
+        if (browsingRankingViewMode === 'folder') {
+            await renderBrowsingFolderRankingList(listContainer, items, range, stats, { customRangeLabel, searchTokens: folderSearchTokens });
+        } else if (browsingRankingViewMode === 'domain' || browsingRankingViewMode === 'subdomain') {
+            renderBrowsingDomainRankingList(listContainer, items, range, {
+                customRangeLabel,
+                searchTokens: domainSearchTokens,
+                mode: browsingRankingViewMode
+            });
+        } else {
+            renderBrowsingClickRankingList(listContainer, items, range, { customRangeLabel, stats });
+        }
+    } catch (error) {
+        console.error('[BrowsingRanking] 加载点击排行失败:', error);
+        const fallbackTitle = isZh ? '加载点击排行失败' : 'Failed to load click ranking';
+        listContainer.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-exclamation-circle"></i></div>
+                <div class="empty-state-title">${fallbackTitle}</div>
+            </div>
+        `;
+    }
+}
+
+function initBrowsingClickRanking() {
+    const panel = document.getElementById('browsingRankingPanel');
+    if (!panel) return;
+
+    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
+    if (!buttons.length) return;
+
+    // Phase 4.7: Insert filter indicator next to [All]
+    try {
+        const allBtn = document.getElementById('browsingRankingFilterAll');
+        const indicator = ensureSearchFilterIndicator('browsingRankingSearchIndicator', allBtn);
+        if (indicator && !indicator.__searchIndicatorBound) {
+            indicator.__searchIndicatorBound = true;
+            indicator.addEventListener('click', () => {
+                const input = document.getElementById('searchInput');
+                if (input) {
+                    input.focus();
+                    // restore query for editing if possible
+                    if (browsingRankingSearchQuery) input.value = browsingRankingSearchQuery;
+                }
+            });
+        }
+    } catch (_) { }
+
+    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
+
+    const setActiveRange = (range, shouldPersist = true) => {
+        if (!allowedRanges.includes(range)) {
+            range = 'month';
+        }
+
+        buttons.forEach(btn => {
+            if (btn.dataset.range === range) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+
+        // 显示时间菜单
+        showBrowsingRankingTimeMenu(range);
+
+        loadBrowsingClickRanking(range);
+
+        if (shouldPersist) {
+            try {
+                localStorage.setItem('browsingRankingActiveRange', range);
+            } catch (storageErr) {
+                console.warn('[BrowsingRanking] 无法保存筛选范围:', storageErr);
+            }
+        }
+    };
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const range = btn.dataset.range || 'month';
+            setActiveRange(range);
+        });
+    });
+
+    let initialRange = 'day';
+    try {
+        const saved = localStorage.getItem('browsingRankingActiveRange');
+        if (saved && allowedRanges.includes(saved)) {
+            initialRange = saved;
+        }
+    } catch (storageErr) {
+        console.warn('[BrowsingRanking] 无法读取筛选范围:', storageErr);
+    }
+
+    setActiveRange(initialRange, false);
+}
+
+function getActiveBrowsingRankingRange() {
+    const panel = document.getElementById('browsingRankingPanel');
+    if (!panel) return null;
+    const activeBtn = panel.querySelector('.ranking-time-filter-btn.active');
+    return activeBtn ? (activeBtn.dataset.range || 'month') : null;
+}
+
+// Phase 4.7: allow programmatic switching (search-driven)
+function setBrowsingRankingActiveRange(range, shouldPersist = true) {
+    const panel = document.getElementById('browsingRankingPanel');
+    if (!panel) return;
+    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
+    if (!buttons.length) return;
+
+    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
+    if (!allowedRanges.includes(range)) range = 'month';
+
+    buttons.forEach(btn => {
+        if (btn.dataset.range === range) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+
+    showBrowsingRankingTimeMenu(range);
+    loadBrowsingClickRanking(range);
+
+    if (shouldPersist) {
+        try {
+            localStorage.setItem('browsingRankingActiveRange', range);
+        } catch (_) { }
+    }
+}
+
+async function refreshActiveBrowsingRankingIfVisible() {
+    const panel = document.getElementById('browsingRankingPanel');
+    if (!panel || !panel.classList.contains('active')) return;
+
+    const calendar = await waitForBrowsingHistoryCalendar({
+        timeout: 2000,
+        pollMs: 50
+    });
+    if (!isBrowsingHistoryCalendarReady(calendar)) {
+        console.warn('[BrowsingRanking] 等待日历数据超时');
+    }
+
+    const range = getActiveBrowsingRankingRange() || 'month';
+    loadBrowsingClickRanking(range);
+}
+
+// Phase 4.7: Ranking/Related filter APIs (called by search.js)
+function isBrowsingRankingSearchActive() {
+    return Boolean((browsingRankingCustomRange && browsingRankingCustomRange.startTime) || (browsingRankingSearchTokens && browsingRankingSearchTokens.length));
+}
+
+function isBrowsingRelatedSearchActive() {
+    return Boolean(
+        browsingRelatedExpandMode ||
+        (browsingRelatedCustomBounds && browsingRelatedCustomBounds.startTime) ||
+        (browsingRelatedSearchTokens && browsingRelatedSearchTokens.length)
+    );
+}
+
+function applyBrowsingRankingIndicatorState() {
+    try {
+        const allBtn = document.getElementById('browsingRankingFilterAll');
+        ensureSearchFilterIndicator('browsingRankingSearchIndicator', allBtn);
+        const active = isBrowsingRankingSearchActive();
+        // If list is currently empty, don't show the green outline.
+        setListSearchFilterHighlight('browsingRankingList', active, { requireNonEmpty: true });
+
+        if (!active) {
+            setSearchFilterIndicatorState('browsingRankingSearchIndicator', false);
+            return;
+        }
+        const label = browsingRankingCustomRange
+            ? browsingRankingCustomRange.label
+            : (browsingRankingSearchQuery ? `"${browsingRankingSearchQuery}"` : '');
+        setSearchFilterIndicatorState('browsingRankingSearchIndicator', true, label);
+    } catch (_) { }
+}
+
+function applyBrowsingRelatedIndicatorState() {
+    try {
+        const allBtn = document.getElementById('browsingRelatedFilterAll');
+        ensureSearchFilterIndicator('browsingRelatedSearchIndicator', allBtn);
+        const active = isBrowsingRelatedSearchActive();
+        setListSearchFilterHighlight('browsingRelatedList', active);
+
+        if (!active) {
+            setSearchFilterIndicatorState('browsingRelatedSearchIndicator', false);
+            return;
+        }
+        const label = browsingRelatedCustomBounds
+            ? browsingRelatedCustomBounds.label
+            : (browsingRelatedSearchQuery
+                ? `"${browsingRelatedSearchQuery}"`
+                : (browsingRelatedExpandMode ? getBrowsingRelatedScopeLabel() : ''));
+        setSearchFilterIndicatorState('browsingRelatedSearchIndicator', true, label);
+    } catch (_) { }
+}
+
+function clearBrowsingRankingSearchFilter(restorePrev = true) {
+    if (restorePrev && browsingRankingSearchPrevState) {
+        const prev = browsingRankingSearchPrevState;
+        browsingRankingSearchPrevState = null;
+
+        browsingRankingCustomRange = prev.customRange || null;
+        browsingRankingSearchTokens = prev.tokens || null;
+        browsingRankingSearchQuery = prev.query || '';
+
+        // Restore range + view mode + time filter
+        browsingRankingViewMode = normalizeBrowsingRankingViewMode(prev.viewMode);
+
+        setBrowsingRankingActiveRange(prev.range || 'month', false);
+        browsingRankingTimeFilter = prev.timeFilter || null;
+        loadBrowsingClickRanking(prev.range || 'month');
+    } else {
+        browsingRankingSearchPrevState = null;
+        browsingRankingSearchQuery = '';
+        browsingRankingSearchTokens = null;
+        browsingRankingCustomRange = null;
+        const range = getActiveBrowsingRankingRange() || 'month';
+        loadBrowsingClickRanking(range);
+    }
+
+    applyBrowsingRankingIndicatorState();
+    if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+}
+
+function clearBrowsingRelatedSearchFilter(restorePrev = true) {
+    if (restorePrev && browsingRelatedSearchPrevState) {
+        const prev = browsingRelatedSearchPrevState;
+        browsingRelatedSearchPrevState = null;
+
+        browsingRelatedCustomBounds = prev.customBounds || null;
+        browsingRelatedSearchTokens = prev.tokens || null;
+        browsingRelatedSearchQuery = prev.query || '';
+        browsingRelatedExpandMode = false;
+
+        // Restore range + time filter
+        if (prev.range) {
+            setBrowsingRelatedActiveRange(prev.range, false);
+        } else {
+            loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+        }
+        browsingRelatedTimeFilter = prev.timeFilter || null;
+        loadBrowsingRelatedHistory(prev.range || browsingRelatedCurrentRange);
+    } else {
+        browsingRelatedSearchPrevState = null;
+        browsingRelatedSearchQuery = '';
+        browsingRelatedSearchTokens = null;
+        browsingRelatedCustomBounds = null;
+        browsingRelatedExpandMode = false;
+        browsingRelatedExpandSavedQuery = '';
+        browsingRelatedExpandSavedTokens = null;
+        loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+    }
+
+    applyBrowsingRelatedIndicatorState();
+    if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+}
+
+// Phase 4.7: when leaving ranking/related/tracking pages, auto exit to keep isolation
+function autoExitSearchFiltersOnContextChange(prevCtx, nextCtx) {
+    try {
+        const prev = prevCtx || {};
+        const next = nextCtx || {};
+
+        const prevIsRanking = prev.view === 'additions' && prev.tab === 'browsing' && prev.subTab === 'ranking';
+        const prevIsRelated = prev.view === 'additions' && prev.tab === 'browsing' && prev.subTab === 'related';
+        const prevIsTracking = prev.view === 'additions' && prev.tab === 'tracking';
+
+        const nextIsRanking = next.view === 'additions' && next.tab === 'browsing' && next.subTab === 'ranking';
+        const nextIsRelated = next.view === 'additions' && next.tab === 'browsing' && next.subTab === 'related';
+        const nextIsTracking = next.view === 'additions' && next.tab === 'tracking';
+
+        if (prevIsRanking && !nextIsRanking && isBrowsingRankingSearchActive()) {
+            clearBrowsingRankingSearchFilter(true);
+        }
+        if (prevIsRelated && !nextIsRelated) {
+            // 离开关联记录页面时，无条件隐藏「显示当天关联记录」按钮
+            setShowTodayRelatedVisible(false);
+            if (isBrowsingRelatedSearchActive()) {
+                clearBrowsingRelatedSearchFilter(true);
+            }
+        }
+        // Phase 4.7: 时间捕捉页面离开时自动退出筛选
+        if (prevIsTracking && !nextIsTracking && isTrackingRankingSearchActive()) {
+            clearTrackingRankingSearchFilter();
+        }
+
+        // 确保退出按钮状态正确更新
+        if (typeof window.updateSearchFilterExitButton === 'function') {
+            setTimeout(() => window.updateSearchFilterExitButton(), 0);
+        }
+    } catch (_) { }
+}
+
+try {
+    window.autoExitSearchFiltersOnContextChange = autoExitSearchFiltersOnContextChange;
+} catch (_) { }
+
+function setBrowsingRelatedActiveRange(range, shouldPersist = true, options = {}) {
+    const panel = document.getElementById('browsingRelatedPanel');
+    if (!panel) return;
+    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
+    if (!buttons.length) return;
+
+    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
+    if (!allowedRanges.includes(range)) range = 'day';
+
+    browsingRelatedCurrentRange = range;
+
+    buttons.forEach(btn => {
+        if (btn.dataset.range === range) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+
+    const userInitiated = options && options.userInitiated === true;
+    showBrowsingRelatedTimeMenu(range);
+    loadBrowsingRelatedHistory(range, { userInitiated });
+
+    if (shouldPersist) {
+        try {
+            localStorage.setItem('browsingRelatedActiveRange', range);
+        } catch (_) { }
+    }
+
+    try {
+        if (typeof window.updateSearchFilterExitButton === 'function') {
+            window.updateSearchFilterExitButton();
+        }
+    } catch (_) { }
+}
+
+try {
+    window.setBrowsingRankingActiveRange = setBrowsingRankingActiveRange;
+    window.setBrowsingRelatedActiveRange = setBrowsingRelatedActiveRange;
+    // Phase 4.7: Export filter state check functions for blur exit
+    window.isBrowsingRankingSearchActive = isBrowsingRankingSearchActive;
+    window.isBrowsingRelatedSearchActive = isBrowsingRelatedSearchActive;
+} catch (_) { }
+
+try {
+    window.applyBrowsingRankingKeywordFilter = (query, tokens) => {
+        const q = String(query || '').trim();
+        browsingRankingSearchQuery = q;
+        browsingRankingSearchTokens = Array.isArray(tokens) ? tokens : null;
+
+        if (!browsingRankingSearchPrevState && !browsingRankingCustomRange) {
+            browsingRankingSearchPrevState = {
+                range: getActiveBrowsingRankingRange() || 'month',
+                timeFilter: browsingRankingTimeFilter ? { ...browsingRankingTimeFilter } : null,
+                viewMode: browsingRankingViewMode,
+                tokens: null,
+                query: '',
+                customRange: null
+            };
+        }
+
+        applyBrowsingRankingIndicatorState();
+        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+
+        const range = getActiveBrowsingRankingRange() || 'month';
+        loadBrowsingClickRanking(range);
+    };
+
+    window.applyBrowsingRankingDateRangeFilter = (bounds, options = {}) => {
+        if (!bounds || typeof bounds.startTime !== 'number' || typeof bounds.endTime !== 'number') return;
+
+        if (!browsingRankingSearchPrevState) {
+            browsingRankingSearchPrevState = {
+                range: getActiveBrowsingRankingRange() || 'month',
+                timeFilter: browsingRankingTimeFilter ? { ...browsingRankingTimeFilter } : null,
+                viewMode: browsingRankingViewMode,
+                tokens: browsingRankingSearchTokens,
+                query: browsingRankingSearchQuery,
+                customRange: browsingRankingCustomRange
+            };
+        }
+
+        browsingRankingCustomRange = {
+            startTime: bounds.startTime,
+            endTime: bounds.endTime,
+            label: bounds.label || (options.rawQuery || '')
+        };
+        browsingRankingSearchQuery = options.rawQuery || bounds.label || '';
+        browsingRankingSearchTokens = null;
+        browsingRankingTimeFilter = null;
+
+        applyBrowsingRankingIndicatorState();
+        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+
+        // Use [All] as a neutral base range
+        setBrowsingRankingActiveRange('all', false);
+    };
+
+    window.applyBrowsingRelatedKeywordFilter = (query, tokens) => {
+        const q = String(query || '').trim();
+        browsingRelatedSearchQuery = q;
+        browsingRelatedSearchTokens = Array.isArray(tokens) ? tokens : null;
+        browsingRelatedExpandMode = false;
+        browsingRelatedExpandSavedQuery = '';
+        browsingRelatedExpandSavedTokens = null;
+
+        if (!browsingRelatedSearchPrevState && !browsingRelatedCustomBounds) {
+            browsingRelatedSearchPrevState = {
+                range: browsingRelatedCurrentRange,
+                timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
+                tokens: null,
+                query: '',
+                customBounds: null
+            };
+        }
+
+        applyBrowsingRelatedIndicatorState();
+        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+
+        loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+    };
+
+    window.applyBrowsingRelatedDateRangeFilter = (bounds, options = {}) => {
+        if (!bounds || typeof bounds.startTime !== 'number' || typeof bounds.endTime !== 'number') return;
+
+        if (!browsingRelatedSearchPrevState) {
+            browsingRelatedSearchPrevState = {
+                range: browsingRelatedCurrentRange,
+                timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
+                tokens: browsingRelatedSearchTokens,
+                query: browsingRelatedSearchQuery,
+                customBounds: browsingRelatedCustomBounds
+            };
+        }
+
+        browsingRelatedCustomBounds = {
+            startTime: bounds.startTime,
+            endTime: bounds.endTime,
+            label: bounds.label || (options.rawQuery || '')
+        };
+        browsingRelatedSearchQuery = options.rawQuery || bounds.label || '';
+        browsingRelatedSearchTokens = null;
+        browsingRelatedExpandMode = false;
+        browsingRelatedExpandSavedQuery = '';
+        browsingRelatedExpandSavedTokens = null;
+        browsingRelatedTimeFilter = null;
+
+        applyBrowsingRelatedIndicatorState();
+        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
+
+        // Use [All] as a neutral base range
+        setBrowsingRelatedActiveRange('all', false);
+    };
+
+    window.exitSearchFilter = () => {
+        const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+        if (ctx && ctx.view === 'additions') {
+            if (ctx.tab === 'browsing') {
+                if (ctx.subTab === 'ranking') {
+                    clearBrowsingRankingSearchFilter(true);
+                    return;
+                }
+                if (ctx.subTab === 'related') {
+                    clearBrowsingRelatedSearchFilter(true);
+                    return;
+                }
+            } else if (ctx.tab === 'tracking') {
+                // Phase 4.7: 时间捕捉搜索筛选
+                clearTrackingRankingSearchFilter();
+                return;
+            }
+        }
+
+        // Fallback: clear whichever is active
+        if (isBrowsingRankingSearchActive()) clearBrowsingRankingSearchFilter(true);
+        if (isBrowsingRelatedSearchActive()) clearBrowsingRelatedSearchFilter(true);
+        if (isTrackingRankingSearchActive()) clearTrackingRankingSearchFilter();
+    };
+
+    window.showTodayBrowsingRelated = () => {
+        try {
+            // In related page, this button is an "expand" action:
+            // when we are in keyword-filter mode, show ALL records within the CURRENT scope
+            // (current range + optional secondary time menu selection).
+
+            // Toggle behavior:
+            // - First click: expand (remove keyword filter)
+            // - Second click: restore keyword filter (no need to use Exit)
+
+            if (browsingRelatedExpandMode) {
+                browsingRelatedExpandMode = false;
+                if (browsingRelatedExpandSavedTokens && browsingRelatedExpandSavedTokens.length > 0) {
+                    browsingRelatedSearchTokens = browsingRelatedExpandSavedTokens;
+                    browsingRelatedSearchQuery = browsingRelatedExpandSavedQuery || '';
+                }
+                browsingRelatedExpandSavedTokens = null;
+                browsingRelatedExpandSavedQuery = '';
+
+                applyBrowsingRelatedIndicatorState();
+                loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+                if (typeof window.updateSearchFilterExitButton === 'function') {
+                    window.updateSearchFilterExitButton();
+                }
+                return;
+            }
+
+            // Capture prev state once so Exit Filter can restore.
+            if (!browsingRelatedSearchPrevState) {
+                browsingRelatedSearchPrevState = {
+                    range: browsingRelatedCurrentRange,
+                    timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
+                    tokens: browsingRelatedSearchTokens,
+                    query: browsingRelatedSearchQuery,
+                    customBounds: browsingRelatedCustomBounds
+                };
+            }
+
+            // Save current keyword filter for restoring on second click
+            browsingRelatedExpandSavedTokens = browsingRelatedSearchTokens;
+            browsingRelatedExpandSavedQuery = browsingRelatedSearchQuery;
+
+            // Clear ONLY keyword filter; keep range/time menu selection.
+            browsingRelatedSearchTokens = null;
+            browsingRelatedSearchQuery = '';
+            browsingRelatedExpandMode = true;
+
+            applyBrowsingRelatedIndicatorState();
+            loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
+
+            if (typeof window.updateSearchFilterExitButton === 'function') {
+                window.updateSearchFilterExitButton();
+            }
+        } catch (e) {
+            console.warn('[BrowsingRelated] showTodayBrowsingRelated failed:', e);
+        }
+    };
+
+    window.updateSearchFilterExitButton = () => {
+        try {
+            const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
+            const isZh = currentLang === 'zh_CN';
+            const btn = ensureExitSearchFilterButton();
+            if (!btn) return;
+
+            const todayBtn = ensureShowTodayRelatedButton();
+
+            let visible = false;
+            if (ctx && ctx.view === 'additions') {
+                if (ctx.tab === 'browsing') {
+                    if (ctx.subTab === 'ranking') visible = isBrowsingRankingSearchActive();
+                    if (ctx.subTab === 'related') visible = isBrowsingRelatedSearchActive();
+                } else if (ctx.tab === 'tracking') {
+                    // Phase 4.7: 时间捕捉搜索筛选
+                    visible = isTrackingRankingSearchActive();
+                }
+            }
+
+            if (!visible) {
+                setExitSearchFilterVisible(false);
+                setShowTodayRelatedVisible(false);
+                return;
+            }
+
+            btn.innerHTML = isZh
+                ? '<i class="fas fa-times"></i><span>退出筛选</span>'
+                : '<i class="fas fa-times"></i><span>Exit filter</span>';
+            setExitSearchFilterVisible(true);
+
+            // Phase 4.7: Related quick action
+            if (ctx && ctx.view === 'additions' && ctx.tab === 'browsing' && ctx.subTab === 'related') {
+                if (todayBtn) {
+                    const rangeLabel = getBrowsingRelatedScopeLabel();
+                    const iconClass = browsingRelatedExpandMode ? 'fas fa-check-square' : 'fas fa-square';
+                    todayBtn.innerHTML = isZh
+                        ? `<i class="${iconClass}"></i><span>显示${rangeLabel}关联记录</span>`
+                        : `<i class="${iconClass}"></i><span>Show ${rangeLabel} related</span>`;
+
+                    todayBtn.classList.toggle('checked', Boolean(browsingRelatedExpandMode));
+                    todayBtn.setAttribute('aria-pressed', browsingRelatedExpandMode ? 'true' : 'false');
+                }
+                setShowTodayRelatedVisible(true);
+            } else {
+                setShowTodayRelatedVisible(false);
+            }
+        } catch (_) { }
+    };
+} catch (_) { }
+
+document.addEventListener('browsingHistoryCacheUpdated', () => {
+
+    resetBrowsingRankingDerivedCache();
+    markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 80 });
+    refreshActiveBrowsingRankingIfVisible();
+    markBrowsingRelatedSnapshotStale('browsing-history-cache-updated');
+});
+
+function groupBookmarksByTime(bookmarks, timeFilter) {
+    const groups = {};
+
+    bookmarks.forEach(bookmark => {
+        const date = new Date(bookmark.dateAdded);
+        let groupKey;
+
+        switch (timeFilter) {
+            case 'year':
+                groupKey = date.getFullYear().toString();
+                break;
+            case 'month':
+                groupKey = currentLang === 'zh_CN'
+                    ? `${date.getFullYear()}年${date.getMonth() + 1}月`
+                    : `${date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}`;
+                break;
+            case 'day':
+            case 'all':
+            default:
+                groupKey = date.toLocaleDateString(currentLang === 'en' ? 'en-US' : 'zh-CN');
+                break;
+        }
+
+        if (!groups[groupKey]) {
+            groups[groupKey] = [];
+        }
+        groups[groupKey].push(bookmark);
+    });
+
+    return groups;
+}
+
+// 保留旧函数用于兼容
+function groupBookmarksByDate(bookmarks) {
+    return groupBookmarksByTime(bookmarks, 'day');
+}
+
+function filterBookmarks(groups) {
+    return groups;
+}
+
+let additionsGroupItemsCache = new Map();
+
+function renderBookmarkGroups(groups, timeFilter) {
+    additionsGroupItemsCache = new Map();
+
+    const sortedDates = Object.keys(groups).sort((a, b) => {
+        // 根据timeFilter决定排序方式
+        if (timeFilter === 'year') {
+            return parseInt(b) - parseInt(a);
+        }
+        return new Date(b) - new Date(a);
+    });
+
+    return sortedDates.map((date, index) => {
+        const bookmarks = groups[date];
+        const groupId = `group-${index}`;
+        // 默认折叠
+        const isExpanded = false;
+
+        additionsGroupItemsCache.set(groupId, bookmarks);
+
+        return `
+            <div class="addition-group" data-group-id="${groupId}">
+                <div class="addition-group-header" data-group-id="${groupId}">
+                    <div class="addition-group-title">
+                        <i class="fas fa-chevron-right addition-group-toggle ${isExpanded ? 'expanded' : ''}"></i>
+                        <span class="addition-group-date">${date}</span>
+                        <span class="addition-count">${bookmarks.length} ${i18n.bookmarks[currentLang]}</span>
+                    </div>
+                </div>
+                <div class="addition-items ${isExpanded ? 'expanded' : ''}" data-group-id="${groupId}" data-loaded="0"></div>
+            </div>
+        `;
+    }).join('');
+}
+
+// 绑定折叠/展开事件
+function attachAdditionGroupEvents() {
+    const container = document.getElementById('additionsList');
+    if (!container || container.dataset.groupEventsBound === '1') return;
+    container.dataset.groupEventsBound = '1';
+
+    container.addEventListener('click', (e) => {
+        const header = e.target && e.target.closest ? e.target.closest('.addition-group-header') : null;
+        if (!header || !container.contains(header)) return;
+
+        const groupId = header.getAttribute('data-group-id');
+        const items = header.parentElement ? header.parentElement.querySelector('.addition-items') : null;
+        const toggle = header.querySelector('.addition-group-toggle');
+
+        if (!items || !toggle) return;
+
+        const willExpand = !items.classList.contains('expanded');
+        if (willExpand && items.getAttribute('data-loaded') !== '1') {
+            const groupBookmarks = additionsGroupItemsCache.get(groupId) || [];
+            
+            // Batched rendering to prevent DOM thread locking on expansion
+            const BATCH_SIZE = 100;
+            let renderedCount = 0;
+            
+            items.innerHTML = ''; // clear loading state
+            
+            const renderBatch = () => {
+                const end = Math.min(renderedCount + BATCH_SIZE, groupBookmarks.length);
+                const batch = groupBookmarks.slice(renderedCount, end);
+                const html = batch.map(renderBookmarkItem).join('');
+                
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                while (tempDiv.firstChild) {
+                    items.appendChild(tempDiv.firstChild);
+                }
+                
+                renderedCount = end;
+                return renderedCount < groupBookmarks.length;
+            };
+            
+            const hasMore = renderBatch();
+            
+            if (hasMore) {
+                const loadMoreBtn = document.createElement('div');
+                loadMoreBtn.className = 'addition-load-more-btn';
+                loadMoreBtn.style.padding = '8px 12px';
+                loadMoreBtn.style.margin = '10px auto';
+                loadMoreBtn.style.textAlign = 'center';
+                loadMoreBtn.style.background = 'var(--bg-secondary)';
+                loadMoreBtn.style.border = '1px solid var(--border-color)';
+                loadMoreBtn.style.borderRadius = '6px';
+                loadMoreBtn.style.cursor = 'pointer';
+                loadMoreBtn.style.color = 'var(--text-secondary)';
+                loadMoreBtn.style.fontSize = '12px';
+                loadMoreBtn.style.width = 'fit-content';
+                loadMoreBtn.style.transition = 'all 0.2s';
+                
+                const updateBtnText = () => {
+                    const remaining = groupBookmarks.length - renderedCount;
+                    const nextBatch = Math.min(BATCH_SIZE, remaining);
+                    loadMoreBtn.textContent = currentLang === 'zh_CN'
+                        ? `加载更多 ${nextBatch} 个（剩余 ${remaining} 个）`
+                        : `Load ${nextBatch} more (${remaining} remaining)`;
+                };
+                
+                updateBtnText();
+                
+                loadMoreBtn.addEventListener('mouseenter', () => {
+                    loadMoreBtn.style.background = 'var(--bg-tertiary)';
+                    loadMoreBtn.style.borderColor = 'var(--accent-primary)';
+                    loadMoreBtn.style.color = 'var(--accent-primary)';
+                });
+                loadMoreBtn.addEventListener('mouseleave', () => {
+                    loadMoreBtn.style.background = 'var(--bg-secondary)';
+                    loadMoreBtn.style.borderColor = 'var(--border-color)';
+                    loadMoreBtn.style.color = 'var(--text-secondary)';
+                });
+                
+                loadMoreBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const more = renderBatch();
+                    if (more) {
+                        updateBtnText();
+                        items.appendChild(loadMoreBtn); // move button to the end
+                    } else {
+                        loadMoreBtn.remove();
+                    }
+                });
+                
+                items.appendChild(loadMoreBtn);
+            }
+            
+            items.setAttribute('data-loaded', '1');
+        }
+
+        items.classList.toggle('expanded');
+        toggle.classList.toggle('expanded');
+    });
+}
+
+function renderBookmarkItem(bookmark) {
+    const favicon = getFaviconUrl(bookmark.url);
+
+    return `
+        <div class="addition-item" data-bookmark-url="${escapeHtml(bookmark.url)}">
+            <img class="addition-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${favicon}" alt="">
+            <div class="addition-info">
+                <a href="${escapeHtml(bookmark.url)}" target="_blank" class="addition-title" rel="noopener noreferrer">${escapeHtml(bookmark.title)}</a>
+                <div class="addition-url">${escapeHtml(bookmark.url)}</div>
+            </div>
+        </div>
+    `;
+}
+
+// =================================================================================
+// X. DIALOGS & DIALOG MANAGEMENT (全局弹窗管理器 - 复习/屏蔽/清除记录)
+// =================================================================================
+
 
 // =============================================================================
 // 推荐卡片专用：弹窗管理
@@ -27074,3863 +32094,6 @@ function initCardInteractions() {
     });
 }
 
-// =============================================================================
-// 【重要架构】全局链接点击兜底监听器 - 时间捕捉归因
-// =============================================================================
-// 本项目有两套独立的链接点击处理系统，互不干扰：
-//   1. 书签系统（defaultOpenMode）- 处理 .tree-bookmark-link
-//   2. 时间捕捉兜底（本监听器）- 处理其他所有 target="_blank" 链接
-//
-// ⚠️ 添加新功能时必须注意：
-//   - 如果新增链接区域有自己的处理逻辑，必须在下面添加排除条件！
-//   - 否则会导致链接被打开两次（本监听器 + 专用监听器都处理）
-//   - 详见：.agent/workflows/link-click-handling.md
-// =============================================================================
-// 捕捉 extension 页面内的超链接打开（<a target="_blank">），统一走 tabs.create 以便做书签归因兜底
-// 排除书签链接（.tree-bookmark-link）和超链接区域，让其走专门的处理逻辑
-try {
-    document.addEventListener('click', async (e) => {
-        const anchor = e.target && typeof e.target.closest === 'function'
-            ? e.target.closest('a[target="_blank"]')
-            : null;
-        if (!anchor) return;
-
-        // 排除书签链接：书签链接有专门的处理逻辑（支持 defaultOpenMode 记忆）
-        if (anchor.classList.contains('tree-bookmark-link')) return;
-
-        // 排除超链接区域：如果新增独立处理的区域，请在此处添加排除条件
-        if (anchor.dataset?.skipGlobalOpenFallback === '1' || anchor.closest('[data-skip-global-open-fallback="1"]')) return;
-
-        const href = anchor.getAttribute('href') || '';
-        if (!href || (!href.startsWith('http://') && !href.startsWith('https://'))) return;
-
-        // 已被其他逻辑处理则跳过
-        if (e.defaultPrevented) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        const title = (anchor.textContent || '').trim();
-        if (typeof window.openBookmarkNewTab === 'function') {
-            await window.openBookmarkNewTab(href, { title, source: 'history_ui_link' });
-        } else {
-            window.open(href, '_blank');
-        }
-    }, true);
-} catch (_) { }
-
-// 应用预设模式
-function applyPresetMode(mode) {
-    if (!presetModes[mode]) return;
-
-    // 如果已经是目标模式，不触发全量重算
-    if (currentRecommendMode === mode) {
-
-        return;
-    }
-
-    currentRecommendMode = mode;
-    const preset = presetModes[mode];
-
-    try {
-        browserAPI.storage.local.set({
-            [RECOMMEND_ACTIVE_MODE_STORAGE_KEY]: mode,
-            [RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY]: Date.now()
-        });
-    } catch (_) { }
-
-    // 更新按钮状态
-    document.querySelectorAll('.preset-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-
-    // 更新权重输入框
-    const weightInputs = {
-        freshness: document.getElementById('weightFreshness'),
-        coldness: document.getElementById('weightColdness'),
-        timeDegree: document.getElementById('weightTimeDegree'),
-        forgetting: document.getElementById('weightForgetting'),
-        laterReview: document.getElementById('weightLaterReview')
-    };
-
-    // 设置权重值
-    weightInputs.freshness.value = preset.weights.freshness;
-    weightInputs.coldness.value = preset.weights.coldness;
-    weightInputs.timeDegree.value = preset.weights.timeDegree;
-    weightInputs.forgetting.value = preset.weights.forgetting;
-    weightInputs.laterReview.value = preset.weights.laterReview;
-
-    // 处理优先模式和用户覆盖
-    const priorityModeBtn = document.getElementById('priorityModeBtn');
-
-    if (mode === 'priority') {
-        // 优先模式：橙色显示
-        for (const input of Object.values(weightInputs)) {
-            input.style.color = '#ff6b35';
-            input.style.fontWeight = 'bold';
-        }
-        // 清除用户覆盖标记
-        if (priorityModeBtn) {
-            delete priorityModeBtn.dataset.userOverride;
-        }
-    } else {
-        // 其他模式：正常显示
-        for (const input of Object.values(weightInputs)) {
-            input.style.color = '';
-            input.style.fontWeight = '';
-        }
-        // 设置用户覆盖标记（防止自动切换回优先模式）
-        if (priorityModeBtn && priorityModeBtn.style.display !== 'none') {
-            priorityModeBtn.dataset.userOverride = 'true';
-        }
-    }
-
-    // 更新阈值输入框
-    document.getElementById('thresholdFreshness').value = preset.thresholds.freshness;
-    document.getElementById('thresholdColdness').value = preset.thresholds.coldness;
-    document.getElementById('thresholdTimeDegree').value = preset.thresholds.timeDegree;
-    document.getElementById('thresholdForgetting').value = preset.thresholds.forgetting;
-
-    // 保存配置（saveFormulaConfig 内部会触发全量重算）
-    saveFormulaConfig().then(() => {
-        // 重算完成后刷新推荐卡片
-        refreshRecommendCards();
-    });
-
-    const modeNames = { default: '默认', archaeology: '考古', consolidate: '巩固', wander: '漫游', priority: '优先巩固' };
-
-}
-
-function initTrackingToggle() {
-    // 可能会在多个入口被调用（recommend view / tracking tab），避免重复绑定导致一次点击触发两次反向切换
-    if (initTrackingToggle._initialized) return;
-
-    const toggleBtn = document.getElementById('trackingToggleBtn');
-    if (toggleBtn) {
-        initTrackingToggle._initialized = true;
-        let userInteracted = false;
-
-        const setToggleUi = (isActive) => {
-            toggleBtn.classList.toggle('active', !!isActive);
-            const textEl = document.getElementById('trackingToggleText');
-            if (textEl) {
-                textEl.textContent = isActive
-                    ? i18n.trackingToggleOn[currentLang]
-                    : i18n.trackingToggleOff[currentLang];
-            }
-
-            // 更新公式中的T项（时间度）
-            const termT = document.getElementById('termTimeDegree');
-            if (termT) {
-                termT.classList.toggle('disabled', !isActive);
-            }
-        };
-
-        toggleBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            userInteracted = true;
-            const isActive = !toggleBtn.classList.contains('active');
-            setToggleUi(isActive);
-
-            // 通知 background.js 更新追踪状态
-            try {
-                await browserAPI.runtime.sendMessage({
-                    action: 'setTrackingEnabled',
-                    enabled: isActive
-                });
-                // 立即刷新左下角小组件
-                updateTimeTrackingWidget();
-            } catch (error) {
-                console.warn('[书签推荐] 设置追踪状态失败:', error);
-            }
-        });
-
-        // 加载保存的状态
-        browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' }, (response) => {
-            if (response && response.success) {
-                // 如果用户已经点击过，不用“初始化回包”覆盖用户最新操作（避免看起来像“点不动”）
-                if (userInteracted) return;
-                const isActive = response.enabled;
-                setToggleUi(isActive);
-            }
-        });
-    }
-
-    // 排行类型选择器（综合时间 / 唤醒次数）
-    const rankingTypeSelect = document.getElementById('trackingRankingType');
-    if (rankingTypeSelect) {
-        rankingTypeSelect.addEventListener('change', () => {
-            loadActiveTimeRanking();
-        });
-    }
-
-    // 时间范围选择器
-    const rangeSelect = document.getElementById('trackingRankingRange');
-    if (rangeSelect) {
-        rangeSelect.addEventListener('change', () => {
-            loadActiveTimeRanking();
-        });
-    }
-
-    // 清除记录按钮 - 改为下拉菜单
-    const clearBtn = document.getElementById('clearTrackingBtn');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            showTrackingClearMenu(clearBtn);
-        });
-    }
-
-    // 状态说明弹窗（使用事件委托，支持动态创建的图标）
-    const stateModal = document.getElementById('trackingStateModal');
-    const closeStateModalBtn = document.getElementById('closeTrackingStateModal');
-    const trackingHeaderState = document.getElementById('trackingHeaderState');
-
-    if (trackingHeaderState && stateModal) {
-        trackingHeaderState.addEventListener('click', (e) => {
-            if (e.target.classList.contains('tracking-state-help')) {
-                e.stopPropagation();
-                stateModal.classList.add('show');
-                updateTrackingStateModalI18n();
-            }
-        });
-
-        if (closeStateModalBtn) {
-            closeStateModalBtn.addEventListener('click', () => {
-                stateModal.classList.remove('show');
-            });
-        }
-
-        // 点击背景关闭
-        stateModal.addEventListener('click', (e) => {
-            if (e.target === stateModal) {
-                stateModal.classList.remove('show');
-            }
-        });
-    }
-
-    // 公式说明弹窗
-    const formulaHelpBtn = document.getElementById('formulaHelpBtn');
-    const formulaHelpModal = document.getElementById('formulaHelpModal');
-    const closeFormulaHelpBtn = document.getElementById('closeFormulaHelpModal');
-
-    if (formulaHelpBtn && formulaHelpModal) {
-        formulaHelpBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            formulaHelpModal.classList.add('show');
-            updateFormulaHelpModalI18n();
-        });
-
-        if (closeFormulaHelpBtn) {
-            closeFormulaHelpBtn.addEventListener('click', () => {
-                formulaHelpModal.classList.remove('show');
-            });
-        }
-
-        formulaHelpModal.addEventListener('click', (e) => {
-            if (e.target === formulaHelpModal) {
-                formulaHelpModal.classList.remove('show');
-            }
-        });
-    }
-}
-
-// 更新状态说明弹窗的国际化文本
-function updateTrackingStateModalI18n() {
-    const isEn = currentLang === 'en';
-
-    // 标题
-    const title = document.getElementById('trackingStateModalTitle');
-    if (title) title.textContent = isEn ? 'Time Tracking State Guide' : '时间捕捉状态说明';
-
-    // 表头（图标在第一列）
-    document.getElementById('stateTableHeaderIcon').textContent = isEn ? 'Icon' : '图标';
-    document.getElementById('stateTableHeaderState').textContent = isEn ? 'State' : '状态';
-    document.getElementById('stateTableHeaderCondition').textContent = isEn ? 'Condition' : '条件';
-    document.getElementById('stateTableHeaderRate').textContent = isEn ? 'Rate' : '计时倍率';
-    document.getElementById('stateTableHeaderExample').textContent = isEn ? 'Example' : '例子';
-
-    // 表格内容
-    document.getElementById('stateActiveLabel').textContent = isEn ? 'Active' : '活跃';
-    document.getElementById('stateActiveCondition').textContent = isEn ? 'Current tab + Window focus + User active' : '当前标签 + 窗口焦点 + 用户活跃';
-    document.getElementById('stateActiveExample').textContent = isEn ? 'Reading, scrolling, typing' : '正在阅读、滚动页面、打字';
-
-    document.getElementById('stateIdleLabel').textContent = isEn ? 'Idle Focus' : '前台静止';
-    document.getElementById('stateIdleCondition').textContent = isEn ? 'Current tab + Window focus + User idle' : '当前标签 + 窗口焦点 + 用户空闲';
-    document.getElementById('stateIdleExample').textContent = isEn ? 'Watching video, thinking' : '静止观看视频、思考内容';
-
-    document.getElementById('stateVisibleLabel').textContent = isEn ? 'Visible Ref' : '可见参考';
-    document.getElementById('stateVisibleCondition').textContent = isEn ? 'Current tab + No window focus + User active' : '当前标签 + 窗口无焦点 + 用户活跃';
-    document.getElementById('stateVisibleExample').textContent = isEn ? 'Split-screen reference, comparing code' : '分屏参考文档、对照代码';
-
-    document.getElementById('stateBackgroundLabel').textContent = isEn ? 'Background' : '后台';
-    document.getElementById('stateBackgroundCondition').textContent = isEn ? 'Not current tab + User active' : '非当前标签 + 用户活跃';
-    document.getElementById('stateBackgroundExample').textContent = isEn ? 'Idle tab, background music' : '挂机、后台播放音乐';
-
-    document.getElementById('stateSleepLabel').textContent = isEn ? 'Sleep' : '睡眠';
-    document.getElementById('stateSleepCondition').textContent = isEn ? 'User idle (any tab)' : '用户空闲（任何标签）';
-    document.getElementById('stateSleepExample').textContent = isEn ? 'Away from computer, screen locked, tab auto-sleep' : '离开电脑、锁屏、页面自动睡眠';
-
-    // 综合时间公式
-    const formulaEl = document.getElementById('trackingStateFormula');
-    if (formulaEl) {
-        formulaEl.textContent = isEn
-            ? 'Composite = Active×1.0 + Idle×0.8 + Visible×0.5 + Background×0.1'
-            : '综合时间 = 活跃×1.0 + 前台静止×0.8 + 可见参考×0.5 + 后台×0.1';
-    }
-}
-
-// 更新公式说明弹窗的国际化文本
-function updateFormulaHelpModalI18n() {
-    const isEn = currentLang === 'en';
-
-    // 标题
-    const title = document.getElementById('formulaHelpModalTitle');
-    if (title) title.textContent = isEn ? 'Formula Explanation' : '权重公式说明';
-
-    // 通用公式
-    const generalTitle = document.getElementById('formulaHelpGeneralTitle');
-    if (generalTitle) generalTitle.textContent = isEn ? 'General Formula' : '通用公式';
-
-    const codeEl = document.querySelector('.formula-help-code code');
-    if (codeEl) codeEl.textContent = isEn
-        ? 'Factor = 1 / (1 + (value / threshold)^0.7)'
-        : '因子值 = 1 / (1 + (实际值 / 阈值)^0.7)';
-
-    // 公式特点
-    const featuresTitle = document.getElementById('formulaHelpFeaturesTitle');
-    if (featuresTitle) featuresTitle.textContent = isEn ? 'Features' : '公式特点';
-
-    document.getElementById('formulaHelpFeature1').innerHTML = isEn
-        ? '<strong>At threshold = 0.5</strong>: When value equals threshold, factor is exactly 0.5'
-        : '<strong>阈值处 = 0.5</strong>：当实际值等于阈值时，因子值正好是0.5';
-    document.getElementById('formulaHelpFeature2').innerHTML = isEn
-        ? '<strong>Smooth decay</strong>: Power function (^0.7) makes decay more gradual, avoiding hard cutoff'
-        : '<strong>平滑衰减</strong>：使用幂函数(^0.7)使衰减更平缓，避免硬截断';
-    document.getElementById('formulaHelpFeature3').innerHTML = isEn
-        ? '<strong>Never zero</strong>: Even very large values retain small differentiation'
-        : '<strong>永不归零</strong>：即使数值很大，仍保留微小区分度';
-    document.getElementById('formulaHelpFeature4').innerHTML = isEn
-        ? '<strong>Large value friendly</strong>: 1000 clicks still has 0.02 differentiation'
-        : '<strong>大数值友好</strong>：1000次点击仍有0.02的区分度';
-
-    // 效果示例
-    const exampleTitle = document.getElementById('formulaHelpExampleTitle');
-    if (exampleTitle) exampleTitle.textContent = isEn ? 'Examples' : '效果示例';
-
-    document.getElementById('formulaHelpTableValue').textContent = isEn ? 'Value/Threshold' : '实际值/阈值';
-    document.getElementById('formulaHelpTableResult').textContent = isEn ? 'Factor' : '因子值';
-    document.getElementById('formulaHelpTableMeaning').textContent = isEn ? 'Meaning' : '含义';
-
-    document.getElementById('formulaHelpThreshold').textContent = isEn ? '1×(threshold)' : '1×(阈值)';
-    document.getElementById('formulaHelpMeaning1').textContent = isEn ? 'Highest priority' : '最高优先';
-    document.getElementById('formulaHelpMeaning2').textContent = isEn ? 'Higher' : '较高';
-    document.getElementById('formulaHelpMeaning3').textContent = isEn ? 'Medium' : '中等';
-    document.getElementById('formulaHelpMeaning4').textContent = isEn ? 'Lower' : '较低';
-    document.getElementById('formulaHelpMeaning5').textContent = isEn ? 'Very low' : '很低';
-    document.getElementById('formulaHelpMeaning6').textContent = isEn ? 'Minimal but distinct' : '极低但仍有区分';
-
-    // 注意事项
-    const notesTitle = document.getElementById('formulaHelpNotesTitle');
-    if (notesTitle) notesTitle.textContent = isEn ? 'Notes' : '注意事项';
-
-    document.getElementById('formulaHelpNote1').innerHTML = isEn
-        ? '<strong>F, C, T</strong> use inverse mode: larger value = smaller factor (e.g., more clicks = lower coldness)'
-        : '<strong>F、C、T</strong> 使用 inverse 模式：值越大，因子越小（如点击越多，冷门度越低）';
-    document.getElementById('formulaHelpNote2').innerHTML = isEn
-        ? '<strong>D</strong> uses direct mode: more unvisited days = higher forgetting'
-        : '<strong>D</strong> 使用正向模式：未访问天数越多，遗忘度越高';
-    document.getElementById('formulaHelpNote3').innerHTML = isEn
-        ? '<strong>L</strong> is boolean: manually added = 1, otherwise = 0'
-        : '<strong>L</strong> 是布尔值：手动添加=1，否则=0';
-    const note4 = document.getElementById('formulaHelpNote4');
-    if (note4) {
-        note4.innerHTML = isEn
-            ? '<strong>Backup restore</strong>: Restoring bookmarks via other tools may reassign bookmark IDs, so history and recommendation state can be lost'
-            : '<strong>备份恢复</strong>：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失';
-    }
-}
-
-// 推荐卡片数据
-let recommendCards = [];
-let trackingRefreshInterval = null;
-let rankingRefreshInterval = null;  // 排行榜刷新定时器
-const TRACKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次当前会话，更实时
-const RANKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次排行榜，与正在追踪同步
-let recommendPostponedAuthoritativeIds = null;
-
-// 书签推荐诊断缓存
-const RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
-const recommendScoreDebugCache = new Map();
-const recommendScoreDebugInFlight = new Map();
-// 推荐选卡统一走后台，前端只展示共享结果
-
-// 跳过和屏蔽数据
-let skippedBookmarks = new Set(); // 已跳过书签（内存镜像 + storage 持久化）
-let postponedExpiryRefreshTimer = null;
-let postponedListRefreshFromStorageTimer = null;
-let postponedListRefreshInProgress = false;
-let postponedListRefreshPending = false;
-let recommendCardsRefreshFromCacheTimer = null;
-let recommendCardsRefreshInProgress = false;
-let recommendCardsRefreshPending = false;
-let recommendCardsRefreshFromStateTimer = null;
-let recommendCardsStateRefreshInProgress = false;
-let recommendCardsStateRefreshPending = false;
-let recommendLastUpdatedTimestamp = 0;
-
-function normalizeRecommendLastUpdatedTimestamp(value) {
-    const ts = Number(value || 0);
-    return Number.isFinite(ts) && ts > 0 ? Math.floor(ts) : 0;
-}
-
-function formatRecommendLastUpdatedText(timestamp) {
-    const isZh = currentLang === 'zh_CN';
-    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
-    if (!normalized) {
-        return isZh ? '最近更新：--' : 'Updated: --';
-    }
-
-    const locale = isZh ? 'zh-CN' : 'en-US';
-    let timeText = '';
-    try {
-        timeText = new Date(normalized).toLocaleString(locale, {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    } catch (_) {
-        timeText = new Date(normalized).toLocaleString(locale);
-    }
-    return isZh ? `最近更新：${timeText}` : `Updated: ${timeText}`;
-}
-
-function applyRecommendLastUpdatedText(timestamp) {
-    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
-    const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
-    const label = formatRecommendLastUpdatedText(normalized);
-    let title = '';
-    if (normalized) {
-        try {
-            title = new Date(normalized).toLocaleString(locale);
-        } catch (_) {
-            title = '';
-        }
-    }
-
-    const widgetsEl = document.getElementById('widgetsRecommendLastUpdated');
-    if (widgetsEl) {
-        widgetsEl.textContent = label;
-        widgetsEl.title = title;
-    }
-
-    const recommendEl = document.getElementById('recommendLastUpdated');
-    if (recommendEl) {
-        recommendEl.textContent = label;
-        recommendEl.title = title;
-    }
-}
-
-function syncRecommendLastUpdatedFromState(state = null) {
-    const ts = normalizeRecommendLastUpdatedTimestamp(
-        state?.lastUpdated || state?.timestamp || 0
-    );
-    if (ts > 0) {
-        recommendLastUpdatedTimestamp = ts;
-    }
-    applyRecommendLastUpdatedText(recommendLastUpdatedTimestamp);
-    return recommendLastUpdatedTimestamp;
-}
-
-function normalizeRecommendSnapshotCard(card) {
-    if (!card || !card.url) return null;
-
-    const priority = Number(card.priority);
-    const forceDueAt = Number(card.forceDueAt || 0);
-    const forceDueMovedAt = Number(card.forceDueMovedAt || 0);
-    const currentCardsVersion = getRecommendActionExpectedVersion(card);
-    return {
-        id: card.id,
-        title: card.title || card.name || card.url || '',
-        name: card.title || card.name || card.url || '',
-        url: card.url,
-        favicon: card.favicon || card.faviconUrl || null,
-        faviconUrl: card.favicon || card.faviconUrl || null,
-        priority: Number.isFinite(priority) ? priority : 0.5,
-        forceDue: card.forceDue === true,
-        forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
-        forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0,
-        ...(currentCardsVersion != null ? { currentCardsVersion } : {})
-    };
-}
-
-function mergeRecommendSnapshotCardsWithCardData(snapshotCards = [], cardData = []) {
-    const safeSnapshotCards = (Array.isArray(snapshotCards) ? snapshotCards : [])
-        .map(normalizeRecommendSnapshotCard)
-        .filter(Boolean);
-    if (safeSnapshotCards.length === 0) return [];
-
-    const cardDataMap = new Map();
-    (Array.isArray(cardData) ? cardData : []).forEach((item) => {
-        const normalized = normalizeRecommendSnapshotCard(item);
-        const id = String(normalized?.id || '').trim();
-        if (!id || !normalized) return;
-        cardDataMap.set(id, normalized);
-    });
-
-    return safeSnapshotCards.map((card) => {
-        const id = String(card?.id || '').trim();
-        const fromData = id ? cardDataMap.get(id) : null;
-        if (!fromData) return card;
-
-        const title = card.title || card.name || fromData.title || fromData.name || fromData.url || '';
-        const url = card.url || fromData.url || '';
-        const favicon = card.favicon || card.faviconUrl || fromData.favicon || fromData.faviconUrl || null;
-        const priority = Number(card.priority);
-        const fallbackPriority = Number(fromData.priority);
-        const mergedPriority = Number.isFinite(priority)
-            ? priority
-            : (Number.isFinite(fallbackPriority) ? fallbackPriority : 0.5);
-        const currentCardsVersion = getRecommendActionExpectedVersion(card)
-            ?? getRecommendActionExpectedVersion(fromData);
-
-        return {
-            ...fromData,
-            ...card,
-            title,
-            name: title,
-            url,
-            favicon,
-            faviconUrl: favicon,
-            priority: mergedPriority,
-            ...(currentCardsVersion != null ? { currentCardsVersion } : {})
-        };
-    }).filter(Boolean).slice(0, 3);
-}
-
-function readRecommendCardsSnapshot() {
-    try {
-        const raw = localStorage.getItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
-        if (!raw) return null;
-
-        const parsed = JSON.parse(raw);
-        if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
-            return null;
-        }
-
-        const ts = Number(parsed.ts || parsed.timestamp || 0);
-        if (Number.isFinite(ts) && ts > 0 && (Date.now() - ts) > SIDEPANEL_RECOMMEND_SNAPSHOT_MAX_AGE_MS) {
-            return null;
-        }
-
-        const cards = parsed.cards
-            .map(normalizeRecommendSnapshotCard)
-            .filter(Boolean)
-            .slice(0, 3);
-
-        if (!cards.length) return null;
-
-        const flippedIds = Array.isArray(parsed.flippedIds)
-            ? parsed.flippedIds.map(id => String(id))
-            : [];
-
-        return { cards, flippedIds, ts: Number.isFinite(ts) ? ts : Date.now() };
-    } catch (_) {
-        return null;
-    }
-}
-
-function writeRecommendCardsSnapshot(cards = [], flippedIds = []) {
-    try {
-        const safeCards = (Array.isArray(cards) ? cards : [])
-            .map(normalizeRecommendSnapshotCard)
-            .filter(Boolean)
-            .slice(0, 3);
-
-        if (!safeCards.length) return;
-
-        const safeFlipped = Array.from(new Set(
-            (Array.isArray(flippedIds) ? flippedIds : []).map(id => String(id))
-        ));
-
-        localStorage.setItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY, JSON.stringify({
-            ts: Date.now(),
-            cards: safeCards,
-            flippedIds: safeFlipped
-        }));
-    } catch (_) { }
-}
-
-function clearRecommendCardsSnapshot() {
-    try {
-        localStorage.removeItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
-    } catch (_) { }
-}
-
-async function selectRecommendCardsRoundShared(force = false) {
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'selectRecommendCardsRound',
-            force: force === true
-        });
-
-        if (response && response.success && Array.isArray(response.cards)) {
-            return response;
-        }
-    } catch (_) { }
-
-    return null;
-}
-
-async function dispatchRecommendCardAction(recommendAction, bookmark, options = {}) {
-    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || options.bookmarkId || '').trim();
-    if (!bookmarkId || !recommendAction) {
-        return { success: false, reason: 'invalid_action' };
-    }
-
-    const expectedVersion = await resolveRecommendActionExpectedVersion(
-        bookmarkId,
-        bookmark,
-        options.expectedVersion
-    );
-
-    let response = null;
-    const sendAction = async (version) => browserAPI.runtime.sendMessage({
-        action: 'executeRecommendCardAction',
-        recommendAction,
-        bookmarkId,
-        expectedVersion: version,
-        source: options.source || (recommendSearchPreviewActive ? 'search' : currentView || 'unknown'),
-        delayMs: options.delayMs,
-        postponeUntil: options.postponeUntil,
-        postponePresetKey: options.postponePresetKey,
-        manuallyAdded: options.manuallyAdded === true,
-        groupId: options.groupId,
-        groupType: options.groupType,
-        groupName: options.groupName,
-        scope: options.scope,
-        timestamp: options.timestamp || Date.now()
-    });
-
-    try {
-        response = await sendAction(expectedVersion);
-    } catch (error) {
-        return { success: false, reason: 'background_failed', error: error?.message || String(error) };
-    }
-
-    if (response?.success === false && response?.reason === 'missing_current_cards_version') {
-        const retryVersion = await resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, { allowRefresh: true });
-        if (retryVersion != null && retryVersion !== expectedVersion) {
-            try {
-                response = await sendAction(retryVersion);
-            } catch (error) {
-                return { success: false, reason: 'background_failed', error: error?.message || String(error) };
-            }
-        }
-    }
-
-    if (!response || response.success === false) {
-        if (response?.stale) {
-            try {
-                showToast(currentLang === 'en'
-                    ? 'Recommendations changed, refreshing'
-                    : '推荐状态已变化，正在刷新');
-            } catch (_) { }
-            await refreshRecommendCardSurfaces(false);
-        }
-        return response || { success: false, reason: 'no_response' };
-    }
-
-    if (Array.isArray(response.skippedIds)) {
-        skippedBookmarks = new Set(normalizeSkippedBookmarkIds(response.skippedIds));
-    }
-    if (Array.isArray(response.postponed)) {
-        await schedulePostponedExpiryRefresh(normalizePostponedList(response.postponed));
-    }
-    if (response.currentCards && typeof response.currentCards === 'object') {
-        syncRecommendLastUpdatedFromState(response.currentCards);
-        if (Array.isArray(response.currentCards.cardData)) {
-            seedFaviconMemoryFromCardData(response.currentCards.cardData);
-        }
-    }
-
-    return response;
-}
-
-async function refreshRecommendCardSurfaces(force = false) {
-    const normalizedForce = force === true;
-    const tasks = [];
-
-    if (document.getElementById('cardsRow')) {
-        tasks.push(refreshRecommendCards(normalizedForce));
-    }
-
-    if (document.getElementById('widgetsCardsRow')) {
-        tasks.push((async () => {
-            await renderWidgetsRecommendCards({
-                force: normalizedForce,
-                allowDuringInteraction: true,
-                allowBootstrap: false
-            });
-            if (currentView === 'widgets') {
-                applyWidgetsSmartSort();
-            }
-        })());
-    }
-
-    await Promise.all(tasks);
-}
-
-function hydrateRecommendCardsFromCurrentCardsState(state = null) {
-    if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
-        return [];
-    }
-
-    const cardDataMap = new Map();
-    if (Array.isArray(state.cardData)) {
-        state.cardData.forEach((item) => {
-            const id = String(item?.id || '').trim();
-            if (id) cardDataMap.set(id, item);
-        });
-    }
-    if (cardDataMap.size === 0) {
-        return [];
-    }
-
-    const version = getRecommendCurrentCardsVersion(state);
-    return filterStaleForceDueRecommendCards(state.cardIds
-        .map(id => cardDataMap.get(String(id || '').trim()) || null)
-        .filter(Boolean)
-        .map((bookmark) => {
-            const normalized = normalizeRecommendSnapshotCard(bookmark);
-            if (!normalized) return null;
-            return {
-                ...normalized,
-                factors: bookmark?.factors || {},
-                currentCardsVersion: version
-            };
-        })
-        .filter(Boolean)
-    );
-}
-
-function renderRecommendCurrentCardsStateToRows(currentCards, options = {}) {
-    if (!currentCards || typeof currentCards !== 'object') return false;
-
-    const cardsToRender = hydrateRecommendCardsFromCurrentCardsState(currentCards);
-    const flippedIds = Array.isArray(currentCards.flippedIds)
-        ? currentCards.flippedIds.map(id => String(id || '').trim()).filter(Boolean)
-        : [];
-    const flippedSet = new Set(flippedIds);
-    const selectors = Array.isArray(options.selectors) && options.selectors.length > 0
-        ? options.selectors
-        : ['#cardsRow', '#widgetsCardsRow'];
-
-    let rendered = false;
-    selectors.forEach((selector) => {
-        const cardsRow = document.querySelector(selector);
-        if (!cardsRow) return;
-        const slots = cardsRow.querySelectorAll('.recommend-card');
-        if (!slots || slots.length === 0) return;
-
-        slots.forEach((card, index) => {
-            if (index < cardsToRender.length) {
-                const bookmark = cardsToRender[index];
-                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
-            } else {
-                hideUnusedRecommendCardSlot(card);
-            }
-        });
-        rendered = true;
-    });
-
-    if (!rendered) return false;
-
-    recommendCards = cardsToRender.slice();
-    seedFaviconMemoryFromCardData(cardsToRender);
-    syncRecommendLastUpdatedFromState(currentCards);
-
-    try {
-        writeRecommendCardsSnapshot(cardsToRender, flippedIds);
-    } catch (_) { }
-
-    lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
-        recommendCards,
-        flippedIds,
-        currentLang
-    );
-
-    return true;
-}
-
-async function applyRecommendActionCurrentCardsToSurfaces(actionResult, fallbackForce = false) {
-    suppressRecommendCardActionHover(null);
-
-    if (actionResult?.currentCards && typeof actionResult.currentCards === 'object') {
-        markHistoryCurrentCardsSelfWrite(actionResult.currentCards);
-        const applied = renderRecommendCurrentCardsStateToRows(actionResult.currentCards);
-        if (applied) {
-            suppressRecommendCardActionHover(null);
-            return true;
-        }
-    }
-
-    await refreshRecommendCardSurfaces(fallbackForce === true);
-    suppressRecommendCardActionHover(null);
-    return false;
-}
-
-function applyRecommendSnapshotToCardRows(snapshot) {
-    if (!snapshot || !Array.isArray(snapshot.cards) || snapshot.cards.length === 0) return false;
-
-    const flippedSet = new Set(Array.isArray(snapshot.flippedIds) ? snapshot.flippedIds.map(String) : []);
-    const rowSelectors = ['#widgetsCardsRow', '#cardsRow'];
-    let applied = false;
-
-    rowSelectors.forEach((selector) => {
-        const cardsRow = document.querySelector(selector);
-        if (!cardsRow) return;
-        const cards = cardsRow.querySelectorAll('.recommend-card');
-        if (!cards || !cards.length) return;
-
-        cards.forEach((card, index) => {
-            if (index < snapshot.cards.length) {
-                const bookmark = snapshot.cards[index];
-                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark.id)));
-                applied = true;
-            } else {
-                hideUnusedRecommendCardSlot(card);
-            }
-        });
-    });
-
-    if (applied) {
-        recommendCards = snapshot.cards.slice();
-        seedFaviconMemoryFromCardData(snapshot.cards);
-
-        lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
-            recommendCards,
-            Array.from(flippedSet),
-            currentLang
-        );
-    }
-
-    return applied;
-}
-
-function normalizeRecommendCardIdList(ids = []) {
-    return (Array.isArray(ids) ? ids : [])
-        .map(id => String(id || '').trim())
-        .filter(Boolean);
-}
-
-function getRecommendCurrentCardsVersion(state = null) {
-    const version = Number(state?.version || 0);
-    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
-}
-
-function markHistoryCurrentCardsSelfWrite(state = null) {
-    const version = getRecommendCurrentCardsVersion(state);
-    historyLastSelfWriteVersion = version > 0 ? version : 0;
-}
-
-function hasLegacyVersionlessRecommendCurrentCardsState(state = null) {
-    const cardIds = normalizeRecommendCardIdList(state?.cardIds || []);
-    return cardIds.length > 0 && getRecommendCurrentCardsVersion(state) <= 0;
-}
-
-function attachRecommendStateVersionToCards(cards = [], state = null) {
-    const version = getRecommendCurrentCardsVersion(state);
-    return (Array.isArray(cards) ? cards : []).map(card => ({
-        ...card,
-        currentCardsVersion: version
-    }));
-}
-
-function getRecommendActionExpectedVersion(bookmark = null) {
-    const version = Number(
-        bookmark?.currentCardsVersion
-        ?? bookmark?._currentCardsVersion
-        ?? bookmark?.recommendStateVersion
-        ?? 0
-    );
-    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
-}
-
-function normalizeRecommendActionVersionValue(value) {
-    const version = Number(value);
-    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
-}
-
-async function resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, options = {}) {
-    const id = String(bookmarkId || '').trim();
-    if (!id) return null;
-
-    try {
-        const currentCards = await getHistoryCurrentCards();
-        const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
-        if (!currentIds.includes(id)) return null;
-        const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
-        if (currentVersion != null) return currentVersion;
-        if (options?.allowRefresh !== true) return null;
-
-        const backendRound = await selectRecommendCardsRoundShared(true);
-        const refreshedCards = backendRound?.currentCards && typeof backendRound.currentCards === 'object'
-            ? backendRound.currentCards
-            : await getHistoryCurrentCards();
-        const refreshedIds = normalizeRecommendCardIdList(refreshedCards?.cardIds || []);
-        if (!refreshedIds.includes(id)) return null;
-        return normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(refreshedCards));
-    } catch (_) {
-        return null;
-    }
-}
-
-async function resolveRecommendActionExpectedVersion(bookmarkId, bookmark = null, explicitVersion = null) {
-    const explicit = normalizeRecommendActionVersionValue(explicitVersion);
-    if (explicit != null) return explicit;
-
-    const fromBookmark = getRecommendActionExpectedVersion(bookmark);
-    if (fromBookmark != null) return fromBookmark;
-
-    return resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId);
-}
-
-function areRecommendCardIdListsEqual(a = [], b = []) {
-    const listA = normalizeRecommendCardIdList(a);
-    const listB = normalizeRecommendCardIdList(b);
-    if (listA.length !== listB.length) return false;
-    for (let i = 0; i < listA.length; i++) {
-        if (listA[i] !== listB[i]) return false;
-    }
-    return true;
-}
-
-async function hydrateRecommendCardsFromSnapshotForSidePanel() {
-    if (!isSidePanelMode) return false;
-    const snapshot = readRecommendCardsSnapshot();
-    if (!snapshot) return false;
-    try {
-        const currentCards = await getHistoryCurrentCards();
-        if (Array.isArray(currentCards?.cardData)) {
-            seedFaviconMemoryFromCardData(currentCards.cardData);
-        }
-        if (hasLegacyVersionlessRecommendCurrentCardsState(currentCards)) {
-            clearRecommendCardsSnapshot();
-            return false;
-        }
-        const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
-        const snapshotCardIds = normalizeRecommendCardIdList((snapshot.cards || []).map(card => card?.id));
-
-        if (!currentCardIds.length) {
-            clearRecommendCardsSnapshot();
-            return false;
-        }
-        if (!areRecommendCardIdListsEqual(snapshotCardIds, currentCardIds)) {
-            clearRecommendCardsSnapshot();
-            return false;
-        }
-
-        const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(snapshot.cards, currentCards?.cardData);
-        if (mergedSnapshotCards.length > 0) {
-            seedFaviconMemoryFromCardData(mergedSnapshotCards);
-        }
-        const currentFlippedIds = normalizeRecommendCardIdList(currentCards?.flippedIds || []);
-        return applyRecommendSnapshotToCardRows({
-            ...snapshot,
-            cards: attachRecommendStateVersionToCards(
-                mergedSnapshotCards.length > 0 ? mergedSnapshotCards : snapshot.cards,
-                currentCards
-            ),
-            flippedIds: currentFlippedIds
-        });
-    } catch (_) {
-        return false;
-    }
-}
-
-// 获取当前显示的卡片状态（本页面共享）
-async function getHistoryCurrentCards() {
-    return new Promise((resolve) => {
-        browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY], (result) => {
-            resolve(result[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null);
-        });
-    });
-}
-
-async function hasPendingRecommendRoundState() {
-    try {
-        const currentCards = await getHistoryCurrentCards();
-        const cardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
-        if (!cardIds.length) return false;
-
-        const flippedSet = new Set(normalizeRecommendCardIdList(currentCards?.flippedIds || []));
-        return cardIds.some(id => !flippedSet.has(id));
-    } catch (_) {
-        return false;
-    }
-}
-
-// 保存当前显示的卡片状态（本页面共享）
-async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'saveHistoryCurrentCardsState',
-            cardIds: normalizeRecommendCardIdList(cardIds || []),
-            flippedIds: normalizeRecommendCardIdList(flippedIds || []),
-            cardData: Array.isArray(cardData) ? cardData : []
-        });
-
-        if (!response || response.success === false) {
-            return false;
-        }
-
-        const nextCards = response.currentCards;
-        if (nextCards && typeof nextCards === 'object') {
-            syncRecommendLastUpdatedFromState(nextCards);
-            markHistoryCurrentCardsSelfWrite(nextCards);
-        }
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
-
-// 异步获取并保存当前卡片的数据（含priority和favicon）
-async function saveCardFaviconsToStorage(bookmarks) {
-    if (!bookmarks || bookmarks.length === 0) return;
-
-    try {
-        // 获取当前保存的卡片状态
-        const currentCards = await getHistoryCurrentCards();
-        if (!currentCards || !currentCards.cardIds) return;
-
-        // 为每个卡片获取favicon data URL和priority
-        const cardData = await Promise.all(bookmarks.map(async (bookmark) => {
-            if (!bookmark || !bookmark.url) {
-                return { id: bookmark?.id, title: bookmark?.title || bookmark?.name || '', url: null, favicon: null, priority: 0 };
-            }
-            try {
-                const faviconUrl = await FaviconCache.fetch(bookmark.url);
-                const favicon = faviconUrl !== fallbackIcon ? faviconUrl : null;
-                return {
-                    id: bookmark.id,
-                    title: bookmark.title || bookmark.name || '',
-                    url: bookmark.url,
-                    favicon,
-                    faviconUrl: favicon, // 兼容旧字段
-                    priority: bookmark.priority || 0,
-                    forceDue: bookmark.forceDue === true,
-                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
-                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
-                };
-            } catch (e) {
-                return {
-                    id: bookmark.id,
-                    title: bookmark.title || bookmark.name || '',
-                    url: bookmark.url,
-                    favicon: null,
-                    faviconUrl: null,
-                    priority: bookmark.priority || 0,
-                    forceDue: bookmark.forceDue === true,
-                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
-                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
-                };
-            }
-        }));
-
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'updateHistoryCurrentCardData',
-            cardData,
-            expectedVersion: getRecommendCurrentCardsVersion(currentCards)
-        });
-        if (!response || response.success === false) {
-            return;
-        }
-
-        const nextCards = response.currentCards || {
-            ...currentCards,
-            cardData
-        };
-        syncRecommendLastUpdatedFromState(nextCards);
-        markHistoryCurrentCardsSelfWrite(nextCards);
-
-        try {
-            const flippedIds = Array.isArray(nextCards.flippedIds) ? nextCards.flippedIds : [];
-            writeRecommendCardsSnapshot(cardData, flippedIds);
-        } catch (_) { }
-    } catch (error) {
-        // 静默处理错误
-    }
-}
-
-function shouldUseCompactRecommendCardPriority(card) {
-    if (!isSidePanelMode) return false;
-    try {
-        const inWidgets = card?.closest?.('#widgetsCardsRow') || currentView === 'widgets';
-        return Boolean(inWidgets);
-    } catch (_) {
-        return currentView === 'widgets';
-    }
-}
-
-function formatRecommendCardPriority(priority, compact = false) {
-    if (!Number.isFinite(priority)) {
-        return compact ? 'S--' : 'S = --';
-    }
-    return compact
-        ? `S${Number(priority).toFixed(2)}`
-        : `S = ${Number(priority).toFixed(3)}`;
-}
-
-const recommendActionSuppressTimers = new WeakMap();
-
-function blurRecommendCardActionFocus(target = null) {
-    try {
-        const active = document.activeElement;
-        if (!active || typeof active.blur !== 'function') return;
-        const shouldBlur = target
-            ? target.contains(active)
-            : Boolean(active.closest?.('.recommend-card'));
-        if (shouldBlur) {
-            active.blur();
-        }
-    } catch (_) { }
-}
-
-function suppressRecommendCardActionHover(target = null, durationMs = 900) {
-    blurRecommendCardActionFocus(target);
-
-    const rows = new Set();
-    try {
-        const row = target?.closest?.('.cards-row');
-        if (row) rows.add(row);
-    } catch (_) { }
-
-    document.querySelectorAll('#cardsRow, #widgetsCardsRow').forEach((row) => rows.add(row));
-
-    rows.forEach((row) => {
-        if (!row) return;
-        row.classList.add('recommend-actions-suppressed');
-        const existingTimer = recommendActionSuppressTimers.get(row);
-        if (existingTimer) {
-            clearTimeout(existingTimer);
-        }
-        const timer = setTimeout(() => {
-            row.classList.remove('recommend-actions-suppressed');
-            recommendActionSuppressTimers.delete(row);
-        }, durationMs);
-        recommendActionSuppressTimers.set(row, timer);
-    });
-}
-
-// 更新单个卡片显示
-function updateCardDisplay(card, bookmark, isFlipped = false) {
-    const previousBookmarkId = String(card.dataset.bookmarkId || '');
-    const nextBookmarkId = String(bookmark?.id || '');
-    const preserveDebugOpen = Boolean(
-        previousBookmarkId
-        && nextBookmarkId
-        && previousBookmarkId === nextBookmarkId
-        && card.classList.contains('debug-open')
-    );
-
-    card.classList.remove('empty');
-    card.hidden = false;
-    card.classList.remove('is-opening');
-    card.dataset.opening = '0';
-    card.removeAttribute('aria-busy');
-    if (isFlipped) {
-        card.classList.add('flipped');
-    } else {
-        card.classList.remove('flipped');
-    }
-    card.querySelector('.card-title').textContent = bookmark.title || bookmark.name || bookmark.url;
-    const priorityEl = card.querySelector('.card-priority');
-    if (priorityEl) {
-        const compactPriority = shouldUseCompactRecommendCardPriority(card);
-        priorityEl.textContent = formatRecommendCardPriority(bookmark.priority, compactPriority);
-    }
-    card.dataset.url = bookmark.url;
-    card.dataset.bookmarkId = bookmark.id;
-    const currentCardsVersion = getRecommendActionExpectedVersion(bookmark);
-    if (currentCardsVersion != null) {
-        card.dataset.currentCardsVersion = String(currentCardsVersion);
-    } else {
-        delete card.dataset.currentCardsVersion;
-    }
-
-    let dueBadge = card.querySelector('.card-due-badge');
-    if (!dueBadge) {
-        dueBadge = document.createElement('span');
-        dueBadge.className = 'card-due-badge';
-        card.appendChild(dueBadge);
-    }
-
-    const showForceDueBadge = bookmark.forceDue === true
-        && isRecommendBookmarkInPostponedState(bookmark.id || bookmark.bookmarkId);
-    if (showForceDueBadge) {
-        card.classList.add('force-due');
-        dueBadge.textContent = currentLang === 'en' ? 'Due' : '到期';
-        dueBadge.style.display = 'inline-flex';
-    } else {
-        card.classList.remove('force-due');
-        dueBadge.textContent = '';
-        dueBadge.style.display = 'none';
-    }
-
-    // 设置 favicon
-    const favicon = card.querySelector('.card-favicon');
-    if (favicon && bookmark.url) {
-        const cachedFavicon = bookmark.favicon || bookmark.faviconUrl || null;
-        setHighResFavicon(favicon, bookmark.url, cachedFavicon);
-    }
-
-    // 诊断面板（右上角）
-    const debugOverlay = card.querySelector('.recommend-debug');
-    const debugPre = card.querySelector('.recommend-debug-pre');
-    if (!preserveDebugOpen) {
-        card.classList.remove('debug-open');
-        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
-        if (debugPre) debugPre.textContent = '--';
-    } else if (debugOverlay) {
-        debugOverlay.setAttribute('aria-hidden', 'false');
-    }
-
-    const closeDebug = () => {
-        card.classList.remove('debug-open');
-        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
-    };
-
-    const openDebug = async () => {
-        if (!debugOverlay || !debugPre) return;
-        card.classList.add('debug-open');
-        debugOverlay.setAttribute('aria-hidden', 'false');
-        debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
-
-        const cached = getCachedRecommendScoreDebug(bookmark.id);
-        if (cached) {
-            debugPre.textContent = formatRecommendScoreDebugText(cached);
-            if (cached?.factors && typeof cached.factors.S === 'number') {
-                bookmark.priority = cached.factors.S;
-                bookmark.factors = cached.factors;
-            }
-            syncRecommendScoreFromDebug(bookmark.id, cached);
-        } else {
-            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
-        }
-
-        const debug = await getFreshRecommendScoreDebug(bookmark.id);
-        if (!debug) {
-            if (!cached) {
-                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
-            }
-            return;
-        }
-        setCachedRecommendScoreDebug(bookmark.id, debug);
-        debugPre.textContent = formatRecommendScoreDebugText(debug);
-        if (debug?.factors && typeof debug.factors.S === 'number') {
-            bookmark.priority = debug.factors.S;
-            bookmark.factors = debug.factors;
-        }
-        syncRecommendScoreFromDebug(bookmark.id, debug);
-    };
-
-    const debugBtn = card.querySelector('.card-debug-btn');
-    if (debugBtn) {
-        debugBtn.onclick = (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (card.classList.contains('debug-open')) {
-                closeDebug();
-            } else {
-                openDebug();
-            }
-        };
-    }
-
-    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
-    if (debugCloseBtn) {
-        debugCloseBtn.onclick = (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            closeDebug();
-        };
-    }
-
-    // 点击卡片主体：打开链接 + 标记为已翻过 + 记录复习
-    card.onclick = async (e) => {
-        if (e.target.closest('.card-actions')) return;
-        if (e.target.closest('.card-debug-btn')) return;
-        if (e.target.closest('.recommend-debug')) return;
-
-        if (!bookmark.url) return;
-
-        if (card.dataset.opening === '1') {
-            return;
-        }
-
-        const openKey = buildRecommendOpenInFlightKey({
-            bookmarkId: bookmark.id,
-            url: bookmark.url
-        });
-        if (openKey && recommendOpenInFlightKeys.has(openKey)) {
-            return;
-        }
-
-        card.dataset.opening = '1';
-        card.classList.add('is-opening');
-        card.setAttribute('aria-busy', 'true');
-        if (openKey) {
-            recommendOpenInFlightKeys.add(openKey);
-        }
-
-        try {
-            const openResult = await openInRecommendWindow(bookmark.url);
-            if (!openResult || !openResult.success) {
-                const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-
-            const actionResult = await dispatchRecommendCardAction('review', bookmark, {
-                source: 'recommend_card',
-                timestamp: Date.now()
-            });
-            if (!actionResult || actionResult.success === false) {
-                const msg = currentLang === 'en' ? 'Review update failed, please retry' : '复习状态更新失败，请重试';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-            card.classList.add('flipped');
-
-            if (actionResult.changedCurrentCards) {
-                await applyRecommendActionCurrentCardsToSurfaces(actionResult);
-            }
-            if (currentView === 'recommend') {
-                await loadHeatmapData();
-            }
-        } finally {
-            card.dataset.opening = '0';
-            card.classList.remove('is-opening');
-            card.removeAttribute('aria-busy');
-            if (openKey) {
-                recommendOpenInFlightKeys.delete(openKey);
-            }
-        }
-    };
-
-    // 按钮事件：稍后复习
-    const btnLater = card.querySelector('.card-btn-later');
-    if (btnLater) {
-        btnLater.onclick = (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            suppressRecommendCardActionHover(card);
-            showLaterModal(bookmark);
-        };
-    }
-
-    // 按钮事件：跳过本次
-    const btnSkip = card.querySelector('.card-btn-skip');
-    if (btnSkip) {
-        btnSkip.onclick = async (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            suppressRecommendCardActionHover(card);
-
-            const result = await dispatchRecommendCardAction('skip', bookmark, { source: 'recommend_card' });
-            if (!result || result.success === false) {
-                const msg = currentLang === 'en' ? 'Skip failed, please retry' : '跳过失败，请重试';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-            await applyRecommendActionCurrentCardsToSurfaces(result);
-        };
-    }
-
-    // 按钮事件：永久屏蔽
-    const btnBlock = card.querySelector('.card-btn-block');
-    if (btnBlock) {
-        btnBlock.onclick = async (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            suppressRecommendCardActionHover(card);
-            const result = await dispatchRecommendCardAction('block', bookmark, {
-                source: 'recommend_card',
-                scope: 'sameTitle'
-            });
-            if (!result || result.success === false) {
-                const msg = currentLang === 'en' ? 'Block failed, please retry' : '屏蔽失败，请重试';
-                try { showToast(msg); } catch (_) { }
-                return;
-            }
-            await loadBlockedLists();
-            await applyRecommendActionCurrentCardsToSurfaces(result);
-        };
-    }
-}
-
-// 设置卡片为空状态
-function setCardEmpty(card) {
-    card.hidden = false;
-    card.classList.add('empty');
-    card.classList.remove('is-opening');
-    card.dataset.opening = '0';
-    card.removeAttribute('aria-busy');
-    card.classList.remove('force-due');
-    card.querySelector('.card-title').textContent = '--';
-    const priorityEl = card.querySelector('.card-priority');
-    if (priorityEl) {
-        const compactPriority = shouldUseCompactRecommendCardPriority(card);
-        priorityEl.textContent = formatRecommendCardPriority(Number.NaN, compactPriority);
-    }
-    const favicon = card.querySelector('.card-favicon');
-    if (favicon) {
-        favicon.src = fallbackIcon;
-    }
-
-    const dueBadge = card.querySelector('.card-due-badge');
-    if (dueBadge) {
-        dueBadge.textContent = '';
-        dueBadge.style.display = 'none';
-    }
-
-    card.onclick = null;
-
-    const actions = card.querySelector('.card-actions');
-    if (actions) {
-        actions.querySelectorAll('.card-btn').forEach(btn => {
-            btn.onclick = null;
-        });
-    }
-
-    card.classList.remove('debug-open');
-    const debugOverlay = card.querySelector('.recommend-debug');
-    if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
-    const debugPre = card.querySelector('.recommend-debug-pre');
-    if (debugPre) debugPre.textContent = '--';
-    const debugBtn = card.querySelector('.card-debug-btn');
-    if (debugBtn) debugBtn.onclick = null;
-    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
-    if (debugCloseBtn) debugCloseBtn.onclick = null;
-}
-
-function hideUnusedRecommendCardSlot(card) {
-    if (!card) return;
-    setCardEmpty(card);
-    card.hidden = true;
-}
-
-function setRecommendCardsRowEmptyMessage(cards, message) {
-    const slots = Array.from(cards || []);
-    slots.forEach((card, index) => {
-        setCardEmpty(card);
-        card.hidden = index > 0;
-        if (index === 0) {
-            const titleEl = card.querySelector('.card-title');
-            if (titleEl) titleEl.textContent = message || '--';
-        }
-    });
-}
-
-
-
-function getCachedRecommendScoreDebug(bookmarkId) {
-    const entry = recommendScoreDebugCache.get(bookmarkId);
-    if (!entry) return null;
-    if ((Date.now() - entry.time) > RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS) {
-        recommendScoreDebugCache.delete(bookmarkId);
-        return null;
-    }
-    return entry.debug || null;
-}
-
-function setCachedRecommendScoreDebug(bookmarkId, debug) {
-    if (!bookmarkId || !debug) return;
-    recommendScoreDebugCache.set(bookmarkId, { time: Date.now(), debug });
-}
-
-function getFreshRecommendScoreDebug(bookmarkId) {
-    if (!bookmarkId) return Promise.resolve(null);
-    const key = String(bookmarkId);
-    if (recommendScoreDebugInFlight.has(key)) {
-        return recommendScoreDebugInFlight.get(key);
-    }
-    const promise = requestRecommendScoreDebug(key)
-        .catch(() => null)
-        .finally(() => {
-            recommendScoreDebugInFlight.delete(key);
-        });
-    recommendScoreDebugInFlight.set(key, promise);
-    return promise;
-}
-
-function updateRecommendCardScoreDisplay(bookmarkId, newS) {
-    if (!bookmarkId || !Number.isFinite(newS)) return;
-    const id = String(bookmarkId);
-    const cards = document.querySelectorAll(`.recommend-card[data-bookmark-id="${id}"]`);
-    if (!cards || !cards.length) return;
-    cards.forEach((card) => {
-        const priorityEl = card.querySelector('.card-priority');
-        if (priorityEl) {
-            const compactPriority = shouldUseCompactRecommendCardPriority(card);
-            priorityEl.textContent = formatRecommendCardPriority(newS, compactPriority);
-        }
-    });
-}
-
-function syncRecommendScoreFromDebug(bookmarkId, debug, options = {}) {
-    if (!bookmarkId || !debug) return null;
-    const cachedS = (typeof debug?.storage?.cachedEntry?.S === 'number') ? debug.storage.cachedEntry.S : null;
-    const computedS = (typeof debug?.factors?.S === 'number') ? debug.factors.S : null;
-    const nextS = (cachedS != null) ? cachedS : computedS;
-    if (!Number.isFinite(nextS)) return null;
-
-    if (options && options.scoreEl) {
-        try {
-            options.scoreEl.textContent = nextS.toFixed(3);
-        } catch (_) { }
-    }
-
-    updateRecommendCardScoreDisplay(bookmarkId, nextS);
-
-    try {
-        if (typeof window.updateRecommendSearchScoreCache === 'function') {
-            const updated = window.updateRecommendSearchScoreCache(bookmarkId, nextS);
-            if (!updated && typeof window.invalidateRecommendSearchIndex === 'function') {
-                window.invalidateRecommendSearchIndex();
-            }
-        } else if (typeof window.invalidateRecommendSearchIndex === 'function') {
-            window.invalidateRecommendSearchIndex();
-        }
-    } catch (_) { }
-
-    return nextS;
-}
-
-function requestRecommendScoreDebug(bookmarkId) {
-    return new Promise((resolve) => {
-        let done = false;
-        const timer = setTimeout(() => {
-            if (done) return;
-            done = true;
-            resolve(null);
-        }, 3500);
-
-        if (!browserAPI?.runtime?.sendMessage || !bookmarkId) {
-            clearTimeout(timer);
-            resolve(null);
-            return;
-        }
-
-        browserAPI.runtime.sendMessage({ action: 'getBookmarkScoreDebug', bookmarkId }, (response) => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            if (browserAPI.runtime.lastError) {
-                resolve(null);
-            } else if (response?.success && response?.debug) {
-                resolve(response.debug);
-            } else {
-                resolve(null);
-            }
-        });
-    });
-}
-
-function formatRecommendDebugTime(ts) {
-    const t = Number(ts || 0);
-    if (!t) return '--';
-    try {
-        const locale = currentLang === 'en' ? 'en-US' : 'zh-CN';
-        return new Date(t).toLocaleString(locale);
-    } catch (_) {
-        return String(t);
-    }
-}
-
-function formatRecommendScoreDebugText(debug) {
-    const isEn = currentLang === 'en';
-    const lines = [];
-    if (!debug) {
-        return isEn ? 'No debug data.' : '没有诊断数据。';
-    }
-
-    const f = debug.factors || {};
-    const h = debug.matches?.history || {};
-    const t = debug.matches?.tracking || {};
-    const raw = debug.raw || {};
-    const w = debug.weightsUsed || {};
-    const th = debug.config?.thresholds || {};
-    const storage = debug.storage || {};
-    const cachedS = typeof storage.cachedEntry?.S === 'number' ? storage.cachedEntry.S : null;
-
-    const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : '--');
-    const fmtDays = (v) => (typeof v === 'number' ? v.toFixed(2) : '--');
-
-    if (cachedS != null && typeof f.S === 'number') {
-        if (isEn) {
-            lines.push(`S=${cachedS.toFixed(3)} (old)  S=${f.S.toFixed(3)} (new)`);
-        } else {
-            lines.push(`S=${cachedS.toFixed(3)}（旧）  S=${f.S.toFixed(3)}（新）`);
-        }
-    } else {
-        lines.push(`S=${fmt(f.S)}`);
-    }
-    lines.push(`F=${fmt(f.F)} C=${fmt(f.C)} T=${fmt(f.T)} D=${fmt(f.D)} L=${fmt(f.L)} R=${fmt(f.R)}`);
-    lines.push(`AddedΔ=${fmtDays(raw.daysSinceAdded)}d  LastVisitΔ=${fmtDays(raw.daysSinceLastVisit)}d  T(min)=${fmtDays(raw.compositeMinutes)}`);
-    lines.push('');
-
-    lines.push(`History: ${h.type || 'none'}  visits=${h.visitCount ?? 0}  last=${formatRecommendDebugTime(h.lastVisitTime)}`);
-    lines.push(`Tracking: ${t.type || 'none'}  ms=${t.compositeMs ?? 0}${t.ignoredTitleHit ? '  (ignored title hit)' : ''}`);
-    lines.push('');
-
-    lines.push(`WeightsUsed: w1=${fmt(w.w1)} w2=${fmt(w.w2)} w3=${fmt(w.w3)} w4=${fmt(w.w4)} w5=${fmt(w.w5)}`);
-    lines.push(`Thresholds: freshness=${th.freshness ?? '--'} coldness=${th.coldness ?? '--'} shallowRead=${th.shallowRead ?? '--'} forgetting=${th.forgetting ?? '--'}`);
-    lines.push('');
-
-    lines.push(`Cache: mode=${storage.cacheMode || '--'} algo=v${storage.algoVersion || '--'} cachedS=${cachedS == null ? '--' : cachedS.toFixed(3)} time=${storage.recommendScoresTime || 0}`);
-    if (storage.staleMeta?.staleAt) {
-        lines.push(`StaleMeta: at=${formatRecommendDebugTime(storage.staleMeta.staleAt)} reason=${storage.staleMeta.reason || ''}`);
-    }
-
-    if (Array.isArray(debug.notes) && debug.notes.length) {
-        lines.push('');
-        lines.push(isEn ? 'Notes:' : '备注:');
-        debug.notes.forEach((note) => lines.push(`- ${note}`));
-    }
-
-    return lines.join('\n');
-}
-
-// 推荐搜索：二级 UI 预览（不影响推荐卡片）
-let recommendSearchPreviewActive = false;
-let recommendSearchModalItem = null;
-
-async function handleRecommendSearchOpenOnly(item, options = {}) {
-    const closeAfterOpen = options.closeAfterOpen === true;
-    const url = String(item?.url || '').trim();
-
-    if (!url) {
-        return { success: false, reason: 'no-url' };
-    }
-
-    const openResult = await openInRecommendWindow(url);
-    if (!openResult || !openResult.success) {
-        const msg = currentLang === 'en' ? 'Open failed' : '打开失败';
-        try { showToast(msg); } catch (_) { }
-        return { success: false, reason: 'open-failed' };
-    }
-
-    if (closeAfterOpen) {
-        closeRecommendSearchModal();
-    }
-
-    return { success: true, updated: false };
-}
-
-function closeRecommendSearchModal() {
-    const modal = document.getElementById('recommendSearchModal');
-    if (!modal) return;
-    modal.classList.remove('show');
-    recommendSearchPreviewActive = false;
-}
-
-function initRecommendSearchModal() {
-    const modal = document.getElementById('recommendSearchModal');
-    if (!modal || modal.hasAttribute('data-bound')) return;
-    modal.setAttribute('data-bound', 'true');
-
-    const closeBtn = document.getElementById('recommendSearchModalClose');
-    const closeBtn2 = document.getElementById('recommendSearchModalCloseBtn');
-    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
-    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
-    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
-    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
-    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
-    if (closeBtn) closeBtn.addEventListener('click', closeRecommendSearchModal);
-    if (closeBtn2) closeBtn2.addEventListener('click', closeRecommendSearchModal);
-
-    if (laterBtn) {
-        laterBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            const item = recommendSearchModalItem;
-            if (!item) return;
-            closeRecommendSearchModal();
-            showLaterModal(item);
-        });
-    }
-
-    if (skipBtn) {
-        skipBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const item = recommendSearchModalItem;
-            if (!item || !item.id) return;
-
-            const result = await dispatchRecommendCardAction('skip', item, { source: 'recommend_search' });
-            if (result && result.success !== false) {
-                await applyRecommendActionCurrentCardsToSurfaces(result);
-            }
-            closeRecommendSearchModal();
-        });
-    }
-
-    if (blockBtn) {
-        blockBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const item = recommendSearchModalItem;
-            if (!item || !item.id) return;
-            const result = await dispatchRecommendCardAction('block', item, {
-                source: 'recommend_search',
-                scope: 'sameTitle'
-            });
-            if (!result || result.success === false) return;
-            await loadBlockedLists();
-            await applyRecommendActionCurrentCardsToSurfaces(result);
-            closeRecommendSearchModal();
-        });
-    }
-
-    if (reviewBtn) {
-        reviewBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const item = recommendSearchModalItem;
-            if (!item || !item.id) return;
-
-            const result = await dispatchRecommendCardAction('review', item, {
-                source: 'recommend_search_mark_reviewed',
-                timestamp: Date.now()
-            });
-            if (!result || result.success === false) {
-                try {
-                    showToast(currentLang === 'en'
-                        ? 'Review update failed, please retry'
-                        : '复习状态更新失败，请重试');
-                } catch (_) { }
-                return;
-            }
-            if (result.changedCurrentCards) {
-                await applyRecommendActionCurrentCardsToSurfaces(result);
-            }
-            if (currentView === 'recommend') {
-                await loadHeatmapData();
-            }
-            try {
-                if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
-                    window.refreshRecommendSearchIfNeeded();
-                }
-            } catch (_) { }
-            closeRecommendSearchModal();
-        });
-    }
-
-    if (openBtn) {
-        openBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const item = recommendSearchModalItem;
-            if (!item || !item.url) return;
-            await handleRecommendSearchOpenOnly(item, { closeAfterOpen: true });
-        });
-    }
-
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeRecommendSearchModal();
-    });
-}
-
-async function showRecommendSearchResultCard(item) {
-    initRecommendSearchModal();
-    const modal = document.getElementById('recommendSearchModal');
-    if (!modal) return;
-
-    const faviconEl = document.getElementById('recommendSearchModalFavicon');
-    const titleEl = document.getElementById('recommendSearchModalItemTitle');
-    const urlEl = document.getElementById('recommendSearchModalItemUrl');
-    const scoreEl = document.getElementById('recommendSearchModalItemScore');
-    const debugPre = document.getElementById('recommendSearchModalDebugPre');
-    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
-    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
-    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
-    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
-    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
-
-    const bookmarkId = item && (item.id || item.bookmarkId);
-    const priority = (item && Number.isFinite(item.scoreS)) ? item.scoreS
-        : (item && Number.isFinite(item.S)) ? item.S
-            : (item && Number.isFinite(item.priority)) ? item.priority
-                : 0.5;
-
-    const bookmark = {
-        id: bookmarkId,
-        title: item?.title || item?.name || '',
-        name: item?.title || item?.name || '',
-        url: item?.url || '',
-        priority,
-        forceDue: item?.forceDue === true
-    };
-
-    // 如果搜索结果缺失 URL，尝试从书签 API 回填
-    if (bookmarkId && !bookmark.url) {
-        try {
-            const nodes = await browserAPI.bookmarks.get(bookmarkId);
-            const node = Array.isArray(nodes) ? nodes[0] : null;
-            if (node && node.url) {
-                bookmark.url = node.url;
-                if (!bookmark.title) {
-                    bookmark.title = node.title || '';
-                    bookmark.name = node.title || '';
-                }
-            }
-        } catch (_) { }
-    }
-
-    // 尝试补充 factors / S
-    if (bookmarkId) {
-        try {
-            const result = await browserAPI.storage.local.get(['recommend_scores_cache']);
-            const cached = result?.recommend_scores_cache?.[bookmarkId];
-            if (cached && Number.isFinite(cached.S)) {
-                bookmark.priority = cached.S;
-                bookmark.factors = cached;
-                try {
-                    if (typeof window.updateRecommendSearchScoreCache === 'function') {
-                        window.updateRecommendSearchScoreCache(bookmarkId, cached.S);
-                    }
-                } catch (_) { }
-            }
-        } catch (_) { }
-    }
-
-    let isCurrentRecommendCard = false;
-    if (bookmarkId) {
-        try {
-            const currentCards = await getHistoryCurrentCards();
-            const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
-            isCurrentRecommendCard = currentIds.includes(String(bookmarkId));
-            if (isCurrentRecommendCard) {
-                const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
-                if (currentVersion != null) {
-                    bookmark.currentCardsVersion = currentVersion;
-                }
-            }
-        } catch (_) { }
-    }
-
-    if (titleEl) {
-        titleEl.textContent = bookmark.title || (currentLang === 'zh_CN' ? '（无标题）' : '(Untitled)');
-    }
-    if (urlEl) {
-        urlEl.textContent = bookmark.url || '--';
-        if (bookmark.url) {
-            urlEl.setAttribute('href', bookmark.url);
-            urlEl.setAttribute('title', bookmark.url);
-            urlEl.setAttribute('data-skip-global-open-fallback', '1');
-            urlEl.onclick = async (e) => {
-                e.preventDefault();
-                await handleRecommendSearchOpenOnly(bookmark, { closeAfterOpen: false });
-            };
-        } else {
-            urlEl.setAttribute('href', '#');
-            urlEl.removeAttribute('title');
-            urlEl.removeAttribute('data-skip-global-open-fallback');
-            urlEl.onclick = null;
-        }
-    }
-    if (scoreEl) {
-        const scoreValue = Number.isFinite(bookmark.priority) ? bookmark.priority : priority;
-        scoreEl.textContent = Number.isFinite(scoreValue) ? scoreValue.toFixed(3) : '--';
-    }
-    if (faviconEl) {
-        setHighResFavicon(faviconEl, bookmark.url);
-    }
-
-    if (debugPre) {
-        const cached = getCachedRecommendScoreDebug(bookmark.id);
-        if (cached) {
-            debugPre.textContent = formatRecommendScoreDebugText(cached);
-            if (cached?.factors && typeof cached.factors.S === 'number') {
-                bookmark.priority = cached.factors.S;
-                bookmark.factors = cached.factors;
-            }
-            syncRecommendScoreFromDebug(bookmark.id, cached, { scoreEl });
-        } else {
-            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
-        }
-
-        const debug = await getFreshRecommendScoreDebug(bookmark.id);
-        if (!debug) {
-            if (!cached) {
-                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
-            }
-        } else {
-            setCachedRecommendScoreDebug(bookmark.id, debug);
-            debugPre.textContent = formatRecommendScoreDebugText(debug);
-            if (debug?.factors && typeof debug.factors.S === 'number') {
-                bookmark.priority = debug.factors.S;
-                bookmark.factors = debug.factors;
-            }
-            syncRecommendScoreFromDebug(bookmark.id, debug, { scoreEl });
-        }
-    }
-
-    if (openBtn) {
-        openBtn.disabled = !bookmark.url;
-    }
-    if (laterBtn) laterBtn.disabled = !bookmark.id;
-    if (reviewBtn) reviewBtn.disabled = !bookmark.id;
-    if (skipBtn) {
-        skipBtn.disabled = !bookmark.id || !isCurrentRecommendCard;
-        skipBtn.style.display = isCurrentRecommendCard ? '' : 'none';
-    }
-    if (blockBtn) blockBtn.disabled = !bookmark.id;
-
-    recommendSearchModalItem = bookmark;
-
-    modal.classList.add('show');
-    recommendSearchPreviewActive = true;
-}
-
-try {
-    window.showRecommendSearchResultCard = showRecommendSearchResultCard;
-} catch (_) { }
-// 获取已屏蔽书签
-async function getBlockedBookmarks() {
-    try {
-        const result = await browserAPI.storage.local.get(RECOMMEND_BLOCKED_STORAGE_KEY);
-        return normalizeBlockedState(result[RECOMMEND_BLOCKED_STORAGE_KEY]);
-    } catch (e) {
-        console.error('[屏蔽] 获取屏蔽数据失败:', e);
-        return normalizeBlockedState(null);
-    }
-}
-
-async function requestRecommendScoreUpdate(action, payload) {
-    try {
-        const response = await browserAPI.runtime.sendMessage({ action, ...(payload || {}) });
-        if (response && response.success === false) {
-            console.warn('[推荐] S值增量更新失败:', response.error || response);
-            return false;
-        }
-        return true;
-    } catch (e) {
-        console.warn('[推荐] S值增量更新失败:', e);
-        return false;
-    }
-}
-
-function normalizeBlockedListIds(list = []) {
-    return Array.from(new Set(
-        (Array.isArray(list) ? list : [])
-            .map(item => String(item || '').trim())
-            .filter(Boolean)
-    ));
-}
-
-function normalizeBlockedDomainEntry(entry, options = {}) {
-    const modeHint = String(options?.mode || '').trim().toLowerCase();
-    const toBaseEntry = (value) => {
-        const base = getRecommendBaseDomainFromHost(value);
-        return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
-    };
-    const toExactEntry = (value) => normalizeRecommendDomainHost(value);
-
-    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-        const mode = String(entry?.matchMode || entry?.mode || modeHint || RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT).trim().toLowerCase();
-        const raw = String(entry?.domain || entry?.host || entry?.value || '').trim();
-        if (!raw) return '';
-        return mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE
-            ? toBaseEntry(raw)
-            : toExactEntry(raw);
-    }
-
-    const raw = String(entry || '').trim().toLowerCase();
-    if (!raw) return '';
-    if (raw.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
-        return toBaseEntry(raw.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
-    }
-    if (modeHint === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
-        return toBaseEntry(raw);
-    }
-    return toExactEntry(raw);
-}
-
-function normalizeBlockedDomains(domains = []) {
-    return Array.from(new Set(
-        (Array.isArray(domains) ? domains : [])
-            .map(domain => normalizeBlockedDomainEntry(domain))
-            .filter(Boolean)
-    ));
-}
-
-function parseBlockedDomainEntry(entry) {
-    const normalized = normalizeBlockedDomainEntry(entry);
-    if (!normalized) return null;
-
-    if (normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
-        const baseDomain = normalizeRecommendDomainHost(normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
-        if (!baseDomain) return null;
-        return {
-            entry: `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${baseDomain}`,
-            mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE,
-            baseDomain,
-            exactDomain: '',
-            displayDomain: baseDomain
-        };
-    }
-
-    const exactDomain = normalizeRecommendDomainHost(normalized);
-    if (!exactDomain) return null;
-    return {
-        entry: exactDomain,
-        mode: RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT,
-        baseDomain: getRecommendBaseDomainFromHost(exactDomain),
-        exactDomain,
-        displayDomain: exactDomain
-    };
-}
-
-function buildBlockedDomainMatchers(domains = []) {
-    const exact = new Set();
-    const base = new Set();
-    for (const entry of Array.isArray(domains) ? domains : []) {
-        const parsed = parseBlockedDomainEntry(entry);
-        if (!parsed) continue;
-        if (parsed.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
-            base.add(parsed.baseDomain);
-        } else if (parsed.exactDomain) {
-            exact.add(parsed.exactDomain);
-        }
-    }
-    return {
-        exact,
-        base,
-        hasRules: exact.size > 0 || base.size > 0
-    };
-}
-
-function isHostnameBlockedByDomainMatchers(hostname, matchers) {
-    if (!matchers || matchers.hasRules !== true) return false;
-    const exactHost = normalizeRecommendDomainHost(hostname);
-    if (!exactHost) return false;
-    if (matchers.exact?.has(exactHost)) return true;
-    const baseHost = getRecommendBaseDomainFromHost(exactHost);
-    return Boolean(baseHost && matchers.base?.has(baseHost));
-}
-
-function buildBlockedDomainBaseEntry(domain) {
-    const base = getRecommendBaseDomainFromHost(domain);
-    return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
-}
-
-function normalizeRecommendStateVersion(value) {
-    const version = Number(value);
-    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
-}
-
-function attachRecommendListStateVersion(list, version) {
-    const normalized = Array.isArray(list) ? list : [];
-    try {
-        Object.defineProperty(normalized, 'stateVersion', {
-            value: normalizeRecommendStateVersion(version),
-            enumerable: false,
-            configurable: true,
-            writable: true
-        });
-    } catch (_) {
-        normalized.stateVersion = normalizeRecommendStateVersion(version);
-    }
-    return normalized;
-}
-
-function getRecommendStateVersion(source) {
-    return normalizeRecommendStateVersion(
-        source?.version
-        ?? source?.stateVersion
-        ?? source?._version
-        ?? 0
-    );
-}
-
-function normalizeBlockedState(blocked) {
-    const source = blocked && typeof blocked === 'object' ? blocked : {};
-    return {
-        bookmarks: normalizeBlockedListIds(source.bookmarks),
-        folders: normalizeBlockedListIds(source.folders),
-        domains: normalizeBlockedDomains(source.domains),
-        version: getRecommendStateVersion(source)
-    };
-}
-
-function normalizePostponedList(postponed = []) {
-    if (!Array.isArray(postponed)) return [];
-    const byId = new Map();
-
-    for (const item of postponed) {
-        if (!item || item.bookmarkId == null) continue;
-        const bookmarkId = String(item.bookmarkId || '').trim();
-        if (!bookmarkId) continue;
-
-        const normalized = {
-            ...item,
-            bookmarkId
-        };
-
-        if (!byId.has(bookmarkId)) {
-            byId.set(bookmarkId, normalized);
-            continue;
-        }
-
-        const existing = byId.get(bookmarkId);
-        const existingUpdatedAt = Number(existing?.updatedAt || existing?.createdAt || existing?.addedAt || 0);
-        const nextUpdatedAt = Number(normalized?.updatedAt || normalized?.createdAt || normalized?.addedAt || 0);
-        if (nextUpdatedAt >= existingUpdatedAt) {
-            byId.set(bookmarkId, {
-                ...existing,
-                ...normalized,
-                bookmarkId
-            });
-        }
-    }
-
-    return attachRecommendListStateVersion(
-        Array.from(byId.values()),
-        getRecommendStateVersion(postponed)
-    );
-}
-
-async function saveBlockedBookmarks(blockedInput) {
-    const expectedVersion = getRecommendStateVersion(blockedInput);
-    const blocked = normalizeBlockedState(blockedInput);
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'setRecommendBlockedState',
-            blocked,
-            expectedVersion
-        });
-        if (response && response.success) {
-            return normalizeBlockedState(response.blocked || blocked);
-        }
-        if (response && response.stale) {
-            throw new Error(response.reason || 'stale_recommend_state');
-        }
-    } catch (error) {
-        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
-            throw error;
-        }
-    }
-
-    throw new Error('background_unavailable');
-}
-
-async function savePostponedBookmarks(postponedInput) {
-    const expectedVersion = getRecommendStateVersion(postponedInput);
-    const postponed = normalizePostponedList(postponedInput);
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'setRecommendPostponedState',
-            postponed,
-            expectedVersion
-        });
-        if (response && response.success) {
-            return attachRecommendListStateVersion(
-                normalizePostponedList(response.postponed || postponed),
-                response.version
-            );
-        }
-        if (response && response.stale) {
-            throw new Error(response.reason || 'stale_recommend_state');
-        }
-    } catch (error) {
-        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
-            throw error;
-        }
-    }
-
-    throw new Error('background_unavailable');
-}
-
-async function clearFlippedForBookmarkIds(bookmarkIds = []) {
-    const ids = Array.from(new Set(
-        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean)
-    ));
-    if (ids.length === 0) return;
-
-    try {
-        const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
-        const current = normalizeSkippedBookmarkIds(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
-        const removeSet = new Set(ids);
-        const next = current.filter(id => !removeSet.has(id));
-        if (next.length !== current.length) {
-            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: next });
-        }
-    } catch (_) {
-    }
-}
-
-function normalizeRecommendBookmarkIds(bookmarkIds = []) {
-    return Array.from(new Set(
-        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean)
-    ));
-}
-
-async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedInput = null) {
-    const ids = Array.from(new Set(
-        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean)
-    ));
-    if (ids.length === 0) return { allowedIds: [], blockedIds: [] };
-
-    const blocked = normalizeBlockedState(blockedInput);
-    const blockedBookmarkIds = new Set(blocked.bookmarks);
-    const blockedFolderIds = new Set(blocked.folders);
-    const blockedDomainMatchers = buildBlockedDomainMatchers(blocked.domains);
-
-    if (blockedBookmarkIds.size === 0 && blockedFolderIds.size === 0 && blockedDomainMatchers.hasRules !== true) {
-        return { allowedIds: ids, blockedIds: [] };
-    }
-
-    let bookmarkById = new Map();
-    if (blockedFolderIds.size > 0 || blockedDomainMatchers.hasRules === true) {
-        try {
-            const all = await getAllBookmarksFlat();
-            bookmarkById = new Map(
-                all
-                    .map(bookmark => [String(bookmark?.id || '').trim(), bookmark])
-                    .filter(([id]) => Boolean(id))
-            );
-        } catch (_) {
-            bookmarkById = new Map();
-        }
-    }
-
-    const allowedIds = [];
-    const blockedIds = [];
-
-    for (const id of ids) {
-        if (blockedBookmarkIds.has(id)) {
-            blockedIds.push(id);
-            continue;
-        }
-
-        const bookmark = bookmarkById.get(id);
-        const parentId = String(bookmark?.parentId || '').trim();
-        const ancestors = Array.isArray(bookmark?.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
-        const folderBlocked = Boolean(
-            bookmark
-            && blockedFolderIds.size > 0
-            && (
-                (parentId && blockedFolderIds.has(parentId))
-                || ancestors.some(folderId => blockedFolderIds.has(String(folderId || '').trim()))
-            )
-        );
-        if (folderBlocked) {
-            blockedIds.push(id);
-            continue;
-        }
-
-        let domainBlocked = false;
-        if (bookmark?.url && blockedDomainMatchers.hasRules === true) {
-            try {
-                const domainHost = new URL(bookmark.url).hostname || '';
-                domainBlocked = isHostnameBlockedByDomainMatchers(domainHost, blockedDomainMatchers);
-            } catch (_) {
-                domainBlocked = false;
-            }
-        }
-        if (domainBlocked) {
-            blockedIds.push(id);
-            continue;
-        }
-
-        allowedIds.push(id);
-    }
-
-    return { allowedIds, blockedIds };
-}
-
-function collectAddBlockTreeBookmarkIds(nodeKey, state) {
-    const result = [];
-    const visit = (key) => {
-        const node = state?.nodeMap?.get(key);
-        if (!node) return;
-        if (node.kind === 'bookmark') {
-            const id = String(node.id || '').trim();
-            if (id) result.push(id);
-            return;
-        }
-        const childKeys = Array.isArray(node.childKeys) ? node.childKeys : [];
-        childKeys.forEach(visit);
-    };
-    visit(nodeKey);
-    return Array.from(new Set(result));
-}
-
-function sortPostponedByReviewOrder(items = []) {
-    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
-        const aAnchor = Number(a?.dueQueueMovedAt || a?.addedAt || a?.createdAt || 0);
-        const bAnchor = Number(b?.dueQueueMovedAt || b?.addedAt || b?.createdAt || 0);
-        if (aAnchor !== bAnchor) return aAnchor - bAnchor; // 旧 -> 新
-        const aBookmarkId = String(a?.bookmarkId || '');
-        const bBookmarkId = String(b?.bookmarkId || '');
-        return aBookmarkId.localeCompare(bBookmarkId);
-    });
-}
-
-function isPostponedArchiveItem(item, now = Date.now()) {
-    if (!item || item.bookmarkId == null || item.manuallyAdded === true) return false;
-    const postponeUntil = Number(item.postponeUntil || 0);
-    return Number.isFinite(postponeUntil) && postponeUntil > 0 && postponeUntil <= now;
-}
-
-function sortPostponedArchiveOrder(items = []) {
-    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
-        const aAnchor = Number(a?.dueQueueMovedAt || a?.postponeUntil || a?.updatedAt || a?.addedAt || a?.createdAt || 0);
-        const bAnchor = Number(b?.dueQueueMovedAt || b?.postponeUntil || b?.updatedAt || b?.addedAt || b?.createdAt || 0);
-        if (aAnchor !== bAnchor) return bAnchor - aAnchor; // 新 -> 旧
-        const aBookmarkId = String(a?.bookmarkId || '');
-        const bBookmarkId = String(b?.bookmarkId || '');
-        return aBookmarkId.localeCompare(bBookmarkId);
-    });
-}
-
-async function ensureRecommendScoresReadyForView(reason = '') {
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'ensureRecommendScoresReady',
-            reason
-        });
-        return response || { success: false, ready: false };
-    } catch (e) {
-        return {
-            success: false,
-            ready: false,
-            error: e?.message || String(e)
-        };
-    }
-}
-
-function normalizeSkippedBookmarkIds(ids = []) {
-    const list = Array.from(new Set(
-        (Array.isArray(ids) ? ids : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean)
-    ));
-    if (list.length <= RECOMMEND_SKIPPED_MAX_ITEMS) {
-        return list;
-    }
-    return list.slice(list.length - RECOMMEND_SKIPPED_MAX_ITEMS);
-}
-
-async function getSkippedBookmarksPersisted() {
-    try {
-        const result = await browserAPI.storage.local.get([RECOMMEND_SKIPPED_STORAGE_KEY]);
-        const list = normalizeSkippedBookmarkIds(result?.[RECOMMEND_SKIPPED_STORAGE_KEY] || []);
-        return list;
-    } catch (e) {
-        console.warn('[跳过] 读取持久化跳过列表失败:', e);
-        return [];
-    }
-}
-
-async function removeSkippedBookmarkPersisted(bookmarkId) {
-    const id = String(bookmarkId || '').trim();
-    if (!id) return false;
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'removeRecommendSkippedState',
-            bookmarkId: id
-        });
-        if (response && response.success) {
-            const next = normalizeSkippedBookmarkIds(response.skippedIds || []);
-            skippedBookmarks = new Set(next);
-            return true;
-        }
-    } catch (_) { }
-
-    return false;
-}
-
-async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {}) {
-    const ids = Array.from(new Set(
-        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
-            .map(id => String(id || '').trim())
-            .filter(Boolean)
-    ));
-
-    if (ids.length === 0) {
-        return { requested: 0, updated: 0 };
-    }
-
-    const chunkSize = Math.max(20, Math.min(500, Number(options.chunkSize) || 200));
-    let updated = 0;
-
-    for (let i = 0; i < ids.length; i += chunkSize) {
-        const chunk = ids.slice(i, i + chunkSize);
-        const ok = await requestRecommendScoreUpdate('updateBookmarkScoresByIds', { ids: chunk });
-        if (!ok) {
-            for (const bookmarkId of chunk) {
-                await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
-            }
-        }
-
-        updated += chunk.length;
-        if (i + chunkSize < ids.length) {
-            await new Promise(resolve => setTimeout(resolve, 0));
-        }
-    }
-
-    return { requested: ids.length, updated };
-}
-
-async function blockBookmark(bookmarkId) {
-    try {
-        const id = String(bookmarkId || '').trim();
-        if (!id) return false;
-        const postponed = await getPostponedBookmarks();
-        const postponedIds = new Set(postponed.map(item => String(item?.bookmarkId || '').trim()).filter(Boolean));
-        if (postponedIds.has(id)) {
-            return true;
-        }
-        const blocked = await getBlockedBookmarks();
-        if (!blocked.bookmarks.includes(id)) {
-            blocked.bookmarks.push(id);
-            await saveBlockedBookmarks(blocked);
-            await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId: id });
-        }
-        return true;
-    } catch (e) {
-        console.error('[屏蔽] 添加书签失败:', e);
-        return false;
-    }
-}
-
-// 恢复屏蔽的书签
-async function unblockBookmark(bookmarkId) {
-    const result = await unblockBlockedEntries({ bookmarkIds: [bookmarkId] });
-    return result.success === true;
-}
-
-function collectBlockedDomainRemovalEntries(domains = [], currentDomains = []) {
-    const removeSet = new Set();
-    const normalizedCurrentDomains = normalizeBlockedDomains(currentDomains);
-
-    for (const domain of Array.isArray(domains) ? domains : []) {
-        const normalizedRaw = normalizeBlockedDomainEntry(domain);
-        if (!normalizedRaw) continue;
-
-        removeSet.add(normalizedRaw);
-        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
-        if (isExplicitBase) continue;
-
-        const hasExactRule = normalizedCurrentDomains.some(entry => normalizeBlockedDomainEntry(entry) === normalizedRaw);
-        if (!hasExactRule) {
-            const normalizedBase = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
-            if (normalizedBase) removeSet.add(normalizedBase);
-        }
-    }
-
-    return removeSet;
-}
-
-async function unblockBlockedEntries({ bookmarkIds = [], folderIds = [], domains = [] } = {}) {
-    try {
-        const bookmarkRemoveSet = new Set(normalizeRecommendBookmarkIds(bookmarkIds));
-        const folderRemoveSet = new Set(normalizeBlockedListIds(folderIds));
-        const blocked = await getBlockedBookmarks();
-        const domainRemoveSet = collectBlockedDomainRemovalEntries(domains, blocked.domains);
-
-        const removedBookmarkIds = [];
-        const removedFolderIds = [];
-        const removedDomains = [];
-
-        blocked.bookmarks = normalizeBlockedListIds(blocked.bookmarks).filter((id) => {
-            if (bookmarkRemoveSet.has(id)) {
-                removedBookmarkIds.push(id);
-                return false;
-            }
-            return true;
-        });
-
-        blocked.folders = normalizeBlockedListIds(blocked.folders).filter((id) => {
-            if (folderRemoveSet.has(id)) {
-                removedFolderIds.push(id);
-                return false;
-            }
-            return true;
-        });
-
-        blocked.domains = normalizeBlockedDomains(blocked.domains).filter((entry) => {
-            const normalized = normalizeBlockedDomainEntry(entry);
-            if (normalized && domainRemoveSet.has(normalized)) {
-                removedDomains.push(normalized);
-                return false;
-            }
-            return true;
-        });
-
-        const changed = removedBookmarkIds.length > 0 || removedFolderIds.length > 0 || removedDomains.length > 0;
-        if (changed) {
-            await saveBlockedBookmarks(blocked);
-        }
-
-        if (removedBookmarkIds.length > 0) {
-            await requestRecommendScoreUpdatesByIds(removedBookmarkIds, { chunkSize: 200 });
-        }
-        if (removedFolderIds.length > 0) {
-            await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderIds: removedFolderIds });
-        }
-        if (removedDomains.length > 0) {
-            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domains: removedDomains });
-        }
-
-        return {
-            success: true,
-            changed,
-            removedBookmarkIds,
-            removedFolderIds,
-            removedDomains
-        };
-    } catch (e) {
-        console.error('[屏蔽] 批量恢复失败:', e);
-        return {
-            success: false,
-            changed: false,
-            removedBookmarkIds: [],
-            removedFolderIds: [],
-            removedDomains: [],
-            error: e
-        };
-    }
-}
-
-// 获取稍后复习数据
-function syncRecommendPostponedAuthoritativeIds(postponed = []) {
-    recommendPostponedAuthoritativeIds = new Set(
-        normalizePostponedList(postponed)
-            .filter(item => item && item.bookmarkId != null)
-            .map(item => String(item?.bookmarkId || '').trim())
-            .filter(Boolean)
-    );
-    clearRecommendDueBadgesOutsidePostponedState();
-}
-
-function isRecommendBookmarkInPostponedState(bookmarkId) {
-    const id = String(bookmarkId || '').trim();
-    if (!id) return false;
-    if (!recommendPostponedAuthoritativeIds) return false;
-    return recommendPostponedAuthoritativeIds.has(id);
-}
-
-function clearRecommendDueBadgesOutsidePostponedState() {
-    if (!recommendPostponedAuthoritativeIds) return;
-    document.querySelectorAll('.recommend-card.force-due').forEach((card) => {
-        const bookmarkId = String(card?.dataset?.bookmarkId || '').trim();
-        if (bookmarkId && recommendPostponedAuthoritativeIds.has(bookmarkId)) return;
-        card.classList.remove('force-due');
-        const dueBadge = card.querySelector('.card-due-badge');
-        if (dueBadge) {
-            dueBadge.textContent = '';
-            dueBadge.style.display = 'none';
-        }
-    });
-}
-
-function filterStaleForceDueRecommendCards(cards = []) {
-    return (Array.isArray(cards) ? cards : [])
-        .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
-        .slice(0, RECOMMEND_BATCH_SIZE);
-}
-
-async function getPostponedBookmarks() {
-    try {
-        const result = await browserAPI.storage.local.get([
-            RECOMMEND_POSTPONED_STORAGE_KEY,
-            RECOMMEND_POSTPONED_VERSION_STORAGE_KEY
-        ]);
-        const postponed = normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]);
-        syncRecommendPostponedAuthoritativeIds(postponed);
-        return attachRecommendListStateVersion(
-            postponed,
-            result[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]
-        );
-    } catch (e) {
-        console.error('[稍后] 获取稍后复习数据失败:', e);
-        return [];
-    }
-}
-
-async function moveForceDueBookmarkToTail(bookmarkId) {
-    const normalizedId = String(bookmarkId || '').trim();
-    if (!normalizedId) return false;
-
-    try {
-        const postponed = await getPostponedBookmarks();
-        if (!Array.isArray(postponed) || postponed.length === 0) {
-            return false;
-        }
-
-        const now = Date.now();
-        let maxMovedAt = 0;
-        for (const item of postponed) {
-            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
-            if (Number(item.postponeUntil || 0) > now) continue;
-            const movedAt = Number(item.dueQueueMovedAt || 0);
-            if (Number.isFinite(movedAt) && movedAt > maxMovedAt) {
-                maxMovedAt = movedAt;
-            }
-        }
-
-        const target = postponed.find((item) => {
-            if (!item || item.bookmarkId == null || item.manuallyAdded) return false;
-            if (String(item.bookmarkId) !== normalizedId) return false;
-            return Number(item.postponeUntil || 0) <= now;
-        });
-
-        if (!target) {
-            return false;
-        }
-
-        target.dueQueueMovedAt = Math.max(now, maxMovedAt + 1);
-        target.updatedAt = now;
-
-        const nextPostponed = await savePostponedBookmarks(postponed);
-        await schedulePostponedExpiryRefresh(nextPostponed);
-        await removeSkippedBookmarkPersisted(normalizedId);
-        return true;
-    } catch (e) {
-        console.warn('[稍后] 待复习队列后移失败:', e);
-        return false;
-    }
-}
-
-async function schedulePostponedExpiryRefresh(postponedInput = null) {
-    try {
-        if (postponedExpiryRefreshTimer) {
-            clearTimeout(postponedExpiryRefreshTimer);
-            postponedExpiryRefreshTimer = null;
-        }
-
-        const postponed = Array.isArray(postponedInput)
-            ? postponedInput
-            : await getPostponedBookmarks();
-
-        const now = Date.now();
-        let nextExpireAt = Number.POSITIVE_INFINITY;
-
-        for (const item of postponed) {
-            if (!item || item.manuallyAdded) continue;
-            const postponeUntil = Number(item.postponeUntil || 0);
-            if (postponeUntil > now && postponeUntil < nextExpireAt) {
-                nextExpireAt = postponeUntil;
-            }
-        }
-
-        if (!Number.isFinite(nextExpireAt)) {
-            return;
-        }
-
-        const delay = Math.max(150, Math.min(nextExpireAt - now + 80, 2147483647));
-        postponedExpiryRefreshTimer = setTimeout(async () => {
-            postponedExpiryRefreshTimer = null;
-            try {
-                await cleanExpiredPostponed();
-                await loadPostponedList();
-                const shouldForceRefresh = await shouldForceRecommendCardsRefreshFromStorageChange();
-                await refreshRecommendCards(shouldForceRefresh);
-                if (currentView === 'widgets') {
-                    await renderWidgetsRecommendCards({ force: shouldForceRefresh, allowBootstrap: false });
-                    applyWidgetsSmartSort();
-                }
-            } catch (error) {
-                console.warn('[稍后] 到期换卡刷新失败:', error);
-            }
-        }, delay);
-    } catch (error) {
-        console.warn('[稍后] 安排到期刷新失败:', error);
-    }
-}
-
-// 添加稍后复习
-async function postponeBookmark(bookmarkId, delayMs, options = {}) {
-    try {
-        const sourceBookmark = currentLaterBookmark && String(currentLaterBookmark.id || '') === String(bookmarkId || '')
-            ? currentLaterBookmark
-            : { id: bookmarkId };
-        return await dispatchRecommendCardAction('postpone', sourceBookmark, {
-            source: 'later_modal',
-            delayMs,
-            postponePresetKey: options.postponePresetKey
-        });
-    } catch (e) {
-        console.error('[稍后] 推迟书签失败:', e);
-        return { success: false, reason: 'postpone_failed', error: e?.message || String(e) };
-    }
-}
-
-// 取消稍后复习
-async function cancelPostpone(bookmarkId) {
-    const result = await cancelPostponedBookmarks([bookmarkId]);
-    return result.success === true;
-}
-
-async function cancelPostponedBookmarks(bookmarkIds = [], options = {}) {
-    const ids = normalizeRecommendBookmarkIds(bookmarkIds);
-    if (ids.length === 0) {
-        return { success: true, removedIds: [] };
-    }
-
-    try {
-        const postponed = await getPostponedBookmarks();
-        const expectedVersion = getRecommendStateVersion(postponed);
-        const hadManualPostponed = postponed.some(p => p?.manuallyAdded);
-        const removeSet = new Set(ids);
-        const shouldRemove = typeof options.shouldRemove === 'function'
-            ? options.shouldRemove
-            : () => true;
-        const removedIds = [];
-
-        const next = postponed.filter((item) => {
-            const id = String(item?.bookmarkId || '').trim();
-            if (!id || !removeSet.has(id) || !shouldRemove(item)) {
-                return true;
-            }
-            removedIds.push(id);
-            return false;
-        });
-
-        const uniqueRemovedIds = normalizeRecommendBookmarkIds(removedIds);
-        if (uniqueRemovedIds.length === 0) {
-            return { success: true, removedIds: [] };
-        }
-
-        attachRecommendListStateVersion(next, expectedVersion);
-        const nextPostponed = await savePostponedBookmarks(next);
-        syncRecommendPostponedAuthoritativeIds(nextPostponed);
-        await schedulePostponedExpiryRefresh(nextPostponed);
-
-        const hasManualPostponed = nextPostponed.some(p => p?.manuallyAdded);
-        const shouldSkipIncrementalScores = hadManualPostponed && !hasManualPostponed && currentRecommendMode === 'priority';
-        if (options.refreshScores !== false && !shouldSkipIncrementalScores) {
-            await requestRecommendScoreUpdatesByIds(uniqueRemovedIds, { chunkSize: 200 });
-        }
-
-        return { success: true, removedIds: uniqueRemovedIds };
-    } catch (e) {
-        console.error('[稍后] 批量取消推迟失败:', e);
-        return { success: false, removedIds: [], error: e };
-    }
-}
-
-// 清理过期的稍后复习记录
-async function cleanExpiredPostponed() {
-    try {
-        let postponed = await getPostponedBookmarks();
-        const expectedVersion = getRecommendStateVersion(postponed);
-        const before = postponed.length;
-        postponed = postponed.filter(p => p && p.bookmarkId != null);
-        attachRecommendListStateVersion(postponed, expectedVersion);
-        let nextPostponed = postponed;
-        if (postponed.length !== before) {
-            nextPostponed = await savePostponedBookmarks(postponed);
-
-        }
-        await schedulePostponedExpiryRefresh(nextPostponed);
-    } catch (e) {
-        console.error('[稍后] 清理过期记录失败:', e);
-    }
-}
-
-// 稍后复习弹窗相关
-let currentLaterBookmark = null;
-let laterModalActionInFlight = false;
-const LATER_CUSTOM_DEFAULT_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
-
-function getLaterModalActionButtons(modal = null) {
-    const root = modal || document.getElementById('laterModal');
-    if (!root) return [];
-    return Array.from(root.querySelectorAll('#laterModalClose, .later-option, #laterCustomSubmitBtn'));
-}
-
-function setLaterModalBusy(isBusy) {
-    laterModalActionInFlight = isBusy === true;
-    const modal = document.getElementById('laterModal');
-    if (modal) {
-        modal.classList.toggle('is-busy', laterModalActionInFlight);
-        modal.setAttribute('aria-busy', laterModalActionInFlight ? 'true' : 'false');
-    }
-    getLaterModalActionButtons(modal).forEach((button) => {
-        button.disabled = laterModalActionInFlight;
-    });
-    const customInput = document.getElementById('laterCustomDatetime');
-    if (customInput) customInput.disabled = laterModalActionInFlight;
-}
-
-function formatDateTimeLocalValue(timestamp) {
-    const date = new Date(timestamp);
-    if (!Number.isFinite(date.getTime())) return '';
-    const pad = (value) => String(value).padStart(2, '0');
-    const year = date.getFullYear();
-    const month = pad(date.getMonth() + 1);
-    const day = pad(date.getDate());
-    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    const dateText = currentLang === 'zh_CN'
-        ? `${year}-${month}-${day}`
-        : `${month}/${day}/${year}`;
-    return `${dateText} ${time}`;
-}
-
-function parseDateTimeLocalValue(value) {
-    const safeValue = String(value || '').trim();
-    const match = /^(.+?)[ T](\d{1,2}):(\d{2})$/.exec(safeValue);
-    if (!match) return NaN;
-    const dateParts = parseSyncDatePartsByLang(match[1]);
-    if (!dateParts) return NaN;
-    const hours = Number(match[2]);
-    const minutes = Number(match[3]);
-    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-        return NaN;
-    }
-    const date = new Date(dateParts.year, dateParts.month - 1, dateParts.day, hours, minutes, 0, 0);
-    if (
-        date.getFullYear() !== dateParts.year
-        || date.getMonth() + 1 !== dateParts.month
-        || date.getDate() !== dateParts.day
-        || date.getHours() !== hours
-        || date.getMinutes() !== minutes
-    ) {
-        return NaN;
-    }
-    return date.getTime();
-}
-
-function syncLaterModalTexts(options = {}) {
-    const customInput = document.getElementById('laterCustomDatetime');
-    if (customInput) {
-        customInput.type = 'text';
-        customInput.setAttribute('lang', currentLang === 'zh_CN' ? 'zh-CN' : 'en-US');
-        customInput.placeholder = currentLang === 'zh_CN' ? 'YYYY-MM-DD HH:mm' : 'MM/DD/YYYY HH:mm';
-        const currentValueTime = parseDateTimeLocalValue(customInput.value);
-        if (options.resetCustomTime === true || !Number.isFinite(currentValueTime)) {
-            customInput.value = formatDateTimeLocalValue(Date.now() + LATER_CUSTOM_DEFAULT_DELAY_MS);
-        } else {
-            customInput.value = formatDateTimeLocalValue(currentValueTime);
-        }
-    }
-}
-
-function getLaterCustomDelayMs() {
-    const input = document.getElementById('laterCustomDatetime');
-    const value = String(input?.value || '').trim();
-    if (!value) return NaN;
-    const targetTime = parseDateTimeLocalValue(value);
-    if (!Number.isFinite(targetTime)) return NaN;
-    return targetTime - Date.now();
-}
-
-async function submitLaterModalDelay(delayMs, options = {}) {
-    if (laterModalActionInFlight) return;
-
-    const bookmarkId = String(currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || '').trim();
-    if (!bookmarkId) {
-        try {
-            showToast(currentLang === 'en'
-                ? 'No bookmark selected'
-                : '未选择书签');
-        } catch (_) { }
-        return;
-    }
-
-    const safeDelay = Number(delayMs);
-    if (!Number.isFinite(safeDelay) || safeDelay <= 0) {
-        try {
-            showToast(currentLang === 'en'
-                ? 'Invalid postpone time'
-                : '稍后时间无效');
-        } catch (_) { }
-        return;
-    }
-
-    setLaterModalBusy(true);
-    try {
-        const result = await postponeBookmark(bookmarkId, safeDelay, {
-            postponePresetKey: options.postponePresetKey
-        });
-        if (!result || result.success === false) {
-            try {
-                showToast(currentLang === 'en'
-                    ? 'Unable to postpone, please retry'
-                    : '稍后复习失败，请重试');
-            } catch (_) { }
-            return;
-        }
-
-        hideLaterModal({ force: true });
-        await loadPostponedList();
-        await applyRecommendActionCurrentCardsToSurfaces(result);
-    } finally {
-        setLaterModalBusy(false);
-    }
-}
-
-function showLaterModal(bookmark) {
-    initLaterModal();
-
-    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || '').trim();
-    currentLaterBookmark = {
-        ...(bookmark || {}),
-        id: bookmarkId
-    };
-    const modal = document.getElementById('laterModal');
-    if (!modal) return;
-
-    const bookmarkTitleEl = document.getElementById('laterModalBookmarkTitle');
-    if (bookmarkTitleEl) {
-        const title = String(bookmark?.title || bookmark?.name || bookmark?.url || '').trim();
-        bookmarkTitleEl.textContent = title || '--';
-        bookmarkTitleEl.title = title || '';
-    }
-    const bookmarkUrlEl = document.getElementById('laterModalBookmarkUrl');
-    if (bookmarkUrlEl) {
-        const url = String(bookmark?.url || '').trim();
-        bookmarkUrlEl.textContent = url;
-        bookmarkUrlEl.title = url;
-        bookmarkUrlEl.hidden = !url;
-        bookmarkUrlEl.dataset.url = url;
-    }
-
-    syncLaterModalTexts({ resetCustomTime: true });
-    setLaterModalBusy(false);
-    modal.classList.add('show');
-
-}
-
-function hideLaterModal(options = {}) {
-    const force = options?.force === true;
-    if (laterModalActionInFlight && !force) {
-        return false;
-    }
-
-    const modal = document.getElementById('laterModal');
-    if (modal) {
-        modal.classList.remove('show');
-        modal.removeAttribute('aria-busy');
-    }
-    currentLaterBookmark = null;
-    if (!laterModalActionInFlight || !force) {
-        laterModalActionInFlight = false;
-    }
-    return true;
-}
-
-function initLaterModal() {
-    const modal = document.getElementById('laterModal');
-    if (!modal) return;
-    if (modal.hasAttribute('data-bound')) return;
-    modal.setAttribute('data-bound', 'true');
-
-    modal.addEventListener('click', async (e) => {
-        if (e.target === modal) {
-            if (laterModalActionInFlight) return;
-            hideLaterModal();
-            return;
-        }
-
-        if (e.target.closest('#laterModalClose')) {
-            e.preventDefault();
-            if (laterModalActionInFlight) return;
-            hideLaterModal();
-            return;
-        }
-
-        const customSubmitBtn = e.target.closest('#laterCustomSubmitBtn');
-        if (customSubmitBtn) {
-            e.preventDefault();
-            await submitLaterModalDelay(getLaterCustomDelayMs());
-            return;
-        }
-
-        const bookmarkUrlBtn = e.target.closest('#laterModalBookmarkUrl');
-        if (bookmarkUrlBtn) {
-            e.preventDefault();
-            const url = String(bookmarkUrlBtn.dataset.url || '').trim();
-            if (url && typeof window.openBookmarkNewTab === 'function') {
-                await window.openBookmarkNewTab(url, {
-                    title: currentLaterBookmark?.title || currentLaterBookmark?.name || '',
-                    bookmarkId: currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || null,
-                    source: 'later_modal_url'
-                });
-            }
-            return;
-        }
-
-        const option = e.target.closest('.later-option');
-        if (option) {
-            e.preventDefault();
-            await submitLaterModalDelay(Number(option.dataset.delay), {
-                postponePresetKey: option.dataset.presetKey || ''
-            });
-        }
-    });
-}
-
-// =============================================================================
-// 自动刷新设置
-// =============================================================================
-
-const DEFAULT_REFRESH_SETTINGS = {
-    refreshEveryNOpens: 3,      // 默认每3次打开刷新
-    refreshAfterHours: 0,       // 0=禁用
-    refreshAfterDays: 0,        // 0=禁用
-    lastRefreshTime: 0,
-    openCountSinceRefresh: 0,
-    sidePanelOpenCountSinceRefresh: 0
-};
-
-function normalizeRefreshOpenSource(source) {
-    return source === 'sidepanel' ? 'sidepanel' : 'page';
-}
-
-function getRefreshOpenCountField(source) {
-    return normalizeRefreshOpenSource(source) === 'sidepanel'
-        ? 'sidePanelOpenCountSinceRefresh'
-        : 'openCountSinceRefresh';
-}
-
-function getRefreshOpenCount(settings, source) {
-    const field = getRefreshOpenCountField(source);
-    const raw = Number(settings && settings[field]);
-    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-}
-
-function setRefreshOpenCount(settings, source, count) {
-    const field = getRefreshOpenCountField(source);
-    const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
-    settings[field] = safeCount;
-}
-
-async function getRefreshSettings() {
-    try {
-        const result = await browserAPI.storage.local.get(RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY);
-        return { ...DEFAULT_REFRESH_SETTINGS, ...result[RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY] };
-    } catch (e) {
-        console.error('[刷新设置] 读取失败:', e);
-        return { ...DEFAULT_REFRESH_SETTINGS };
-    }
-}
-
-async function saveRefreshSettings(settings) {
-    try {
-        await browserAPI.storage.local.set({ [RECOMMEND_REFRESH_SETTINGS_STORAGE_KEY]: settings });
-
-    } catch (e) {
-        console.error('[刷新设置] 保存失败:', e);
-    }
-}
-
-async function getReviewReminderPopupEnabled() {
-    try {
-        const result = await browserAPI.storage.local.get(RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY);
-        return result?.[RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY] !== false;
-    } catch (e) {
-        console.error('[待复习提醒] 读取失败:', e);
-        return true;
-    }
-}
-
-async function saveReviewReminderPopupEnabled(enabled) {
-    try {
-        await browserAPI.storage.local.set({
-            [RECOMMEND_REVIEW_REMINDER_ENABLED_STORAGE_KEY]: enabled === true
-        });
-    } catch (e) {
-        console.error('[待复习提醒] 保存失败:', e);
-    }
-}
-
-// checkAutoRefresh 已移除：S值通过增量更新机制保持最新，不再需要定时全量重算
-// 保留刷新设置UI用于记录上次刷新时间
-
-function showRefreshSettingsModal() {
-    initRefreshSettingsModal();
-    const modal = document.getElementById('refreshSettingsModal');
-    if (!modal) return;
-
-    loadRefreshSettingsToUI();
-    modal.classList.add('show');
-    startShortcutsLiveSync();
-}
-
-function hideRefreshSettingsModal() {
-    const modal = document.getElementById('refreshSettingsModal');
-    if (modal) {
-        modal.classList.remove('show');
-    }
-    stopShortcutsLiveSyncIfIdle();
-}
-
-function setRefreshQuickReviewModeButtons(mode) {
-    const normalized = normalizeQuickReviewOpenMode(mode);
-    const singleBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
-    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
-
-    if (singleBtn) {
-        const active = normalized !== 'new_tab';
-        singleBtn.classList.toggle('active', active);
-        singleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    }
-
-    if (newTabBtn) {
-        const active = normalized === 'new_tab';
-        newTabBtn.classList.toggle('active', active);
-        newTabBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    }
-}
-
-function getRefreshQuickReviewModeFromUI() {
-    const newTabBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
-    if (newTabBtn && newTabBtn.classList.contains('active')) {
-        return 'new_tab';
-    }
-    return 'single_tab';
-}
-
-async function loadRefreshSettingsToUI() {
-    const settings = await getRefreshSettings();
-    const reminderEnabled = await getReviewReminderPopupEnabled();
-
-    // 每N次打开
-    const everyNEnabled = document.getElementById('refreshEveryNOpensEnabled');
-    const everyNValue = document.getElementById('refreshEveryNOpensValue');
-    if (everyNEnabled) everyNEnabled.checked = settings.refreshEveryNOpens > 0;
-    if (everyNValue) everyNValue.value = settings.refreshEveryNOpens || 3;
-
-    // 超过X小时
-    const hoursEnabled = document.getElementById('refreshAfterHoursEnabled');
-    const hoursValue = document.getElementById('refreshAfterHoursValue');
-    if (hoursEnabled) hoursEnabled.checked = settings.refreshAfterHours > 0;
-    if (hoursValue) hoursValue.value = settings.refreshAfterHours || 1;
-
-    // 超过X天
-    const daysEnabled = document.getElementById('refreshAfterDaysEnabled');
-    const daysValue = document.getElementById('refreshAfterDaysValue');
-    if (daysEnabled) daysEnabled.checked = settings.refreshAfterDays > 0;
-    if (daysValue) daysValue.value = settings.refreshAfterDays || 1;
-
-    setRefreshQuickReviewModeButtons(readQuickReviewOpenMode());
-    updateQuickReviewShortcutDisplay();
-
-    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
-    if (reminderEnabledInput) reminderEnabledInput.checked = reminderEnabled;
-
-    // 更新状态显示
-    updateRefreshSettingsStatus(settings);
-}
-
-async function saveRefreshSettingsFromUI() {
-    const settings = await getRefreshSettings();
-
-    // 每N次打开
-    const everyNEnabled = document.getElementById('refreshEveryNOpensEnabled');
-    const everyNValue = document.getElementById('refreshEveryNOpensValue');
-    settings.refreshEveryNOpens = everyNEnabled?.checked ? parseInt(everyNValue?.value) || 3 : 0;
-
-    // 超过X小时
-    const hoursEnabled = document.getElementById('refreshAfterHoursEnabled');
-    const hoursValue = document.getElementById('refreshAfterHoursValue');
-    settings.refreshAfterHours = hoursEnabled?.checked ? parseInt(hoursValue?.value) || 1 : 0;
-
-    // 超过X天
-    const daysEnabled = document.getElementById('refreshAfterDaysEnabled');
-    const daysValue = document.getElementById('refreshAfterDaysValue');
-    settings.refreshAfterDays = daysEnabled?.checked ? parseInt(daysValue?.value) || 1 : 0;
-
-    await saveRefreshSettings(settings);
-    const reminderEnabledInput = document.getElementById('reviewReminderPopupEnabled');
-    await saveReviewReminderPopupEnabled(reminderEnabledInput?.checked === true);
-    quickReviewOpenMode = writeQuickReviewOpenMode(getRefreshQuickReviewModeFromUI());
-    hideRefreshSettingsModal();
-}
-
-function updateRefreshSettingsStatus(settings) {
-    const statusEl = document.getElementById('refreshSettingsStatus');
-    if (!statusEl) return;
-
-    const isZh = currentLang !== 'en';
-    const parts = [];
-
-    // 上次刷新时间
-    if (settings.lastRefreshTime > 0) {
-        const elapsed = Date.now() - settings.lastRefreshTime;
-        const minutes = Math.floor(elapsed / 60000);
-        const hours = Math.floor(elapsed / 3600000);
-        const days = Math.floor(elapsed / 86400000);
-
-        let timeStr;
-        if (days > 0) {
-            timeStr = isZh ? `${days} 天前` : `${days} day${days > 1 ? 's' : ''} ago`;
-        } else if (hours > 0) {
-            timeStr = isZh ? `${hours} 小时前` : `${hours} hour${hours > 1 ? 's' : ''} ago`;
-        } else {
-            timeStr = isZh ? `${minutes} 分钟前` : `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
-        }
-        parts.push(isZh ? `上次刷新: ${timeStr}` : `Last refresh: ${timeStr}`);
-    } else {
-        parts.push(isZh ? '尚未刷新' : 'Not refreshed yet');
-    }
-
-    // 打开次数
-    if (settings.refreshEveryNOpens > 0) {
-        const source = isSidePanelMode ? 'sidepanel' : 'page';
-        const count = getRefreshOpenCount(settings, source);
-        if (source === 'sidepanel') {
-            parts.push(isZh
-                ? `侧边栏已打开 ${count} / ${settings.refreshEveryNOpens} 次`
-                : `Side panel opened ${count} / ${settings.refreshEveryNOpens} times`);
-        } else {
-            parts.push(isZh
-                ? `已打开 ${count} / ${settings.refreshEveryNOpens} 次`
-                : `Opened ${count} / ${settings.refreshEveryNOpens} times`);
-        }
-    }
-
-    statusEl.textContent = parts.join(' | ');
-}
-
-function initRefreshSettingsModal() {
-    const modal = document.getElementById('refreshSettingsModal');
-    if (!modal) return;
-    if (modal.dataset.bound === 'true') return;
-    modal.dataset.bound = 'true';
-
-    // 关闭按钮
-    const closeBtn = document.getElementById('refreshSettingsClose');
-    if (closeBtn) {
-        closeBtn.onclick = hideRefreshSettingsModal;
-    }
-
-    // 点击背景关闭
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            hideRefreshSettingsModal();
-        }
-    };
-
-    // 保存按钮
-    const saveBtn = document.getElementById('refreshSettingsSaveBtn');
-    if (saveBtn) {
-        saveBtn.onclick = saveRefreshSettingsFromUI;
-    }
-
-    const openShortcutsBtn = document.getElementById('refreshQuickReviewOpenShortcutsBtn');
-    if (openShortcutsBtn) {
-        openShortcutsBtn.onclick = () => {
-            openBrowserShortcutsSettingsPage();
-        };
-    }
-
-    const singleModeBtn = document.getElementById('refreshQuickReviewModeSingleBtn');
-    const newTabModeBtn = document.getElementById('refreshQuickReviewModeNewTabBtn');
-    if (singleModeBtn) {
-        singleModeBtn.onclick = () => setRefreshQuickReviewModeButtons('single_tab');
-    }
-    if (newTabModeBtn) {
-        newTabModeBtn.onclick = () => setRefreshQuickReviewModeButtons('new_tab');
-    }
-}
-
-function initBrowsingCalibrationMenu() {
-    const mainBtn = document.getElementById('browsingCalibrationBtn');
-    if (!mainBtn) return;
-    if (mainBtn.hasAttribute('data-calibration-bound')) return;
-    mainBtn.setAttribute('data-calibration-bound', 'true');
-
-    mainBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        showBrowsingCalibrationSettingsModal();
-    });
-
-    initBrowsingCalibrationSettingsModal();
-}
-
-async function updateBrowsingHistoryStatsUI() {
-    const daysEl = document.getElementById('dbStatsDays');
-    const countEl = document.getElementById('dbStatsCount');
-    const sizeEl = document.getElementById('dbStatsSize');
-    if (!daysEl || !countEl || !sizeEl) return;
-
-    try {
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ action: 'getBrowsingHistoryStats' }, (response) => {
-                if (response && response.success) {
-                    daysEl.textContent = `${response.daysCount || 0} 天`;
-                    countEl.textContent = `${response.recordsCount || 0} 条`;
-                    const sizeMB = ((response.estimatedBytes || 0) / (1024 * 1024)).toFixed(2);
-                    sizeEl.textContent = `${sizeMB} MB`;
-                } else {
-                    daysEl.textContent = '读取失败';
-                    countEl.textContent = '读取失败';
-                    sizeEl.textContent = '读取失败';
-                }
-            });
-        }
-    } catch (e) {
-        console.warn('[Calibration] 载入统计失败:', e);
-    }
-}
-
-function showBrowsingCalibrationSettingsModal() {
-    const panel = document.getElementById('browsingCalibrationSettingsPanel');
-    if (!panel) return;
-    loadBrowsingCalibrationSettingsToUI();
-    panel.hidden = false;
-    updateBrowsingCalibrationCounts();
-    updateBrowsingHistoryStatsUI();
-    try {
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } catch (_) { }
-}
-
-function hideBrowsingCalibrationSettingsModal() {
-    const panel = document.getElementById('browsingCalibrationSettingsPanel');
-    if (panel) {
-        panel.hidden = true;
-    }
-}
-
-async function loadBrowsingCalibrationSettingsToUI() {
-    const settings = await getBrowsingCalibrationSettings();
-
-    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
-    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
-    if (deleteEnabled) deleteEnabled.checked = settings.deleteThreshold > 0;
-    if (deleteValue) {
-        deleteValue.value = settings.deleteThreshold > 0
-            ? settings.deleteThreshold
-            : BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold;
-    }
-
-    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
-    const openValue = document.getElementById('browsingCalibrationOpenValue');
-    if (openEnabled) openEnabled.checked = settings.openThreshold > 0;
-    if (openValue) {
-        openValue.value = settings.openThreshold > 0
-            ? settings.openThreshold
-            : BROWSING_CALIBRATION_RECOMMENDED.openThreshold;
-    }
-
-    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
-    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
-    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
-    if (scheduleEnabled) scheduleEnabled.checked = settings.scheduledCalibrationEnabled !== false;
-    if (scheduleTime) scheduleTime.value = normalizeBrowsingCalibrationTime(settings.scheduledCalibrationTime);
-    if (idleEnabled) idleEnabled.checked = settings.scheduledCalibrationRequireIdle === true;
-    updateBrowsingCalibrationCounts();
-}
-
-async function saveBrowsingCalibrationSettingsFromUI() {
-    const settings = await getBrowsingCalibrationSettings();
-
-    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
-    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
-    settings.deleteThreshold = deleteEnabled?.checked
-        ? Math.max(1, parseInt(deleteValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.deleteThreshold)
-        : 0;
-
-    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
-    const openValue = document.getElementById('browsingCalibrationOpenValue');
-    settings.openThreshold = openEnabled?.checked
-        ? Math.max(1, parseInt(openValue?.value, 10) || BROWSING_CALIBRATION_RECOMMENDED.openThreshold)
-        : 0;
-    delete settings.clickThreshold;
-
-    const scheduleEnabled = document.getElementById('browsingCalibrationScheduleEnabled');
-    const scheduleTime = document.getElementById('browsingCalibrationScheduleTime');
-    const idleEnabled = document.getElementById('browsingCalibrationIdleEnabled');
-    settings.scheduledCalibrationEnabled = scheduleEnabled?.checked !== false;
-    settings.scheduledCalibrationTime = normalizeBrowsingCalibrationTime(scheduleTime?.value || DEFAULT_BROWSING_CALIBRATION_SETTINGS.scheduledCalibrationTime);
-    settings.scheduledCalibrationRequireIdle = idleEnabled?.checked === true;
-
-    await saveBrowsingCalibrationSettings(settings);
-    hideBrowsingCalibrationSettingsModal();
-
-    if (typeof showToast === 'function') {
-        const msg = currentLang === 'zh_CN' ? '自动校准设置已保存' : 'Calibration settings saved';
-        showToast(msg, 2000);
-    }
-}
-
-function initBrowsingCalibrationSettingsModal() {
-    const panel = document.getElementById('browsingCalibrationSettingsPanel');
-    if (!panel) return;
-    if (panel.hasAttribute('data-calibration-settings-bound')) return;
-    panel.setAttribute('data-calibration-settings-bound', 'true');
-
-    const closeBtn = document.getElementById('browsingCalibrationSettingsClose');
-    if (closeBtn) {
-        closeBtn.onclick = hideBrowsingCalibrationSettingsModal;
-    }
-
-    const manualBtn = document.getElementById('browsingCalibrationManualActionBtn');
-    if (manualBtn) {
-        manualBtn.onclick = async () => {
-            manualBtn.disabled = true;
-            const ok = await runBrowsingCalibration({ reason: 'manual', showToast: true });
-            manualBtn.disabled = false;
-            if (ok) {
-                updateBrowsingHistoryStatsUI();
-                // 刷新历史图表页面
-                if (typeof refreshBrowsingHistoryFromCache === 'function') {
-                    refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
-                }
-            }
-        };
-    }
-
-    const saveBtn = document.getElementById('browsingCalibrationSettingsSaveBtn');
-    if (saveBtn) {
-        saveBtn.onclick = saveBrowsingCalibrationSettingsFromUI;
-    }
-
-    const purgeInfoBtn = document.getElementById('historyPurgeInfoBtn');
-    const purgeInfoPanel = document.getElementById('historyPurgeInfoPanel');
-    if (purgeInfoBtn && purgeInfoPanel) {
-        purgeInfoBtn.onclick = () => {
-            const nextHidden = !purgeInfoPanel.hidden;
-            purgeInfoPanel.hidden = nextHidden;
-            purgeInfoBtn.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
-        };
-    }
-
-    const deleteValue = document.getElementById('browsingCalibrationDeleteValue');
-    if (deleteValue) {
-        deleteValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
-    }
-    const openValue = document.getElementById('browsingCalibrationOpenValue');
-    if (openValue) {
-        openValue.addEventListener('input', () => updateBrowsingCalibrationCounts());
-    }
-    const deleteEnabled = document.getElementById('browsingCalibrationDeleteEnabled');
-    if (deleteEnabled) {
-        deleteEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
-    }
-    const openEnabled = document.getElementById('browsingCalibrationOpenEnabled');
-    if (openEnabled) {
-        openEnabled.addEventListener('change', () => updateBrowsingCalibrationCounts());
-    }
-
-    const purgeBtn = document.getElementById('historyPurgeBtn');
-    if (purgeBtn) {
-        purgeBtn.onclick = async () => {
-            const rangeSelect = document.getElementById('historyPurgeRange');
-            const range = rangeSelect ? rangeSelect.value : '';
-
-            const purgeRangeOptions = {
-                keep_2years: {
-                    days: 730,
-                    zh: '2年前的本地记录',
-                    en: 'local records older than 2 years'
-                },
-                keep_1year: {
-                    days: 365,
-                    zh: '1年前的本地记录',
-                    en: 'local records older than 1 year'
-                },
-                keep_180days: {
-                    days: 180,
-                    zh: '180天前的本地记录',
-                    en: 'local records older than 180 days'
-                },
-                keep_90days: {
-                    days: 90,
-                    zh: '90天前的本地记录',
-                    en: 'local records older than 90 days'
-                }
-            };
-            const purgeOption = purgeRangeOptions[range];
-            if (!purgeOption) {
-                if (typeof showToast === 'function') {
-                    showToast(currentLang === 'zh_CN' ? '未选择需要清理的范围' : 'No purge range selected', 2000);
-                }
-                return;
-            }
-
-            const now = Date.now();
-            let cutoffDateKey = null;
-            const rangeText = currentLang === 'zh_CN' ? purgeOption.zh : purgeOption.en;
-            const date = new Date(now - purgeOption.days * 24 * 60 * 60 * 1000);
-            cutoffDateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-
-            const confirmMsg = currentLang === 'zh_CN' 
-                ? `确定要清理扩展本地记录库中${rangeText}吗？此操作不可逆，但不会删除浏览器自身的历史记录。`
-                : `Clean ${rangeText} from the extension's local database? This cannot be undone, but it will not delete browser history.`;
-            
-            if (!confirm(confirmMsg)) return;
-
-            purgeBtn.disabled = true;
-            const originalText = purgeBtn.textContent;
-            purgeBtn.textContent = currentLang === 'zh_CN' ? '清理中...' : 'Purging...';
-
-            try {
-                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-                    chrome.runtime.sendMessage({ 
-                        action: 'purgeBrowsingHistoryCache', 
-                        payload: { cutoffDateKey } 
-                    }, async (response) => {
-                        purgeBtn.disabled = false;
-                        purgeBtn.textContent = originalText;
-                        if (response && response.success) {
-                            const successMsg = currentLang === 'zh_CN'
-                                ? `清理成功！共删除 ${response.deletedCount || 0} 条记录。`
-                                : `Purged successfully! Deleted ${response.deletedCount || 0} records.`;
-                            if (typeof showToast === 'function') {
-                                showToast(successMsg, 3000);
-                            }
-                            updateBrowsingHistoryStatsUI();
-                            
-                            // 刷新历史图表页面
-                            if (typeof refreshBrowsingHistoryFromCache === 'function') {
-                                refreshBrowsingHistoryFromCache({ silent: true }).catch(() => {});
-                            }
-                        } else {
-                            if (typeof showToast === 'function') {
-                                showToast(currentLang === 'zh_CN' ? '清理失败' : 'Purge failed', 2000);
-                            }
-                        }
-                    });
-                }
-            } catch (err) {
-                purgeBtn.disabled = false;
-                purgeBtn.textContent = originalText;
-                console.warn('[Purge] 发生异常:', err);
-            }
-        };
-    }
-}
-
-let addBlockDomainSelected = new Set();
-let addBlockDomainData = [];
-
-// 初始化添加域名弹窗（旧：已屏蔽域名子项 +）
-function initAddDomainModal() {
-    const modal = document.getElementById('addDomainModal');
-    if (!modal) return;
-
-    const closeBtn = document.getElementById('addDomainModalClose');
-    const cancelBtn = document.getElementById('addDomainCancelBtn');
-    const confirmBtn = document.getElementById('addDomainConfirmBtn');
-    const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
-
-    const hideModal = () => {
-        modal.classList.remove('show');
-        if (searchInput) searchInput.value = '';
-    };
-
-    const localRoot = getBlockUnifiedDomRoot(modal);
-    const searchInputInsideModal = localRoot.querySelector('#addBlockLegacyDomainSearchInput');
-    const listElInsideModal = localRoot.querySelector('#addBlockLegacyDomainList');
-    const selectedCountInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedCount');
-    const selectedTextInsideModal = localRoot.querySelector('#addBlockLegacyDomainSelectedText');
-    if (selectedTextInsideModal) {
-        selectedTextInsideModal.textContent = i18n.addDomainSelectedText[currentLang];
-    }
-
-    if (closeBtn) closeBtn.onclick = hideModal;
-    if (cancelBtn) cancelBtn.onclick = hideModal;
-
-    modal.onclick = (e) => {
-        if (e.target === modal) hideModal();
-    };
-
-    // 搜索输入
-    let searchTimer = null;
-    if (searchInputInsideModal) {
-        searchInputInsideModal.oninput = () => {
-            clearTimeout(searchTimer);
-            searchTimer = setTimeout(() => {
-                filterBlockDomainList(searchInputInsideModal.value);
-            }, 200);
-        };
-        // Allow Enter to confirm
-        searchInputInsideModal.onkeypress = (e) => {
-            if (e.key === 'Enter') confirmBtn.click();
-        };
-    }
-
-    if (confirmBtn) {
-        confirmBtn.onclick = async () => {
-            const selectedDomains = Array.from(addBlockDomainSelected);
-
-            // Allow manual entry if not in list
-            const inputVal = searchInputInsideModal ? searchInputInsideModal.value.trim() : '';
-            if (inputVal && !addBlockDomainSelected.has(inputVal)) {
-                if (inputVal.includes('.') || inputVal.includes('localhost')) {
-                    selectedDomains.push(buildBlockedDomainBaseEntry(inputVal));
-                }
-            }
-
-            if (selectedDomains.length > 0) {
-                await blockDomains(selectedDomains);
-                hideModal();
-                await loadBlockedLists();
-                await refreshRecommendCards();
-            } else {
-                const isZh = currentLang === 'zh_CN';
-                alert(isZh ? '请选择或输入要屏蔽的域名' : 'Please select or enter a domain to block');
-            }
-        };
-    }
-}
-
-// 初始化选择文件夹弹窗
-function initSelectFolderModal() {
-    const modal = document.getElementById('selectFolderModal');
-    if (!modal) return;
-
-    const closeBtn = document.getElementById('selectFolderModalClose');
-
-    const hideModal = () => {
-        modal.classList.remove('show');
-    };
-
-    if (closeBtn) closeBtn.onclick = hideModal;
-
-    modal.onclick = (e) => {
-        if (e.target === modal) hideModal();
-    };
-}
-
-// 显示添加域名弹窗
-async function showAddDomainModal() {
-    const modal = document.getElementById('addDomainModal');
-    if (modal) {
-        addBlockDomainSelected.clear();
-        updateBlockDomainCount();
-        const searchInput = document.getElementById('addBlockLegacyDomainSearchInput');
-        if (searchInput) {
-            searchInput.value = '';
-            searchInput.focus();
-        }
-
-        modal.classList.add('show');
-        await loadBlockDomainList();
-    }
-}
-
-// 加载屏蔽域名列表
-async function loadBlockDomainList() {
-    const modal = document.getElementById('addDomainModal');
-    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
-    if (!listEl) return;
-
-    const isZh = currentLang === 'zh_CN';
-    listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载中...' : 'Loading...'}</div>`;
-
-    try {
-        const allBookmarks = await getAllBookmarksFlat();
-        const blocked = await getBlockedBookmarks();
-        const blockedDomains = new Set(
-            (blocked.domains || [])
-                .map(d => parseBlockedDomainEntry(d))
-                .filter(entry => entry?.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE)
-                .map(entry => entry.entry)
-                .filter(Boolean)
-        );
-
-        const domainMap = new Map();
-        for (const b of allBookmarks) {
-            if (!b.url) continue;
-            try {
-                const url = new URL(b.url);
-                const domain = getRecommendBaseDomainFromHost(url.hostname);
-                if (!domainMap.has(domain)) {
-                    domainMap.set(domain, { count: 0 });
-                }
-                domainMap.get(domain).count++;
-            } catch { }
-        }
-
-        const validDomains = [];
-        for (const [domain, data] of domainMap.entries()) {
-            if (!blockedDomains.has(buildBlockedDomainBaseEntry(domain))) {
-                validDomains.push([domain, data]);
-            }
-        }
-
-        addBlockDomainData = validDomains.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || ''), 'en', { sensitivity: 'base' }));
-        renderBlockDomainList(addBlockDomainData);
-
-    } catch (e) {
-        console.error('Failed to load domains', e);
-        const isZh = currentLang === 'zh_CN';
-        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载失败' : 'Failed to load'}</div>`;
-    }
-}
-
-// 渲染屏蔽域名列表
-function renderBlockDomainList(domains) {
-    const modal = document.getElementById('addDomainModal');
-    const listEl = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainList');
-    if (!listEl) return;
-
-    const displayDomains = domains.slice(0, 100);
-    const isZh = currentLang === 'zh_CN';
-
-    if (displayDomains.length === 0) {
-        listEl.innerHTML = `<div class="add-results-empty">${isZh ? '没有可屏蔽的新域名' : 'No new domains to block'}</div>`;
-        return;
-    }
-
-    listEl.innerHTML = displayDomains.map(([domain, data]) => {
-        const domainUrl = getRecommendDomainFaviconUrl(domain);
-        return `
-        <div class="add-domain-item ${addBlockDomainSelected.has(domain) ? 'selected' : ''}" data-domain="${escapeHtml(domain)}">
-            <input type="checkbox" ${addBlockDomainSelected.has(domain) ? 'checked' : ''}>
-            <div class="add-domain-info">
-                <div class="add-domain-title-row">
-                    <img class="add-domain-favicon" data-bookmark-url="${escapeHtml(domainUrl)}" src="${getFaviconUrl(domainUrl)}" alt="">
-                    <div class="add-domain-name">${escapeHtml(domain)}</div>
-                </div>
-                <div class="add-domain-count">${data.count} ${isZh ? '个书签' : 'bookmarks'}</div>
-            </div>
-        </div>
-    `;
-    }).join('');
-
-    listEl.querySelectorAll('.add-domain-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const domain = item.dataset.domain;
-            const checkbox = item.querySelector('input[type="checkbox"]');
-            if (addBlockDomainSelected.has(domain)) {
-                addBlockDomainSelected.delete(domain);
-                item.classList.remove('selected');
-                checkbox.checked = false;
-            } else {
-                addBlockDomainSelected.add(domain);
-                item.classList.add('selected');
-                checkbox.checked = true;
-            }
-            updateBlockDomainCount();
-        });
-    });
-}
-
-// 过滤屏蔽域名列表
-function filterBlockDomainList(keyword) {
-    if (!keyword.trim()) {
-        renderBlockDomainList(addBlockDomainData);
-        return;
-    }
-    const keywordLower = keyword.toLowerCase();
-    const filtered = addBlockDomainData.filter(([domain]) =>
-        domain.toLowerCase().includes(keywordLower)
-    );
-    renderBlockDomainList(filtered);
-}
-
-// 更新选中数量
-function updateBlockDomainCount() {
-    const modal = document.getElementById('addDomainModal');
-    const el = getBlockUnifiedDomRoot(modal).querySelector('#addBlockLegacyDomainSelectedCount');
-    if (el) el.textContent = addBlockDomainSelected.size;
-}
-
-// 显示选择文件夹弹窗
-async function showSelectFolderModal() {
-    const modal = document.getElementById('selectFolderModal');
-    const container = document.getElementById('folderTreeContainer');
-    if (!modal || !container) return;
-
-    // 获取已屏蔽的文件夹
-    const blocked = await getBlockedBookmarks();
-    const blockedFolderSet = new Set(blocked.folders);
-
-    // 获取所有文件夹
-    const tree = await new Promise(resolve => {
-        browserAPI.bookmarks.getTree(resolve);
-    });
-
-    // 生成文件夹树HTML
-    container.innerHTML = '';
-
-    function countSubpaths(node) {
-        if (!node || !Array.isArray(node.children)) return 0;
-        let count = 0;
-        for (const child of node.children) {
-            if (!child) continue;
-            if (child.url) {
-                count += 1;
-            } else {
-                count += 1 + countSubpaths(child);
-            }
-        }
-        return count;
-    }
-
-    const unitState = { firstRowRendered: false };
-
-    function renderFolders(nodes, parentEl, depth = 0, sharedUnitState = unitState) {
-        const isZh = currentLang === 'zh_CN';
-        const locale = isZh ? 'zh-CN' : 'en-US';
-        const unnamedFolder = i18n.unnamedFolderLabel ? i18n.unnamedFolderLabel[currentLang] : '未命名文件夹';
-        for (const node of nodes) {
-            if (!node.url && node.children) { // 是文件夹
-                if (blockedFolderSet.has(node.id)) continue; // 已屏蔽的不显示
-
-                const subpathCount = countSubpaths(node);
-                const showUnitLabel = sharedUnitState.firstRowRendered !== true;
-                if (showUnitLabel) sharedUnitState.firstRowRendered = true;
-                const countText = showUnitLabel
-                    ? `${subpathCount.toLocaleString(locale)}（${isZh ? '子路径数量' : 'sub-paths'}）`
-                    : `${subpathCount.toLocaleString(locale)}`;
-
-                // 创建节点包装
-                const nodeWrapper = document.createElement('div');
-                nodeWrapper.className = 'folder-tree-node';
-
-                const item = document.createElement('div');
-                item.className = 'folder-tree-item';
-                item.innerHTML = `
-                    <i class="fas fa-folder"></i>
-                    <span>${escapeHtml(node.title || unnamedFolder)}</span>
-                    <span class="folder-count">${countText}</span>
-                `;
-                item.onclick = async () => {
-                    await blockFolder(node.id);
-                    modal.classList.remove('show');
-                    await loadBlockedLists();
-                    await refreshRecommendCards();
-                };
-                nodeWrapper.appendChild(item);
-
-                // 检查是否有子文件夹
-                const childFolders = node.children.filter(c => !c.url && c.children && !blockedFolderSet.has(c.id));
-                if (childFolders.length > 0) {
-                    const childrenContainer = document.createElement('div');
-                    childrenContainer.className = 'folder-tree-children';
-                    renderFolders(node.children, childrenContainer, depth + 1, sharedUnitState);
-                    nodeWrapper.appendChild(childrenContainer);
-                }
-
-                parentEl.appendChild(nodeWrapper);
-            }
-        }
-    }
-
-    renderFolders(tree, container);
-    modal.classList.add('show');
-}
-
-// 初始化屏蔽管理添加按钮
-function initBlockManageButtons() {
-    // 已迁移到 initAddToBlockModal 统一处理。
-}
 
 // =============================================================================
 // 时间追踪屏蔽管理
@@ -31826,6 +32989,7 @@ function initAddTrackingBlockDomainModal() {
     }
 }
 
+
 // =============================================================================
 // 时间追踪添加屏蔽书签弹窗
 // =============================================================================
@@ -32129,6 +33293,7 @@ function bindAddTrackingBlockBookmarkBtn() {
         addBookmarkBtn.onclick = () => showAddTrackingBlockBookmarkModal();
     }
 }
+
 
 // =============================================================================
 // 添加到稍后复习弹窗
@@ -35786,1853 +36951,6 @@ async function unblockDomain(domain) {
     return result.success === true;
 }
 
-// =============================================================================
-// Phase 4: 权重公式计算 S = (w1×F + w2×C + w3×T + w4×D + w5×L) × R
-// S = Score（推荐分数），值越高越优先推荐
-// R = Recall（记忆度），基于遗忘曲线，复习后锐减，逐渐恢复
-// =============================================================================
-
-// ===== 书签推荐缓存机制（仅 storage.local） =====
-// 所有S值计算已迁移到 background.js
-// 这里只保留缓存读写函数
-
-// 从 storage.local 获取所有缓存的S值
-async function getScoresCache() {
-    try {
-        const result = await new Promise(resolve => {
-            browserAPI.storage.local.get(['recommend_scores_cache'], resolve);
-        });
-        return result.recommend_scores_cache || {};
-    } catch (e) {
-        console.warn('[缓存] 读取S值缓存失败:', e);
-        return {};
-    }
-}
-
-// 保存所有S值到 storage.local
-async function saveScoresCache(cache) {
-    try {
-        await browserAPI.storage.local.set({
-            recommend_scores_cache: cache,
-            recommend_scores_time: Date.now()
-        });
-
-    } catch (e) {
-        // 检测是否是配额问题
-        if (e.message && (e.message.includes('QUOTA') || e.message.includes('quota'))) {
-            console.warn('[缓存] 存储配额已满，尝试清理旧数据...');
-            await cleanupStorageQuota();
-            // 重试一次
-            try {
-                await browserAPI.storage.local.set({
-                    recommend_scores_cache: cache,
-                    recommend_scores_time: Date.now()
-                });
-
-            } catch (e2) {
-                console.error('[缓存] 清理后仍然失败，请手动清理浏览器数据');
-                showStorageFullWarning();
-            }
-        } else {
-            console.warn('[缓存] 保存S值缓存失败:', e);
-        }
-    }
-}
-
-// 清理存储配额（当存储满时调用）
-async function cleanupStorageQuota() {
-    try {
-        // 1. 清理超过1000条的已翻阅记录
-        await browserAPI.runtime.sendMessage({
-            action: 'trimRecommendFlippedBookmarks',
-            maxItems: 1000
-        });
-
-        // 2. 清理无效的稍后复习记录（保留到期待复习，直到用户复习/取消）
-        const postponed = await getPostponedBookmarks();
-        const expectedVersion = getRecommendStateVersion(postponed);
-        const validPostponed = postponed.filter(p => p && p.bookmarkId != null);
-        if (validPostponed.length < postponed.length) {
-            attachRecommendListStateVersion(validPostponed, expectedVersion);
-            await savePostponedBookmarks(validPostponed);
-
-        }
-
-    } catch (e) {
-        console.error('[清理] 清理存储失败:', e);
-    }
-}
-
-// 显示存储满警告
-function showStorageFullWarning() {
-    const isZh = currentLang === 'zh_CN';
-    const msg = isZh
-        ? '存储空间已满，部分数据可能无法保存。请在浏览器设置中清理扩展数据。'
-        : 'Storage is full. Some data may not be saved. Please clear extension data in browser settings.';
-
-    if (typeof showToast === 'function') {
-        showToast(msg, 5000);
-    } else {
-        console.error('[存储] ' + msg);
-    }
-}
-
-// 获取单个书签的缓存S值
-async function getCachedScore(bookmarkId) {
-    const cache = await getScoresCache();
-    return cache[bookmarkId] || null;
-}
-
-// 清除缓存
-async function clearScoresCache() {
-    await browserAPI.storage.local.remove(['recommend_scores_cache', 'recommend_scores_time']);
-
-}
-
-// ===== P1: 缓存机制 =====
-// 综合时间排行静态缓存（"全部"范围，按URL和标题+域名双索引）
-let trackingRankingCache = {
-    byTitleDomain: new Map(), // 标题+域名 -> { compositeMs, url }
-    byUrl: new Map(),     // URL -> { compositeMs, title }
-    loaded: false
-};
-let historyDataCache = null;
-let historyCacheTime = 0;
-const STATS_CACHE_TTL = 60000; // 1分钟缓存
-
-function getHistoryTitleDomainKeyForStats(title, url) {
-    const safeTitle = String(title || '').trim();
-    const domain = getSyncHistoryUrlDomain(url);
-    return safeTitle && domain ? `${safeTitle}|${domain}` : '';
-}
-
-function mergeVisitStatsIntoMap(map, key, data) {
-    if (!(map instanceof Map) || !key || !data) return;
-    const visitCount = Number(data.visitCount || 0) || 0;
-    const lastVisitTime = Number(data.lastVisitTime || 0) || 0;
-    const existing = map.get(key);
-    if (!existing) {
-        map.set(key, { visitCount, lastVisitTime });
-        return;
-    }
-    map.set(key, {
-        visitCount: (Number(existing.visitCount || 0) || 0) + visitCount,
-        lastVisitTime: Math.max(Number(existing.lastVisitTime || 0) || 0, lastVisitTime)
-    });
-}
-
-// ===== P0: 加载综合时间排行缓存（"全部"范围）=====
-async function loadTrackingRankingCache() {
-    if (trackingRankingCache.loaded) {
-        return trackingRankingCache;
-    }
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'getActiveSessions',
-            startTime: 0,  // 全部范围
-            endTime: Date.now()
-        });
-
-        if (response && response.success && response.sessions) {
-            // 按 URL 或标题+域名聚合综合时间，避免同标题跨站点误归因。
-            const sessionStats = new Map();
-            for (const session of response.sessions) {
-                const url = String(session.url || '').trim();
-                const title = String(session.title || url || '').trim();
-                const titleDomainKey = getHistoryTitleDomainKeyForStats(title, url);
-                const key = titleDomainKey || url || title;
-                if (!key) continue;
-                if (!sessionStats.has(key)) {
-                    sessionStats.set(key, {
-                        url,
-                        title: title || url,
-                        titleDomainKey,
-                        compositeMs: 0
-                    });
-                }
-                const stat = sessionStats.get(key);
-                const sessionComposite = session.compositeMs ||
-                    ((session.activeMs || 0) +
-                        (session.idleFocusMs || session.pauseTotalMs || 0) * 0.8 +
-                        (session.visibleMs || 0) * 0.5 +
-                        (session.backgroundMs || 0) * 0.1);
-                stat.compositeMs += sessionComposite;
-            }
-
-            // 构建双索引
-            trackingRankingCache.byTitleDomain.clear();
-            trackingRankingCache.byUrl.clear();
-            for (const [, stat] of sessionStats) {
-                if (stat.titleDomainKey) {
-                    trackingRankingCache.byTitleDomain.set(stat.titleDomainKey, stat);
-                }
-                if (stat.url) {
-                    trackingRankingCache.byUrl.set(stat.url, stat);
-                }
-            }
-            trackingRankingCache.loaded = true;
-
-        }
-    } catch (e) {
-        console.warn('[T值缓存] 加载失败:', e);
-    }
-    return trackingRankingCache;
-}
-
-// 清除T值缓存（在数据变化时调用）
-function clearTrackingRankingCache() {
-    trackingRankingCache.byTitleDomain.clear();
-    trackingRankingCache.byUrl.clear();
-    trackingRankingCache.loaded = false;
-}
-
-// ===== P0: 从静态缓存获取书签的综合时间（URL或标题+域名匹配）=====
-async function getTrackingDataFromDB() {
-    // 确保缓存已加载
-    await loadTrackingRankingCache();
-
-    // 返回兼容旧格式的对象（供 batchGetBookmarkStats 使用）
-    const result = {};
-    for (const [url, stat] of trackingRankingCache.byUrl) {
-        result[url] = {
-            compositeMs: stat.compositeMs,
-            title: stat.title
-        };
-    }
-    return result;
-}
-
-// 根据书签获取综合时间（URL优先，标题+域名兜底）
-async function getBookmarkCompositeTime(bookmark) {
-    await loadTrackingRankingCache();
-
-    // 优先URL匹配
-    if (bookmark.url && trackingRankingCache.byUrl.has(bookmark.url)) {
-        return trackingRankingCache.byUrl.get(bookmark.url).compositeMs;
-    }
-
-    const titleDomainKey = getHistoryTitleDomainKeyForStats(bookmark.title, bookmark.url);
-    if (titleDomainKey && trackingRankingCache.byTitleDomain.has(titleDomainKey)) {
-        return trackingRankingCache.byTitleDomain.get(titleDomainKey).compositeMs;
-    }
-
-    return 0;
-}
-
-// ===== P2: 批量获取历史记录（URL+标题同域名匹配，与点击记录一致）=====
-let historyDataLoadingPromise = null; // 防止并发加载
-
-async function getBatchHistoryData() {
-    const now = Date.now();
-    // 检查缓存
-    if (historyDataCache && (now - historyCacheTime) < STATS_CACHE_TTL) {
-        return historyDataCache;
-    }
-
-    // 如果正在加载，等待加载完成
-    if (historyDataLoadingPromise) {
-        return historyDataLoadingPromise;
-    }
-
-    // 开始加载，设置Promise锁
-    historyDataLoadingPromise = (async () => {
-        try {
-            const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, now);
-
-            const originalMap = new Map();  // URL映射
-            const titleDomainMap = new Map(); // 标题+域名映射
-            let processed = 0;
-
-            for (const [, records] of libraryRows.rows) {
-                for (const item of (Array.isArray(records) ? records : [])) {
-                    processed += 1;
-                    if (!item.url) {
-                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-                        continue;
-                    }
-                    const visitTime = getBrowsingCacheRecordTimestamp(item);
-                    if (!visitTime) {
-                        if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-                        continue;
-                    }
-                    const data = {
-                        visitCount: 1,
-                        lastVisitTime: visitTime
-                    };
-                    // URL映射
-                    const existingUrl = originalMap.get(item.url);
-                    originalMap.set(item.url, existingUrl
-                        ? {
-                            visitCount: existingUrl.visitCount + 1,
-                            lastVisitTime: Math.max(existingUrl.lastVisitTime, visitTime)
-                        }
-                        : data);
-
-                    const titleDomainKey = getHistoryTitleDomainKeyForStats(item.title, item.url);
-                    mergeVisitStatsIntoMap(titleDomainMap, titleDomainKey, data);
-                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-                }
-            }
-
-            // 更新缓存（URL + 标题同域名，与点击记录一致）
-            historyDataCache = { original: originalMap, titleDomain: titleDomainMap };
-            historyCacheTime = Date.now();
-
-            return historyDataCache;
-        } catch (e) {
-            console.warn('[权重计算] 批量获取历史数据失败:', e);
-            return { original: new Map(), titleDomain: new Map() };
-        } finally {
-            historyDataLoadingPromise = null; // 清除锁
-        }
-    })();
-
-    return historyDataLoadingPromise;
-}
-
-// 获取书签的访问统计数据（保留用于单个查询场景）
-async function getBookmarkVisitStats(url) {
-    const normalizeVisitUrl = (value) => {
-        let safe = String(value || '').trim();
-        if (safe.length > 1 && safe.endsWith('/')) safe = safe.slice(0, -1);
-        return safe;
-    };
-    const targetUrl = normalizeVisitUrl(url);
-
-    try {
-        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(0, Date.now());
-        let visitCount = 0;
-        let lastVisitTime = 0;
-        let processed = 0;
-        for (const [, records] of libraryRows.rows) {
-            for (const record of (Array.isArray(records) ? records : [])) {
-                processed += 1;
-                if (normalizeVisitUrl(record?.url) !== targetUrl) {
-                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-                    continue;
-                }
-                const visitTime = getBrowsingCacheRecordTimestamp(record);
-                if (!visitTime) {
-                    if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-                    continue;
-                }
-                visitCount += 1;
-                if (visitTime > lastVisitTime) lastVisitTime = visitTime;
-                if (shouldYieldBrowsingDerivedRows(processed)) await yieldBrowsingDerivedRows();
-            }
-        }
-        if (visitCount > 0) {
-            return { visitCount, lastVisitTime };
-        }
-
-        return { visitCount: 0, lastVisitTime: 0 };
-    } catch (e) {
-        return { visitCount: 0, lastVisitTime: 0 };
-    }
-}
-
-// =============================================================================
-// Phase 4.1: 复习曲线（简化版SM-2）
-// =============================================================================
-
-// 获取复习数据
-async function getReviewData() {
-    try {
-        const result = await browserAPI.storage.local.get('recommend_reviews');
-        return result.recommend_reviews || {};
-    } catch (e) {
-        console.error('[复习] 获取复习数据失败:', e);
-        return {};
-    }
-}
-
-// 获取书签的复习状态
-function getReviewStatus(bookmarkId, reviewData) {
-    const review = reviewData[bookmarkId];
-    if (!review) return { status: 'new', label: '新书签' };
-
-    const now = Date.now();
-    const daysSinceReview = (now - review.lastReview) / (1000 * 60 * 60 * 24);
-
-    if (now >= review.nextReview) {
-        return { status: 'due', label: '待复习', priority: 1.2 };
-    } else if (daysSinceReview >= review.interval * 0.7) {
-        return { status: 'soon', label: '即将到期', priority: 1.1 };
-    } else {
-        return { status: 'reviewed', label: '已复习', priority: 0.8 };
-    }
-}
-
-// 计算带复习状态的优先级（用于保存的卡片恢复）
-function calculatePriorityWithReview(basePriority, bookmarkId, reviewData, postponeData) {
-    let priority = basePriority;
-
-    // 复习状态加成
-    const reviewStatus = getReviewStatus(bookmarkId, reviewData);
-    priority *= reviewStatus.priority || 1.0;
-
-    // 惩罚因子：被多次推迟的书签降低优先级（不影响手动添加的）
-    if (postponeData) {
-        const postponeInfo = postponeData.find(p => p.bookmarkId === bookmarkId);
-        if (postponeInfo && !postponeInfo.manuallyAdded && postponeInfo.postponeCount > 0) {
-            const penaltyFactor = Math.pow(0.9, postponeInfo.postponeCount);
-            priority *= penaltyFactor;
-        }
-    }
-
-    return Math.min(priority, 1.5); // 最高1.5
-}
-
-// 启动时间捕捉实时刷新（当前会话1秒刷新，排行榜10秒刷新）
-function startTrackingRefresh() {
-    // 清除已有定时器
-    if (trackingRefreshInterval) {
-        clearInterval(trackingRefreshInterval);
-    }
-    if (rankingRefreshInterval) {
-        clearInterval(rankingRefreshInterval);
-    }
-
-    // 当前会话状态实时刷新（1秒）
-    trackingRefreshInterval = setInterval(() => {
-        if (currentView === 'additions') {
-            const trackingPanel = document.getElementById('additionsTrackingPanel');
-            if (trackingPanel && trackingPanel.classList.contains('active')) {
-                // 只刷新当前会话（实时显示计时）
-                loadCurrentTrackingSessions();
-            }
-        }
-    }, TRACKING_REFRESH_INTERVAL);
-
-    // 排行榜定时刷新（10秒）
-    rankingRefreshInterval = setInterval(() => {
-        if (currentView === 'additions') {
-            const trackingPanel = document.getElementById('additionsTrackingPanel');
-            if (trackingPanel && trackingPanel.classList.contains('active')) {
-                // 刷新排行榜
-                loadActiveTimeRanking();
-            }
-        }
-    }, RANKING_REFRESH_INTERVAL);
-}
-
-// 停止实时刷新
-function stopTrackingRefresh() {
-    if (trackingRefreshInterval) {
-        clearInterval(trackingRefreshInterval);
-        trackingRefreshInterval = null;
-    }
-    if (rankingRefreshInterval) {
-        clearInterval(rankingRefreshInterval);
-        rankingRefreshInterval = null;
-    }
-}
-
-function compareRecommendPriority(a, b) {
-    const aTemplate = a?.scoreTemplate === true;
-    const bTemplate = b?.scoreTemplate === true;
-    if (aTemplate !== bTemplate) {
-        return aTemplate ? 1 : -1;
-    }
-
-    const diff = (b?.priority ?? 0) - (a?.priority ?? 0);
-    if (Math.abs(diff) >= 0.01) return diff;
-    const bAdded = Number(b?.dateAdded || 0);
-    const aAdded = Number(a?.dateAdded || 0);
-    if (bAdded !== aAdded) return bAdded - aAdded;
-    const aTitle = String(a?.title || a?.name || '').toLowerCase();
-    const bTitle = String(b?.title || b?.name || '').toLowerCase();
-    if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
-    return String(a?.id || '').localeCompare(String(b?.id || ''));
-}
-
-// 刷新推荐卡片（三卡并排）
-// 获取已翻过的书签ID列表
-async function getFlippedBookmarks() {
-    return new Promise((resolve) => {
-        browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY], (result) => {
-            resolve(result[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
-        });
-    });
-}
-
-async function refreshRecommendCards(force = false) {
-    const cardsRow = document.getElementById('cardsRow');
-    if (!cardsRow) return;
-
-    const cards = cardsRow.querySelectorAll('.recommend-card');
-
-    // 清除所有卡片的 flipped 状态
-    cards.forEach(card => card.classList.remove('flipped'));
-
-    let prefetchedCurrentCards = null;
-    if (isSidePanelMode && !force) {
-        try {
-            prefetchedCurrentCards = await getHistoryCurrentCards();
-            if (Array.isArray(prefetchedCurrentCards?.cardData)) {
-                seedFaviconMemoryFromCardData(prefetchedCurrentCards.cardData);
-            }
-            const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(prefetchedCurrentCards);
-            if (!needsVersionedRound) {
-                const snapshot = readRecommendCardsSnapshot();
-                if (snapshot) {
-                    const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(
-                        snapshot.cards,
-                        prefetchedCurrentCards?.cardData
-                    );
-                    const snapshotCards = mergedSnapshotCards.length > 0
-                        ? mergedSnapshotCards
-                        : snapshot.cards;
-                    applyRecommendSnapshotToCardRows({
-                        ...snapshot,
-                        cards: attachRecommendStateVersionToCards(snapshotCards, prefetchedCurrentCards)
-                    });
-                }
-            }
-        } catch (_) { }
-    }
-
-    try {
-        const currentCards = prefetchedCurrentCards || await getHistoryCurrentCards();
-        syncRecommendLastUpdatedFromState(currentCards);
-        if (Array.isArray(currentCards?.cardData)) {
-            seedFaviconMemoryFromCardData(currentCards.cardData);
-        }
-        const needsVersionedRound = hasLegacyVersionlessRecommendCurrentCardsState(currentCards);
-        if (needsVersionedRound) {
-            recommendCards = [];
-            cards.forEach((card) => {
-                setCardEmpty(card);
-            });
-        }
-
-        const syncRefreshSettingsAfterForce = async () => {
-            if (!force) return;
-
-            let marked = false;
-            try {
-                const response = await browserAPI.runtime.sendMessage({ action: 'markRecommendRefreshExecuted' });
-                if (response && response.success && response.settings) {
-                    updateRefreshSettingsStatus({ ...DEFAULT_REFRESH_SETTINGS, ...response.settings });
-                    marked = true;
-                }
-            } catch (_) { }
-
-            if (!marked) {
-                const settings = await getRefreshSettings();
-                settings.lastRefreshTime = Date.now();
-                settings.openCountSinceRefresh = 0;
-                settings.sidePanelOpenCountSinceRefresh = 0;
-                await saveRefreshSettings(settings);
-                updateRefreshSettingsStatus(settings);
-            }
-        };
-
-        // 有保存的当前轮次就直接显示，不额外做前端聚合计算。
-        if (!needsVersionedRound && currentCards && currentCards.cardIds && currentCards.cardIds.length > 0 && !force) {
-            const normalizedFlipped = Array.isArray(currentCards.flippedIds)
-                ? currentCards.flippedIds.map(id => String(id || ''))
-                : [];
-            const allFlipped = currentCards.cardIds.every(id => normalizedFlipped.includes(String(id || '')));
-
-            if (!allFlipped) {
-                const savedCards = hydrateRecommendCardsFromCurrentCardsState(currentCards);
-                if (savedCards.length > 0) {
-                    recommendCards = savedCards;
-                    const flippedSet = new Set(normalizedFlipped.map(id => String(id || '').trim()));
-                    cards.forEach((card, index) => {
-                        if (index < recommendCards.length) {
-                            const bookmark = recommendCards[index];
-                            updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
-                        } else {
-                            hideUnusedRecommendCardSlot(card);
-                        }
-                    });
-
-                    try {
-                        writeRecommendCardsSnapshot(recommendCards, normalizedFlipped);
-                    } catch (_) { }
-                    return;
-                }
-            }
-        }
-
-        // 统一使用后台选卡路径，和快捷复习共享同一套轮转/游标/过滤逻辑
-        const backendRound = await selectRecommendCardsRoundShared(force || needsVersionedRound);
-        if (backendRound && Array.isArray(backendRound.cards)) {
-            const backendReady = backendRound.success !== false
-                && backendRound.ready !== false
-                && backendRound.repairing !== true;
-            if (!backendReady && backendRound.cards.length === 0) {
-                // 后台仍在修复/准备阶段时，不覆盖当前轮次为“空”，避免误判成“全部已翻阅”。
-                if ((!recommendCards || recommendCards.length === 0) && cards.length > 0) {
-                    setRecommendCardsRowEmptyMessage(
-                        cards,
-                        currentLang === 'en' ? 'Recommendations are preparing...' : '推荐准备中...'
-                    );
-                }
-                return;
-            }
-
-            const backendCurrentCards = backendRound.currentCards && typeof backendRound.currentCards === 'object'
-                ? backendRound.currentCards
-                : null;
-            const normalizedCards = attachRecommendStateVersionToCards(
-                backendRound.cards
-                    .map(normalizeRecommendSnapshotCard)
-                    .filter(Boolean)
-                    .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
-                    .slice(0, RECOMMEND_BATCH_SIZE),
-                backendCurrentCards
-            );
-            const backendFlippedIds = Array.isArray(backendCurrentCards?.flippedIds)
-                ? backendCurrentCards.flippedIds.map(id => String(id || '')).filter(Boolean)
-                : [];
-            syncRecommendLastUpdatedFromState(backendCurrentCards);
-            markHistoryCurrentCardsSelfWrite(backendCurrentCards);
-
-            if (Array.isArray(backendCurrentCards?.cardData)) {
-                seedFaviconMemoryFromCardData(backendCurrentCards.cardData);
-            }
-
-            if (normalizedCards.length === 0) {
-                await saveHistoryCurrentCards([], []);
-                clearRecommendCardsSnapshot();
-                setRecommendCardsRowEmptyMessage(
-                    cards,
-                    currentLang === 'en' ? 'No recommendable bookmarks' : '暂无可推荐书签'
-                );
-                await syncRefreshSettingsAfterForce();
-                return;
-            }
-
-            recommendCards = normalizedCards;
-
-            try {
-                writeRecommendCardsSnapshot(recommendCards, backendFlippedIds);
-            } catch (_) { }
-
-            if (!Array.isArray(backendCurrentCards?.cardIds)) {
-                const newCardIds = recommendCards.map(item => String(item?.id || '')).filter(Boolean);
-                await saveHistoryCurrentCards(newCardIds, backendFlippedIds, recommendCards);
-            }
-
-            const preloadUrls = recommendCards.map(item => item.url).filter(Boolean);
-            preloadHighResFavicons(preloadUrls);
-            saveCardFaviconsToStorage(recommendCards);
-
-            const backendFlippedSet = new Set(backendFlippedIds);
-            cards.forEach((card, index) => {
-                if (index < recommendCards.length) {
-                    const bookmark = recommendCards[index];
-                    updateCardDisplay(card, bookmark, backendFlippedSet.has(String(bookmark?.id || '')));
-                } else {
-                    hideUnusedRecommendCardSlot(card);
-                }
-            });
-
-            await syncRefreshSettingsAfterForce();
-            return;
-        }
-
-        if (force || needsVersionedRound) {
-            try {
-                showToast(currentLang === 'en'
-                    ? 'Refresh unavailable, please retry'
-                    : '后台刷新不可用，请重试');
-            } catch (_) { }
-        }
-        return;
-
-    } catch (error) {
-        console.error('[书签推荐] 刷新卡片失败:', error);
-        setRecommendCardsRowEmptyMessage(
-            cards,
-            currentLang === 'en' ? 'Load failed' : '加载失败'
-        );
-    }
-}
-
-// 缓存当前追踪列表的会话 ID，用于判断是否需要完整刷新
-let lastTrackingSessionIds = [];
-// 记录展开状态的分组
-let expandedTrackingGroups = new Set();
-
-async function loadCurrentTrackingSessions() {
-    const trackingCurrentList = document.getElementById('trackingCurrentList');
-    const trackingCurrentCount = document.getElementById('trackingCurrentCount');
-    if (!trackingCurrentList) return;
-
-    try {
-        const response = await browserAPI.runtime.sendMessage({
-            action: 'getCurrentActiveSessions'
-        });
-
-        if (response && response.success && response.sessions) {
-            let sessions = response.sessions;
-
-            // 过滤掉被时间追踪屏蔽的会话
-            const blockedSets = await getTrackingBlockedSets();
-            const cache = await getTrackingBookmarkCache();
-            const blockedFlags = await Promise.all(
-                sessions.map(session => isTrackingItemBlocked(session, blockedSets, cache))
-            );
-            sessions = sessions.filter((_, index) => !blockedFlags[index]);
-
-            // 更新计数
-            if (trackingCurrentCount) {
-                trackingCurrentCount.textContent = sessions.length;
-            }
-
-            if (sessions.length === 0) {
-                lastTrackingSessionIds = [];
-                trackingCurrentList.innerHTML = `
-                    <tr class="tracking-empty-row">
-                        <td colspan="5">${i18n.trackingNoActive[currentLang]}</td>
-                    </tr>
-                `;
-                return;
-            }
-
-            // 按标题分组（标题相同视为同一书签）
-            const groupedSessions = new Map();
-            for (const session of sessions) {
-                const key = session.title || session.url;
-                if (!groupedSessions.has(key)) {
-                    groupedSessions.set(key, []);
-                }
-                groupedSessions.get(key).push(session);
-            }
-
-            // 检查会话列表是否有变化（新增/删除会话）
-            const currentIds = sessions.map(s => s.tabId).sort().join(',');
-            const lastIds = lastTrackingSessionIds.sort().join(',');
-            const needsFullRender = currentIds !== lastIds;
-
-            // 截断标题函数
-            const truncateTitle = (title, maxLen = 45) => {
-                if (!title) return '';
-                return title.length > maxLen ? title.substring(0, maxLen) + '...' : title;
-            };
-
-            if (needsFullRender) {
-                // 会话列表有变化，需要完整渲染
-                lastTrackingSessionIds = sessions.map(s => s.tabId);
-
-                let html = '';
-                for (const [groupKey, groupSessions] of groupedSessions) {
-                    const isMultiple = groupSessions.length > 1;
-                    const isExpanded = expandedTrackingGroups.has(groupKey);
-
-                    // 使用第一个会话作为代表
-                    const primarySession = groupSessions[0];
-
-                    // 计算分组的汇总数据
-                    const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
-                    const totalWakeCount = groupSessions.reduce((sum, s) => sum + (s.wakeCount || 0), 0);
-                    const avgActiveRatio = groupSessions.reduce((sum, s) => sum + (s.activeRatio || 0), 0) / groupSessions.length;
-
-                    // 确定显示的状态（优先显示最活跃的状态）
-                    const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
-                    const bestState = groupSessions.reduce((best, s) => {
-                        const bestIdx = stateOrder.indexOf(best);
-                        const currIdx = stateOrder.indexOf(s.state);
-                        return currIdx < bestIdx ? s.state : best;
-                    }, 'sleeping');
-
-                    const stateIcon = bestState === 'active' ? '🟢' :
-                        (bestState === 'sleeping' ? '💤' :
-                            (bestState === 'background' ? '⚪' :
-                                (bestState === 'visible' ? '🔵' : '🟡')));
-
-                    const compositeTime = formatActiveTime(totalCompositeMs);
-                    const activeRatio = Math.round(avgActiveRatio * 100);
-                    const displayTitle = truncateTitle(primarySession.title || primarySession.url);
-                    const faviconUrl = getFaviconUrl(primarySession.url);
-
-                    // 判断是否有任一会话处于挂机状态
-                    const hasIdle = groupSessions.some(s => s.isIdle);
-                    // 活跃率颜色：挂机=橙色，否则按梯度绿色
-                    const ratioColorClass = hasIdle ? 'ratio-idle' : `ratio-level-${Math.min(Math.floor(activeRatio / 20), 5)}`;
-                    // 唤醒次数高亮（≥15次用橙色）
-                    const wakesHighlight = totalWakeCount >= 15 ? 'wakes-highlight' : '';
-                    // 综合时间梯度蓝色
-                    const timeGradientClass = `time-level-${getTimeGradientLevel(totalCompositeMs)}`;
-
-                    // 主行（分组头）
-                    const groupBadge = isMultiple ?
-                        `<span class="tracking-group-badge" data-group-key="${escapeHtml(groupKey)}">${groupSessions.length}</span>` : '';
-                    const expandIcon = isMultiple ?
-                        `<span class="tracking-expand-icon ${isExpanded ? 'expanded' : ''}" data-group-key="${escapeHtml(groupKey)}">▶</span>` : '';
-
-                    html += `
-                        <tr class="tracking-group-header ${isMultiple ? 'has-children' : ''}"
-                            data-tab-id="${primarySession.tabId}"
-                            data-bookmark-url="${escapeHtml(primarySession.url)}"
-                            data-group-key="${escapeHtml(groupKey)}">
-                            <td><span class="tracking-state">${stateIcon}</span></td>
-                            <td>
-                                <div class="tracking-title-cell">
-                                    ${expandIcon}
-                                    <img class="tracking-favicon" data-bookmark-url="${escapeHtml(primarySession.url || '')}" src="${faviconUrl}" alt="">
-                                    <span class="tracking-title" title="${escapeHtml(primarySession.title || primarySession.url)}">${escapeHtml(displayTitle)}</span>
-                                    ${groupBadge}
-                                </div>
-                            </td>
-                            <td><span class="tracking-time ${timeGradientClass}">${compositeTime}</span></td>
-                            <td><span class="tracking-wakes ${wakesHighlight}">${totalWakeCount}${currentLang === 'en' ? 'x' : '次'}</span></td>
-                            <td>
-                                <div class="tracking-ratio-cell">
-                                    <span class="tracking-ratio ${ratioColorClass}">${activeRatio}%</span>
-                                </div>
-                            </td>
-                        </tr>
-                    `;
-
-                    // 展开的子行（仅当有多个且展开时显示）
-                    if (isMultiple && isExpanded) {
-                        for (const session of groupSessions) {
-                            const subStateIcon = session.state === 'active' ? '🟢' :
-                                (session.state === 'sleeping' ? '💤' :
-                                    (session.state === 'background' ? '⚪' :
-                                        (session.state === 'visible' ? '🔵' : '🟡')));
-                            const subCompositeTime = formatActiveTime(session.compositeMs || session.activeMs);
-                            const subActiveRatio = Math.round(session.activeRatio * 100);
-                            // 活跃率颜色：挂机=橙色，否则按梯度绿色
-                            const subRatioColorClass = session.isIdle ? 'ratio-idle' : `ratio-level-${Math.min(Math.floor(subActiveRatio / 20), 5)}`;
-                            // 唤醒次数高亮（≥15次用橙色）
-                            const subWakesHighlight = (session.wakeCount || 0) >= 15 ? 'wakes-highlight' : '';
-                            // 综合时间梯度蓝色
-                            const subTimeGradientClass = `time-level-${getTimeGradientLevel(session.compositeMs || session.activeMs)}`;
-
-                            // 计算会话开始时间
-                            const startTimestamp = Date.now() - (session.totalMs || 0);
-                            const startDate = new Date(startTimestamp);
-                            const month = startDate.getMonth() + 1;
-                            const day = startDate.getDate();
-                            const timeStr = startDate.toLocaleTimeString(currentLang === 'en' ? 'en-US' : 'zh-CN', {
-                                hour: '2-digit',
-                                minute: '2-digit'
-                            });
-                            const dateTimeStr = currentLang === 'en'
-                                ? `${month}/${day} ${timeStr}`
-                                : `${month}月${day}日 ${timeStr}`;
-                            const startLabel = currentLang === 'en' ? `Started ${dateTimeStr}` : `开始于 ${dateTimeStr}`;
-
-                            html += `
-                                <tr class="tracking-group-child"
-                                    data-tab-id="${session.tabId}"
-                                    data-bookmark-url="${escapeHtml(session.url)}"
-                                    data-group-key="${escapeHtml(groupKey)}">
-                                    <td><span class="tracking-state">${subStateIcon}</span></td>
-                                    <td>
-                                        <div class="tracking-title-cell tracking-child-title">
-                                            <span class="tracking-window-label">${startLabel}</span>
-                                        </div>
-                                    </td>
-                                    <td><span class="tracking-time ${subTimeGradientClass}">${subCompositeTime}</span></td>
-                                    <td><span class="tracking-wakes ${subWakesHighlight}">${session.wakeCount || 0}${currentLang === 'en' ? 'x' : '次'}</span></td>
-                                    <td>
-                                        <div class="tracking-ratio-cell">
-                                            <span class="tracking-ratio ${subRatioColorClass}">${subActiveRatio}%</span>
-                                        </div>
-                                    </td>
-                                </tr>
-                            `;
-                        }
-                    }
-                }
-
-                trackingCurrentList.innerHTML = html;
-
-                // 点击展开/折叠分组
-                trackingCurrentList.querySelectorAll('.tracking-group-header.has-children').forEach(row => {
-                    row.addEventListener('click', (e) => {
-                        const groupKey = row.dataset.groupKey;
-                        // 如果点击的是展开图标或徽章，切换展开状态
-                        if (e.target.classList.contains('tracking-expand-icon') ||
-                            e.target.classList.contains('tracking-group-badge') ||
-                            e.target.classList.contains('tracking-title-cell')) {
-                            if (expandedTrackingGroups.has(groupKey)) {
-                                expandedTrackingGroups.delete(groupKey);
-                            } else {
-                                expandedTrackingGroups.add(groupKey);
-                            }
-                            // 重新渲染
-                            lastTrackingSessionIds = []; // 强制完整刷新
-                            loadCurrentTrackingSessions();
-                        } else {
-                            // 点击其他区域，切换到对应标签页
-                            const tabId = parseInt(row.dataset.tabId);
-                            if (tabId) {
-                                browserAPI.tabs.update(tabId, { active: true });
-                            }
-                        }
-                    });
-                });
-
-                // 点击子行切换到对应标签页
-                trackingCurrentList.querySelectorAll('.tracking-group-child').forEach(row => {
-                    row.addEventListener('click', () => {
-                        const tabId = parseInt(row.dataset.tabId);
-                        if (tabId) {
-                            browserAPI.tabs.update(tabId, { active: true });
-                        }
-                    });
-                });
-
-                // 单个会话的行也可以点击切换
-                trackingCurrentList.querySelectorAll('.tracking-group-header:not(.has-children)').forEach(row => {
-                    row.addEventListener('click', () => {
-                        const tabId = parseInt(row.dataset.tabId);
-                        if (tabId) {
-                            browserAPI.tabs.update(tabId, { active: true });
-                        }
-                    });
-                });
-            } else {
-                // 会话列表没变，只更新时间、状态等动态数据
-                for (const [groupKey, groupSessions] of groupedSessions) {
-                    const row = trackingCurrentList.querySelector(`tr.tracking-group-header[data-group-key="${CSS.escape(groupKey)}"]`);
-                    if (row) {
-                        const isMultiple = groupSessions.length > 1;
-
-                        // 计算分组的汇总数据
-                        const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (s.compositeMs || s.activeMs || 0), 0);
-                        const totalWakeCount = groupSessions.reduce((sum, s) => sum + (s.wakeCount || 0), 0);
-                        const avgActiveRatio = groupSessions.reduce((sum, s) => sum + (s.activeRatio || 0), 0) / groupSessions.length;
-
-                        // 确定显示的状态
-                        const stateOrder = ['active', 'visible', 'paused', 'background', 'sleeping'];
-                        const bestState = groupSessions.reduce((best, s) => {
-                            const bestIdx = stateOrder.indexOf(best);
-                            const currIdx = stateOrder.indexOf(s.state);
-                            return currIdx < bestIdx ? s.state : best;
-                        }, 'sleeping');
-
-                        const stateIcon = bestState === 'active' ? '🟢' :
-                            (bestState === 'sleeping' ? '💤' :
-                                (bestState === 'background' ? '⚪' :
-                                    (bestState === 'visible' ? '🔵' : '🟡')));
-
-                        const compositeTime = formatActiveTime(totalCompositeMs);
-                        const activeRatio = Math.round(avgActiveRatio * 100);
-
-                        // 更新主行
-                        const stateEl = row.querySelector('.tracking-state');
-                        if (stateEl) stateEl.textContent = stateIcon;
-
-                        const timeEl = row.querySelector('.tracking-time');
-                        if (timeEl) timeEl.textContent = compositeTime;
-
-                        const wakesEl = row.querySelector('.tracking-wakes');
-                        if (wakesEl) wakesEl.textContent = `${totalWakeCount}${currentLang === 'en' ? 'x' : '次'}`;
-
-                        const ratioEl = row.querySelector('.tracking-ratio');
-                        if (ratioEl) ratioEl.textContent = `${activeRatio}%`;
-                    }
-
-                    // 更新子行
-                    if (expandedTrackingGroups.has(groupKey)) {
-                        for (const session of groupSessions) {
-                            const childRow = trackingCurrentList.querySelector(`tr.tracking-group-child[data-tab-id="${session.tabId}"]`);
-                            if (childRow) {
-                                const subStateIcon = session.state === 'active' ? '🟢' :
-                                    (session.state === 'sleeping' ? '💤' :
-                                        (session.state === 'background' ? '⚪' :
-                                            (session.state === 'visible' ? '🔵' : '🟡')));
-                                const subCompositeTime = formatActiveTime(session.compositeMs || session.activeMs);
-                                const subActiveRatio = Math.round(session.activeRatio * 100);
-
-                                const stateEl = childRow.querySelector('.tracking-state');
-                                if (stateEl) stateEl.textContent = subStateIcon;
-
-                                const timeEl = childRow.querySelector('.tracking-time');
-                                if (timeEl) timeEl.textContent = subCompositeTime;
-
-                                const wakesEl = childRow.querySelector('.tracking-wakes');
-                                if (wakesEl) wakesEl.textContent = `${session.wakeCount || 0}${currentLang === 'en' ? 'x' : '次'}`;
-
-                                const ratioEl = childRow.querySelector('.tracking-ratio');
-                                if (ratioEl) ratioEl.textContent = `${subActiveRatio}%`;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.warn('[书签推荐] 加载追踪会话失败:', error);
-    }
-}
-
-// HTML 转义函数
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-// 使用全局tooltip元素，附加到body，避免层级问题
-let globalTooltipElement = null;
-let tooltipHideTimer = null;
-
-function initFastTooltips() {
-    // 创建全局tooltip元素（如果不存在）
-    if (!globalTooltipElement) {
-        globalTooltipElement = document.createElement('div');
-        globalTooltipElement.className = 'global-tooltip';
-        document.body.appendChild(globalTooltipElement);
-    }
-
-    const buttons = document.querySelectorAll('.diff-header .diff-edit-btn.icon-only[title]');
-
-    buttons.forEach(btn => {
-        // 保存原始title并移除（防止浏览器原生tooltip）
-        const tooltipText = btn.getAttribute('title');
-        btn.dataset.tooltipText = tooltipText;
-        btn.removeAttribute('title');
-
-        btn.addEventListener('mouseenter', (e) => {
-            if (tooltipHideTimer) {
-                clearTimeout(tooltipHideTimer);
-                tooltipHideTimer = null;
-            }
-
-            const text = btn.dataset.tooltipText;
-            if (!text) return;
-
-            globalTooltipElement.textContent = text;
-
-            // 计算位置（按钮上方居中）
-            const rect = btn.getBoundingClientRect();
-            const tooltipRect = globalTooltipElement.getBoundingClientRect();
-
-            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
-            let top = rect.top - 8 - globalTooltipElement.offsetHeight;
-
-            // 确保不超出视口
-            if (left < 8) left = 8;
-            if (left + tooltipRect.width > window.innerWidth - 8) {
-                left = window.innerWidth - tooltipRect.width - 8;
-            }
-            if (top < 8) {
-                // 如果上方空间不足，显示在下方
-                top = rect.bottom + 8;
-            }
-
-            globalTooltipElement.style.left = left + 'px';
-            globalTooltipElement.style.top = top + 'px';
-            globalTooltipElement.classList.add('visible');
-        });
-
-        btn.addEventListener('mouseleave', () => {
-            tooltipHideTimer = setTimeout(() => {
-                globalTooltipElement.classList.remove('visible');
-            }, 100);
-        });
-
-        // 当按钮title动态更新时，同步更新dataset
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.type === 'attributes' && mutation.attributeName === 'title') {
-                    const newTitle = btn.getAttribute('title');
-                    if (newTitle) {
-                        btn.dataset.tooltipText = newTitle;
-                        btn.removeAttribute('title');
-                    }
-                }
-            });
-        });
-        observer.observe(btn, { attributes: true });
-    });
-}
-
-// =============================================================================
-// 复习热力图 (GitHub 风格，当前月份在左)
-// =============================================================================
-
-function getLocalDateKey(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-}
-
-function normalizeHeatmapBookmarkCounts(byBookmark = {}) {
-    const normalized = {};
-    const source = (byBookmark && typeof byBookmark === 'object') ? byBookmark : {};
-
-    Object.entries(source).forEach(([bookmarkId, count]) => {
-        const id = String(bookmarkId || '').trim();
-        const value = Number(count);
-        if (!id || !Number.isFinite(value) || value <= 0) return;
-        normalized[id] = Math.max(1, Math.floor(value));
-    });
-
-    return normalized;
-}
-
-function normalizeHeatmapDayRecords(records = []) {
-    return (Array.isArray(records) ? records : [])
-        .map((item) => {
-            const bookmarkId = String(item?.bookmarkId || '').trim();
-            const timestamp = Number(item?.timestamp || 0);
-            if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
-                return null;
-            }
-            return { bookmarkId, timestamp };
-        })
-        .filter(Boolean)
-        .slice(-FLIP_HISTORY_DAY_RECORDS_MAX);
-}
-
-function normalizeHeatmapDayEntry(entry) {
-    const source = entry && typeof entry === 'object' ? entry : {};
-    const records = normalizeHeatmapDayRecords(source.records || []);
-    const byBookmark = normalizeHeatmapBookmarkCounts(source.byBookmark || {});
-
-    if (Object.keys(byBookmark).length === 0 && records.length > 0) {
-        records.forEach((record) => {
-            byBookmark[record.bookmarkId] = (byBookmark[record.bookmarkId] || 0) + 1;
-        });
-    }
-
-    const rawCount = Number(source.count);
-    const count = Number.isFinite(rawCount) && rawCount >= records.length
-        ? Math.floor(rawCount)
-        : records.length;
-
-    return {
-        count: Math.max(0, count),
-        byBookmark,
-        records
-    };
-}
-
-function normalizeHeatmapDailyIndex(raw) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    const sourceDays = source.days && typeof source.days === 'object' ? source.days : {};
-    const days = {};
-
-    Object.entries(sourceDays).forEach(([dateKey, value]) => {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
-        days[dateKey] = normalizeHeatmapDayEntry(value);
-    });
-
-    return {
-        version: 1,
-        updatedAt: Number.isFinite(Number(source.updatedAt)) ? Number(source.updatedAt) : 0,
-        days
-    };
-}
-
-function pruneHeatmapDailyIndex(index) {
-    if (!index || typeof index !== 'object' || !index.days || typeof index.days !== 'object') return index;
-
-    const cutoff = new Date();
-    cutoff.setHours(0, 0, 0, 0);
-    cutoff.setDate(cutoff.getDate() - FLIP_HISTORY_RETENTION_DAYS);
-    const cutoffKey = getLocalDateKey(cutoff);
-
-    Object.keys(index.days).forEach((dateKey) => {
-        if (dateKey < cutoffKey) {
-            delete index.days[dateKey];
-        }
-    });
-
-    return index;
-}
-
-function appendFlipEventToHeatmapIndex(index, event) {
-    const normalized = normalizeHeatmapDailyIndex(index);
-    const bookmarkId = String(event?.bookmarkId || '').trim();
-    const timestamp = Number(event?.timestamp || 0);
-
-    if (!bookmarkId || !Number.isFinite(timestamp) || timestamp <= 0) {
-        return normalized;
-    }
-
-    const dateKey = getLocalDateKey(new Date(timestamp));
-    const day = normalizeHeatmapDayEntry(normalized.days[dateKey]);
-
-    day.count += 1;
-    day.byBookmark[bookmarkId] = (day.byBookmark[bookmarkId] || 0) + 1;
-
-    day.records.push({ bookmarkId, timestamp });
-    if (day.records.length > FLIP_HISTORY_DAY_RECORDS_MAX) {
-        day.records = day.records.slice(day.records.length - FLIP_HISTORY_DAY_RECORDS_MAX);
-    }
-
-    normalized.days[dateKey] = day;
-    normalized.updatedAt = Date.now();
-
-    return pruneHeatmapDailyIndex(normalized);
-}
-
-function buildHeatmapDailyIndexFromFlipHistory(flipHistory = []) {
-    let index = normalizeHeatmapDailyIndex(null);
-
-    for (const flip of (Array.isArray(flipHistory) ? flipHistory : [])) {
-        index = appendFlipEventToHeatmapIndex(index, {
-            bookmarkId: String(flip?.bookmarkId || '').trim(),
-            timestamp: Number(flip?.timestamp || 0)
-        });
-    }
-
-    return pruneHeatmapDailyIndex(index);
-}
-
-async function getHeatmapDailyIndex(options = {}) {
-    const allowRebuild = options.allowRebuild !== false;
-
-    try {
-        const result = await browserAPI.storage.local.get([HEATMAP_DAILY_INDEX_STORAGE_KEY, FLIP_HISTORY_STORAGE_KEY]);
-        const existing = normalizeHeatmapDailyIndex(result?.[HEATMAP_DAILY_INDEX_STORAGE_KEY]);
-        const normalized = pruneHeatmapDailyIndex(existing);
-
-        let index = normalized;
-        let changed = false;
-
-        if (allowRebuild && Object.keys(index.days).length === 0) {
-            const flipHistory = Array.isArray(result?.[FLIP_HISTORY_STORAGE_KEY])
-                ? result[FLIP_HISTORY_STORAGE_KEY]
-                : [];
-
-            if (flipHistory.length > 0) {
-                index = buildHeatmapDailyIndexFromFlipHistory(flipHistory);
-                changed = true;
-            }
-        }
-
-        if (changed) {
-            await browserAPI.storage.local.set({ [HEATMAP_DAILY_INDEX_STORAGE_KEY]: index });
-        }
-
-        return index;
-    } catch (error) {
-        console.warn('[热力图] 获取日索引失败:', error);
-        return normalizeHeatmapDailyIndex(null);
-    }
-}
-
-function buildHeatmapDailyCounts(index) {
-    const dailyCounts = new Map();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const daysToShow = 52 * 7 + today.getDay();
-    for (let i = daysToShow - 1; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        const key = getLocalDateKey(date);
-        dailyCounts.set(key, 0);
-    }
-
-    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
-    Object.entries(sourceDays).forEach(([dateKey, day]) => {
-        if (!dailyCounts.has(dateKey)) return;
-        const count = Number(day?.count || 0);
-        dailyCounts.set(dateKey, Number.isFinite(count) && count > 0 ? Math.floor(count) : 0);
-    });
-
-    return dailyCounts;
-}
-
-function collectMonthBookmarkCountsFromHeatmapIndex(index, year, month) {
-    const stats = new Map();
-    const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
-
-    const sourceDays = index?.days && typeof index.days === 'object' ? index.days : {};
-    Object.entries(sourceDays).forEach(([dateKey, day]) => {
-        if (!dateKey.startsWith(monthPrefix)) return;
-
-        const byBookmark = day?.byBookmark && typeof day.byBookmark === 'object'
-            ? day.byBookmark
-            : {};
-
-        Object.entries(byBookmark).forEach(([bookmarkId, count]) => {
-            const id = String(bookmarkId || '').trim();
-            const value = Number(count);
-            if (!id || !Number.isFinite(value) || value <= 0) return;
-
-            if (!stats.has(id)) {
-                stats.set(id, { count: 0 });
-            }
-            stats.get(id).count += Math.floor(value);
-        });
-    });
-
-    return stats;
-}
-
-async function loadHeatmapData() {
-    const container = document.getElementById('heatmapContainer');
-    if (!container) return;
-
-    try {
-        const index = await getHeatmapDailyIndex({ allowRebuild: true });
-        const dailyCounts = buildHeatmapDailyCounts(index);
-
-        // 渲染热力图（反转顺序，当前月份在左）
-        renderHeatmap(container, dailyCounts);
-
-    } catch (error) {
-        console.error('[热力图] 加载失败:', error);
-        container.innerHTML = `<div class="empty-state"><div class="empty-state-title">${currentLang === 'en' ? 'Failed to load heatmap' : '热力图加载失败'
-            }</div></div>`;
-    }
-}
-
-function renderHeatmap(container, dailyCounts) {
-    const isEn = currentLang === 'en';
-    const dayNames = isEn ? ['', 'Mon', '', 'Wed', '', 'Fri', ''] :
-        ['', '一', '', '三', '', '五', ''];
-    const monthNames = isEn ?
-        ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] :
-        ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-
-    // 找出最大值用于计算颜色深度
-    const counts = Array.from(dailyCounts.values());
-    const maxCount = Math.max(...counts, 1);
-    const totalReviews = counts.reduce((a, b) => a + b, 0);
-
-    // 计算今天的复习次数
-    const todayKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
-    const todayReviews = dailyCounts.get(todayKey) || 0;
-
-    // 按月分组数据
-    const monthsData = new Map(); // year-month -> { year, month, days: [], totalCount }
-    const entries = Array.from(dailyCounts.entries()).sort();
-
-    for (const [dateStr, count] of entries) {
-        const [year, month, day] = dateStr.split('-').map(Number);
-        const date = new Date(year, month - 1, day);
-        const dayOfWeek = date.getDay();
-        const monthKey = `${year}-${month}`;
-
-        if (!monthsData.has(monthKey)) {
-            monthsData.set(monthKey, { year, month, days: [], totalCount: 0 });
-        }
-
-        monthsData.get(monthKey).days.push({ date: dateStr, count, dayOfWeek, day });
-        monthsData.get(monthKey).totalCount += count;
-    }
-
-    // 构建显示顺序：当前月 + 今年12个月(1-12正序)
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1;
-
-    const monthsArray = [];
-
-    // 第一个：当前月份
-    const currentMonthKey = `${currentYear}-${currentMonth}`;
-    const currentMonthData = monthsData.get(currentMonthKey) || { year: currentYear, month: currentMonth, days: [], totalCount: 0 };
-    monthsArray.push(currentMonthData);
-
-    // 后面12个：今年1月、2月、3月...12月（正序）
-    for (let m = 1; m <= 12; m++) {
-        const key = `${currentYear}-${m}`;
-        const data = monthsData.get(key) || { year: currentYear, month: m, days: [], totalCount: 0 };
-        monthsArray.push(data);
-    }
-
-
-
-    // 生成 HTML
-    let html = `<div class="heatmap-year-view">`;
-    html += `<div class="heatmap-scroll-container">`;
-    html += `<div class="heatmap-months-row">`;
-
-    for (let idx = 0; idx < monthsArray.length; idx++) {
-        const monthData = monthsArray[idx];
-        const { year, month, days, totalCount } = monthData;
-        const monthLabel = monthNames[month - 1];
-
-        // idx=1 时在当前月份后添加分隔线，后面每3个月添加分隔线
-        if (idx === 1) {
-            // 当前月份与12个月之间的分隔线
-            html += `<div class="heatmap-quarter-divider current-divider"></div>`;
-        } else if (idx > 1 && (idx - 1) % 3 === 0) {
-            // 12个月内部的季度分隔线（4月、7月、10月前）
-            html += `<div class="heatmap-quarter-divider"></div>`;
-        }
-
-        // 获取一周开始日(中文:周一=1, 英文:周日=0)，与书签添加记录日历保持一致
-        const weekStartDay = (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? 1 : 0;
-
-        // 获取这个月第一天是星期几
-        const firstDay = new Date(year, month - 1, 1);
-        const firstDayOfWeek = firstDay.getDay();
-
-        // 获取这个月的天数
-        const daysInMonth = new Date(year, month, 0).getDate();
-        const dayCountMap = new Map(days.map(d => [d.day, d]));
-
-        // 构建日历网格（横向7列）
-        const calendarDays = [];
-
-        // 填充第一行前面的空白（根据周开始日调整）
-        const blankCells = (firstDayOfWeek - weekStartDay + 7) % 7;
-        for (let i = 0; i < blankCells; i++) {
-            calendarDays.push({ empty: true });
-        }
-
-        // 填充每一天
-        for (let d = 1; d <= daysInMonth; d++) {
-            const dayData = dayCountMap.get(d);
-            if (dayData) {
-                calendarDays.push(dayData);
-            } else {
-                calendarDays.push({ date: `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`, count: 0, day: d });
-            }
-        }
-
-        // 填充最后一行的空白
-        while (calendarDays.length % 7 !== 0) {
-            calendarDays.push({ empty: true });
-        }
-
-        // 判断是否是当前月份
-        const isCurrentMonth = year === currentYear && month === currentMonth;
-        const currentClass = isCurrentMonth ? ' current-month' : '';
-
-        html += `<div class="heatmap-month-block${currentClass}" data-year="${year}" data-month="${month}">`;
-        html += `<div class="heatmap-month-header">${monthLabel}</div>`;
-        html += `<div class="heatmap-calendar">`;
-
-        // 当天日期字符串，用于判断是否高亮
-        const todayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-        // 按行输出（每行7个）
-        for (let i = 0; i < calendarDays.length; i += 7) {
-            html += '<div class="heatmap-row">';
-            for (let j = 0; j < 7; j++) {
-                const day = calendarDays[i + j];
-                if (!day || day.empty) {
-                    html += '<div class="heatmap-cell empty"></div>';
-                } else {
-                    // 固定阈值：0 / 1-15 / 16-50 / 51-150 / 151+
-                    const level = day.count === 0 ? 0 :
-                        day.count <= 15 ? 1 :
-                            day.count <= 50 ? 2 :
-                                day.count <= 150 ? 3 : 4;
-                    // 判断是否是当天
-                    const isToday = day.date === todayStr;
-                    const todayClass = isToday ? ' today' : '';
-                    if (day.count > 0) {
-                        const [y, m, dd] = day.date.split('-').map(Number);
-                        const tooltip = isEn ?
-                            `${day.count} review${day.count !== 1 ? 's' : ''}, ${m}-${dd}` :
-                            `${day.count}次, ${m}-${dd}`;
-                        html += `<div class="heatmap-cell level-${level}${todayClass}" data-date="${day.date}" data-tooltip="${tooltip}"></div>`;
-                    } else {
-                        html += `<div class="heatmap-cell level-0${todayClass}" data-date="${day.date}"></div>`;
-                    }
-                }
-            }
-            html += '</div>';
-        }
-
-        html += `</div>`;
-        html += `<div class="heatmap-month-count">${totalCount}</div>`;
-        html += `</div>`;
-    }
-
-    html += `</div></div>`;
-
-    // 底部统计和图例
-    html += `
-        <div class="heatmap-footer">
-            <span class="heatmap-stats">${isEn ? 'Today' : '今天'} ${todayReviews} ${isEn ? 'reviews' : '次'}</span>
-            <div class="heatmap-footer-right">
-                <div class="heatmap-legend">
-                    <span>${isEn ? 'Less' : '少'}</span>
-                    <div class="heatmap-cell level-0"></div>
-                    <div class="heatmap-cell level-1"></div>
-                    <div class="heatmap-cell level-2"></div>
-                    <div class="heatmap-cell level-3"></div>
-                    <div class="heatmap-cell level-4"></div>
-                    <span>${isEn ? 'More' : '多'}</span>
-                </div>
-                <button class="heatmap-help-btn" id="heatmapHelpBtn" title="${isEn ? 'Level description' : '等级说明'}">
-                    <i class="fas fa-question-circle"></i>
-                </button>
-            </div>
-        </div>
-    </div>`;
-
-    container.innerHTML = html;
-
-    // 确保滚动条在最左边，显示当前月份
-    const scrollContainer = container.querySelector('.heatmap-scroll-container');
-    if (scrollContainer) {
-        scrollContainer.scrollLeft = 0;
-    }
-
-    // 创建或获取全局tooltip元素
-    let globalTooltip = document.getElementById('heatmapGlobalTooltip');
-    if (!globalTooltip) {
-        globalTooltip = document.createElement('div');
-        globalTooltip.id = 'heatmapGlobalTooltip';
-        globalTooltip.className = 'heatmap-global-tooltip';
-        document.body.appendChild(globalTooltip);
-    }
-
-    // 绑定日期格子点击事件和tooltip事件
-    container.querySelectorAll('.heatmap-cell[data-date]').forEach(cell => {
-        cell.style.cursor = 'pointer';
-        cell.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // 点击时隐藏tooltip
-            globalTooltip.classList.remove('visible');
-            const date = cell.dataset.date;
-            showHeatmapDateDetail(date);
-        });
-
-        // 鼠标进入时显示tooltip
-        cell.addEventListener('mouseenter', (e) => {
-            const tooltipText = cell.dataset.tooltip;
-            if (!tooltipText) return;
-
-            // 先设置内容并临时显示以获取正确尺寸
-            globalTooltip.textContent = tooltipText;
-            globalTooltip.style.visibility = 'hidden';
-            globalTooltip.style.display = 'block';
-
-            // 计算位置：在cell正上方居中
-            const rect = cell.getBoundingClientRect();
-            const tooltipRect = globalTooltip.getBoundingClientRect();
-            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
-            let top = rect.top - tooltipRect.height - 8;
-
-            // 防止超出左右边界
-            if (left < 5) left = 5;
-            if (left + tooltipRect.width > window.innerWidth - 5) {
-                left = window.innerWidth - tooltipRect.width - 5;
-            }
-
-            // 如果上方空间不够，显示在下方
-            if (top < 5) {
-                top = rect.bottom + 8;
-            }
-
-            globalTooltip.style.left = left + 'px';
-            globalTooltip.style.top = top + 'px';
-            globalTooltip.style.visibility = '';
-            globalTooltip.style.display = '';
-            globalTooltip.classList.add('visible');
-        });
-
-        // 鼠标离开时隐藏tooltip
-        cell.addEventListener('mouseleave', () => {
-            globalTooltip.classList.remove('visible');
-        });
-    });
-
-    // 绑定月份点击事件（进入月视图）
-    container.querySelectorAll('.heatmap-month-block').forEach(block => {
-        block.style.cursor = 'pointer';
-        block.addEventListener('click', (e) => {
-            // 如果点击的是日期格子，不触发月份点击
-            if (e.target.closest('.heatmap-cell[data-date]')) return;
-            const year = parseInt(block.dataset.year);
-            const month = parseInt(block.dataset.month);
-            showHeatmapMonthDetail(year, month);
-        });
-    });
-
-    // 绑定帮助按钮点击事件
-    const helpBtn = document.getElementById('heatmapHelpBtn');
-    if (helpBtn) {
-        helpBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            showHeatmapLevelHelp(helpBtn);
-        });
-    }
-}
-
-// 显示热力图等级说明
-function showHeatmapLevelHelp(anchorBtn) {
-    const isEn = currentLang === 'en';
-
-    // 如果已存在，先移除
-    const existing = document.getElementById('heatmapLevelPopup');
-    if (existing) {
-        existing.remove();
-        return;
-    }
-
-    const popup = document.createElement('div');
-    popup.id = 'heatmapLevelPopup';
-    popup.className = 'heatmap-level-popup';
-    popup.innerHTML = `
-        <div class="heatmap-level-title">${isEn ? 'Review Level' : '复习等级说明'}</div>
-        <div class="heatmap-level-list">
-            <div class="heatmap-level-row">
-                <div class="heatmap-cell level-0"></div>
-                <span>0 ${isEn ? 'reviews' : '次'}</span>
-            </div>
-            <div class="heatmap-level-row">
-                <div class="heatmap-cell level-1"></div>
-                <span>1-15 ${isEn ? 'reviews' : '次'}</span>
-            </div>
-            <div class="heatmap-level-row">
-                <div class="heatmap-cell level-2"></div>
-                <span>16-50 ${isEn ? 'reviews' : '次'}</span>
-            </div>
-            <div class="heatmap-level-row">
-                <div class="heatmap-cell level-3"></div>
-                <span>51-150 ${isEn ? 'reviews' : '次'}</span>
-            </div>
-            <div class="heatmap-level-row">
-                <div class="heatmap-cell level-4"></div>
-                <span>151+ ${isEn ? 'reviews' : '次'}</span>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(popup);
-
-    // 定位到按钮上方
-    const rect = anchorBtn.getBoundingClientRect();
-    popup.style.position = 'fixed';
-    popup.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
-    popup.style.right = (window.innerWidth - rect.right) + 'px';
-
-    // 点击其他地方关闭
-    const closeHandler = (e) => {
-        if (!popup.contains(e.target) && e.target !== anchorBtn) {
-            popup.remove();
-            document.removeEventListener('click', closeHandler);
-        }
-    };
-    setTimeout(() => document.addEventListener('click', closeHandler), 0);
-}
-
-async function getHeatmapDetailBookmarkMap() {
-    const now = Date.now();
-    if (heatmapBookmarkMapCache.map instanceof Map && now < Number(heatmapBookmarkMapCache.expiresAt || 0)) {
-        return heatmapBookmarkMapCache.map;
-    }
-
-    const nextMap = new Map();
-    try {
-        const bookmarks = await getAllBookmarksFlat();
-        bookmarks.forEach((item) => {
-            const id = String(item?.id || '').trim();
-            if (!id || !item?.url) return;
-            nextMap.set(id, item);
-        });
-    } catch (e) {
-        console.warn('[热力图] 获取书签失败:', e);
-    }
-
-    heatmapBookmarkMapCache = {
-        expiresAt: now + HEATMAP_BOOKMARK_MAP_CACHE_TTL_MS,
-        map: nextMap
-    };
-
-    return nextMap;
-}
-
-function invalidateHeatmapDetailBookmarkMapCache() {
-    heatmapBookmarkMapCache = {
-        expiresAt: 0,
-        map: null
-    };
-}
-
-// 显示热力图日期详情（二级UI）
-async function showHeatmapDateDetail(dateStr) {
-    const isEn = currentLang === 'en';
-    const container = document.getElementById('heatmapContainer');
-    if (!container) return;
-
-    const index = await getHeatmapDailyIndex({ allowRebuild: true });
-    const dayEntry = normalizeHeatmapDayEntry(index?.days?.[dateStr]);
-    const dayRecords = Array.isArray(dayEntry.records)
-        ? dayEntry.records.slice().sort((a, b) => b.timestamp - a.timestamp)
-        : [];
-    const totalCount = Math.max(dayRecords.length, Number(dayEntry.count || 0));
-
-    // 获取书签信息（短TTL缓存，避免重复全量遍历）
-    const bookmarkMap = await getHeatmapDetailBookmarkMap();
-
-    // 格式化日期
-    const [year, month, day] = dateStr.split('-').map(Number);
-    const dateLabel = isEn ? `${month}/${day}/${year}` : `${year}年${month}月${day}日`;
-
-    const truncatedHint = totalCount > dayRecords.length
-        ? `<div class="heatmap-detail-empty">${isEn ? `Showing latest ${dayRecords.length} records` : `仅显示最近 ${dayRecords.length} 条记录`}</div>`
-        : '';
-
-    // 生成详情HTML
-    let html = `
-        <div class="heatmap-detail-view">
-            <div class="heatmap-detail-header">
-                <button class="heatmap-back-btn" id="heatmapBackBtn">
-                    <i class="fas fa-arrow-left"></i>
-                    <span>${isEn ? 'Back' : '返回'}</span>
-                </button>
-                <span class="heatmap-detail-title">${dateLabel}</span>
-                <span class="heatmap-detail-count">${totalCount} ${isEn ? 'reviews' : '次复习'}</span>
-            </div>
-            <div class="heatmap-detail-list">
-                ${truncatedHint}
-    `;
-
-    if (dayRecords.length === 0) {
-        html += `<div class="heatmap-detail-empty">${isEn ? 'No reviews on this day' : '当天没有复习记录'}</div>`;
-    } else {
-        for (const record of dayRecords) {
-            const bookmark = bookmarkMap.get(String(record.bookmarkId || ''));
-            const time = new Date(record.timestamp);
-            const timeStr = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
-
-            if (bookmark) {
-                html += `
-                    <div class="heatmap-detail-item" data-url="${escapeHtml(bookmark.url)}">
-                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
-                        <div class="heatmap-detail-info">
-                            <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
-                            <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
-                        </div>
-                        <span class="heatmap-detail-time">${timeStr}</span>
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div class="heatmap-detail-item deleted">
-                        <i class="fas fa-bookmark heatmap-detail-favicon-icon"></i>
-                        <div class="heatmap-detail-info">
-                            <div class="heatmap-detail-item-title">${isEn ? 'Bookmark deleted' : '书签已删除'}</div>
-                            <div class="heatmap-detail-item-url">ID: ${record.bookmarkId}</div>
-                        </div>
-                        <span class="heatmap-detail-time">${timeStr}</span>
-                    </div>
-                `;
-            }
-        }
-    }
-
-    html += `</div></div>`;
-
-    container.innerHTML = html;
-
-    // 绑定返回按钮
-    document.getElementById('heatmapBackBtn').addEventListener('click', () => {
-        loadHeatmapData();
-    });
-
-    // 绑定书签点击事件
-    container.querySelectorAll('.heatmap-detail-item[data-url]').forEach(item => {
-        item.style.cursor = 'pointer';
-        item.addEventListener('click', () => {
-            const url = item.dataset.url;
-            if (url) window.open(url, '_blank');
-        });
-    });
-}
-
-// 显示热力图月份详情（书签复习排行）
-async function showHeatmapMonthDetail(year, month) {
-    const isEn = currentLang === 'en';
-    const container = document.getElementById('heatmapContainer');
-    if (!container) return;
-
-    const index = await getHeatmapDailyIndex({ allowRebuild: true });
-
-    // 按书签ID统计当月次数
-    const bookmarkCountMap = collectMonthBookmarkCountsFromHeatmapIndex(index, year, month);
-
-    // 获取书签信息（短TTL缓存，避免重复全量遍历）
-    const bookmarkMap = await getHeatmapDetailBookmarkMap();
-
-    const monthNames = isEn ?
-        ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] :
-        ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-    const monthLabel = isEn ? `${monthNames[month - 1]} ${year}` : `${year}年${monthNames[month - 1]}`;
-
-    const totalCount = Array.from(bookmarkCountMap.values()).reduce((sum, s) => sum + (Number(s?.count || 0)), 0);
-
-    // 按复习次数排序
-    const sortedBookmarks = Array.from(bookmarkCountMap.entries())
-        .sort((a, b) => Number(b?.[1]?.count || 0) - Number(a?.[1]?.count || 0));
-
-    // 生成详情HTML
-    let html = `
-        <div class="heatmap-detail-view">
-            <div class="heatmap-detail-header">
-                <button class="heatmap-back-btn" id="heatmapBackBtn">
-                    <i class="fas fa-arrow-left"></i>
-                    <span>${isEn ? 'Back' : '返回'}</span>
-                </button>
-                <span class="heatmap-detail-title">${monthLabel} ${isEn ? 'Ranking' : '复习排行'}</span>
-                <span class="heatmap-detail-count">${totalCount} ${isEn ? 'reviews' : '次复习'}</span>
-            </div>
-            <div class="heatmap-detail-list">
-    `;
-
-    if (sortedBookmarks.length === 0) {
-        html += `<div class="heatmap-detail-empty">${isEn ? 'No reviews this month' : '当月没有复习记录'}</div>`;
-    } else {
-        let rank = 0;
-        for (const [bookmarkId, stat] of sortedBookmarks) {
-            rank++;
-            const bookmark = bookmarkMap.get(String(bookmarkId || ''));
-
-            if (bookmark) {
-                html += `
-                    <div class="heatmap-detail-item heatmap-ranking-item" data-url="${escapeHtml(bookmark.url)}">
-                        <span class="heatmap-rank ${rank <= 3 ? 'top-' + rank : ''}">${rank}</span>
-                        <img class="heatmap-detail-favicon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${getFaviconUrl(bookmark.url)}">
-                        <div class="heatmap-detail-info">
-                            <div class="heatmap-detail-item-title">${escapeHtml(bookmark.title || bookmark.url)}</div>
-                            <div class="heatmap-detail-item-url">${escapeHtml(bookmark.url)}</div>
-                        </div>
-                        <span class="heatmap-review-count">${stat.count} ${isEn ? 'times' : '次'}</span>
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div class="heatmap-detail-item heatmap-ranking-item deleted">
-                        <span class="heatmap-rank">${rank}</span>
-                        <i class="fas fa-bookmark heatmap-detail-favicon-icon"></i>
-                        <div class="heatmap-detail-info">
-                            <div class="heatmap-detail-item-title">${isEn ? 'Bookmark deleted' : '书签已删除'}</div>
-                            <div class="heatmap-detail-item-url">ID: ${bookmarkId}</div>
-                        </div>
-                        <span class="heatmap-review-count">${stat.count} ${isEn ? 'times' : '次'}</span>
-                    </div>
-                `;
-            }
-        }
-    }
-
-    html += `</div></div>`;
-
-    container.innerHTML = html;
-
-    // 绑定返回按钮
-    document.getElementById('heatmapBackBtn').addEventListener('click', () => {
-        loadHeatmapData();
-    });
-
-    // 绑定书签点击事件
-    container.querySelectorAll('.heatmap-detail-item[data-url]').forEach(item => {
-        item.style.cursor = 'pointer';
-        item.addEventListener('click', () => {
-            const url = item.dataset.url;
-            if (url) window.open(url, '_blank');
-        });
-    });
-}
 
 // =============================================================================
 // 清除记录菜单
@@ -37721,3087 +37039,3017 @@ function showTrackingClearMenu(anchorEl) {
     setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
-// =============================================================================
-// 综合排行
-// =============================================================================
+// =================================================================================
+// XI. EVENT LISTENERS & MESSAGE LISTENERS (全局 API/消息监听与实时更新)
+// =================================================================================
 
-function normalizeTrackingRankingRange(range) {
-    const safe = String(range || '').toLowerCase();
-    if (safe === 'today' || safe === 'week' || safe === 'month' || safe === 'year' || safe === 'all') {
-        return safe;
-    }
-    return 'all';
-}
-
-function getTrackingRankingRangeBounds(range) {
-    const safeRange = normalizeTrackingRankingRange(range);
-    const now = Date.now();
-
-    if (safeRange === 'all') {
-        return { range: safeRange, startTime: 0, endTime: now };
-    }
-
-    const current = new Date(now);
-    const dayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate());
-    const start = new Date(dayStart);
-
-    if (safeRange === 'week') {
-        const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // zh: Monday, en: Sunday
-        let diff = dayStart.getDay() - weekStartDay;
-        if (diff < 0) diff += 7;
-        start.setDate(dayStart.getDate() - diff);
-    } else if (safeRange === 'month') {
-        start.setDate(1);
-    } else if (safeRange === 'year') {
-        start.setMonth(0, 1);
-    }
-
-    return {
-        range: safeRange,
-        startTime: start.getTime(),
-        endTime: now
-    };
-}
-
-function getTrackingSessionCompositeMs(session) {
-    if (!session || typeof session !== 'object') return 0;
-
-    const directComposite = Number(session.compositeMs);
-    if (Number.isFinite(directComposite) && directComposite > 0) {
-        return directComposite;
-    }
-
-    const activeMs = Number(session.activeMs) || 0;
-    const idleFocusMs = Number(session.idleFocusMs || session.pauseTotalMs) || 0;
-    const visibleMs = Number(session.visibleMs) || 0;
-    const backgroundMs = Number(session.backgroundMs) || 0;
-
-    const fallbackComposite = activeMs + (idleFocusMs * 0.8) + (visibleMs * 0.5) + (backgroundMs * 0.1);
-    return Number.isFinite(fallbackComposite) && fallbackComposite > 0 ? fallbackComposite : 0;
-}
-
-function getTrackingSessionWakeCount(session) {
-    if (!session || typeof session !== 'object') return 0;
-    const wakes = Number(session.wakeCount);
-    return Number.isFinite(wakes) && wakes > 0 ? wakes : 0;
-}
-
-function getTrackingRankingAggregateKey(item) {
-    if (!item || typeof item !== 'object') return '';
-
-    const bookmarkId = String(item.bookmarkId || '').trim();
-    if (bookmarkId) return `bookmark:${bookmarkId}`;
-
-    const url = String(item.url || '').trim();
-    if (url) return `url:${url}`;
-
-    const title = String(item.title || '').trim();
-    if (title) return `title:${title}`;
-
-    return '';
-}
-
-function getTrackingSessionBounds(session, fallbackEndTime) {
-    if (!session || typeof session !== 'object') return null;
-
-    const safeFallbackEnd = Number(fallbackEndTime) || Date.now();
-    const rawStart = Number(session.startTime || session.originalStartTime || 0);
-    const rawEnd = Number(session.endTime || session.lastUpdate || 0);
-    const rawTotal = Number(session.totalMs || 0);
-
-    let start = Number.isFinite(rawStart) && rawStart > 0 ? rawStart : 0;
-    let end = Number.isFinite(rawEnd) && rawEnd > 0 ? rawEnd : 0;
-    const totalMs = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
-
-    if (start <= 0 && end > 0 && totalMs > 0) {
-        start = Math.max(1, end - totalMs);
-    } else if (start > 0 && end <= 0 && totalMs > 0) {
-        end = start + totalMs;
-    } else if (start <= 0 && end <= 0 && totalMs > 0) {
-        end = safeFallbackEnd;
-        start = Math.max(1, end - totalMs);
-    }
-
-    if (start <= 0 && end > 0) {
-        start = end;
-    } else if (start > 0 && end <= 0) {
-        end = safeFallbackEnd > start ? safeFallbackEnd : (start + 1);
-    } else if (start <= 0 && end <= 0) {
-        start = safeFallbackEnd;
-        end = safeFallbackEnd + 1;
-    }
-
-    const normalizedStart = Math.max(1, start);
-    const normalizedEnd = Math.max(normalizedStart + 1, end);
-    return {
-        startTime: normalizedStart,
-        endTime: normalizedEnd,
-        durationMs: Math.max(1, normalizedEnd - normalizedStart)
-    };
-}
-
-function getTrackingSessionOverlapInfo(session, startTime, endTime) {
-    if (!session || typeof session !== 'object') {
-        return { ratio: 0, overlapMs: 0, durationMs: 1 };
-    }
-
-    const safeStartTime = Number(startTime) || 0;
-    const safeEndTime = Number(endTime) || Date.now();
-    const bounds = getTrackingSessionBounds(session, safeEndTime);
-    if (!bounds) {
-        return { ratio: 0, overlapMs: 0, durationMs: 1 };
-    }
-
-    if (safeStartTime <= 0) {
-        return {
-            ratio: 1,
-            overlapMs: bounds.durationMs,
-            durationMs: bounds.durationMs
-        };
-    }
-
-    const overlapStart = Math.max(bounds.startTime, safeStartTime);
-    const overlapEnd = Math.min(bounds.endTime, safeEndTime);
-    const overlap = overlapEnd - overlapStart;
-    if (overlap <= 0) {
-        return {
-            ratio: 0,
-            overlapMs: 0,
-            durationMs: bounds.durationMs
-        };
-    }
-
-    return {
-        ratio: Math.min(1, overlap / bounds.durationMs),
-        overlapMs: overlap,
-        durationMs: bounds.durationMs
-    };
-}
-
-async function loadActiveTimeRanking() {
-    const container = document.getElementById('trackingRankingList');
-    if (!container) return;
-    const hintEl = document.getElementById('trackingRankingHint');
-
-    // 排行榜刷新时，清除T值缓存，下次计算S值时会获取最新数据
-    clearTrackingRankingCache();
-
-    try {
-        // 获取排行类型（综合时间 / 唤醒次数）
-        const rankingTypeSelect = document.getElementById('trackingRankingType');
-        const rankingType = rankingTypeSelect ? rankingTypeSelect.value : 'composite';
-
-        // 获取时间范围
-        const rangeSelect = document.getElementById('trackingRankingRange');
-        const range = normalizeTrackingRankingRange(rangeSelect ? rangeSelect.value : 'all');
-        const { startTime, endTime } = getTrackingRankingRangeBounds(range);
-
-        // 并行获取：区间统计（all=累计总账，其它=区间账）+ 当前正在追踪的会话
-        const [statsResponse, activeSessionsResponse] = await Promise.all([
-            browserAPI.runtime.sendMessage({
-                action: 'getTrackingRankingStatsByRange',
-                range,
-                startTime,
-                endTime
-            }),
-            browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' })
-        ]);
-
-        // 合并数据：已保存统计（累计/区间）+ 当前活跃会话（仅未落盘部分）
-        const titleStats = new Map();
-        const upsertStat = (key, base = {}) => {
-            if (titleStats.has(key)) {
-                const stat = titleStats.get(key);
-                if (!stat.bookmarkId && base.bookmarkId) stat.bookmarkId = base.bookmarkId;
-                if (!stat.url && base.url) stat.url = base.url;
-                if (base.title && (!stat.title || stat.title === stat.url || stat.title === key)) {
-                    stat.title = base.title;
-                }
-                return stat;
-            }
-            const init = {
-                bookmarkId: base.bookmarkId || null,
-                url: base.url || '',
-                title: base.title || base.url || key,
-                totalCompositeMs: 0,
-                wakeCount: 0,
-                sessionCount: 0,
-                lastUpdate: 0
-            };
-            titleStats.set(key, init);
-            return init;
-        };
-
-        // 1. 已保存统计（all=累计总账；today/week/month/year=区间账）
-        const savedStats = (statsResponse?.success && statsResponse?.stats && typeof statsResponse.stats === 'object')
-            ? statsResponse.stats
-            : {};
-        const statsStartedAt = Number(statsResponse?.startedAt || 0);
-        if (hintEl) {
-            if (range === 'all') {
-                hintEl.textContent = '';
-                hintEl.style.display = 'none';
-            } else if (statsStartedAt > 0) {
-                const dateLabel = (() => {
-                    try {
-                        const dt = new Date(statsStartedAt);
-                        if (currentLang === 'zh_CN') {
-                            return dt.toLocaleDateString('zh-CN');
-                        }
-                        return dt.toLocaleDateString('en-US');
-                    } catch (_) {
-                        return String(statsStartedAt);
-                    }
-                })();
-                hintEl.textContent = i18n.trackingRangeDataHintFrom[currentLang].replace('{date}', dateLabel);
-                hintEl.style.display = '';
-            } else {
-                hintEl.textContent = i18n.trackingRangeDataHintPending[currentLang];
-                hintEl.style.display = '';
-            }
-        }
-        for (const rawStat of Object.values(savedStats)) {
-            if (!rawStat || typeof rawStat !== 'object') continue;
-            const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId) : '';
-            const key = getTrackingRankingAggregateKey({
-                bookmarkId,
-                url: rawStat?.url || '',
-                title: rawStat?.title || ''
-            });
-            if (!key) continue;
-
-            const stat = upsertStat(key, {
-                bookmarkId: bookmarkId || null,
-                url: rawStat.url || '',
-                title: rawStat.title || rawStat.url || key
-            });
-            stat.totalCompositeMs += Math.max(
-                0,
-                Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0
-            );
-            stat.wakeCount += Math.max(
-                0,
-                Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0
-            );
-            stat.sessionCount += Math.max(0, Number(rawStat.sessionCount || 0) || 0);
-            stat.lastUpdate = Math.max(
-                stat.lastUpdate,
-                Number(rawStat.lastUpdate || 0) || 0
-            );
-        }
-
-        // 2. 当前活跃会话（只加未落盘部分，避免与历史会话重复）
-        const activeSessions = (activeSessionsResponse?.success && Array.isArray(activeSessionsResponse.sessions))
-            ? activeSessionsResponse.sessions
-            : [];
-        if (activeSessions.length > 0) {
-            const groupedByKey = new Map();
-            for (const session of activeSessions) {
-                const bookmarkId = session?.bookmarkId != null ? String(session.bookmarkId) : '';
-                const key = getTrackingRankingAggregateKey({
-                    bookmarkId,
-                    url: session?.url || '',
-                    title: session?.title || ''
-                });
-                if (!key) continue;
-                if (!groupedByKey.has(key)) {
-                    groupedByKey.set(key, {
-                        bookmarkId: bookmarkId || null,
-                        url: session.url || '',
-                        title: session.title || session.url || key,
-                        unsavedCompositeMs: 0,
-                        unsavedWakeCount: 0
-                    });
-                }
-
-                const unsavedCompositeRaw = Number(session.unsavedCompositeMs);
-                const unsavedWakeRaw = Number(session.unsavedWakeCount);
-                const unsavedCompositeMs = (Number.isFinite(unsavedCompositeRaw) && unsavedCompositeRaw >= 0)
-                    ? unsavedCompositeRaw
-                    : getTrackingSessionCompositeMs(session);
-                const unsavedWakeCount = (Number.isFinite(unsavedWakeRaw) && unsavedWakeRaw >= 0)
-                    ? unsavedWakeRaw
-                    : getTrackingSessionWakeCount(session);
-
-                if (unsavedCompositeMs <= 0 && unsavedWakeCount <= 0) continue;
-
-                // 对活跃会话也按区间做重叠折算（缺失起始时间时按当前区间全计入）
-                const overlapInfo = getTrackingSessionOverlapInfo({
-                    startTime: session.startTime || session.originalStartTime || endTime,
-                    endTime
-                }, startTime, endTime);
-                if (overlapInfo.ratio <= 0) continue;
-
-                const scaledUnsavedComposite = unsavedCompositeMs * overlapInfo.ratio;
-                const boundedUnsavedComposite = overlapInfo.overlapMs > 0
-                    ? Math.min(scaledUnsavedComposite, overlapInfo.overlapMs)
-                    : scaledUnsavedComposite;
-
-                const group = groupedByKey.get(key);
-                group.unsavedCompositeMs += Math.max(0, boundedUnsavedComposite);
-                group.unsavedWakeCount += Math.max(0, unsavedWakeCount * overlapInfo.ratio);
-            }
-
-            // 合并到排行榜
-            for (const [key, group] of groupedByKey) {
-                if (group.unsavedCompositeMs <= 0 && group.unsavedWakeCount <= 0) continue;
-                const stat = upsertStat(key, {
-                    bookmarkId: group.bookmarkId || null,
-                    url: group.url,
-                    title: group.title
-                });
-                stat.totalCompositeMs += group.unsavedCompositeMs;
-                stat.wakeCount += group.unsavedWakeCount;
-                stat.sessionCount += 1;
-                stat.lastUpdate = Math.max(stat.lastUpdate, endTime);
-            }
-        }
-
-        // 防御性兜底：单条目在当前区间内不应超过区间总时长（例如 today <= 24h）。
-        if (startTime > 0 && endTime > startTime) {
-            const maxCompositePerItem = endTime - startTime;
-            for (const stat of titleStats.values()) {
-                stat.totalCompositeMs = Math.min(stat.totalCompositeMs, maxCompositePerItem);
-            }
-        }
-
-        if (titleStats.size === 0) {
-            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
-            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
-            return;
-        }
-
-        // 过滤掉被时间追踪屏蔽的项目
-        const blockedSets = await getTrackingBlockedSets();
-        const cache = await getTrackingBookmarkCache();
-        const items = Array.from(titleStats.values());
-        const blockedFlags = await Promise.all(
-            items.map(item => isTrackingItemBlocked(item, blockedSets, cache))
-        );
-
-        // 根据排行类型排序，并过滤掉被屏蔽的项目
-        const sorted = items
-            .filter((_, index) => !blockedFlags[index])
-            .sort((a, b) => {
-                if (rankingType === 'wakes') {
-                    return b.wakeCount - a.wakeCount;
-                }
-                return b.totalCompositeMs - a.totalCompositeMs;
-            })
-            .slice(0, 10);
-
-        // Expose to global for Search (Phase 4)
-        window.activeTimeRankingStats = { items: sorted };
-
-        if (sorted.length === 0) {
-            const noDataText = range === 'all' ? i18n.trackingNoData[currentLang] : i18n.trackingNoDataRange[currentLang];
-            container.innerHTML = `<div class="tracking-empty">${noDataText}</div>`;
-            return;
-        }
-
-        // 计算最大值用于进度条（根据排行类型）
-        const maxValue = rankingType === 'wakes'
-            ? sorted[0].wakeCount
-            : sorted[0].totalCompositeMs;
-
-        // 截断标题函数
-        const truncateTitle = (title, maxLen = 45) => {
-            if (!title) return '';
-            return title.length > maxLen ? title.substring(0, maxLen) + '...' : title;
-        };
-
-        // 唤醒次数高频阈值（根据时间范围）
-        const wakeThresholds = {
-            'today': 15,
-            'week': 50,
-            'month': 100,
-            'year': 500,
-            'all': 1000
-        };
-        const wakeThreshold = wakeThresholds[range] || 15;
-
-        // 渲染列表
-        container.innerHTML = sorted.map((item, index) => {
-            const compositeTime = formatActiveTime(item.totalCompositeMs);
-            const displayWakeCount = Math.max(0, Math.round(item.wakeCount || 0));
-            // 根据排行类型计算进度条宽度
-            const barWidth = maxValue > 0
-                ? ((rankingType === 'wakes' ? item.wakeCount : item.totalCompositeMs) / maxValue * 100)
-                : 0;
-            const displayTitle = truncateTitle(item.title || item.url);
-            const faviconUrl = getFaviconUrl(item.url);
-
-            // 高亮逻辑：根据排行类型选择主要指标的高亮
-            let wakeHighlight = '';
-            let timeHighlight = '';
-            if (rankingType === 'wakes') {
-                // 唤醒次数排行：唤醒次数用强调色（primary），时间正常显示
-                wakeHighlight = 'ranking-primary';
-                timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)}`;
-            } else {
-                // 综合时间排行：高频唤醒用橙色，时间用梯度蓝色
-                wakeHighlight = displayWakeCount >= wakeThreshold ? 'wakes-highlight' : '';
-                timeHighlight = `time-level-${getTimeGradientLevel(item.totalCompositeMs, range)} ranking-primary`;
-            }
-
-            return `
-                <div class="tracking-ranking-item" data-url="${escapeHtml(item.url)}" data-bookmark-url="${escapeHtml(item.url)}">
-                    <span class="ranking-number">${index + 1}</span>
-                    <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${faviconUrl}" alt="">
-                    <div class="ranking-info">
-                        <div class="ranking-title" title="${escapeHtml(item.title || item.url)}">${escapeHtml(displayTitle)}</div>
-                        <div class="ranking-bar">
-                            <div class="ranking-bar-fill" style="width: ${barWidth}%"></div>
-                        </div>
-                    </div>
-                    <span class="ranking-wakes ${wakeHighlight}">${displayWakeCount}${currentLang === 'en' ? 'x' : '次'}</span>
-                    <span class="ranking-time ${timeHighlight}">${compositeTime}</span>
-                </div>
-            `;
-        }).join('');
-
-        // 点击打开对应URL
-        container.querySelectorAll('.tracking-ranking-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const url = item.dataset.url;
-                if (url) {
-                    browserAPI.tabs.create({ url });
-                }
-            });
-        });
-
-        // Phase 4.7: 重新应用搜索高亮（列表刷新后保持筛选状态）
-        if (isTrackingRankingSearchActive()) {
-            highlightTrackingRankingMatches();
-        }
-
-    } catch (error) {
-        console.error('[综合排行] 加载失败:', error);
-        if (hintEl) {
-            hintEl.textContent = '';
-            hintEl.style.display = 'none';
-        }
-        container.innerHTML = `<div class="tracking-empty">${i18n.trackingLoadFailed[currentLang]}</div>`;
-    }
-}
-
-// 获取综合时间的梯度级别（用于蓝色深浅）
-// range: 'today', 'week', 'month', 'year', 'all', 'current'（正在追踪）
-// Level 0-4: 正常梯度蓝色，Level 5: 极端使用（深紫色）
-function getTimeGradientLevel(ms, range = 'today') {
-    const minutes = (ms || 0) / 60000;
-    const hours = minutes / 60;
-
-    // 根据时间范围使用不同的阈值
-    if (range === 'week') {
-        // 本周：30分钟、2小时、5小时、10小时、20小时（极端）
-        if (minutes < 30) return 0;
-        if (hours < 2) return 1;
-        if (hours < 5) return 2;
-        if (hours < 10) return 3;
-        if (hours < 20) return 4;
-        return 5;  // 极端：20小时+
-    } else if (range === 'month') {
-        // 本月：2小时、10小时、30小时、60小时、100小时（极端）
-        if (hours < 2) return 0;
-        if (hours < 10) return 1;
-        if (hours < 30) return 2;
-        if (hours < 60) return 3;
-        if (hours < 100) return 4;
-        return 5;  // 极端：100小时+
-    } else if (range === 'year' || range === 'all') {
-        // 本年/全部：10小时、50小时、150小时、300小时、500小时（极端）
-        if (hours < 10) return 0;
-        if (hours < 50) return 1;
-        if (hours < 150) return 2;
-        if (hours < 300) return 3;
-        if (hours < 500) return 4;
-        return 5;  // 极端：500小时+
-    } else {
-        // 今日/正在追踪（current）：1分钟、5分钟、15分钟、30分钟、2小时（极端）
-        if (minutes < 1) return 0;
-        if (minutes < 5) return 1;
-        if (minutes < 15) return 2;
-        if (minutes < 30) return 3;
-        if (hours < 2) return 4;
-        return 5;  // 极端：2小时+
-    }
-}
 
 // =============================================================================
-// 时间捕捉搜索筛选 (Phase 4.7)
+// 【重要架构】全局链接点击兜底监听器 - 时间捕捉归因
 // =============================================================================
-
-// 时间捕捉搜索状态
-let trackingRankingSearchQuery = '';
-let trackingRankingSearchTokens = null;
-
-/**
- * 检查时间捕捉搜索是否激活
- */
-function isTrackingRankingSearchActive() {
-    return Boolean(trackingRankingSearchTokens && trackingRankingSearchTokens.length > 0);
-}
-
-/**
- * 应用时间捕捉关键词筛选
- */
-function applyTrackingRankingKeywordFilter(query, tokens) {
-    trackingRankingSearchQuery = String(query || '').trim();
-    trackingRankingSearchTokens = Array.isArray(tokens) ? tokens : null;
-
-    // 高亮匹配项
-    highlightTrackingRankingMatches();
-
-    // 更新指示器状态
-    applyTrackingRankingIndicatorState();
-
-    // 更新退出按钮
-    if (typeof window.updateSearchFilterExitButton === 'function') {
-        window.updateSearchFilterExitButton();
-    }
-}
-
-/**
- * 清除时间捕捉搜索筛选
- */
-function clearTrackingRankingSearchFilter() {
-    trackingRankingSearchQuery = '';
-    trackingRankingSearchTokens = null;
-
-    // 清除高亮
-    clearTrackingRankingHighlight();
-
-    // 更新指示器状态
-    applyTrackingRankingIndicatorState();
-
-    // 更新退出按钮
-    if (typeof window.updateSearchFilterExitButton === 'function') {
-        window.updateSearchFilterExitButton();
-    }
-}
-
-/**
- * 在列表中高亮匹配项
- */
-function highlightTrackingRankingMatches() {
-    const container = document.getElementById('trackingRankingList');
-    if (!container) return;
-
-    const tokens = trackingRankingSearchTokens;
-    if (!tokens || tokens.length === 0) {
-        clearTrackingRankingHighlight();
-        return;
-    }
-
-    const items = container.querySelectorAll('.tracking-ranking-item');
-    let firstMatch = null;
-
-    items.forEach(item => {
-        const url = (item.dataset.url || '').toLowerCase();
-        const titleEl = item.querySelector('.ranking-title');
-        const title = (titleEl ? titleEl.textContent : '').toLowerCase();
-
-        const isMatch = tokens.every(token =>
-            url.includes(token) || title.includes(token)
-        );
-
-        if (isMatch) {
-            item.classList.add('search-match-highlight');
-            if (!firstMatch) firstMatch = item;
-        } else {
-            item.classList.remove('search-match-highlight');
-        }
-    });
-
-    // 滚动到第一个匹配项
-    if (firstMatch) {
-        firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-
-    // 更新列表容器的边框样式
-    setListSearchFilterHighlight('trackingRankingList', true);
-}
-
-/**
- * 清除时间捕捉高亮
- */
-function clearTrackingRankingHighlight() {
-    const container = document.getElementById('trackingRankingList');
-    if (!container) return;
-
-    container.querySelectorAll('.tracking-ranking-item').forEach(item => {
-        item.classList.remove('search-match-highlight');
-    });
-
-    setListSearchFilterHighlight('trackingRankingList', false);
-}
-
-/**
- * 更新时间捕捉搜索指示器状态
- */
-function applyTrackingRankingIndicatorState() {
-    try {
-        const active = isTrackingRankingSearchActive();
-        setListSearchFilterHighlight('trackingRankingList', active);
-
-        // 可选：在 header 中添加指示器（如果需要）
-    } catch (_) { }
-}
-
-// 导出到 window
+// 本项目有两套独立的链接点击处理系统，互不干扰：
+//   1. 书签系统（defaultOpenMode）- 处理 .tree-bookmark-link
+//   2. 时间捕捉兜底（本监听器）- 处理其他所有 target="_blank" 链接
+//
+// ⚠️ 添加新功能时必须注意：
+//   - 如果新增链接区域有自己的处理逻辑，必须在下面添加排除条件！
+//   - 否则会导致链接被打开两次（本监听器 + 专用监听器都处理）
+//   - 详见：.agent/workflows/link-click-handling.md
+// =============================================================================
+// 捕捉 extension 页面内的超链接打开（<a target="_blank">），统一走 tabs.create 以便做书签归因兜底
+// 排除书签链接（.tree-bookmark-link）和超链接区域，让其走专门的处理逻辑
 try {
-    window.isTrackingRankingSearchActive = isTrackingRankingSearchActive;
-    window.applyTrackingRankingKeywordFilter = applyTrackingRankingKeywordFilter;
-    window.clearTrackingRankingSearchFilter = clearTrackingRankingSearchFilter;
+    document.addEventListener('click', async (e) => {
+        const anchor = e.target && typeof e.target.closest === 'function'
+            ? e.target.closest('a[target="_blank"]')
+            : null;
+        if (!anchor) return;
+
+        // 排除书签链接：书签链接有专门的处理逻辑（支持 defaultOpenMode 记忆）
+        if (anchor.classList.contains('tree-bookmark-link')) return;
+
+        // 排除超链接区域：如果新增独立处理的区域，请在此处添加排除条件
+        if (anchor.dataset?.skipGlobalOpenFallback === '1' || anchor.closest('[data-skip-global-open-fallback="1"]')) return;
+
+        const href = anchor.getAttribute('href') || '';
+        if (!href || (!href.startsWith('http://') && !href.startsWith('https://'))) return;
+
+        // 已被其他逻辑处理则跳过
+        if (e.defaultPrevented) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const title = (anchor.textContent || '').trim();
+        if (typeof window.openBookmarkNewTab === 'function') {
+            await window.openBookmarkNewTab(href, { title, source: 'history_ui_link' });
+        } else {
+            window.open(href, '_blank');
+        }
+    }, true);
 } catch (_) { }
 
-// =============================================================================
-// 书签温故视图
-// =============================================================================
+// 应用预设模式
+function applyPresetMode(mode) {
+    if (!presetModes[mode]) return;
 
-function renderAdditionsView() {
-    const container = document.getElementById('additionsList');
-
-    // 【修复】容器已被删除（在UI重构中），直接返回
-    if (!container) {
+    // 如果已经是目标模式，不触发全量重算
+    if (currentRecommendMode === mode) {
 
         return;
     }
 
-    if (allBookmarks.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-bookmark"></i></div>
-                <div class="empty-state-title">${i18n.emptyAdditions[currentLang]}</div>
-            </div>
-        `;
-        return;
-    }
+    currentRecommendMode = mode;
+    const preset = presetModes[mode];
 
-    // 按时间范围分组（年、月、日）
-    const groupedByTime = groupBookmarksByTime(allBookmarks, currentTimeFilter);
-
-    // 过滤
-    const filtered = filterBookmarks(groupedByTime);
-
-    container.innerHTML = renderBookmarkGroups(filtered, currentTimeFilter);
-
-    // 绑定折叠/展开事件
-    attachAdditionGroupEvents();
-}
-
-// 初始化「书签温故」子视图标签和行为
-function initAdditionsSubTabs() {
-    const tabs = document.querySelectorAll('.additions-tab');
-    const reviewPanel = document.getElementById('additionsReviewPanel');
-    const browsingPanel = document.getElementById('additionsBrowsingPanel');
-    const trackingPanel = document.getElementById('additionsTrackingPanel');
-
-    if (!tabs.length || !reviewPanel || !browsingPanel) {
-        console.warn('[initAdditionsSubTabs] 主标签或面板缺失');
-        return;
-    }
-
-    let browsingHistoryInitialized = false;
-    let trackingInitialized = false;
-
-    // 标签切换函数
-    const switchToTab = (target, shouldSave = true) => {
-        // [Fixed] Exit Locate Mode when leaving the current view (Search Isolation)
-        // 1. Check Bookmark Calendar
-        if (window.bookmarkCalendarInstance && window.bookmarkCalendarInstance.selectMode) {
-            if (typeof window.bookmarkCalendarInstance.exitLocateMode === 'function') {
-                window.bookmarkCalendarInstance.exitLocateMode();
-            }
-        }
-        // 2. Check Browsing History Calendar
-        if (window.browsingHistoryCalendarInstance && window.browsingHistoryCalendarInstance.selectMode) {
-            if (typeof window.browsingHistoryCalendarInstance.exitLocateMode === 'function') {
-                window.browsingHistoryCalendarInstance.exitLocateMode();
-            }
-        }
-
-        // 切换标签高亮
-        tabs.forEach(t => t.classList.remove('active'));
-        const targetTab = document.querySelector(`.additions-tab[data-tab="${target}"]`);
-        if (targetTab) targetTab.classList.add('active');
-
-        // 切换子视图
-        reviewPanel.classList.remove('active');
-        browsingPanel.classList.remove('active');
-        if (trackingPanel) trackingPanel.classList.remove('active');
-
-        // [Fixed] Update Search Context immediately (for both click and restore)
-        // IMPORTANT: initAdditionsSubTabs() runs on page init even when the active view is not "additions".
-        // If we update context here unconditionally, it will overwrite the main search placeholder on refresh
-        if (window.SearchContextManager && currentView === 'additions') {
-            let subTab = null;
-            if (target === 'browsing') {
-                subTab = localStorage.getItem('browsingActiveSubTab') || 'history';
-            }
-            window.SearchContextManager.updateContext('additions', target, subTab);
-        }
-
-        if (target === 'review') {
-            reviewPanel.classList.add('active');
-            try {
-                if (typeof initBookmarkCalendar === 'function') {
-                    initBookmarkCalendar();
-                }
-                // If switching back to Review, force refresh might be good but just rendering is enough
-                // Note: The calendar's state is preserved unless refreshed.
-                // We exited locate mode above, so it will be clean.
-                renderAdditionsView();
-            } catch (error) {
-                console.warn('[initAdditionsSubTabs] 渲染书签添加记录失败:', error);
-            }
-        } else if (target === 'browsing') {
-            browsingPanel.classList.add('active');
-            if (currentView === 'additions') {
-                recordBrowsingCalibrationInteraction('open', { source: 'browsing-tab' });
-            }
-            // 初始化浏览记录日历（首次点击时）
-            if (!browsingHistoryInitialized) {
-                browsingHistoryInitialized = true;
-                try {
-                    initBrowsingHistoryCalendar();
-                } catch (e) {
-                    console.error('[Additions] 初始化浏览记录日历失败:', e);
-                }
-            } else {
-                refreshBrowsingHistoryData({ forceFull: false, silent: true });
-            }
-        } else if (target === 'tracking' && trackingPanel) {
-            trackingPanel.classList.add('active');
-            // 初始化时间捕捉（首次点击时）
-            if (!trackingInitialized) {
-                trackingInitialized = true;
-                initTrackingToggle();
-            }
-            // 每次切换到标签时加载最新数据
-            loadCurrentTrackingSessions();
-            loadActiveTimeRanking();
-            // 启动当前会话的实时刷新（排行榜不定时刷新）
-            startTrackingRefresh();
-        }
-
-        // 保存当前状态
-        if (shouldSave) {
-            localStorage.setItem('additionsActiveTab', target);
-        }
-    };
-
-    // 绑定点击事件
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            switchToTab(tab.dataset.tab, true);
-        });
-    });
-
-    // 恢复上次选中的标签
-    const savedTab = localStorage.getItem('additionsActiveTab');
-    if (savedTab && ['review', 'browsing', 'tracking'].includes(savedTab)) {
-        switchToTab(savedTab, false);
-    } else if (currentView === 'additions') {
-        switchToTab('review', false);
-    }
-
-    // 初始化浏览记录的子标签
-    initBrowsingSubTabs();
-}
-
-// 初始化浏览记录子标签
-function initBrowsingSubTabs() {
-    const subTabs = document.querySelectorAll('.browsing-sub-tab');
-    const historyPanel = document.getElementById('browsingHistoryPanel');
-    const rankingPanel = document.getElementById('browsingRankingPanel');
-    const relatedPanel = document.getElementById('browsingRelatedPanel');
-    let browsingRankingInitialized = false;
-    let browsingRelatedInitialized = false;
-
-    if (!subTabs.length || !historyPanel || !rankingPanel || !relatedPanel) {
-        console.warn('[initBrowsingSubTabs] 子标签或面板缺失');
-        return;
-    }
-
-    // 子标签切换函数
-    const switchToSubTab = (target, shouldSave = true) => {
-        // [Fixed] Exit Locate Mode when switching sub-tabs (Search Isolation)
-        if (window.browsingHistoryCalendarInstance && window.browsingHistoryCalendarInstance.selectMode) {
-            if (typeof window.browsingHistoryCalendarInstance.exitLocateMode === 'function') {
-                window.browsingHistoryCalendarInstance.exitLocateMode();
-            }
-        }
-
-        // 切换子标签高亮
-        subTabs.forEach(t => t.classList.remove('active'));
-        const targetTab = document.querySelector(`.browsing-sub-tab[data-sub-tab="${target}"]`);
-        if (targetTab) targetTab.classList.add('active');
-
-        // [Fixed] Update Search Context immediately (for both click and restore)
-        // Guard: only affect global search when "additions" view is active.
-        if (window.SearchContextManager && currentView === 'additions') {
-            window.SearchContextManager.updateContext('additions', 'browsing', target);
-        }
-
-        // 切换子面板
-        historyPanel.classList.remove('active');
-        rankingPanel.classList.remove('active');
-        relatedPanel.classList.remove('active');
-
-        if (target === 'history') {
-            historyPanel.classList.add('active');
-            refreshBrowsingHistoryData({ forceFull: false, silent: true });
-        } else if (target === 'ranking') {
-            rankingPanel.classList.add('active');
-            if (!browsingRankingInitialized) {
-                browsingRankingInitialized = true;
-                try {
-                    initBrowsingClickRanking();
-                } catch (e) {
-                    console.error('[initBrowsingSubTabs] 初始化点击排行失败:', e);
-                }
-            } else {
-                refreshBrowsingHistoryData({ forceFull: false, silent: true });
-                resetBrowsingRankingDerivedCache();
-                markWidgetsDirty(['ranking', 'related', 'historyWeek'], { schedule: false });
-                refreshActiveBrowsingRankingIfVisible();
-            }
-        } else if (target === 'related') {
-            relatedPanel.classList.add('active');
-            if (!browsingRelatedInitialized) {
-                browsingRelatedInitialized = true;
-                try {
-                    initBrowsingRelatedHistory();
-                } catch (e) {
-                    console.error('[initBrowsingSubTabs] 初始化书签关联记录失败:', e);
-                }
-            } else {
-                refreshBrowsingRelatedHistory({ userInitiated: true });
-            }
-        }
-
-        // 保存当前状态
-        if (shouldSave) {
-            localStorage.setItem('browsingActiveSubTab', target);
-        }
-    };
-
-    // 绑定点击事件
-    subTabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            switchToSubTab(tab.dataset.subTab, true);
-        });
-    });
-
-    // 恢复上次选中的子标签
-    const savedSubTab = localStorage.getItem('browsingActiveSubTab');
-    if (savedSubTab && ['history', 'ranking', 'related'].includes(savedSubTab)) {
-        switchToSubTab(savedSubTab, false);
-    }
-}
-
-// 基于浏览器历史记录的「点击排行」（书签浏览记录子视图）
-
-function getBrowsingClickRankingBoundaries() {
-    const now = new Date();
-    const nowMs = now.getTime();
-
-    // 当天起始（本地时区）
-    const dayStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dayStart = dayStartDate.getTime();
-
-    // 与「点击记录」日历保持一致：
-    // - 中文使用周一作为一周开始
-    // - 其他语言使用周日作为一周开始
-    const weekStartDay = currentLang === 'zh_CN' ? 1 : 0; // 0=周日,1=周一,...
-    const weekStartDate = new Date(dayStartDate);
-    const currentDay = weekStartDate.getDay(); // 0-6 (周日-周六)
-    let diff = currentDay - weekStartDay;
-    if (diff < 0) diff += 7;
-    weekStartDate.setDate(weekStartDate.getDate() - diff);
-    const weekStart = weekStartDate.getTime();
-
-    // 当月起始
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-    // 当年起始
-    const yearStart = new Date(now.getFullYear(), 0, 1).getTime();
-
-    return { now: nowMs, dayStart, weekStart, monthStart, yearStart };
-}
-
-function normalizeBrowsingRankingDomainHost(hostname) {
-    const safeHost = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
-    return safeHost;
-}
-
-function getBrowsingRankingDomainPartsFromUrl(url) {
     try {
-        const parsed = new URL(url);
-        const childDomain = normalizeBrowsingRankingDomainHost(parsed.hostname);
-        if (!childDomain) return null;
+        browserAPI.storage.local.set({
+            [RECOMMEND_ACTIVE_MODE_STORAGE_KEY]: mode,
+            [RECOMMEND_ACTIVE_MODE_SWITCHED_AT_STORAGE_KEY]: Date.now()
+        });
+    } catch (_) { }
 
-        const isIpLike = /^(\d{1,3}\.){3}\d{1,3}$/.test(childDomain) || childDomain.includes(':');
-        if (isIpLike || childDomain === 'localhost' || childDomain.endsWith('.local')) {
-            return { childDomain, parentDomain: childDomain };
+    // 更新按钮状态
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    // 更新权重输入框
+    const weightInputs = {
+        freshness: document.getElementById('weightFreshness'),
+        coldness: document.getElementById('weightColdness'),
+        timeDegree: document.getElementById('weightTimeDegree'),
+        forgetting: document.getElementById('weightForgetting'),
+        laterReview: document.getElementById('weightLaterReview')
+    };
+
+    // 设置权重值
+    weightInputs.freshness.value = preset.weights.freshness;
+    weightInputs.coldness.value = preset.weights.coldness;
+    weightInputs.timeDegree.value = preset.weights.timeDegree;
+    weightInputs.forgetting.value = preset.weights.forgetting;
+    weightInputs.laterReview.value = preset.weights.laterReview;
+
+    // 处理优先模式和用户覆盖
+    const priorityModeBtn = document.getElementById('priorityModeBtn');
+
+    if (mode === 'priority') {
+        // 优先模式：橙色显示
+        for (const input of Object.values(weightInputs)) {
+            input.style.color = '#ff6b35';
+            input.style.fontWeight = 'bold';
+        }
+        // 清除用户覆盖标记
+        if (priorityModeBtn) {
+            delete priorityModeBtn.dataset.userOverride;
+        }
+    } else {
+        // 其他模式：正常显示
+        for (const input of Object.values(weightInputs)) {
+            input.style.color = '';
+            input.style.fontWeight = '';
+        }
+        // 设置用户覆盖标记（防止自动切换回优先模式）
+        if (priorityModeBtn && priorityModeBtn.style.display !== 'none') {
+            priorityModeBtn.dataset.userOverride = 'true';
+        }
+    }
+
+    // 更新阈值输入框
+    document.getElementById('thresholdFreshness').value = preset.thresholds.freshness;
+    document.getElementById('thresholdColdness').value = preset.thresholds.coldness;
+    document.getElementById('thresholdTimeDegree').value = preset.thresholds.timeDegree;
+    document.getElementById('thresholdForgetting').value = preset.thresholds.forgetting;
+
+    // 保存配置（saveFormulaConfig 内部会触发全量重算）
+    saveFormulaConfig().then(() => {
+        // 重算完成后刷新推荐卡片
+        refreshRecommendCards();
+    });
+
+    const modeNames = { default: '默认', archaeology: '考古', consolidate: '巩固', wander: '漫游', priority: '优先巩固' };
+
+}
+
+function initTrackingToggle() {
+    // 可能会在多个入口被调用（recommend view / tracking tab），避免重复绑定导致一次点击触发两次反向切换
+    if (initTrackingToggle._initialized) return;
+
+    const toggleBtn = document.getElementById('trackingToggleBtn');
+    if (toggleBtn) {
+        initTrackingToggle._initialized = true;
+        let userInteracted = false;
+
+        const setToggleUi = (isActive) => {
+            toggleBtn.classList.toggle('active', !!isActive);
+            const textEl = document.getElementById('trackingToggleText');
+            if (textEl) {
+                textEl.textContent = isActive
+                    ? i18n.trackingToggleOn[currentLang]
+                    : i18n.trackingToggleOff[currentLang];
+            }
+
+            // 更新公式中的T项（时间度）
+            const termT = document.getElementById('termTimeDegree');
+            if (termT) {
+                termT.classList.toggle('disabled', !isActive);
+            }
+        };
+
+        toggleBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            userInteracted = true;
+            const isActive = !toggleBtn.classList.contains('active');
+            setToggleUi(isActive);
+
+            // 通知 background.js 更新追踪状态
+            try {
+                await browserAPI.runtime.sendMessage({
+                    action: 'setTrackingEnabled',
+                    enabled: isActive
+                });
+                // 立即刷新左下角小组件
+                updateTimeTrackingWidget();
+            } catch (error) {
+                console.warn('[书签推荐] 设置追踪状态失败:', error);
+            }
+        });
+
+        // 加载保存的状态
+        browserAPI.runtime.sendMessage({ action: 'isTrackingEnabled' }, (response) => {
+            if (response && response.success) {
+                // 如果用户已经点击过，不用“初始化回包”覆盖用户最新操作（避免看起来像“点不动”）
+                if (userInteracted) return;
+                const isActive = response.enabled;
+                setToggleUi(isActive);
+            }
+        });
+    }
+
+    // 排行类型选择器（综合时间 / 唤醒次数）
+    const rankingTypeSelect = document.getElementById('trackingRankingType');
+    if (rankingTypeSelect) {
+        rankingTypeSelect.addEventListener('change', () => {
+            loadActiveTimeRanking();
+        });
+    }
+
+    // 时间范围选择器
+    const rangeSelect = document.getElementById('trackingRankingRange');
+    if (rangeSelect) {
+        rangeSelect.addEventListener('change', () => {
+            loadActiveTimeRanking();
+        });
+    }
+
+    // 清除记录按钮 - 改为下拉菜单
+    const clearBtn = document.getElementById('clearTrackingBtn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showTrackingClearMenu(clearBtn);
+        });
+    }
+
+    // 状态说明弹窗（使用事件委托，支持动态创建的图标）
+    const stateModal = document.getElementById('trackingStateModal');
+    const closeStateModalBtn = document.getElementById('closeTrackingStateModal');
+    const trackingHeaderState = document.getElementById('trackingHeaderState');
+
+    if (trackingHeaderState && stateModal) {
+        trackingHeaderState.addEventListener('click', (e) => {
+            if (e.target.classList.contains('tracking-state-help')) {
+                e.stopPropagation();
+                stateModal.classList.add('show');
+                updateTrackingStateModalI18n();
+            }
+        });
+
+        if (closeStateModalBtn) {
+            closeStateModalBtn.addEventListener('click', () => {
+                stateModal.classList.remove('show');
+            });
         }
 
-        const labels = childDomain.split('.').filter(Boolean);
-        if (labels.length <= 2) {
-            return { childDomain, parentDomain: childDomain };
+        // 点击背景关闭
+        stateModal.addEventListener('click', (e) => {
+            if (e.target === stateModal) {
+                stateModal.classList.remove('show');
+            }
+        });
+    }
+
+    // 公式说明弹窗
+    const formulaHelpBtn = document.getElementById('formulaHelpBtn');
+    const formulaHelpModal = document.getElementById('formulaHelpModal');
+    const closeFormulaHelpBtn = document.getElementById('closeFormulaHelpModal');
+
+    if (formulaHelpBtn && formulaHelpModal) {
+        formulaHelpBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            formulaHelpModal.classList.add('show');
+            updateFormulaHelpModalI18n();
+        });
+
+        if (closeFormulaHelpBtn) {
+            closeFormulaHelpBtn.addEventListener('click', () => {
+                formulaHelpModal.classList.remove('show');
+            });
         }
 
-        const suffix2 = labels.slice(-2).join('.');
-        const multiPartSuffixes = new Set([
-            'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
-            'co.uk', 'org.uk', 'gov.uk', 'ac.uk',
-            'co.jp',
-            'com.au', 'net.au', 'org.au',
-            'co.nz',
-            'com.hk', 'com.tw', 'com.sg'
-        ]);
+        formulaHelpModal.addEventListener('click', (e) => {
+            if (e.target === formulaHelpModal) {
+                formulaHelpModal.classList.remove('show');
+            }
+        });
+    }
+}
 
-        const parentDomain = (labels.length >= 3 && multiPartSuffixes.has(suffix2))
-            ? labels.slice(-3).join('.')
-            : labels.slice(-2).join('.');
+// 更新状态说明弹窗的国际化文本
+function updateTrackingStateModalI18n() {
+    const isEn = currentLang === 'en';
 
-        return { childDomain, parentDomain };
+    // 标题
+    const title = document.getElementById('trackingStateModalTitle');
+    if (title) title.textContent = isEn ? 'Time Tracking State Guide' : '时间捕捉状态说明';
+
+    // 表头（图标在第一列）
+    document.getElementById('stateTableHeaderIcon').textContent = isEn ? 'Icon' : '图标';
+    document.getElementById('stateTableHeaderState').textContent = isEn ? 'State' : '状态';
+    document.getElementById('stateTableHeaderCondition').textContent = isEn ? 'Condition' : '条件';
+    document.getElementById('stateTableHeaderRate').textContent = isEn ? 'Rate' : '计时倍率';
+    document.getElementById('stateTableHeaderExample').textContent = isEn ? 'Example' : '例子';
+
+    // 表格内容
+    document.getElementById('stateActiveLabel').textContent = isEn ? 'Active' : '活跃';
+    document.getElementById('stateActiveCondition').textContent = isEn ? 'Current tab + Window focus + User active' : '当前标签 + 窗口焦点 + 用户活跃';
+    document.getElementById('stateActiveExample').textContent = isEn ? 'Reading, scrolling, typing' : '正在阅读、滚动页面、打字';
+
+    document.getElementById('stateIdleLabel').textContent = isEn ? 'Idle Focus' : '前台静止';
+    document.getElementById('stateIdleCondition').textContent = isEn ? 'Current tab + Window focus + User idle' : '当前标签 + 窗口焦点 + 用户空闲';
+    document.getElementById('stateIdleExample').textContent = isEn ? 'Watching video, thinking' : '静止观看视频、思考内容';
+
+    document.getElementById('stateVisibleLabel').textContent = isEn ? 'Visible Ref' : '可见参考';
+    document.getElementById('stateVisibleCondition').textContent = isEn ? 'Current tab + No window focus + User active' : '当前标签 + 窗口无焦点 + 用户活跃';
+    document.getElementById('stateVisibleExample').textContent = isEn ? 'Split-screen reference, comparing code' : '分屏参考文档、对照代码';
+
+    document.getElementById('stateBackgroundLabel').textContent = isEn ? 'Background' : '后台';
+    document.getElementById('stateBackgroundCondition').textContent = isEn ? 'Not current tab + User active' : '非当前标签 + 用户活跃';
+    document.getElementById('stateBackgroundExample').textContent = isEn ? 'Idle tab, background music' : '挂机、后台播放音乐';
+
+    document.getElementById('stateSleepLabel').textContent = isEn ? 'Sleep' : '睡眠';
+    document.getElementById('stateSleepCondition').textContent = isEn ? 'User idle (any tab)' : '用户空闲（任何标签）';
+    document.getElementById('stateSleepExample').textContent = isEn ? 'Away from computer, screen locked, tab auto-sleep' : '离开电脑、锁屏、页面自动睡眠';
+
+    // 综合时间公式
+    const formulaEl = document.getElementById('trackingStateFormula');
+    if (formulaEl) {
+        formulaEl.textContent = isEn
+            ? 'Composite = Active×1.0 + Idle×0.8 + Visible×0.5 + Background×0.1'
+            : '综合时间 = 活跃×1.0 + 前台静止×0.8 + 可见参考×0.5 + 后台×0.1';
+    }
+}
+
+// 更新公式说明弹窗的国际化文本
+function updateFormulaHelpModalI18n() {
+    const isEn = currentLang === 'en';
+
+    // 标题
+    const title = document.getElementById('formulaHelpModalTitle');
+    if (title) title.textContent = isEn ? 'Formula Explanation' : '权重公式说明';
+
+    // 通用公式
+    const generalTitle = document.getElementById('formulaHelpGeneralTitle');
+    if (generalTitle) generalTitle.textContent = isEn ? 'General Formula' : '通用公式';
+
+    const codeEl = document.querySelector('.formula-help-code code');
+    if (codeEl) codeEl.textContent = isEn
+        ? 'Factor = 1 / (1 + (value / threshold)^0.7)'
+        : '因子值 = 1 / (1 + (实际值 / 阈值)^0.7)';
+
+    // 公式特点
+    const featuresTitle = document.getElementById('formulaHelpFeaturesTitle');
+    if (featuresTitle) featuresTitle.textContent = isEn ? 'Features' : '公式特点';
+
+    document.getElementById('formulaHelpFeature1').innerHTML = isEn
+        ? '<strong>At threshold = 0.5</strong>: When value equals threshold, factor is exactly 0.5'
+        : '<strong>阈值处 = 0.5</strong>：当实际值等于阈值时，因子值正好是0.5';
+    document.getElementById('formulaHelpFeature2').innerHTML = isEn
+        ? '<strong>Smooth decay</strong>: Power function (^0.7) makes decay more gradual, avoiding hard cutoff'
+        : '<strong>平滑衰减</strong>：使用幂函数(^0.7)使衰减更平缓，避免硬截断';
+    document.getElementById('formulaHelpFeature3').innerHTML = isEn
+        ? '<strong>Never zero</strong>: Even very large values retain small differentiation'
+        : '<strong>永不归零</strong>：即使数值很大，仍保留微小区分度';
+    document.getElementById('formulaHelpFeature4').innerHTML = isEn
+        ? '<strong>Large value friendly</strong>: 1000 clicks still has 0.02 differentiation'
+        : '<strong>大数值友好</strong>：1000次点击仍有0.02的区分度';
+
+    // 效果示例
+    const exampleTitle = document.getElementById('formulaHelpExampleTitle');
+    if (exampleTitle) exampleTitle.textContent = isEn ? 'Examples' : '效果示例';
+
+    document.getElementById('formulaHelpTableValue').textContent = isEn ? 'Value/Threshold' : '实际值/阈值';
+    document.getElementById('formulaHelpTableResult').textContent = isEn ? 'Factor' : '因子值';
+    document.getElementById('formulaHelpTableMeaning').textContent = isEn ? 'Meaning' : '含义';
+
+    document.getElementById('formulaHelpThreshold').textContent = isEn ? '1×(threshold)' : '1×(阈值)';
+    document.getElementById('formulaHelpMeaning1').textContent = isEn ? 'Highest priority' : '最高优先';
+    document.getElementById('formulaHelpMeaning2').textContent = isEn ? 'Higher' : '较高';
+    document.getElementById('formulaHelpMeaning3').textContent = isEn ? 'Medium' : '中等';
+    document.getElementById('formulaHelpMeaning4').textContent = isEn ? 'Lower' : '较低';
+    document.getElementById('formulaHelpMeaning5').textContent = isEn ? 'Very low' : '很低';
+    document.getElementById('formulaHelpMeaning6').textContent = isEn ? 'Minimal but distinct' : '极低但仍有区分';
+
+    // 注意事项
+    const notesTitle = document.getElementById('formulaHelpNotesTitle');
+    if (notesTitle) notesTitle.textContent = isEn ? 'Notes' : '注意事项';
+
+    document.getElementById('formulaHelpNote1').innerHTML = isEn
+        ? '<strong>F, C, T</strong> use inverse mode: larger value = smaller factor (e.g., more clicks = lower coldness)'
+        : '<strong>F、C、T</strong> 使用 inverse 模式：值越大，因子越小（如点击越多，冷门度越低）';
+    document.getElementById('formulaHelpNote2').innerHTML = isEn
+        ? '<strong>D</strong> uses direct mode: more unvisited days = higher forgetting'
+        : '<strong>D</strong> 使用正向模式：未访问天数越多，遗忘度越高';
+    document.getElementById('formulaHelpNote3').innerHTML = isEn
+        ? '<strong>L</strong> is boolean: manually added = 1, otherwise = 0'
+        : '<strong>L</strong> 是布尔值：手动添加=1，否则=0';
+    const note4 = document.getElementById('formulaHelpNote4');
+    if (note4) {
+        note4.innerHTML = isEn
+            ? '<strong>Backup restore</strong>: Restoring bookmarks via other tools may reassign bookmark IDs, so history and recommendation state can be lost'
+            : '<strong>备份恢复</strong>：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失';
+    }
+}
+
+// 推荐卡片数据
+let recommendCards = [];
+let trackingRefreshInterval = null;
+let rankingRefreshInterval = null;  // 排行榜刷新定时器
+const TRACKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次当前会话，更实时
+const RANKING_REFRESH_INTERVAL = 1000; // 1秒刷新一次排行榜，与正在追踪同步
+let recommendPostponedAuthoritativeIds = null;
+
+// 书签推荐诊断缓存
+const RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS = 60 * 1000;
+const recommendScoreDebugCache = new Map();
+const recommendScoreDebugInFlight = new Map();
+// 推荐选卡统一走后台，前端只展示共享结果
+
+// 跳过和屏蔽数据
+let skippedBookmarks = new Set(); // 已跳过书签（内存镜像 + storage 持久化）
+let postponedExpiryRefreshTimer = null;
+let postponedListRefreshFromStorageTimer = null;
+let postponedListRefreshInProgress = false;
+let postponedListRefreshPending = false;
+let recommendCardsRefreshFromCacheTimer = null;
+let recommendCardsRefreshInProgress = false;
+let recommendCardsRefreshPending = false;
+let recommendCardsRefreshFromStateTimer = null;
+let recommendCardsStateRefreshInProgress = false;
+let recommendCardsStateRefreshPending = false;
+let recommendLastUpdatedTimestamp = 0;
+
+function normalizeRecommendLastUpdatedTimestamp(value) {
+    const ts = Number(value || 0);
+    return Number.isFinite(ts) && ts > 0 ? Math.floor(ts) : 0;
+}
+
+function formatRecommendLastUpdatedText(timestamp) {
+    const isZh = currentLang === 'zh_CN';
+    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
+    if (!normalized) {
+        return isZh ? '最近更新：--' : 'Updated: --';
+    }
+
+    const locale = isZh ? 'zh-CN' : 'en-US';
+    let timeText = '';
+    try {
+        timeText = new Date(normalized).toLocaleString(locale, {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (_) {
+        timeText = new Date(normalized).toLocaleString(locale);
+    }
+    return isZh ? `最近更新：${timeText}` : `Updated: ${timeText}`;
+}
+
+function applyRecommendLastUpdatedText(timestamp) {
+    const normalized = normalizeRecommendLastUpdatedTimestamp(timestamp);
+    const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+    const label = formatRecommendLastUpdatedText(normalized);
+    let title = '';
+    if (normalized) {
+        try {
+            title = new Date(normalized).toLocaleString(locale);
+        } catch (_) {
+            title = '';
+        }
+    }
+
+    const widgetsEl = document.getElementById('widgetsRecommendLastUpdated');
+    if (widgetsEl) {
+        widgetsEl.textContent = label;
+        widgetsEl.title = title;
+    }
+
+    const recommendEl = document.getElementById('recommendLastUpdated');
+    if (recommendEl) {
+        recommendEl.textContent = label;
+        recommendEl.title = title;
+    }
+}
+
+function syncRecommendLastUpdatedFromState(state = null) {
+    const ts = normalizeRecommendLastUpdatedTimestamp(
+        state?.lastUpdated || state?.timestamp || 0
+    );
+    if (ts > 0) {
+        recommendLastUpdatedTimestamp = ts;
+    }
+    applyRecommendLastUpdatedText(recommendLastUpdatedTimestamp);
+    return recommendLastUpdatedTimestamp;
+}
+
+function normalizeRecommendSnapshotCard(card) {
+    if (!card || !card.url) return null;
+
+    const priority = Number(card.priority);
+    const forceDueAt = Number(card.forceDueAt || 0);
+    const forceDueMovedAt = Number(card.forceDueMovedAt || 0);
+    const currentCardsVersion = getRecommendActionExpectedVersion(card);
+    return {
+        id: card.id,
+        title: card.title || card.name || card.url || '',
+        name: card.title || card.name || card.url || '',
+        url: card.url,
+        favicon: card.favicon || card.faviconUrl || null,
+        faviconUrl: card.favicon || card.faviconUrl || null,
+        priority: Number.isFinite(priority) ? priority : 0.5,
+        forceDue: card.forceDue === true,
+        forceDueAt: Number.isFinite(forceDueAt) ? forceDueAt : 0,
+        forceDueMovedAt: Number.isFinite(forceDueMovedAt) ? forceDueMovedAt : 0,
+        ...(currentCardsVersion != null ? { currentCardsVersion } : {})
+    };
+}
+
+function mergeRecommendSnapshotCardsWithCardData(snapshotCards = [], cardData = []) {
+    const safeSnapshotCards = (Array.isArray(snapshotCards) ? snapshotCards : [])
+        .map(normalizeRecommendSnapshotCard)
+        .filter(Boolean);
+    if (safeSnapshotCards.length === 0) return [];
+
+    const cardDataMap = new Map();
+    (Array.isArray(cardData) ? cardData : []).forEach((item) => {
+        const normalized = normalizeRecommendSnapshotCard(item);
+        const id = String(normalized?.id || '').trim();
+        if (!id || !normalized) return;
+        cardDataMap.set(id, normalized);
+    });
+
+    return safeSnapshotCards.map((card) => {
+        const id = String(card?.id || '').trim();
+        const fromData = id ? cardDataMap.get(id) : null;
+        if (!fromData) return card;
+
+        const title = card.title || card.name || fromData.title || fromData.name || fromData.url || '';
+        const url = card.url || fromData.url || '';
+        const favicon = card.favicon || card.faviconUrl || fromData.favicon || fromData.faviconUrl || null;
+        const priority = Number(card.priority);
+        const fallbackPriority = Number(fromData.priority);
+        const mergedPriority = Number.isFinite(priority)
+            ? priority
+            : (Number.isFinite(fallbackPriority) ? fallbackPriority : 0.5);
+        const currentCardsVersion = getRecommendActionExpectedVersion(card)
+            ?? getRecommendActionExpectedVersion(fromData);
+
+        return {
+            ...fromData,
+            ...card,
+            title,
+            name: title,
+            url,
+            favicon,
+            faviconUrl: favicon,
+            priority: mergedPriority,
+            ...(currentCardsVersion != null ? { currentCardsVersion } : {})
+        };
+    }).filter(Boolean).slice(0, 3);
+}
+
+function readRecommendCardsSnapshot() {
+    try {
+        const raw = localStorage.getItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
+            return null;
+        }
+
+        const ts = Number(parsed.ts || parsed.timestamp || 0);
+        if (Number.isFinite(ts) && ts > 0 && (Date.now() - ts) > SIDEPANEL_RECOMMEND_SNAPSHOT_MAX_AGE_MS) {
+            return null;
+        }
+
+        const cards = parsed.cards
+            .map(normalizeRecommendSnapshotCard)
+            .filter(Boolean)
+            .slice(0, 3);
+
+        if (!cards.length) return null;
+
+        const flippedIds = Array.isArray(parsed.flippedIds)
+            ? parsed.flippedIds.map(id => String(id))
+            : [];
+
+        return { cards, flippedIds, ts: Number.isFinite(ts) ? ts : Date.now() };
     } catch (_) {
         return null;
     }
 }
 
-function getBrowsingRankingDomainValue(domainParts, mode = 'domain') {
-    if (!domainParts) return '';
-    const child = String(domainParts.childDomain || '').trim();
-    const parent = String(domainParts.parentDomain || '').trim();
-    if (!child) return '';
-    if (mode === 'subdomain') return child;
-    return parent || child;
+function writeRecommendCardsSnapshot(cards = [], flippedIds = []) {
+    try {
+        const safeCards = (Array.isArray(cards) ? cards : [])
+            .map(normalizeRecommendSnapshotCard)
+            .filter(Boolean)
+            .slice(0, 3);
+
+        if (!safeCards.length) return;
+
+        const safeFlipped = Array.from(new Set(
+            (Array.isArray(flippedIds) ? flippedIds : []).map(id => String(id))
+        ));
+
+        localStorage.setItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY, JSON.stringify({
+            ts: Date.now(),
+            cards: safeCards,
+            flippedIds: safeFlipped
+        }));
+    } catch (_) { }
 }
 
-function isBrowsingHistoryCalendarReady(inst) {
-    if (!inst) return false;
-    if (inst.useNewArchitecture && inst.dbManager) {
-        if (inst.initCompleted === false) return false;
-        return true;
-    }
-    if (inst.loadedRangeKeys && inst.loadedRangeKeys.startKey && inst.loadedRangeKeys.endKey) return true;
-    if (inst.historyCacheRestored) return true;
-    if (inst.historyCacheMeta && typeof inst.historyCacheMeta.lastSyncTime === 'number' && inst.historyCacheMeta.lastSyncTime > 0) {
-        return true;
-    }
-    return !!inst.initCompleted;
+function clearRecommendCardsSnapshot() {
+    try {
+        localStorage.removeItem(SIDEPANEL_RECOMMEND_SNAPSHOT_KEY);
+    } catch (_) { }
 }
 
-function isBrowsingRankingTransientPending(calendar) {
-    if (!calendar) return true;
-    if (!calendar.bookmarksByDate || typeof calendar.bookmarksByDate.size !== 'number') return true;
-    if (calendar.bookmarksByDate.size === 0) return true;
-    if (calendar.initCompleted === false) return true;
-    if (calendar.useNewArchitecture && calendar.dbManager && calendar.initCompleted !== true) return true;
-    return false;
-}
+async function selectRecommendCardsRoundShared(force = false) {
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'selectRecommendCardsRound',
+            force: force === true
+        });
 
-function clearBrowsingRankingTransientRetryTimer() {
-    if (!browsingClickRankingRetryTimer) return;
-    clearTimeout(browsingClickRankingRetryTimer);
-    browsingClickRankingRetryTimer = null;
-}
-
-function resetBrowsingRankingDerivedCache() {
-    browsingClickRankingStats = null;
-    if (browsingClickRankingStatsCache instanceof Map) {
-        browsingClickRankingStatsCache.clear();
-    } else {
-        browsingClickRankingStatsCache = new Map();
-    }
-    if (browsingClickRankingStatsPromises instanceof Map) {
-        browsingClickRankingStatsPromises.clear();
-    } else {
-        browsingClickRankingStatsPromises = new Map();
-    }
-    clearBrowsingRankingTransientRetryTimer();
-    clearWidgetsRankingFastItems();
-    clearWidgetsRelatedTimeBucketIndexCache();
-}
-
-function normalizeBrowsingRankingStatsRange(range = 'all') {
-    return normalizeWidgetsRankingRange(range || 'all');
-}
-
-function isBrowsingRankingStatsUsable(stats, range) {
-    if (!stats) return false;
-    const safeRange = normalizeBrowsingRankingStatsRange(range);
-    if (stats.error === 'noBookmarks' && stats.transient === true) {
-        const expiresAt = Number(stats.expiresAt || 0);
-        if (!expiresAt || Date.now() >= expiresAt) return false;
-    }
-    if (stats.filteredRange && stats.filteredRange !== safeRange) return false;
-    return true;
-}
-
-function readBrowsingRankingStatsCache(range = 'all') {
-    if (!(browsingClickRankingStatsCache instanceof Map)) {
-        browsingClickRankingStatsCache = new Map();
-    }
-    const safeRange = normalizeBrowsingRankingStatsRange(range);
-    const exact = browsingClickRankingStatsCache.get(safeRange);
-    if (isBrowsingRankingStatsUsable(exact, safeRange)) {
-        return exact;
-    }
-    if (exact) {
-        browsingClickRankingStatsCache.delete(safeRange);
-    }
-
-    if (safeRange !== 'all') {
-        const allStats = browsingClickRankingStatsCache.get('all');
-        if (isBrowsingRankingStatsUsable(allStats, 'all') && !allStats.filteredRange) {
-            return allStats;
+        if (response && response.success && Array.isArray(response.cards)) {
+            return response;
         }
-        if (allStats && !isBrowsingRankingStatsUsable(allStats, 'all')) {
-            browsingClickRankingStatsCache.delete('all');
-        }
-    }
+    } catch (_) { }
 
     return null;
 }
 
-function scheduleBrowsingRankingTransientRetry(delayMs = BROWSING_RANKING_TRANSIENT_RETRY_MS) {
-    if (browsingClickRankingRetryTimer) return;
-    const safeDelay = Number.isFinite(Number(delayMs))
-        ? Math.max(120, Number(delayMs))
-        : BROWSING_RANKING_TRANSIENT_RETRY_MS;
-
-    browsingClickRankingRetryTimer = setTimeout(() => {
-        browsingClickRankingRetryTimer = null;
-        if (!browsingClickRankingStats) return;
-        if (browsingClickRankingStats.error !== 'noBookmarks' || browsingClickRankingStats.transient !== true) return;
-        resetBrowsingRankingDerivedCache();
-        markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 120 });
-        try {
-            refreshActiveBrowsingRankingIfVisible();
-            markBrowsingRelatedSnapshotStale('ranking-transient-retry');
-        } catch (_) { }
-    }, safeDelay);
-}
-
-function cacheBrowsingRankingError(error, options = {}) {
-    const safeError = String(error || 'unknown');
-    const transient = options.transient === true;
-    const safeRange = normalizeBrowsingRankingStatsRange(options.range || 'all');
-    const payload = {
-        items: [],
-        error: safeError,
-        rangeKey: safeRange
-    };
-    if (safeRange !== 'all') {
-        payload.filteredRange = safeRange;
+async function dispatchRecommendCardAction(recommendAction, bookmark, options = {}) {
+    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || options.bookmarkId || '').trim();
+    if (!bookmarkId || !recommendAction) {
+        return { success: false, reason: 'invalid_action' };
     }
 
-    if (transient) {
-        payload.transient = true;
-        payload.expiresAt = Date.now() + BROWSING_RANKING_TRANSIENT_CACHE_TTL_MS;
-        scheduleBrowsingRankingTransientRetry(options.retryMs);
-    }
+    const expectedVersion = await resolveRecommendActionExpectedVersion(
+        bookmarkId,
+        bookmark,
+        options.expectedVersion
+    );
 
-    browsingClickRankingStats = payload;
-    if (!(browsingClickRankingStatsCache instanceof Map)) {
-        browsingClickRankingStatsCache = new Map();
-    }
-    browsingClickRankingStatsCache.set(safeRange, payload);
-    return payload;
-}
-
-function shouldReuseBrowsingRankingStatsCache(range = 'all') {
-    return !!readBrowsingRankingStatsCache(range);
-}
-
-async function waitForBrowsingHistoryCalendar(options = {}) {
-    const {
-        timeout = 5000,
-        pollMs = 100
-    } = options;
-
-    try {
-        if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-            initBrowsingHistoryCalendar();
-        }
-    } catch {
-    }
-
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-        const inst = window.browsingHistoryCalendarInstance;
-        if (isBrowsingHistoryCalendarReady(inst)) {
-            return inst;
-        }
-        await new Promise(resolve => setTimeout(resolve, pollMs));
-    }
-
-    return window.browsingHistoryCalendarInstance || null;
-}
-
-async function readBrowsingHistoryLibraryRowsForBoundsRaw(startTime = 0, endTime = Date.now()) {
-    const safeStart = Math.max(0, Number(startTime || 0) || 0);
-    const safeEnd = Math.max(safeStart, Number(endTime || Date.now()) || Date.now());
-    if (typeof readHistoryCacheRange !== 'function') {
-        return { rows: [], source: 'history-cache-unavailable', meta: { unavailable: true } };
-    }
-
-    const startKey = safeStart > 0 ? getSyncHistoryDateKey(safeStart) : '';
-    const endKey = getSyncHistoryDateKey(safeEnd);
-    let cached = null;
-    try {
-        cached = await readHistoryCacheRange(startKey, endKey);
-    } catch (error) {
-        console.warn('[BrowsingRanking] 读取浏览历史库失败:', error);
-        return { rows: [], source: 'history-cache-error', meta: { error: error?.message || String(error) } };
-    }
-
-    const rows = normalizeBrowsingCacheRowsForSync(cached);
-    const filteredRows = await filterBrowsingCacheRowsByTimeAsync(rows, safeStart, safeEnd);
-
-    return {
-        rows: filteredRows,
-        source: 'history-cache',
-        meta: {
-            lastSyncTime: Number(cached?.lastSyncTime || 0) || 0,
-            lastFullSyncTime: Number(cached?.lastFullSyncTime || cached?.lastSyncTime || 0) || 0,
-            recordCount: filteredRows.reduce((sum, [, records]) => sum + (Array.isArray(records) ? records.length : 0), 0)
-        }
-    };
-}
-
-function getBrowsingHistoryLibraryMetaSyncTime(meta = {}) {
-    const lastFullSyncTime = Number(meta.lastFullSyncTime || 0) || 0;
-    const lastSyncTime = Number(meta.lastSyncTime || 0) || 0;
-    return Math.max(lastFullSyncTime, lastSyncTime);
-}
-
-function isBrowsingHistoryLibraryReadUsable(result) {
-    if (!result || !result.meta || result.meta.unavailable || result.meta.error) {
-        return false;
-    }
-    if (Array.isArray(result.rows) && result.rows.length > 0) {
-        return true;
-    }
-    return getBrowsingHistoryLibraryMetaSyncTime(result.meta) > 0;
-}
-
-function shouldRefreshBrowsingHistoryLibraryInBackground(result, now = Date.now()) {
-    const syncTime = getBrowsingHistoryLibraryMetaSyncTime(result?.meta || {});
-    if (!syncTime) return false;
-    return now - syncTime > BROWSING_HISTORY_SEARCH_LIBRARY_STALE_MS;
-}
-
-async function runBrowsingHistorySearchCalibration({ reason = 'search-library-ready', requireIdle = false, quietFailure = false } = {}) {
-    if (browsingHistorySearchCalibrationPromise) {
-        return browsingHistorySearchCalibrationPromise;
-    }
-
-    browsingHistorySearchCalibrationLastRequestedAt = Date.now();
-    browsingHistorySearchCalibrationPromise = (async () => {
-        const result = await requestBrowsingHistoryBackgroundCalibration({
-            reason,
-            requireIdle
-        });
-        if (!result?.success) {
-            if (quietFailure) {
-                return result || { success: false };
-            }
-            throw new Error(result?.error || 'background_calibration_failed');
-        }
-        return result;
-    })().finally(() => {
-        browsingHistorySearchCalibrationPromise = null;
+    let response = null;
+    const sendAction = async (version) => browserAPI.runtime.sendMessage({
+        action: 'executeRecommendCardAction',
+        recommendAction,
+        bookmarkId,
+        expectedVersion: version,
+        source: options.source || (recommendSearchPreviewActive ? 'search' : currentView || 'unknown'),
+        delayMs: options.delayMs,
+        postponeUntil: options.postponeUntil,
+        postponePresetKey: options.postponePresetKey,
+        manuallyAdded: options.manuallyAdded === true,
+        groupId: options.groupId,
+        groupType: options.groupType,
+        groupName: options.groupName,
+        scope: options.scope,
+        timestamp: options.timestamp || Date.now()
     });
 
-    return browsingHistorySearchCalibrationPromise;
-}
-
-function scheduleBrowsingHistorySearchCalibration({ reason = 'search-library-stale' } = {}) {
-    if (browsingHistorySearchCalibrationPromise) return;
-    if (browsingHistorySearchCalibrationTimer) return;
-    const now = Date.now();
-    if (now - browsingHistorySearchCalibrationLastRequestedAt < BROWSING_HISTORY_SEARCH_CALIBRATION_COOLDOWN_MS) {
-        return;
-    }
-    browsingHistorySearchCalibrationTimer = setTimeout(() => {
-        browsingHistorySearchCalibrationTimer = null;
-        runBrowsingHistorySearchCalibration({ reason, requireIdle: true, quietFailure: true }).catch((error) => {
-            console.warn('[BrowsingHistory] 后台校准请求失败:', error);
-        });
-    }, 300);
-}
-
-async function ensureBrowsingHistorySearchLibraryReady(startTime = 0, endTime = Date.now(), options = {}) {
-    const reason = options.reason || 'search-library-ready';
-    const allowBlocking = options.blocking !== false;
-    const firstRead = await readBrowsingHistoryLibraryRowsForBoundsRaw(startTime, endTime);
-
-    if (isBrowsingHistoryLibraryReadUsable(firstRead)) {
-        if (options.refreshStale !== false && shouldRefreshBrowsingHistoryLibraryInBackground(firstRead)) {
-            scheduleBrowsingHistorySearchCalibration({ reason: `${reason}-stale` });
-        }
-        return firstRead;
-    }
-
-    if (firstRead?.meta?.unavailable || firstRead?.meta?.error || !allowBlocking) {
-        if (options.refreshStale !== false && !firstRead?.meta?.unavailable) {
-            scheduleBrowsingHistorySearchCalibration({ reason: `${reason}-missing` });
-        }
-        return firstRead;
-    }
-
     try {
-        await runBrowsingHistorySearchCalibration({ reason, requireIdle: false });
+        response = await sendAction(expectedVersion);
     } catch (error) {
-        console.warn('[BrowsingHistory] 搜索前校准失败:', error);
-        return firstRead;
+        return { success: false, reason: 'background_failed', error: error?.message || String(error) };
     }
 
-    const secondRead = await readBrowsingHistoryLibraryRowsForBoundsRaw(startTime, endTime);
-    return {
-        ...secondRead,
-        source: secondRead.source || firstRead.source,
-        meta: {
-            ...(secondRead.meta || {}),
-            searchCalibrationApplied: true
+    if (response?.success === false && response?.reason === 'missing_current_cards_version') {
+        const retryVersion = await resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, { allowRefresh: true });
+        if (retryVersion != null && retryVersion !== expectedVersion) {
+            try {
+                response = await sendAction(retryVersion);
+            } catch (error) {
+                return { success: false, reason: 'background_failed', error: error?.message || String(error) };
+            }
         }
-    };
+    }
+
+    if (!response || response.success === false) {
+        if (response?.stale) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Recommendations changed, refreshing'
+                    : '推荐状态已变化，正在刷新');
+            } catch (_) { }
+            await refreshRecommendCardSurfaces(false);
+        }
+        return response || { success: false, reason: 'no_response' };
+    }
+
+    if (Array.isArray(response.skippedIds)) {
+        skippedBookmarks = new Set(normalizeSkippedBookmarkIds(response.skippedIds));
+    }
+    if (Array.isArray(response.postponed)) {
+        await schedulePostponedExpiryRefresh(normalizePostponedList(response.postponed));
+    }
+    if (response.currentCards && typeof response.currentCards === 'object') {
+        syncRecommendLastUpdatedFromState(response.currentCards);
+        if (Array.isArray(response.currentCards.cardData)) {
+            seedFaviconMemoryFromCardData(response.currentCards.cardData);
+        }
+    }
+
+    return response;
 }
 
-async function readBrowsingHistoryLibraryRowsForBounds(startTime = 0, endTime = Date.now(), options = {}) {
-    return ensureBrowsingHistorySearchLibraryReady(startTime, endTime, options);
-}
+async function refreshRecommendCardSurfaces(force = false) {
+    const normalizedForce = force === true;
+    const tasks = [];
 
-function buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl) {
-    const bookmarkKeyMap = new Map();
-    const bookmarkInfoMap = new Map();
-    let bookmarkKeyCounter = 0;
-
-    for (const [url, info] of bookmarkInfoByUrl.entries()) {
-        const normalizedUrl = String(url || '').trim();
-        if (!normalizedUrl) continue;
-        const normalizedTitle = info && typeof info.title === 'string' ? info.title.trim() : '';
-        const normalizedDomain = getSyncHistoryUrlDomain(normalizedUrl);
-        const titleDomainKey = normalizedTitle && normalizedDomain
-            ? `titleDomain:${normalizedTitle}|${normalizedDomain}`
-            : '';
-
-        const bookmarkKey = `bm_${bookmarkKeyCounter++}`;
-        bookmarkKeyMap.set(`url:${normalizedUrl}`, bookmarkKey);
-        if (titleDomainKey && !bookmarkKeyMap.has(titleDomainKey)) {
-            bookmarkKeyMap.set(titleDomainKey, bookmarkKey);
-        }
-        bookmarkInfoMap.set(bookmarkKey, {
-            id: info?.id == null ? null : String(info.id),
-            url: normalizedUrl,
-            title: normalizedTitle || normalizedUrl,
-            folderPath: Array.isArray(info?.folderPath) ? info.folderPath : [],
-            urls: [normalizedUrl]
-        });
+    if (document.getElementById('cardsRow')) {
+        tasks.push(refreshRecommendCards(normalizedForce));
     }
 
-    return { bookmarkKeyMap, bookmarkInfoMap };
-}
-
-function findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap) {
-    if (!record || !(bookmarkKeyMap instanceof Map)) return null;
-    const url = String(record?.url || '').trim();
-    if (!url) return null;
-
-    let bookmarkKey = bookmarkKeyMap.get(`url:${url}`);
-    if (bookmarkKey) {
-        return { bookmarkKey, matchType: 'exact_url' };
-    }
-
-    const title = typeof record?.title === 'string' && record.title.trim()
-        ? record.title.trim()
-        : '';
-    const domain = getSyncHistoryUrlDomain(url);
-    if (title && domain) {
-        bookmarkKey = bookmarkKeyMap.get(`titleDomain:${title}|${domain}`);
-        if (bookmarkKey) {
-            return { bookmarkKey, matchType: 'title_domain' };
-        }
-    }
-
-    return null;
-}
-
-async function buildBrowsingClickRankingStatsFromRows(rows, options = {}) {
-    const boundaries = options.boundaries || getBrowsingClickRankingBoundaries();
-    let bookmarkData = options.bookmarkData || null;
-    if (!bookmarkData) {
-        bookmarkData = await getBookmarkUrlsAndTitles();
-    }
-    const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
-    if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
-        return null;
-    }
-
-    const { bookmarkKeyMap, bookmarkInfoMap } = buildBrowsingRankingBookmarkMaps(bookmarkInfoByUrl);
-    const statsMap = new Map();
-    let processed = 0;
-
-    for (const [, records] of (Array.isArray(rows) ? rows : [])) {
-        for (const record of (Array.isArray(records) ? records : [])) {
-            processed += 1;
-            const url = String(record?.url || '').trim();
-            if (!url) {
-                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
-                    await yieldBrowsingDerivedRows();
-                }
-                continue;
-            }
-            const t = getBrowsingCacheRecordTimestamp(record);
-            if (!t || t > boundaries.now) {
-                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
-                    await yieldBrowsingDerivedRows();
-                }
-                continue;
-            }
-
-            const match = findBrowsingRankingBookmarkMatch(record, bookmarkKeyMap);
-            if (!match) {
-                if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
-                    await yieldBrowsingDerivedRows();
-                }
-                continue;
-            }
-            const bookmarkKey = match.bookmarkKey;
-
-            let stats = statsMap.get(bookmarkKey);
-            if (!stats) {
-                const info = bookmarkInfoMap.get(bookmarkKey);
-                stats = {
-                    url: info.url,
-                    title: info.title,
-                    lastVisitTime: 0,
-                    dayCount: 0,
-                    weekCount: 0,
-                    monthCount: 0,
-                    yearCount: 0,
-                    allCount: 0
-                };
-                statsMap.set(bookmarkKey, stats);
-            }
-
-            stats.allCount += 1;
-            if (t >= boundaries.dayStart) stats.dayCount += 1;
-            if (t >= boundaries.weekStart) stats.weekCount += 1;
-            if (t >= boundaries.monthStart) stats.monthCount += 1;
-            if (t >= boundaries.yearStart) stats.yearCount += 1;
-            if (t > stats.lastVisitTime) stats.lastVisitTime = t;
-            if (shouldYieldBrowsingDerivedRows(processed, options.yieldEvery)) {
-                await yieldBrowsingDerivedRows();
-            }
-        }
-    }
-
-    return {
-        items: Array.from(statsMap.values()),
-        boundaries,
-        bookmarkKeyMap,
-        bookmarkInfoMap,
-        rows: Array.isArray(rows) ? rows : [],
-        source: options.source || 'history-cache',
-        meta: options.meta || null
-    };
-}
-
-async function ensureBrowsingClickRankingStats(range = 'all', options = {}) {
-    const safeRange = normalizeBrowsingRankingStatsRange(range);
-    const cachedStats = readBrowsingRankingStatsCache(safeRange);
-    if (cachedStats) {
-        browsingClickRankingStats = cachedStats;
-        return cachedStats;
-    }
-
-    if (typeof readHistoryCacheRange !== 'function') {
-        return cacheBrowsingRankingError('historyCacheUnavailable', { range: safeRange });
-    }
-
-    if (!(browsingClickRankingStatsPromises instanceof Map)) {
-        browsingClickRankingStatsPromises = new Map();
-    }
-    const existingPromise = browsingClickRankingStatsPromises.get(safeRange);
-    if (existingPromise) {
-        return existingPromise;
-    }
-
-    const loadPromise = (async () => {
-        try {
-            if (typeof initBrowsingHistoryCalendar === 'function' && !window.browsingHistoryCalendarInstance) {
-                initBrowsingHistoryCalendar();
-            }
-        } catch (e) {
-            console.warn('[BrowsingRanking] 初始化 BrowsingHistoryCalendar 失败:', e);
-        }
-
-        const boundaries = getBrowsingClickRankingBoundaries();
-        let bookmarkData;
-        try {
-            bookmarkData = await getBookmarkUrlsAndTitles();
-        } catch (error) {
-            console.warn('[BrowsingRanking] 获取书签URL和标题失败:', error);
-            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
-        }
-
-        const bookmarkInfoByUrl = bookmarkData && bookmarkData.info ? bookmarkData.info : null;
-        if (!bookmarkInfoByUrl || bookmarkInfoByUrl.size === 0) {
-            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
-        }
-
-        const rangeStartMs = safeRange === 'all'
-            ? 0
-            : Math.max(0, getWidgetsRankingRangeStartMs(safeRange, boundaries));
-        const libraryRows = await readBrowsingHistoryLibraryRowsForBounds(rangeStartMs, boundaries.now, {
-            blocking: options.blocking !== false,
-            reason: options.reason || 'browsing-ranking'
-        });
-        if (!libraryRows.rows.length) {
-            const calendar = await waitForBrowsingHistoryCalendar({
-                timeout: currentView === 'widgets' ? 900 : 1500,
-                pollMs: currentView === 'widgets' ? 100 : 150
+    if (document.getElementById('widgetsCardsRow')) {
+        tasks.push((async () => {
+            await renderWidgetsRecommendCards({
+                force: normalizedForce,
+                allowDuringInteraction: true,
+                allowBootstrap: false
             });
-            return cacheBrowsingRankingError('noBookmarks', {
-                transient: isBrowsingRankingTransientPending(calendar),
-                range: safeRange
-            });
-        }
-
-        const stats = await buildBrowsingClickRankingStatsFromRows(libraryRows.rows, {
-            boundaries,
-            bookmarkData,
-            source: libraryRows.source,
-            meta: {
-                ...(libraryRows.meta || {}),
-                filteredRange: safeRange,
-                rangeStartTime: rangeStartMs,
-                rangeEndTime: boundaries.now
+            if (currentView === 'widgets') {
+                applyWidgetsSmartSort();
             }
-        });
-        if (!stats || !Array.isArray(stats.items) || stats.items.length === 0) {
-            return cacheBrowsingRankingError('noBookmarks', { range: safeRange });
-        }
+        })());
+    }
 
-        if (safeRange !== 'all') {
-            stats.filteredRange = safeRange;
-            stats.items = stats.items.map((item) => ({
-                ...item,
-                filteredCount: Number(item.allCount || 0)
-            }));
-        }
-
-        if (browsingClickRankingRetryTimer) {
-            clearBrowsingRankingTransientRetryTimer();
-        }
-        browsingClickRankingStats = stats;
-        browsingClickRankingStatsCache.set(safeRange, stats);
-        return stats;
-    })().finally(() => {
-        if (browsingClickRankingStatsPromises instanceof Map) {
-            browsingClickRankingStatsPromises.delete(safeRange);
-        }
-    });
-
-    browsingClickRankingStatsPromises.set(safeRange, loadPromise);
-    return loadPromise;
+    await Promise.all(tasks);
 }
 
-function getBrowsingRankingItemsForRange(range) {
-    const stats = readBrowsingRankingStatsCache(range) || browsingClickRankingStats;
-    return getBrowsingRankingItemsForRangeFromStats(stats, range);
-}
-
-function getBrowsingRankingItemsForRangeFromStats(stats, range) {
-    if (!stats || !Array.isArray(stats.items)) {
+function hydrateRecommendCardsFromCurrentCardsState(state = null) {
+    if (!state || !Array.isArray(state.cardIds) || state.cardIds.length === 0) {
         return [];
     }
 
-    const safeRange = normalizeWidgetsRankingRange(range);
-    const hasFilteredRange = String(stats.filteredRange || '') === safeRange;
-    const key = hasFilteredRange
-        ? 'filteredCount'
-        : (safeRange === 'day'
-            ? 'dayCount'
-            : safeRange === 'week'
-                ? 'weekCount'
-                : safeRange === 'year'
-                    ? 'yearCount'
-                    : safeRange === 'all'
-                        ? 'allCount'
-                        : 'monthCount');
-
-    const getCount = (item) => {
-        if (hasFilteredRange) {
-            return Number(item?.filteredCount) || 0;
-        }
-        return getBrowsingRankingItemCountByRange(item, safeRange);
-    };
-
-    return stats.items
-        .filter((item) => getCount(item) > 0)
-        .sort((a, b) => {
-            const countDiff = getCount(b) - getCount(a);
-            if (countDiff !== 0) return countDiff;
-            return (Number(b?.lastVisitTime) || 0) - (Number(a?.lastVisitTime) || 0);
-        });
-}
-
-function getBrowsingRankingItemCountByRange(item, range) {
-    if (item && item.filteredCount !== undefined) {
-        return Number(item.filteredCount) || 0;
-    }
-    if (!item) return 0;
-    if (range === 'day') return Number(item.dayCount) || 0;
-    if (range === 'week') return Number(item.weekCount) || 0;
-    if (range === 'year') return Number(item.yearCount) || 0;
-    if (range === 'all') return Number(item.allCount) || 0;
-    return Number(item.monthCount) || 0;
-}
-
-// 渲染文件夹模式的点击排行列表
-async function renderBrowsingFolderRankingList(container, items, range, stats, options = {}) {
-    container.innerHTML = '';
-
-    const isZh = currentLang === 'zh_CN';
-
-    // 确保书签信息已加载（包含 folderPath）
-    await getBookmarkUrlsAndTitles();
-
-    if (!items.length) {
-        const title = isZh ? '暂无点击记录' : 'No click records found';
-        const desc = isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.';
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-folder"></i></div>
-                <div class="empty-state-title">${title}</div>
-                <div class="empty-state-description">${desc}</div>
-            </div>
-        `;
-        return;
-    }
-
-    const searchTokens = Array.isArray(options.searchTokens) ? options.searchTokens : null;
-    const folderDepthMode = normalizeBrowsingRankingFolderDepth(browsingRankingFolderDepth);
-
-    // 按文件夹聚合统计
-    const folderStats = new Map(); // folderPath -> { count, items: [] }
-
-    items.forEach(item => {
-        // 尝试从 getBookmarkUrlsAndTitles 获取 folderPath
-        let folderPath = [];
-        if (browsingRelatedBookmarkInfo && browsingRelatedBookmarkInfo.has(item.url)) {
-            folderPath = browsingRelatedBookmarkInfo.get(item.url).folderPath || [];
-        }
-
-        let groupedFolderPath = Array.isArray(folderPath) ? folderPath.slice() : [];
-        if (folderDepthMode === 'level1') {
-            groupedFolderPath = groupedFolderPath.slice(0, 1);
-        } else if (folderDepthMode === 'level2') {
-            groupedFolderPath = groupedFolderPath.slice(0, 2);
-        }
-
-        const folderKey = groupedFolderPath.length > 0 ? groupedFolderPath.join(' / ') : (isZh ? '未分类' : 'Uncategorized');
-        const folderName = groupedFolderPath.length > 0 ? groupedFolderPath[groupedFolderPath.length - 1] : folderKey;
-
-        if (!folderStats.has(folderKey)) {
-            folderStats.set(folderKey, {
-                name: folderName,
-                fullPath: folderKey,
-                folderPath: groupedFolderPath,
-                count: 0,
-                items: []
-            });
-        }
-
-        const folderData = folderStats.get(folderKey);
-        const itemCount = getBrowsingRankingItemCountByRange(item, range);
-        folderData.count += itemCount;
-
-        folderData.items.push({ ...item, count: itemCount, folderPath: groupedFolderPath });
-    });
-
-    // 按点击次数排序文件夹
-    let sortedFolders = Array.from(folderStats.values()).sort((a, b) => b.count - a.count);
-
-    // Phase 4.7: folder-mode keyword search
-    // - match folder name/path
-    // - OR match any bookmark in folder
-    if (searchTokens && searchTokens.length > 0) {
-        sortedFolders = sortedFolders.filter(folder => {
-            if (matchesTokens(folder.fullPath, searchTokens) || matchesTokens(folder.name, searchTokens)) {
-                return true;
-            }
-            if (Array.isArray(folder.items) && folder.items.length > 0) {
-                return folder.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
-            }
-            return false;
+    const cardDataMap = new Map();
+    if (Array.isArray(state.cardData)) {
+        state.cardData.forEach((item) => {
+            const id = String(item?.id || '').trim();
+            if (id) cardDataMap.set(id, item);
         });
     }
-
-    // 渲染文件夹列表
-    const rangeLabel = options.customRangeLabel || (() => {
-        if (range === 'day') return isZh ? '今天' : 'Today';
-        if (range === 'week') return isZh ? '本周' : 'This week';
-        if (range === 'year') return isZh ? '本年' : 'This year';
-        if (range === 'all') return isZh ? '全部' : 'All';
-        return isZh ? '本月' : 'This month';
-    })();
-
-    sortedFolders.forEach((folder, index) => {
-        const folderRow = document.createElement('div');
-        folderRow.className = 'ranking-item folder-ranking-item';
-        folderRow.style.cursor = 'pointer';
-
-        // 排名样式
-        let rankClass = '';
-        if (index === 0) rankClass = 'rank-gold';
-        else if (index === 1) rankClass = 'rank-silver';
-        else if (index === 2) rankClass = 'rank-bronze';
-
-        const header = document.createElement('div');
-        header.className = 'ranking-header';
-
-        // 排名数字
-        const rank = document.createElement('span');
-        rank.className = 'ranking-rank';
-        rank.textContent = index + 1;
-        if (rankClass) rank.classList.add(rankClass);
-        header.appendChild(rank);
-
-        // 文件夹图标和名称
-        const main = document.createElement('div');
-        main.className = 'ranking-main';
-        const pathDisplay = folder.fullPath !== folder.name ? folder.fullPath : '';
-        const safeFolderName = escapeHtml(folder.name);
-        const safeFolderFullPath = escapeHtml(folder.fullPath);
-        const safePathDisplay = escapeHtml(pathDisplay);
-        main.innerHTML = `
-            <div class="ranking-icon" style="color: var(--accent-primary);">
-                <i class="fas fa-folder"></i>
-            </div>
-            <div class="ranking-info">
-                <div class="ranking-title" title="${safeFolderFullPath}">${safeFolderName}</div>
-                <div class="ranking-meta">${pathDisplay ? `${safePathDisplay} · ` : ''}${isZh ? `${folder.items.length} 个书签` : `${folder.items.length} bookmarks`}</div>
-            </div>
-        `;
-        header.appendChild(main);
-
-        // 点击次数
-        const counts = document.createElement('div');
-        counts.className = 'ranking-counts';
-        if (rankClass) counts.classList.add(rankClass);
-        counts.textContent = folder.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
-        counts.dataset.tooltip = isZh ? `${rangeLabel}：${folder.count} 次` : `${rangeLabel}: ${folder.count} clicks`;
-        header.appendChild(counts);
-
-        folderRow.appendChild(header);
-
-        // 展开的书签列表
-        const bookmarkList = document.createElement('div');
-        bookmarkList.className = 'folder-bookmark-list';
-        bookmarkList.style.display = 'none';
-        bookmarkList.style.padding = '8px 0 8px 40px';
-        bookmarkList.style.borderTop = '1px solid var(--border-color)';
-        bookmarkList.style.marginTop = '8px';
-
-        // 按点击次数排序书签
-        folder.items.sort((a, b) => b.count - a.count);
-
-        folder.items.forEach(item => {
-            const bookmarkItem = document.createElement('div');
-            bookmarkItem.style.display = 'flex';
-            bookmarkItem.style.alignItems = 'center';
-            bookmarkItem.style.gap = '8px';
-            bookmarkItem.style.padding = '6px 8px';
-            bookmarkItem.style.marginBottom = '4px';
-            bookmarkItem.style.borderRadius = '4px';
-            bookmarkItem.style.cursor = 'pointer';
-            bookmarkItem.style.transition = 'background 0.2s';
-
-            const itemTitle = item.title || item.url || '';
-            const faviconSrc = getFaviconUrl(item.url);
-
-            bookmarkItem.innerHTML = `
-                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
-                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
-                      title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
-                <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
-            `;
-
-            bookmarkItem.addEventListener('mouseenter', () => {
-                bookmarkItem.style.background = 'var(--bg-tertiary)';
-            });
-            bookmarkItem.addEventListener('mouseleave', () => {
-                bookmarkItem.style.background = 'transparent';
-            });
-            bookmarkItem.addEventListener('click', (e) => {
-                e.stopPropagation();
-                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-folder', url: item.url });
-                try {
-                    const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
-                    if (browserAPI?.tabs?.create) {
-                        browserAPI.tabs.create({ url: item.url });
-                    } else {
-                        window.open(item.url, '_blank');
-                    }
-                } catch (err) {
-                    console.warn('[FolderRanking] 打开书签失败:', err);
-                }
-            });
-
-            bookmarkList.appendChild(bookmarkItem);
-        });
-
-        folderRow.appendChild(bookmarkList);
-
-        // 点击展开/收起
-        header.addEventListener('click', () => {
-            const isExpanded = bookmarkList.style.display === 'block';
-            bookmarkList.style.display = isExpanded ? 'none' : 'block';
-            const icon = main.querySelector('.fa-folder, .fa-folder-open');
-            if (icon) {
-                icon.classList.toggle('fa-folder', isExpanded);
-                icon.classList.toggle('fa-folder-open', !isExpanded);
-            }
-        });
-
-        container.appendChild(folderRow);
-    });
-}
-
-function renderBrowsingDomainRankingList(container, items, range, options = {}) {
-    container.innerHTML = '';
-
-    const isZh = currentLang === 'zh_CN';
-    const mode = options.mode === 'subdomain' ? 'subdomain' : 'domain';
-    const searchTokens = Array.isArray(options.searchTokens) ? options.searchTokens : null;
-
-    const domainStats = new Map();
-    items.forEach(item => {
-        const domainParts = getBrowsingRankingDomainPartsFromUrl(item.url);
-        const domainValue = getBrowsingRankingDomainValue(domainParts, mode);
-        if (!domainValue) return;
-
-        const key = String(domainValue).toLowerCase();
-        const itemCount = getBrowsingRankingItemCountByRange(item, range);
-        if (itemCount <= 0) return;
-
-        if (!domainStats.has(key)) {
-            const parentDomain = getBrowsingRankingDomainValue(domainParts, 'domain') || domainValue;
-            domainStats.set(key, {
-                key,
-                name: domainValue,
-                parentDomain,
-                count: 0,
-                lastVisitTime: 0,
-                items: []
-            });
-        }
-
-        const domainData = domainStats.get(key);
-        domainData.count += itemCount;
-        domainData.lastVisitTime = Math.max(domainData.lastVisitTime, Number(item.lastVisitTime) || 0);
-        domainData.items.push({ ...item, count: itemCount });
-    });
-
-    let sortedDomains = Array.from(domainStats.values()).sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        if (b.lastVisitTime !== a.lastVisitTime) return b.lastVisitTime - a.lastVisitTime;
-        return String(a.name || '').localeCompare(String(b.name || ''));
-    });
-
-    if (searchTokens && searchTokens.length > 0) {
-        sortedDomains = sortedDomains.filter(domain => {
-            if (matchesTokens(domain.name, searchTokens) || matchesTokens(domain.parentDomain, searchTokens)) {
-                return true;
-            }
-            if (Array.isArray(domain.items) && domain.items.length > 0) {
-                return domain.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
-            }
-            return false;
-        });
+    if (cardDataMap.size === 0) {
+        return [];
     }
 
-    if (!sortedDomains.length) {
-        const title = i18n.browsingRankingEmptyTitle
-            ? i18n.browsingRankingEmptyTitle[currentLang]
-            : (isZh ? '暂无点击记录' : 'No click records found');
-        const desc = i18n.browsingRankingEmptyDescription
-            ? i18n.browsingRankingEmptyDescription[currentLang]
-            : (isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.');
-
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-globe"></i></div>
-                <div class="empty-state-title">${title}</div>
-                <div class="empty-state-description">${desc}</div>
-            </div>
-        `;
-        return;
-    }
-
-    const rangeLabel = options.customRangeLabel || (() => {
-        if (range === 'day') return isZh ? '今天' : 'Today';
-        if (range === 'week') return isZh ? '本周' : 'This week';
-        if (range === 'year') return isZh ? '本年' : 'This year';
-        if (range === 'all') return isZh ? '全部' : 'All';
-        return isZh ? '本月' : 'This month';
-    })();
-
-    sortedDomains.forEach((domain, index) => {
-        const domainRow = document.createElement('div');
-        domainRow.className = 'ranking-item folder-ranking-item domain-ranking-item';
-        domainRow.style.cursor = 'pointer';
-
-        let rankClass = '';
-        if (index === 0) rankClass = 'rank-gold';
-        else if (index === 1) rankClass = 'rank-silver';
-        else if (index === 2) rankClass = 'rank-bronze';
-
-        const header = document.createElement('div');
-        header.className = 'ranking-header';
-
-        const rank = document.createElement('span');
-        rank.className = 'ranking-rank';
-        rank.textContent = index + 1;
-        if (rankClass) rank.classList.add(rankClass);
-        header.appendChild(rank);
-
-        const main = document.createElement('div');
-        main.className = 'ranking-main';
-
-        const safeDomainName = escapeHtml(domain.name);
-        const safeParentDomain = escapeHtml(domain.parentDomain || domain.name);
-        const domainMeta = mode === 'subdomain' && domain.parentDomain && domain.parentDomain !== domain.name
-            ? (isZh ? `主域名：${safeParentDomain}` : `Parent: ${safeParentDomain}`)
-            : (mode === 'subdomain' ? (isZh ? '子域名' : 'Subdomain') : (isZh ? '主域名' : 'Domain'));
-
-        main.innerHTML = `
-            <div class="ranking-icon" style="color: var(--accent-primary);">
-                <i class="fas ${mode === 'subdomain' ? 'fa-sitemap' : 'fa-globe'}"></i>
-            </div>
-            <div class="ranking-info">
-                <div class="ranking-title" title="${safeDomainName}">${safeDomainName}</div>
-                <div class="ranking-meta">${domainMeta} · ${isZh ? `${domain.items.length} 个书签` : `${domain.items.length} bookmarks`}</div>
-            </div>
-        `;
-        header.appendChild(main);
-
-        const counts = document.createElement('div');
-        counts.className = 'ranking-counts';
-        if (rankClass) counts.classList.add(rankClass);
-        counts.textContent = domain.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
-        counts.dataset.tooltip = isZh ? `${rangeLabel}：${domain.count} 次` : `${rangeLabel}: ${domain.count} clicks`;
-        header.appendChild(counts);
-
-        domainRow.appendChild(header);
-
-        const bookmarkList = document.createElement('div');
-        bookmarkList.className = 'folder-bookmark-list';
-        bookmarkList.style.display = 'none';
-        bookmarkList.style.padding = '8px 0 8px 40px';
-        bookmarkList.style.borderTop = '1px solid var(--border-color)';
-        bookmarkList.style.marginTop = '8px';
-
-        domain.items.sort((a, b) => b.count - a.count);
-
-        domain.items.forEach(item => {
-            const bookmarkItem = document.createElement('div');
-            bookmarkItem.style.display = 'flex';
-            bookmarkItem.style.alignItems = 'center';
-            bookmarkItem.style.gap = '8px';
-            bookmarkItem.style.padding = '6px 8px';
-            bookmarkItem.style.marginBottom = '4px';
-            bookmarkItem.style.borderRadius = '4px';
-            bookmarkItem.style.cursor = 'pointer';
-            bookmarkItem.style.transition = 'background 0.2s';
-
-            const itemTitle = item.title || item.url || '';
-            const faviconSrc = getFaviconUrl(item.url);
-
-            bookmarkItem.innerHTML = `
-                <img class="ranking-favicon" data-bookmark-url="${escapeHtml(item.url || '')}" src="${escapeHtml(faviconSrc)}" style="width:16px;height:16px;flex-shrink:0;">
-                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;"
-                      title="${escapeHtml(itemTitle)}">${escapeHtml(itemTitle)}</span>
-                <span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;">${item.count}</span>
-            `;
-
-            bookmarkItem.addEventListener('mouseenter', () => {
-                bookmarkItem.style.background = 'var(--bg-tertiary)';
-            });
-            bookmarkItem.addEventListener('mouseleave', () => {
-                bookmarkItem.style.background = 'transparent';
-            });
-            bookmarkItem.addEventListener('click', (e) => {
-                e.stopPropagation();
-                recordBrowsingCalibrationInteraction('click', { source: mode === 'subdomain' ? 'browsing-ranking-subdomain' : 'browsing-ranking-domain', url: item.url });
-                try {
-                    const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
-                    if (browserAPI?.tabs?.create) {
-                        browserAPI.tabs.create({ url: item.url });
-                    } else {
-                        window.open(item.url, '_blank');
-                    }
-                } catch (err) {
-                    console.warn('[DomainRanking] 打开书签失败:', err);
-                }
-            });
-
-            bookmarkList.appendChild(bookmarkItem);
-        });
-
-        domainRow.appendChild(bookmarkList);
-
-        header.addEventListener('click', () => {
-            const isExpanded = bookmarkList.style.display === 'block';
-            bookmarkList.style.display = isExpanded ? 'none' : 'block';
-            const icon = main.querySelector('.fa-globe, .fa-sitemap');
-            if (icon) {
-                icon.classList.toggle('fa-globe', mode === 'domain');
-                icon.classList.toggle('fa-sitemap', mode === 'subdomain');
-            }
-        });
-
-        container.appendChild(domainRow);
-    });
-}
-
-function renderBrowsingClickRankingList(container, items, range, options = {}) {
-    container.innerHTML = '';
-
-    if (!items.length) {
-        const isZh = currentLang === 'zh_CN';
-        const title = i18n.browsingRankingEmptyTitle
-            ? i18n.browsingRankingEmptyTitle[currentLang]
-            : (isZh ? '暂无点击记录' : 'No click records found');
-        const desc = i18n.browsingRankingEmptyDescription
-            ? i18n.browsingRankingEmptyDescription[currentLang]
-            : (isZh ? '当前时间范围内尚未找到这些书签的访问记录。' : 'No visit records were found in the selected time range.');
-
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-clock"></i></div>
-                <div class="empty-state-title">${title}</div>
-                <div class="empty-state-description">${desc}</div>
-            </div>
-        `;
-        return;
-    }
-
-    const isZh = currentLang === 'zh_CN';
-    const rangeLabel = options.customRangeLabel || (() => {
-        if (range === 'day') return isZh ? '今天' : 'Today';
-        if (range === 'week') return isZh ? '本周' : 'This week';
-        if (range === 'year') return isZh ? '本年' : 'This year';
-        if (range === 'all') return isZh ? '全部' : 'All';
-        return isZh ? '本月' : 'This month';
-    })();
-
-    const PAGE_SIZE = 100; // 每次加载100条
-    let offset = 0;
-
-    const appendNextPage = () => {
-        const end = Math.min(offset + PAGE_SIZE, items.length);
-        for (let i = offset; i < end; i++) {
-            const entry = items[i];
-
-            const row = document.createElement('div');
-            row.className = 'addition-item ranking-item';
-            row.dataset.url = entry.url || '';
-            row.dataset.bookmarkUrl = entry.url || '';
-
-            const header = document.createElement('div');
-            header.className = 'ranking-item-header';
-
-            const main = document.createElement('div');
-            main.className = 'ranking-main';
-
-            const rankSpan = document.createElement('span');
-            rankSpan.className = 'ranking-index';
-            rankSpan.textContent = i + 1;
-            let rankClass = '';
-            if (i === 0) {
-                rankClass = 'gold';
-            } else if (i === 1) {
-                rankClass = 'silver';
-            } else if (i === 2) {
-                rankClass = 'bronze';
-            }
-            if (rankClass) {
-                rankSpan.classList.add(rankClass);
-            }
-
-            const icon = document.createElement('img');
-            icon.className = 'addition-icon';
-            icon.dataset.bookmarkUrl = entry.url || '';
-            icon.src = getFaviconUrl(entry.url);
-            icon.alt = '';
-
-            const info = document.createElement('div');
-            info.className = 'addition-info';
-
-            const titleLink = document.createElement('a');
-            titleLink.className = 'addition-title';
-            titleLink.href = entry.url;
-            titleLink.target = '_blank';
-            titleLink.rel = 'noopener noreferrer';
-            titleLink.textContent = entry.title;
-            titleLink.addEventListener('click', () => {
-                recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking-link', url: entry.url });
-            });
-
-            const urlDiv = document.createElement('div');
-            urlDiv.className = 'addition-url';
-            urlDiv.textContent = entry.url;
-
-            info.appendChild(titleLink);
-            info.appendChild(urlDiv);
-
-            main.appendChild(rankSpan);
-            main.appendChild(icon);
-            main.appendChild(info);
-
-            const counts = document.createElement('div');
-            counts.className = 'ranking-counts';
-
-            // 优先使用筛选后的次数（如果存在）
-            const value = entry.filteredCount !== undefined
-                ? entry.filteredCount
-                : (range === 'day'
-                    ? entry.dayCount
-                    : range === 'week'
-                        ? entry.weekCount
-                        : range === 'year'
-                            ? entry.yearCount
-                            : range === 'all'
-                                ? entry.allCount
-                                : entry.monthCount);
-            const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
-            const formattedValue = typeof value === 'number'
-                ? value.toLocaleString(locale)
-                : String(value);
-            counts.textContent = formattedValue;
-
-            if (rankClass) {
-                counts.classList.add(rankClass);
-            }
-
-            const unitLabel = isZh ? '次' : (value === 1 ? 'click' : 'clicks');
-            const accessibleLabel = isZh
-                ? `${rangeLabel}：${value} ${unitLabel}`
-                : `${rangeLabel}: ${value} ${unitLabel}`;
-            counts.dataset.tooltip = accessibleLabel;
-            counts.setAttribute('aria-label', accessibleLabel);
-
-            header.appendChild(main);
-
-            // 跳转按钮容器（点击次数左边）
-            const jumpBtnContainer = document.createElement('div');
-            jumpBtnContainer.className = 'jump-to-related-btn-container';
-            jumpBtnContainer.style.display = 'flex';
-            jumpBtnContainer.style.alignItems = 'center';
-            jumpBtnContainer.style.flexShrink = '0';
-
-            const jumpBtn = document.createElement('button');
-            jumpBtn.className = 'jump-to-related-btn';
-            jumpBtn.dataset.tooltip = isZh ? '跳转至关联记录' : 'Jump to Related History';
-            jumpBtn.innerHTML = '<i class="fas fa-external-link-alt"></i>';
-            jumpBtn.dataset.url = entry.url;
-            jumpBtn.dataset.title = entry.title;
-            jumpBtn.dataset.range = range;
-
-            jumpBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                if (typeof jumpToRelatedHistoryFromRanking === 'function') {
-                    jumpToRelatedHistoryFromRanking(entry.url, entry.title, range);
-                }
-            });
-
-            // 容器也阻止事件冒泡
-            jumpBtnContainer.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-
-            jumpBtnContainer.appendChild(jumpBtn);
-            header.appendChild(jumpBtnContainer);
-
-            header.appendChild(counts);
-
-            const detail = document.createElement('div');
-            detail.className = 'ranking-detail';
-            detail.style.display = 'none';
-
-            const lastVisitText = entry.lastVisitTime
-                ? new Date(entry.lastVisitTime).toLocaleString()
-                : (isZh ? '无访问记录' : 'No visits');
-
-            const scopedStatsRange = options.stats && options.stats.filteredRange
-                ? normalizeWidgetsRankingRange(options.stats.filteredRange)
-                : '';
-            const isRangeScopedStats = scopedStatsRange && scopedStatsRange === normalizeWidgetsRankingRange(range);
-            if (isRangeScopedStats) {
-                const scopedCount = entry.filteredCount !== undefined ? entry.filteredCount : value;
-                detail.textContent = isZh
-                    ? `${rangeLabel}：${scopedCount} 次；最近访问：${lastVisitText}`
-                    : `${rangeLabel}: ${scopedCount} clicks; Last visit: ${lastVisitText}`;
-            } else if (isZh) {
-                detail.textContent =
-                    `今天：${entry.dayCount} 次，本周：${entry.weekCount} 次，本月：${entry.monthCount} 次，本年：${entry.yearCount} 次；` +
-                    `最近访问：${lastVisitText}`;
-            } else {
-                detail.textContent =
-                    `Today: ${entry.dayCount} clicks, This week: ${entry.weekCount} clicks, ` +
-                    `This month: ${entry.monthCount} clicks, This year: ${entry.yearCount} clicks; ` +
-                    `Last visit: ${lastVisitText}`;
-            }
-
-            row.appendChild(header);
-            row.appendChild(detail);
-
-            // 整行可点击：展开/收起详细统计，同时打开书签
-            row.addEventListener('click', (e) => {
-                // 如果直接点击的是标题链接，让浏览器默认打开，不拦截
-                if (e.target === titleLink) {
-                    return;
-                }
-
-                // 如果点击的是跳转按钮或其容器，不执行打开书签操作
-                if (e.target.closest('.jump-to-related-btn-container') ||
-                    e.target.closest('.jump-to-related-btn')) {
-                    return;
-                }
-
-                e.preventDefault();
-
-                const visible = detail.style.display === 'block';
-                detail.style.display = visible ? 'none' : 'block';
-
-                try {
-                    recordBrowsingCalibrationInteraction('click', { source: 'browsing-ranking', url: entry.url });
-                    if (browserAPI && browserAPI.tabs && typeof browserAPI.tabs.create === 'function') {
-                        browserAPI.tabs.create({ url: entry.url });
-                    } else {
-                        window.open(entry.url, '_blank');
-                    }
-                } catch (err) {
-                    console.warn('[BrowsingRanking] 打开书签失败:', err);
-                }
-            });
-
-            container.appendChild(row);
-        }
-
-        offset = end;
-    };
-
-    appendNextPage();
-
-    // 找到真正的滚动容器（.content-area）
-    const scrollContainer = container.closest('.content-area') || container;
-
-    const onScroll = () => {
-        if (offset >= items.length) return;
-        // 提前加载：使用视口高度的3倍作为阈值，至少1500px
-        const threshold = Math.max(1500, scrollContainer.clientHeight * 3);
-        if (scrollContainer.scrollTop + scrollContainer.clientHeight + threshold >= scrollContainer.scrollHeight) {
-            appendNextPage();
-        }
-    };
-
-    // 清理旧的监听器
-    if (scrollContainer.__browsingRankingScrollHandler) {
-        scrollContainer.removeEventListener('scroll', scrollContainer.__browsingRankingScrollHandler);
-    }
-    scrollContainer.addEventListener('scroll', onScroll);
-    scrollContainer.__browsingRankingScrollHandler = onScroll;
-
-    // 暴露懒加载状态和函数，供跳转功能使用
-    container.__lazyLoadState = {
-        totalItems: items.length,
-        getLoadedCount: () => offset,
-        loadMore: appendNextPage,
-        loadAll: () => {
-            while (offset < items.length) {
-                appendNextPage();
-            }
-        }
-    };
-}
-
-async function loadBrowsingClickRanking(range) {
-    const listContainer = document.getElementById('browsingRankingList');
-    if (!listContainer) return;
-
-    // 显示加载状态
-    const isZh = currentLang === 'zh_CN';
-    const loadingText = isZh ? '正在读取历史记录...' : 'Loading history...';
-    listContainer.innerHTML = `
-        <div class="empty-state">
-            <div class="empty-state-icon"><i class="fas fa-clock"></i></div>
-            <div class="empty-state-title">${loadingText}</div>
-        </div>
-    `;
-
-    try {
-        const stats = await ensureBrowsingClickRankingStats(range);
-
-        if (stats.error === 'noHistoryApi') {
-            const title = i18n.browsingRankingNotSupportedTitle
-                ? i18n.browsingRankingNotSupportedTitle[currentLang]
-                : (isZh ? '当前环境不支持历史记录统计' : 'History statistics are not available in this environment');
-            const desc = i18n.browsingRankingNotSupportedDesc
-                ? i18n.browsingRankingNotSupportedDesc[currentLang]
-                : (isZh ? '请确认扩展已获得浏览器的历史记录权限。' : 'Please ensure the extension has permission to access browser history.');
-
-            listContainer.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><i class="fas fa-ban"></i></div>
-                    <div class="empty-state-title">${title}</div>
-                    <div class="empty-state-description">${desc}</div>
-                </div>
-            `;
-            return;
-        }
-
-        if (stats.error === 'noBookmarks') {
-            const title = i18n.browsingRankingNoBookmarksTitle
-                ? i18n.browsingRankingNoBookmarksTitle[currentLang]
-                : (isZh ? '暂无书签可统计' : 'No bookmarks to analyze');
-
-            listContainer.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><i class="fas fa-bookmark"></i></div>
-                    <div class="empty-state-title">${title}</div>
-                </div>
-            `;
-            return;
-        }
-
-        // Ensure view mode is up-to-date before applying keyword logic
-        initBrowsingRankingViewMode();
-
-        let items = [];
-        let customRangeLabel = null;
-
-        // Phase 4.7: If custom date range is active, compute filteredCount from calendar data.
-        if (browsingRankingCustomRange && typeof getBrowsingRankingItemsForCustomRange === 'function') {
-            customRangeLabel = browsingRankingCustomRange.label || null;
-            items = await getBrowsingRankingItemsForCustomRange(browsingRankingCustomRange.startTime, browsingRankingCustomRange.endTime);
-        } else {
-            items = getBrowsingRankingItemsForRangeFromStats(stats, range);
-
-            // 应用二级菜单时间筛选
-            if (browsingRankingTimeFilter && items.length > 0) {
-                items = filterRankingItemsByTime(items, browsingRankingTimeFilter, stats.boundaries, stats);
-            }
-        }
-
-        // Phase 4.7: Keyword filter
-        // - bookmark mode: filter items directly
-        // - folder/domain/subdomain mode: renderer 内执行分组搜索
-        let folderSearchTokens = null;
-        let domainSearchTokens = null;
-        if (browsingRankingSearchTokens && browsingRankingSearchTokens.length > 0) {
-            if (browsingRankingViewMode === 'folder') {
-                folderSearchTokens = browsingRankingSearchTokens;
-            } else if (browsingRankingViewMode === 'domain' || browsingRankingViewMode === 'subdomain') {
-                domainSearchTokens = browsingRankingSearchTokens;
-            } else {
-                items = items.filter(item => matchesTokens(item.title, browsingRankingSearchTokens) || matchesTokens(item.url, browsingRankingSearchTokens));
-            }
-        }
-
-        // 根据视图模式渲染
-        if (browsingRankingViewMode === 'folder') {
-            await renderBrowsingFolderRankingList(listContainer, items, range, stats, { customRangeLabel, searchTokens: folderSearchTokens });
-        } else if (browsingRankingViewMode === 'domain' || browsingRankingViewMode === 'subdomain') {
-            renderBrowsingDomainRankingList(listContainer, items, range, {
-                customRangeLabel,
-                searchTokens: domainSearchTokens,
-                mode: browsingRankingViewMode
-            });
-        } else {
-            renderBrowsingClickRankingList(listContainer, items, range, { customRangeLabel, stats });
-        }
-    } catch (error) {
-        console.error('[BrowsingRanking] 加载点击排行失败:', error);
-        const fallbackTitle = isZh ? '加载点击排行失败' : 'Failed to load click ranking';
-        listContainer.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-exclamation-circle"></i></div>
-                <div class="empty-state-title">${fallbackTitle}</div>
-            </div>
-        `;
-    }
-}
-
-function initBrowsingClickRanking() {
-    const panel = document.getElementById('browsingRankingPanel');
-    if (!panel) return;
-
-    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
-    if (!buttons.length) return;
-
-    // Phase 4.7: Insert filter indicator next to [All]
-    try {
-        const allBtn = document.getElementById('browsingRankingFilterAll');
-        const indicator = ensureSearchFilterIndicator('browsingRankingSearchIndicator', allBtn);
-        if (indicator && !indicator.__searchIndicatorBound) {
-            indicator.__searchIndicatorBound = true;
-            indicator.addEventListener('click', () => {
-                const input = document.getElementById('searchInput');
-                if (input) {
-                    input.focus();
-                    // restore query for editing if possible
-                    if (browsingRankingSearchQuery) input.value = browsingRankingSearchQuery;
-                }
-            });
-        }
-    } catch (_) { }
-
-    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
-
-    const setActiveRange = (range, shouldPersist = true) => {
-        if (!allowedRanges.includes(range)) {
-            range = 'month';
-        }
-
-        buttons.forEach(btn => {
-            if (btn.dataset.range === range) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
-            }
-        });
-
-        // 显示时间菜单
-        showBrowsingRankingTimeMenu(range);
-
-        loadBrowsingClickRanking(range);
-
-        if (shouldPersist) {
-            try {
-                localStorage.setItem('browsingRankingActiveRange', range);
-            } catch (storageErr) {
-                console.warn('[BrowsingRanking] 无法保存筛选范围:', storageErr);
-            }
-        }
-    };
-
-    buttons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const range = btn.dataset.range || 'month';
-            setActiveRange(range);
-        });
-    });
-
-    let initialRange = 'day';
-    try {
-        const saved = localStorage.getItem('browsingRankingActiveRange');
-        if (saved && allowedRanges.includes(saved)) {
-            initialRange = saved;
-        }
-    } catch (storageErr) {
-        console.warn('[BrowsingRanking] 无法读取筛选范围:', storageErr);
-    }
-
-    setActiveRange(initialRange, false);
-}
-
-function getActiveBrowsingRankingRange() {
-    const panel = document.getElementById('browsingRankingPanel');
-    if (!panel) return null;
-    const activeBtn = panel.querySelector('.ranking-time-filter-btn.active');
-    return activeBtn ? (activeBtn.dataset.range || 'month') : null;
-}
-
-// Phase 4.7: allow programmatic switching (search-driven)
-function setBrowsingRankingActiveRange(range, shouldPersist = true) {
-    const panel = document.getElementById('browsingRankingPanel');
-    if (!panel) return;
-    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
-    if (!buttons.length) return;
-
-    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
-    if (!allowedRanges.includes(range)) range = 'month';
-
-    buttons.forEach(btn => {
-        if (btn.dataset.range === range) btn.classList.add('active');
-        else btn.classList.remove('active');
-    });
-
-    showBrowsingRankingTimeMenu(range);
-    loadBrowsingClickRanking(range);
-
-    if (shouldPersist) {
-        try {
-            localStorage.setItem('browsingRankingActiveRange', range);
-        } catch (_) { }
-    }
-}
-
-async function refreshActiveBrowsingRankingIfVisible() {
-    const panel = document.getElementById('browsingRankingPanel');
-    if (!panel || !panel.classList.contains('active')) return;
-
-    const calendar = await waitForBrowsingHistoryCalendar({
-        timeout: 2000,
-        pollMs: 50
-    });
-    if (!isBrowsingHistoryCalendarReady(calendar)) {
-        console.warn('[BrowsingRanking] 等待日历数据超时');
-    }
-
-    const range = getActiveBrowsingRankingRange() || 'month';
-    loadBrowsingClickRanking(range);
-}
-
-// Phase 4.7: Ranking/Related filter APIs (called by search.js)
-function isBrowsingRankingSearchActive() {
-    return Boolean((browsingRankingCustomRange && browsingRankingCustomRange.startTime) || (browsingRankingSearchTokens && browsingRankingSearchTokens.length));
-}
-
-function isBrowsingRelatedSearchActive() {
-    return Boolean(
-        browsingRelatedExpandMode ||
-        (browsingRelatedCustomBounds && browsingRelatedCustomBounds.startTime) ||
-        (browsingRelatedSearchTokens && browsingRelatedSearchTokens.length)
+    const version = getRecommendCurrentCardsVersion(state);
+    return filterStaleForceDueRecommendCards(state.cardIds
+        .map(id => cardDataMap.get(String(id || '').trim()) || null)
+        .filter(Boolean)
+        .map((bookmark) => {
+            const normalized = normalizeRecommendSnapshotCard(bookmark);
+            if (!normalized) return null;
+            return {
+                ...normalized,
+                factors: bookmark?.factors || {},
+                currentCardsVersion: version
+            };
+        })
+        .filter(Boolean)
     );
 }
 
-function applyBrowsingRankingIndicatorState() {
-    try {
-        const allBtn = document.getElementById('browsingRankingFilterAll');
-        ensureSearchFilterIndicator('browsingRankingSearchIndicator', allBtn);
-        const active = isBrowsingRankingSearchActive();
-        // If list is currently empty, don't show the green outline.
-        setListSearchFilterHighlight('browsingRankingList', active, { requireNonEmpty: true });
+function renderRecommendCurrentCardsStateToRows(currentCards, options = {}) {
+    if (!currentCards || typeof currentCards !== 'object') return false;
 
-        if (!active) {
-            setSearchFilterIndicatorState('browsingRankingSearchIndicator', false);
-            return;
-        }
-        const label = browsingRankingCustomRange
-            ? browsingRankingCustomRange.label
-            : (browsingRankingSearchQuery ? `"${browsingRankingSearchQuery}"` : '');
-        setSearchFilterIndicatorState('browsingRankingSearchIndicator', true, label);
-    } catch (_) { }
-}
+    const cardsToRender = hydrateRecommendCardsFromCurrentCardsState(currentCards);
+    const flippedIds = Array.isArray(currentCards.flippedIds)
+        ? currentCards.flippedIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+    const flippedSet = new Set(flippedIds);
+    const selectors = Array.isArray(options.selectors) && options.selectors.length > 0
+        ? options.selectors
+        : ['#cardsRow', '#widgetsCardsRow'];
 
-function applyBrowsingRelatedIndicatorState() {
-    try {
-        const allBtn = document.getElementById('browsingRelatedFilterAll');
-        ensureSearchFilterIndicator('browsingRelatedSearchIndicator', allBtn);
-        const active = isBrowsingRelatedSearchActive();
-        setListSearchFilterHighlight('browsingRelatedList', active);
+    let rendered = false;
+    selectors.forEach((selector) => {
+        const cardsRow = document.querySelector(selector);
+        if (!cardsRow) return;
+        const slots = cardsRow.querySelectorAll('.recommend-card');
+        if (!slots || slots.length === 0) return;
 
-        if (!active) {
-            setSearchFilterIndicatorState('browsingRelatedSearchIndicator', false);
-            return;
-        }
-        const label = browsingRelatedCustomBounds
-            ? browsingRelatedCustomBounds.label
-            : (browsingRelatedSearchQuery
-                ? `"${browsingRelatedSearchQuery}"`
-                : (browsingRelatedExpandMode ? getBrowsingRelatedScopeLabel() : ''));
-        setSearchFilterIndicatorState('browsingRelatedSearchIndicator', true, label);
-    } catch (_) { }
-}
-
-function clearBrowsingRankingSearchFilter(restorePrev = true) {
-    if (restorePrev && browsingRankingSearchPrevState) {
-        const prev = browsingRankingSearchPrevState;
-        browsingRankingSearchPrevState = null;
-
-        browsingRankingCustomRange = prev.customRange || null;
-        browsingRankingSearchTokens = prev.tokens || null;
-        browsingRankingSearchQuery = prev.query || '';
-
-        // Restore range + view mode + time filter
-        browsingRankingViewMode = normalizeBrowsingRankingViewMode(prev.viewMode);
-
-        setBrowsingRankingActiveRange(prev.range || 'month', false);
-        browsingRankingTimeFilter = prev.timeFilter || null;
-        loadBrowsingClickRanking(prev.range || 'month');
-    } else {
-        browsingRankingSearchPrevState = null;
-        browsingRankingSearchQuery = '';
-        browsingRankingSearchTokens = null;
-        browsingRankingCustomRange = null;
-        const range = getActiveBrowsingRankingRange() || 'month';
-        loadBrowsingClickRanking(range);
-    }
-
-    applyBrowsingRankingIndicatorState();
-    if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-}
-
-function clearBrowsingRelatedSearchFilter(restorePrev = true) {
-    if (restorePrev && browsingRelatedSearchPrevState) {
-        const prev = browsingRelatedSearchPrevState;
-        browsingRelatedSearchPrevState = null;
-
-        browsingRelatedCustomBounds = prev.customBounds || null;
-        browsingRelatedSearchTokens = prev.tokens || null;
-        browsingRelatedSearchQuery = prev.query || '';
-        browsingRelatedExpandMode = false;
-
-        // Restore range + time filter
-        if (prev.range) {
-            setBrowsingRelatedActiveRange(prev.range, false);
-        } else {
-            loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
-        }
-        browsingRelatedTimeFilter = prev.timeFilter || null;
-        loadBrowsingRelatedHistory(prev.range || browsingRelatedCurrentRange);
-    } else {
-        browsingRelatedSearchPrevState = null;
-        browsingRelatedSearchQuery = '';
-        browsingRelatedSearchTokens = null;
-        browsingRelatedCustomBounds = null;
-        browsingRelatedExpandMode = false;
-        browsingRelatedExpandSavedQuery = '';
-        browsingRelatedExpandSavedTokens = null;
-        loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
-    }
-
-    applyBrowsingRelatedIndicatorState();
-    if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-}
-
-// Phase 4.7: when leaving ranking/related/tracking pages, auto exit to keep isolation
-function autoExitSearchFiltersOnContextChange(prevCtx, nextCtx) {
-    try {
-        const prev = prevCtx || {};
-        const next = nextCtx || {};
-
-        const prevIsRanking = prev.view === 'additions' && prev.tab === 'browsing' && prev.subTab === 'ranking';
-        const prevIsRelated = prev.view === 'additions' && prev.tab === 'browsing' && prev.subTab === 'related';
-        const prevIsTracking = prev.view === 'additions' && prev.tab === 'tracking';
-
-        const nextIsRanking = next.view === 'additions' && next.tab === 'browsing' && next.subTab === 'ranking';
-        const nextIsRelated = next.view === 'additions' && next.tab === 'browsing' && next.subTab === 'related';
-        const nextIsTracking = next.view === 'additions' && next.tab === 'tracking';
-
-        if (prevIsRanking && !nextIsRanking && isBrowsingRankingSearchActive()) {
-            clearBrowsingRankingSearchFilter(true);
-        }
-        if (prevIsRelated && !nextIsRelated) {
-            // 离开关联记录页面时，无条件隐藏「显示当天关联记录」按钮
-            setShowTodayRelatedVisible(false);
-            if (isBrowsingRelatedSearchActive()) {
-                clearBrowsingRelatedSearchFilter(true);
-            }
-        }
-        // Phase 4.7: 时间捕捉页面离开时自动退出筛选
-        if (prevIsTracking && !nextIsTracking && isTrackingRankingSearchActive()) {
-            clearTrackingRankingSearchFilter();
-        }
-
-        // 确保退出按钮状态正确更新
-        if (typeof window.updateSearchFilterExitButton === 'function') {
-            setTimeout(() => window.updateSearchFilterExitButton(), 0);
-        }
-    } catch (_) { }
-}
-
-try {
-    window.autoExitSearchFiltersOnContextChange = autoExitSearchFiltersOnContextChange;
-} catch (_) { }
-
-function setBrowsingRelatedActiveRange(range, shouldPersist = true, options = {}) {
-    const panel = document.getElementById('browsingRelatedPanel');
-    if (!panel) return;
-    const buttons = panel.querySelectorAll('.ranking-time-filter-btn');
-    if (!buttons.length) return;
-
-    const allowedRanges = ['day', 'week', 'month', 'year', 'all'];
-    if (!allowedRanges.includes(range)) range = 'day';
-
-    browsingRelatedCurrentRange = range;
-
-    buttons.forEach(btn => {
-        if (btn.dataset.range === range) btn.classList.add('active');
-        else btn.classList.remove('active');
-    });
-
-    const userInitiated = options && options.userInitiated === true;
-    showBrowsingRelatedTimeMenu(range);
-    loadBrowsingRelatedHistory(range, { userInitiated });
-
-    if (shouldPersist) {
-        try {
-            localStorage.setItem('browsingRelatedActiveRange', range);
-        } catch (_) { }
-    }
-
-    try {
-        if (typeof window.updateSearchFilterExitButton === 'function') {
-            window.updateSearchFilterExitButton();
-        }
-    } catch (_) { }
-}
-
-try {
-    window.setBrowsingRankingActiveRange = setBrowsingRankingActiveRange;
-    window.setBrowsingRelatedActiveRange = setBrowsingRelatedActiveRange;
-    // Phase 4.7: Export filter state check functions for blur exit
-    window.isBrowsingRankingSearchActive = isBrowsingRankingSearchActive;
-    window.isBrowsingRelatedSearchActive = isBrowsingRelatedSearchActive;
-} catch (_) { }
-
-try {
-    window.applyBrowsingRankingKeywordFilter = (query, tokens) => {
-        const q = String(query || '').trim();
-        browsingRankingSearchQuery = q;
-        browsingRankingSearchTokens = Array.isArray(tokens) ? tokens : null;
-
-        if (!browsingRankingSearchPrevState && !browsingRankingCustomRange) {
-            browsingRankingSearchPrevState = {
-                range: getActiveBrowsingRankingRange() || 'month',
-                timeFilter: browsingRankingTimeFilter ? { ...browsingRankingTimeFilter } : null,
-                viewMode: browsingRankingViewMode,
-                tokens: null,
-                query: '',
-                customRange: null
-            };
-        }
-
-        applyBrowsingRankingIndicatorState();
-        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-
-        const range = getActiveBrowsingRankingRange() || 'month';
-        loadBrowsingClickRanking(range);
-    };
-
-    window.applyBrowsingRankingDateRangeFilter = (bounds, options = {}) => {
-        if (!bounds || typeof bounds.startTime !== 'number' || typeof bounds.endTime !== 'number') return;
-
-        if (!browsingRankingSearchPrevState) {
-            browsingRankingSearchPrevState = {
-                range: getActiveBrowsingRankingRange() || 'month',
-                timeFilter: browsingRankingTimeFilter ? { ...browsingRankingTimeFilter } : null,
-                viewMode: browsingRankingViewMode,
-                tokens: browsingRankingSearchTokens,
-                query: browsingRankingSearchQuery,
-                customRange: browsingRankingCustomRange
-            };
-        }
-
-        browsingRankingCustomRange = {
-            startTime: bounds.startTime,
-            endTime: bounds.endTime,
-            label: bounds.label || (options.rawQuery || '')
-        };
-        browsingRankingSearchQuery = options.rawQuery || bounds.label || '';
-        browsingRankingSearchTokens = null;
-        browsingRankingTimeFilter = null;
-
-        applyBrowsingRankingIndicatorState();
-        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-
-        // Use [All] as a neutral base range
-        setBrowsingRankingActiveRange('all', false);
-    };
-
-    window.applyBrowsingRelatedKeywordFilter = (query, tokens) => {
-        const q = String(query || '').trim();
-        browsingRelatedSearchQuery = q;
-        browsingRelatedSearchTokens = Array.isArray(tokens) ? tokens : null;
-        browsingRelatedExpandMode = false;
-        browsingRelatedExpandSavedQuery = '';
-        browsingRelatedExpandSavedTokens = null;
-
-        if (!browsingRelatedSearchPrevState && !browsingRelatedCustomBounds) {
-            browsingRelatedSearchPrevState = {
-                range: browsingRelatedCurrentRange,
-                timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
-                tokens: null,
-                query: '',
-                customBounds: null
-            };
-        }
-
-        applyBrowsingRelatedIndicatorState();
-        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-
-        loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
-    };
-
-    window.applyBrowsingRelatedDateRangeFilter = (bounds, options = {}) => {
-        if (!bounds || typeof bounds.startTime !== 'number' || typeof bounds.endTime !== 'number') return;
-
-        if (!browsingRelatedSearchPrevState) {
-            browsingRelatedSearchPrevState = {
-                range: browsingRelatedCurrentRange,
-                timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
-                tokens: browsingRelatedSearchTokens,
-                query: browsingRelatedSearchQuery,
-                customBounds: browsingRelatedCustomBounds
-            };
-        }
-
-        browsingRelatedCustomBounds = {
-            startTime: bounds.startTime,
-            endTime: bounds.endTime,
-            label: bounds.label || (options.rawQuery || '')
-        };
-        browsingRelatedSearchQuery = options.rawQuery || bounds.label || '';
-        browsingRelatedSearchTokens = null;
-        browsingRelatedExpandMode = false;
-        browsingRelatedExpandSavedQuery = '';
-        browsingRelatedExpandSavedTokens = null;
-        browsingRelatedTimeFilter = null;
-
-        applyBrowsingRelatedIndicatorState();
-        if (typeof window.updateSearchFilterExitButton === 'function') window.updateSearchFilterExitButton();
-
-        // Use [All] as a neutral base range
-        setBrowsingRelatedActiveRange('all', false);
-    };
-
-    window.exitSearchFilter = () => {
-        const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
-        if (ctx && ctx.view === 'additions') {
-            if (ctx.tab === 'browsing') {
-                if (ctx.subTab === 'ranking') {
-                    clearBrowsingRankingSearchFilter(true);
-                    return;
-                }
-                if (ctx.subTab === 'related') {
-                    clearBrowsingRelatedSearchFilter(true);
-                    return;
-                }
-            } else if (ctx.tab === 'tracking') {
-                // Phase 4.7: 时间捕捉搜索筛选
-                clearTrackingRankingSearchFilter();
-                return;
-            }
-        }
-
-        // Fallback: clear whichever is active
-        if (isBrowsingRankingSearchActive()) clearBrowsingRankingSearchFilter(true);
-        if (isBrowsingRelatedSearchActive()) clearBrowsingRelatedSearchFilter(true);
-        if (isTrackingRankingSearchActive()) clearTrackingRankingSearchFilter();
-    };
-
-    window.showTodayBrowsingRelated = () => {
-        try {
-            // In related page, this button is an "expand" action:
-            // when we are in keyword-filter mode, show ALL records within the CURRENT scope
-            // (current range + optional secondary time menu selection).
-
-            // Toggle behavior:
-            // - First click: expand (remove keyword filter)
-            // - Second click: restore keyword filter (no need to use Exit)
-
-            if (browsingRelatedExpandMode) {
-                browsingRelatedExpandMode = false;
-                if (browsingRelatedExpandSavedTokens && browsingRelatedExpandSavedTokens.length > 0) {
-                    browsingRelatedSearchTokens = browsingRelatedExpandSavedTokens;
-                    browsingRelatedSearchQuery = browsingRelatedExpandSavedQuery || '';
-                }
-                browsingRelatedExpandSavedTokens = null;
-                browsingRelatedExpandSavedQuery = '';
-
-                applyBrowsingRelatedIndicatorState();
-                loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
-                if (typeof window.updateSearchFilterExitButton === 'function') {
-                    window.updateSearchFilterExitButton();
-                }
-                return;
-            }
-
-            // Capture prev state once so Exit Filter can restore.
-            if (!browsingRelatedSearchPrevState) {
-                browsingRelatedSearchPrevState = {
-                    range: browsingRelatedCurrentRange,
-                    timeFilter: browsingRelatedTimeFilter ? { ...browsingRelatedTimeFilter } : null,
-                    tokens: browsingRelatedSearchTokens,
-                    query: browsingRelatedSearchQuery,
-                    customBounds: browsingRelatedCustomBounds
-                };
-            }
-
-            // Save current keyword filter for restoring on second click
-            browsingRelatedExpandSavedTokens = browsingRelatedSearchTokens;
-            browsingRelatedExpandSavedQuery = browsingRelatedSearchQuery;
-
-            // Clear ONLY keyword filter; keep range/time menu selection.
-            browsingRelatedSearchTokens = null;
-            browsingRelatedSearchQuery = '';
-            browsingRelatedExpandMode = true;
-
-            applyBrowsingRelatedIndicatorState();
-            loadBrowsingRelatedHistory(browsingRelatedCurrentRange);
-
-            if (typeof window.updateSearchFilterExitButton === 'function') {
-                window.updateSearchFilterExitButton();
-            }
-        } catch (e) {
-            console.warn('[BrowsingRelated] showTodayBrowsingRelated failed:', e);
-        }
-    };
-
-    window.updateSearchFilterExitButton = () => {
-        try {
-            const ctx = window.SearchContextManager ? window.SearchContextManager.currentContext : {};
-            const isZh = currentLang === 'zh_CN';
-            const btn = ensureExitSearchFilterButton();
-            if (!btn) return;
-
-            const todayBtn = ensureShowTodayRelatedButton();
-
-            let visible = false;
-            if (ctx && ctx.view === 'additions') {
-                if (ctx.tab === 'browsing') {
-                    if (ctx.subTab === 'ranking') visible = isBrowsingRankingSearchActive();
-                    if (ctx.subTab === 'related') visible = isBrowsingRelatedSearchActive();
-                } else if (ctx.tab === 'tracking') {
-                    // Phase 4.7: 时间捕捉搜索筛选
-                    visible = isTrackingRankingSearchActive();
-                }
-            }
-
-            if (!visible) {
-                setExitSearchFilterVisible(false);
-                setShowTodayRelatedVisible(false);
-                return;
-            }
-
-            btn.innerHTML = isZh
-                ? '<i class="fas fa-times"></i><span>退出筛选</span>'
-                : '<i class="fas fa-times"></i><span>Exit filter</span>';
-            setExitSearchFilterVisible(true);
-
-            // Phase 4.7: Related quick action
-            if (ctx && ctx.view === 'additions' && ctx.tab === 'browsing' && ctx.subTab === 'related') {
-                if (todayBtn) {
-                    const rangeLabel = getBrowsingRelatedScopeLabel();
-                    const iconClass = browsingRelatedExpandMode ? 'fas fa-check-square' : 'fas fa-square';
-                    todayBtn.innerHTML = isZh
-                        ? `<i class="${iconClass}"></i><span>显示${rangeLabel}关联记录</span>`
-                        : `<i class="${iconClass}"></i><span>Show ${rangeLabel} related</span>`;
-
-                    todayBtn.classList.toggle('checked', Boolean(browsingRelatedExpandMode));
-                    todayBtn.setAttribute('aria-pressed', browsingRelatedExpandMode ? 'true' : 'false');
-                }
-                setShowTodayRelatedVisible(true);
+        slots.forEach((card, index) => {
+            if (index < cardsToRender.length) {
+                const bookmark = cardsToRender[index];
+                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark?.id || '').trim()));
             } else {
-                setShowTodayRelatedVisible(false);
+                hideUnusedRecommendCardSlot(card);
+            }
+        });
+        rendered = true;
+    });
+
+    if (!rendered) return false;
+
+    recommendCards = cardsToRender.slice();
+    seedFaviconMemoryFromCardData(cardsToRender);
+    syncRecommendLastUpdatedFromState(currentCards);
+
+    try {
+        writeRecommendCardsSnapshot(cardsToRender, flippedIds);
+    } catch (_) { }
+
+    lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
+        recommendCards,
+        flippedIds,
+        currentLang
+    );
+
+    return true;
+}
+
+async function applyRecommendActionCurrentCardsToSurfaces(actionResult, fallbackForce = false) {
+    suppressRecommendCardActionHover(null);
+
+    if (actionResult?.currentCards && typeof actionResult.currentCards === 'object') {
+        markHistoryCurrentCardsSelfWrite(actionResult.currentCards);
+        const applied = renderRecommendCurrentCardsStateToRows(actionResult.currentCards);
+        if (applied) {
+            suppressRecommendCardActionHover(null);
+            return true;
+        }
+    }
+
+    await refreshRecommendCardSurfaces(fallbackForce === true);
+    suppressRecommendCardActionHover(null);
+    return false;
+}
+
+function applyRecommendSnapshotToCardRows(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.cards) || snapshot.cards.length === 0) return false;
+
+    const flippedSet = new Set(Array.isArray(snapshot.flippedIds) ? snapshot.flippedIds.map(String) : []);
+    const rowSelectors = ['#widgetsCardsRow', '#cardsRow'];
+    let applied = false;
+
+    rowSelectors.forEach((selector) => {
+        const cardsRow = document.querySelector(selector);
+        if (!cardsRow) return;
+        const cards = cardsRow.querySelectorAll('.recommend-card');
+        if (!cards || !cards.length) return;
+
+        cards.forEach((card, index) => {
+            if (index < snapshot.cards.length) {
+                const bookmark = snapshot.cards[index];
+                updateCardDisplay(card, bookmark, flippedSet.has(String(bookmark.id)));
+                applied = true;
+            } else {
+                hideUnusedRecommendCardSlot(card);
+            }
+        });
+    });
+
+    if (applied) {
+        recommendCards = snapshot.cards.slice();
+        seedFaviconMemoryFromCardData(snapshot.cards);
+
+        lastWidgetsRecommendCardSignature = buildWidgetsRecommendCardSignature(
+            recommendCards,
+            Array.from(flippedSet),
+            currentLang
+        );
+    }
+
+    return applied;
+}
+
+function normalizeRecommendCardIdList(ids = []) {
+    return (Array.isArray(ids) ? ids : [])
+        .map(id => String(id || '').trim())
+        .filter(Boolean);
+}
+
+function getRecommendCurrentCardsVersion(state = null) {
+    const version = Number(state?.version || 0);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
+}
+
+function markHistoryCurrentCardsSelfWrite(state = null) {
+    const version = getRecommendCurrentCardsVersion(state);
+    historyLastSelfWriteVersion = version > 0 ? version : 0;
+}
+
+function hasLegacyVersionlessRecommendCurrentCardsState(state = null) {
+    const cardIds = normalizeRecommendCardIdList(state?.cardIds || []);
+    return cardIds.length > 0 && getRecommendCurrentCardsVersion(state) <= 0;
+}
+
+function attachRecommendStateVersionToCards(cards = [], state = null) {
+    const version = getRecommendCurrentCardsVersion(state);
+    return (Array.isArray(cards) ? cards : []).map(card => ({
+        ...card,
+        currentCardsVersion: version
+    }));
+}
+
+function getRecommendActionExpectedVersion(bookmark = null) {
+    const version = Number(
+        bookmark?.currentCardsVersion
+        ?? bookmark?._currentCardsVersion
+        ?? bookmark?.recommendStateVersion
+        ?? 0
+    );
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
+}
+
+function normalizeRecommendActionVersionValue(value) {
+    const version = Number(value);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : null;
+}
+
+async function resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId, options = {}) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return null;
+
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        if (!currentIds.includes(id)) return null;
+        const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
+        if (currentVersion != null) return currentVersion;
+        if (options?.allowRefresh !== true) return null;
+
+        const backendRound = await selectRecommendCardsRoundShared(true);
+        const refreshedCards = backendRound?.currentCards && typeof backendRound.currentCards === 'object'
+            ? backendRound.currentCards
+            : await getHistoryCurrentCards();
+        const refreshedIds = normalizeRecommendCardIdList(refreshedCards?.cardIds || []);
+        if (!refreshedIds.includes(id)) return null;
+        return normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(refreshedCards));
+    } catch (_) {
+        return null;
+    }
+}
+
+async function resolveRecommendActionExpectedVersion(bookmarkId, bookmark = null, explicitVersion = null) {
+    const explicit = normalizeRecommendActionVersionValue(explicitVersion);
+    if (explicit != null) return explicit;
+
+    const fromBookmark = getRecommendActionExpectedVersion(bookmark);
+    if (fromBookmark != null) return fromBookmark;
+
+    return resolveRecommendCurrentCardsVersionForBookmarkId(bookmarkId);
+}
+
+function areRecommendCardIdListsEqual(a = [], b = []) {
+    const listA = normalizeRecommendCardIdList(a);
+    const listB = normalizeRecommendCardIdList(b);
+    if (listA.length !== listB.length) return false;
+    for (let i = 0; i < listA.length; i++) {
+        if (listA[i] !== listB[i]) return false;
+    }
+    return true;
+}
+
+async function hydrateRecommendCardsFromSnapshotForSidePanel() {
+    if (!isSidePanelMode) return false;
+    const snapshot = readRecommendCardsSnapshot();
+    if (!snapshot) return false;
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        if (Array.isArray(currentCards?.cardData)) {
+            seedFaviconMemoryFromCardData(currentCards.cardData);
+        }
+        if (hasLegacyVersionlessRecommendCurrentCardsState(currentCards)) {
+            clearRecommendCardsSnapshot();
+            return false;
+        }
+        const currentCardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        const snapshotCardIds = normalizeRecommendCardIdList((snapshot.cards || []).map(card => card?.id));
+
+        if (!currentCardIds.length) {
+            clearRecommendCardsSnapshot();
+            return false;
+        }
+        if (!areRecommendCardIdListsEqual(snapshotCardIds, currentCardIds)) {
+            clearRecommendCardsSnapshot();
+            return false;
+        }
+
+        const mergedSnapshotCards = mergeRecommendSnapshotCardsWithCardData(snapshot.cards, currentCards?.cardData);
+        if (mergedSnapshotCards.length > 0) {
+            seedFaviconMemoryFromCardData(mergedSnapshotCards);
+        }
+        const currentFlippedIds = normalizeRecommendCardIdList(currentCards?.flippedIds || []);
+        return applyRecommendSnapshotToCardRows({
+            ...snapshot,
+            cards: attachRecommendStateVersionToCards(
+                mergedSnapshotCards.length > 0 ? mergedSnapshotCards : snapshot.cards,
+                currentCards
+            ),
+            flippedIds: currentFlippedIds
+        });
+    } catch (_) {
+        return false;
+    }
+}
+
+// 获取当前显示的卡片状态（本页面共享）
+async function getHistoryCurrentCards() {
+    return new Promise((resolve) => {
+        browserAPI.storage.local.get([HISTORY_CURRENT_CARDS_STORAGE_KEY], (result) => {
+            resolve(result[HISTORY_CURRENT_CARDS_STORAGE_KEY] || null);
+        });
+    });
+}
+
+async function hasPendingRecommendRoundState() {
+    try {
+        const currentCards = await getHistoryCurrentCards();
+        const cardIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+        if (!cardIds.length) return false;
+
+        const flippedSet = new Set(normalizeRecommendCardIdList(currentCards?.flippedIds || []));
+        return cardIds.some(id => !flippedSet.has(id));
+    } catch (_) {
+        return false;
+    }
+}
+
+// 保存当前显示的卡片状态（本页面共享）
+async function saveHistoryCurrentCards(cardIds, flippedIds, cardData = null) {
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'saveHistoryCurrentCardsState',
+            cardIds: normalizeRecommendCardIdList(cardIds || []),
+            flippedIds: normalizeRecommendCardIdList(flippedIds || []),
+            cardData: Array.isArray(cardData) ? cardData : []
+        });
+
+        if (!response || response.success === false) {
+            return false;
+        }
+
+        const nextCards = response.currentCards;
+        if (nextCards && typeof nextCards === 'object') {
+            syncRecommendLastUpdatedFromState(nextCards);
+            markHistoryCurrentCardsSelfWrite(nextCards);
+        }
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+// 异步获取并保存当前卡片的数据（含priority和favicon）
+async function saveCardFaviconsToStorage(bookmarks) {
+    if (!bookmarks || bookmarks.length === 0) return;
+
+    try {
+        // 获取当前保存的卡片状态
+        const currentCards = await getHistoryCurrentCards();
+        if (!currentCards || !currentCards.cardIds) return;
+
+        // 为每个卡片获取favicon data URL和priority
+        const cardData = await Promise.all(bookmarks.map(async (bookmark) => {
+            if (!bookmark || !bookmark.url) {
+                return { id: bookmark?.id, title: bookmark?.title || bookmark?.name || '', url: null, favicon: null, priority: 0 };
+            }
+            try {
+                const faviconUrl = await FaviconCache.fetch(bookmark.url);
+                const favicon = faviconUrl !== fallbackIcon ? faviconUrl : null;
+                return {
+                    id: bookmark.id,
+                    title: bookmark.title || bookmark.name || '',
+                    url: bookmark.url,
+                    favicon,
+                    faviconUrl: favicon, // 兼容旧字段
+                    priority: bookmark.priority || 0,
+                    forceDue: bookmark.forceDue === true,
+                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
+                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
+                };
+            } catch (e) {
+                return {
+                    id: bookmark.id,
+                    title: bookmark.title || bookmark.name || '',
+                    url: bookmark.url,
+                    favicon: null,
+                    faviconUrl: null,
+                    priority: bookmark.priority || 0,
+                    forceDue: bookmark.forceDue === true,
+                    forceDueAt: Number.isFinite(Number(bookmark.forceDueAt)) ? Number(bookmark.forceDueAt) : 0,
+                    forceDueMovedAt: Number.isFinite(Number(bookmark.forceDueMovedAt)) ? Number(bookmark.forceDueMovedAt) : 0
+                };
+            }
+        }));
+
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'updateHistoryCurrentCardData',
+            cardData,
+            expectedVersion: getRecommendCurrentCardsVersion(currentCards)
+        });
+        if (!response || response.success === false) {
+            return;
+        }
+
+        const nextCards = response.currentCards || {
+            ...currentCards,
+            cardData
+        };
+        syncRecommendLastUpdatedFromState(nextCards);
+        markHistoryCurrentCardsSelfWrite(nextCards);
+
+        try {
+            const flippedIds = Array.isArray(nextCards.flippedIds) ? nextCards.flippedIds : [];
+            writeRecommendCardsSnapshot(cardData, flippedIds);
+        } catch (_) { }
+    } catch (error) {
+        // 静默处理错误
+    }
+}
+
+function shouldUseCompactRecommendCardPriority(card) {
+    if (!isSidePanelMode) return false;
+    try {
+        const inWidgets = card?.closest?.('#widgetsCardsRow') || currentView === 'widgets';
+        return Boolean(inWidgets);
+    } catch (_) {
+        return currentView === 'widgets';
+    }
+}
+
+function formatRecommendCardPriority(priority, compact = false) {
+    if (!Number.isFinite(priority)) {
+        return compact ? 'S--' : 'S = --';
+    }
+    return compact
+        ? `S${Number(priority).toFixed(2)}`
+        : `S = ${Number(priority).toFixed(3)}`;
+}
+
+const recommendActionSuppressTimers = new WeakMap();
+
+function blurRecommendCardActionFocus(target = null) {
+    try {
+        const active = document.activeElement;
+        if (!active || typeof active.blur !== 'function') return;
+        const shouldBlur = target
+            ? target.contains(active)
+            : Boolean(active.closest?.('.recommend-card'));
+        if (shouldBlur) {
+            active.blur();
+        }
+    } catch (_) { }
+}
+
+function suppressRecommendCardActionHover(target = null, durationMs = 900) {
+    blurRecommendCardActionFocus(target);
+
+    const rows = new Set();
+    try {
+        const row = target?.closest?.('.cards-row');
+        if (row) rows.add(row);
+    } catch (_) { }
+
+    document.querySelectorAll('#cardsRow, #widgetsCardsRow').forEach((row) => rows.add(row));
+
+    rows.forEach((row) => {
+        if (!row) return;
+        row.classList.add('recommend-actions-suppressed');
+        const existingTimer = recommendActionSuppressTimers.get(row);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            row.classList.remove('recommend-actions-suppressed');
+            recommendActionSuppressTimers.delete(row);
+        }, durationMs);
+        recommendActionSuppressTimers.set(row, timer);
+    });
+}
+
+// 更新单个卡片显示
+function updateCardDisplay(card, bookmark, isFlipped = false) {
+    const previousBookmarkId = String(card.dataset.bookmarkId || '');
+    const nextBookmarkId = String(bookmark?.id || '');
+    const preserveDebugOpen = Boolean(
+        previousBookmarkId
+        && nextBookmarkId
+        && previousBookmarkId === nextBookmarkId
+        && card.classList.contains('debug-open')
+    );
+
+    card.classList.remove('empty');
+    card.hidden = false;
+    card.classList.remove('is-opening');
+    card.dataset.opening = '0';
+    card.removeAttribute('aria-busy');
+    if (isFlipped) {
+        card.classList.add('flipped');
+    } else {
+        card.classList.remove('flipped');
+    }
+    card.querySelector('.card-title').textContent = bookmark.title || bookmark.name || bookmark.url;
+    const priorityEl = card.querySelector('.card-priority');
+    if (priorityEl) {
+        const compactPriority = shouldUseCompactRecommendCardPriority(card);
+        priorityEl.textContent = formatRecommendCardPriority(bookmark.priority, compactPriority);
+    }
+    card.dataset.url = bookmark.url;
+    card.dataset.bookmarkId = bookmark.id;
+    const currentCardsVersion = getRecommendActionExpectedVersion(bookmark);
+    if (currentCardsVersion != null) {
+        card.dataset.currentCardsVersion = String(currentCardsVersion);
+    } else {
+        delete card.dataset.currentCardsVersion;
+    }
+
+    let dueBadge = card.querySelector('.card-due-badge');
+    if (!dueBadge) {
+        dueBadge = document.createElement('span');
+        dueBadge.className = 'card-due-badge';
+        card.appendChild(dueBadge);
+    }
+
+    const showForceDueBadge = bookmark.forceDue === true
+        && isRecommendBookmarkInPostponedState(bookmark.id || bookmark.bookmarkId);
+    if (showForceDueBadge) {
+        card.classList.add('force-due');
+        dueBadge.textContent = currentLang === 'en' ? 'Due' : '到期';
+        dueBadge.style.display = 'inline-flex';
+    } else {
+        card.classList.remove('force-due');
+        dueBadge.textContent = '';
+        dueBadge.style.display = 'none';
+    }
+
+    // 设置 favicon
+    const favicon = card.querySelector('.card-favicon');
+    if (favicon && bookmark.url) {
+        const cachedFavicon = bookmark.favicon || bookmark.faviconUrl || null;
+        setHighResFavicon(favicon, bookmark.url, cachedFavicon);
+    }
+
+    // 诊断面板（右上角）
+    const debugOverlay = card.querySelector('.recommend-debug');
+    const debugPre = card.querySelector('.recommend-debug-pre');
+    if (!preserveDebugOpen) {
+        card.classList.remove('debug-open');
+        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+        if (debugPre) debugPre.textContent = '--';
+    } else if (debugOverlay) {
+        debugOverlay.setAttribute('aria-hidden', 'false');
+    }
+
+    const closeDebug = () => {
+        card.classList.remove('debug-open');
+        if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+    };
+
+    const openDebug = async () => {
+        if (!debugOverlay || !debugPre) return;
+        card.classList.add('debug-open');
+        debugOverlay.setAttribute('aria-hidden', 'false');
+        debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
+
+        const cached = getCachedRecommendScoreDebug(bookmark.id);
+        if (cached) {
+            debugPre.textContent = formatRecommendScoreDebugText(cached);
+            if (cached?.factors && typeof cached.factors.S === 'number') {
+                bookmark.priority = cached.factors.S;
+                bookmark.factors = cached.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, cached);
+        } else {
+            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
+        }
+
+        const debug = await getFreshRecommendScoreDebug(bookmark.id);
+        if (!debug) {
+            if (!cached) {
+                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
+            }
+            return;
+        }
+        setCachedRecommendScoreDebug(bookmark.id, debug);
+        debugPre.textContent = formatRecommendScoreDebugText(debug);
+        if (debug?.factors && typeof debug.factors.S === 'number') {
+            bookmark.priority = debug.factors.S;
+            bookmark.factors = debug.factors;
+        }
+        syncRecommendScoreFromDebug(bookmark.id, debug);
+    };
+
+    const debugBtn = card.querySelector('.card-debug-btn');
+    if (debugBtn) {
+        debugBtn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (card.classList.contains('debug-open')) {
+                closeDebug();
+            } else {
+                openDebug();
+            }
+        };
+    }
+
+    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
+    if (debugCloseBtn) {
+        debugCloseBtn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeDebug();
+        };
+    }
+
+    // 点击卡片主体：打开链接 + 标记为已翻过 + 记录复习
+    card.onclick = async (e) => {
+        if (e.target.closest('.card-actions')) return;
+        if (e.target.closest('.card-debug-btn')) return;
+        if (e.target.closest('.recommend-debug')) return;
+
+        if (!bookmark.url) return;
+
+        if (card.dataset.opening === '1') {
+            return;
+        }
+
+        const openKey = buildRecommendOpenInFlightKey({
+            bookmarkId: bookmark.id,
+            url: bookmark.url
+        });
+        if (openKey && recommendOpenInFlightKeys.has(openKey)) {
+            return;
+        }
+
+        card.dataset.opening = '1';
+        card.classList.add('is-opening');
+        card.setAttribute('aria-busy', 'true');
+        if (openKey) {
+            recommendOpenInFlightKeys.add(openKey);
+        }
+
+        try {
+            const openResult = await openInRecommendWindow(bookmark.url);
+            if (!openResult || !openResult.success) {
+                const msg = currentLang === 'en' ? 'Open failed, review skipped' : '打开失败，本次不计复习';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+
+            const actionResult = await dispatchRecommendCardAction('review', bookmark, {
+                source: 'recommend_card',
+                timestamp: Date.now()
+            });
+            if (!actionResult || actionResult.success === false) {
+                const msg = currentLang === 'en' ? 'Review update failed, please retry' : '复习状态更新失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+            card.classList.add('flipped');
+
+            if (actionResult.changedCurrentCards) {
+                await applyRecommendActionCurrentCardsToSurfaces(actionResult);
+            }
+            if (currentView === 'recommend') {
+                await loadHeatmapData();
+            }
+        } finally {
+            card.dataset.opening = '0';
+            card.classList.remove('is-opening');
+            card.removeAttribute('aria-busy');
+            if (openKey) {
+                recommendOpenInFlightKeys.delete(openKey);
+            }
+        }
+    };
+
+    // 按钮事件：稍后复习
+    const btnLater = card.querySelector('.card-btn-later');
+    if (btnLater) {
+        btnLater.onclick = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            suppressRecommendCardActionHover(card);
+            showLaterModal(bookmark);
+        };
+    }
+
+    // 按钮事件：跳过本次
+    const btnSkip = card.querySelector('.card-btn-skip');
+    if (btnSkip) {
+        btnSkip.onclick = async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            suppressRecommendCardActionHover(card);
+
+            const result = await dispatchRecommendCardAction('skip', bookmark, { source: 'recommend_card' });
+            if (!result || result.success === false) {
+                const msg = currentLang === 'en' ? 'Skip failed, please retry' : '跳过失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+            await applyRecommendActionCurrentCardsToSurfaces(result);
+        };
+    }
+
+    // 按钮事件：永久屏蔽
+    const btnBlock = card.querySelector('.card-btn-block');
+    if (btnBlock) {
+        btnBlock.onclick = async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            suppressRecommendCardActionHover(card);
+            const result = await dispatchRecommendCardAction('block', bookmark, {
+                source: 'recommend_card',
+                scope: 'sameTitle'
+            });
+            if (!result || result.success === false) {
+                const msg = currentLang === 'en' ? 'Block failed, please retry' : '屏蔽失败，请重试';
+                try { showToast(msg); } catch (_) { }
+                return;
+            }
+            await loadBlockedLists();
+            await applyRecommendActionCurrentCardsToSurfaces(result);
+        };
+    }
+}
+
+// 设置卡片为空状态
+function setCardEmpty(card) {
+    card.hidden = false;
+    card.classList.add('empty');
+    card.classList.remove('is-opening');
+    card.dataset.opening = '0';
+    card.removeAttribute('aria-busy');
+    card.classList.remove('force-due');
+    card.querySelector('.card-title').textContent = '--';
+    const priorityEl = card.querySelector('.card-priority');
+    if (priorityEl) {
+        const compactPriority = shouldUseCompactRecommendCardPriority(card);
+        priorityEl.textContent = formatRecommendCardPriority(Number.NaN, compactPriority);
+    }
+    const favicon = card.querySelector('.card-favicon');
+    if (favicon) {
+        favicon.src = fallbackIcon;
+    }
+
+    const dueBadge = card.querySelector('.card-due-badge');
+    if (dueBadge) {
+        dueBadge.textContent = '';
+        dueBadge.style.display = 'none';
+    }
+
+    card.onclick = null;
+
+    const actions = card.querySelector('.card-actions');
+    if (actions) {
+        actions.querySelectorAll('.card-btn').forEach(btn => {
+            btn.onclick = null;
+        });
+    }
+
+    card.classList.remove('debug-open');
+    const debugOverlay = card.querySelector('.recommend-debug');
+    if (debugOverlay) debugOverlay.setAttribute('aria-hidden', 'true');
+    const debugPre = card.querySelector('.recommend-debug-pre');
+    if (debugPre) debugPre.textContent = '--';
+    const debugBtn = card.querySelector('.card-debug-btn');
+    if (debugBtn) debugBtn.onclick = null;
+    const debugCloseBtn = card.querySelector('.recommend-debug-close-btn');
+    if (debugCloseBtn) debugCloseBtn.onclick = null;
+}
+
+function hideUnusedRecommendCardSlot(card) {
+    if (!card) return;
+    setCardEmpty(card);
+    card.hidden = true;
+}
+
+function setRecommendCardsRowEmptyMessage(cards, message) {
+    const slots = Array.from(cards || []);
+    slots.forEach((card, index) => {
+        setCardEmpty(card);
+        card.hidden = index > 0;
+        if (index === 0) {
+            const titleEl = card.querySelector('.card-title');
+            if (titleEl) titleEl.textContent = message || '--';
+        }
+    });
+}
+
+
+
+function getCachedRecommendScoreDebug(bookmarkId) {
+    const entry = recommendScoreDebugCache.get(bookmarkId);
+    if (!entry) return null;
+    if ((Date.now() - entry.time) > RECOMMEND_SCORE_DEBUG_CACHE_TTL_MS) {
+        recommendScoreDebugCache.delete(bookmarkId);
+        return null;
+    }
+    return entry.debug || null;
+}
+
+function setCachedRecommendScoreDebug(bookmarkId, debug) {
+    if (!bookmarkId || !debug) return;
+    recommendScoreDebugCache.set(bookmarkId, { time: Date.now(), debug });
+}
+
+function getFreshRecommendScoreDebug(bookmarkId) {
+    if (!bookmarkId) return Promise.resolve(null);
+    const key = String(bookmarkId);
+    if (recommendScoreDebugInFlight.has(key)) {
+        return recommendScoreDebugInFlight.get(key);
+    }
+    const promise = requestRecommendScoreDebug(key)
+        .catch(() => null)
+        .finally(() => {
+            recommendScoreDebugInFlight.delete(key);
+        });
+    recommendScoreDebugInFlight.set(key, promise);
+    return promise;
+}
+
+function updateRecommendCardScoreDisplay(bookmarkId, newS) {
+    if (!bookmarkId || !Number.isFinite(newS)) return;
+    const id = String(bookmarkId);
+    const cards = document.querySelectorAll(`.recommend-card[data-bookmark-id="${id}"]`);
+    if (!cards || !cards.length) return;
+    cards.forEach((card) => {
+        const priorityEl = card.querySelector('.card-priority');
+        if (priorityEl) {
+            const compactPriority = shouldUseCompactRecommendCardPriority(card);
+            priorityEl.textContent = formatRecommendCardPriority(newS, compactPriority);
+        }
+    });
+}
+
+function syncRecommendScoreFromDebug(bookmarkId, debug, options = {}) {
+    if (!bookmarkId || !debug) return null;
+    const cachedS = (typeof debug?.storage?.cachedEntry?.S === 'number') ? debug.storage.cachedEntry.S : null;
+    const computedS = (typeof debug?.factors?.S === 'number') ? debug.factors.S : null;
+    const nextS = (cachedS != null) ? cachedS : computedS;
+    if (!Number.isFinite(nextS)) return null;
+
+    if (options && options.scoreEl) {
+        try {
+            options.scoreEl.textContent = nextS.toFixed(3);
+        } catch (_) { }
+    }
+
+    updateRecommendCardScoreDisplay(bookmarkId, nextS);
+
+    try {
+        if (typeof window.updateRecommendSearchScoreCache === 'function') {
+            const updated = window.updateRecommendSearchScoreCache(bookmarkId, nextS);
+            if (!updated && typeof window.invalidateRecommendSearchIndex === 'function') {
+                window.invalidateRecommendSearchIndex();
+            }
+        } else if (typeof window.invalidateRecommendSearchIndex === 'function') {
+            window.invalidateRecommendSearchIndex();
+        }
+    } catch (_) { }
+
+    return nextS;
+}
+
+function requestRecommendScoreDebug(bookmarkId) {
+    return new Promise((resolve) => {
+        let done = false;
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            resolve(null);
+        }, 3500);
+
+        if (!browserAPI?.runtime?.sendMessage || !bookmarkId) {
+            clearTimeout(timer);
+            resolve(null);
+            return;
+        }
+
+        browserAPI.runtime.sendMessage({ action: 'getBookmarkScoreDebug', bookmarkId }, (response) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            if (browserAPI.runtime.lastError) {
+                resolve(null);
+            } else if (response?.success && response?.debug) {
+                resolve(response.debug);
+            } else {
+                resolve(null);
+            }
+        });
+    });
+}
+
+function formatRecommendDebugTime(ts) {
+    const t = Number(ts || 0);
+    if (!t) return '--';
+    try {
+        const locale = currentLang === 'en' ? 'en-US' : 'zh-CN';
+        return new Date(t).toLocaleString(locale);
+    } catch (_) {
+        return String(t);
+    }
+}
+
+function formatRecommendScoreDebugText(debug) {
+    const isEn = currentLang === 'en';
+    const lines = [];
+    if (!debug) {
+        return isEn ? 'No debug data.' : '没有诊断数据。';
+    }
+
+    const f = debug.factors || {};
+    const h = debug.matches?.history || {};
+    const t = debug.matches?.tracking || {};
+    const raw = debug.raw || {};
+    const w = debug.weightsUsed || {};
+    const th = debug.config?.thresholds || {};
+    const storage = debug.storage || {};
+    const cachedS = typeof storage.cachedEntry?.S === 'number' ? storage.cachedEntry.S : null;
+
+    const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : '--');
+    const fmtDays = (v) => (typeof v === 'number' ? v.toFixed(2) : '--');
+
+    if (cachedS != null && typeof f.S === 'number') {
+        if (isEn) {
+            lines.push(`S=${cachedS.toFixed(3)} (old)  S=${f.S.toFixed(3)} (new)`);
+        } else {
+            lines.push(`S=${cachedS.toFixed(3)}（旧）  S=${f.S.toFixed(3)}（新）`);
+        }
+    } else {
+        lines.push(`S=${fmt(f.S)}`);
+    }
+    lines.push(`F=${fmt(f.F)} C=${fmt(f.C)} T=${fmt(f.T)} D=${fmt(f.D)} L=${fmt(f.L)} R=${fmt(f.R)}`);
+    lines.push(`AddedΔ=${fmtDays(raw.daysSinceAdded)}d  LastVisitΔ=${fmtDays(raw.daysSinceLastVisit)}d  T(min)=${fmtDays(raw.compositeMinutes)}`);
+    lines.push('');
+
+    lines.push(`History: ${h.type || 'none'}  visits=${h.visitCount ?? 0}  last=${formatRecommendDebugTime(h.lastVisitTime)}`);
+    lines.push(`Tracking: ${t.type || 'none'}  ms=${t.compositeMs ?? 0}${t.ignoredTitleHit ? '  (ignored title hit)' : ''}`);
+    lines.push('');
+
+    lines.push(`WeightsUsed: w1=${fmt(w.w1)} w2=${fmt(w.w2)} w3=${fmt(w.w3)} w4=${fmt(w.w4)} w5=${fmt(w.w5)}`);
+    lines.push(`Thresholds: freshness=${th.freshness ?? '--'} coldness=${th.coldness ?? '--'} shallowRead=${th.shallowRead ?? '--'} forgetting=${th.forgetting ?? '--'}`);
+    lines.push('');
+
+    lines.push(`Cache: mode=${storage.cacheMode || '--'} algo=v${storage.algoVersion || '--'} cachedS=${cachedS == null ? '--' : cachedS.toFixed(3)} time=${storage.recommendScoresTime || 0}`);
+    if (storage.staleMeta?.staleAt) {
+        lines.push(`StaleMeta: at=${formatRecommendDebugTime(storage.staleMeta.staleAt)} reason=${storage.staleMeta.reason || ''}`);
+    }
+
+    if (Array.isArray(debug.notes) && debug.notes.length) {
+        lines.push('');
+        lines.push(isEn ? 'Notes:' : '备注:');
+        debug.notes.forEach((note) => lines.push(`- ${note}`));
+    }
+
+    return lines.join('\n');
+}
+
+// 推荐搜索：二级 UI 预览（不影响推荐卡片）
+let recommendSearchPreviewActive = false;
+let recommendSearchModalItem = null;
+
+async function handleRecommendSearchOpenOnly(item, options = {}) {
+    const closeAfterOpen = options.closeAfterOpen === true;
+    const url = String(item?.url || '').trim();
+
+    if (!url) {
+        return { success: false, reason: 'no-url' };
+    }
+
+    const openResult = await openInRecommendWindow(url);
+    if (!openResult || !openResult.success) {
+        const msg = currentLang === 'en' ? 'Open failed' : '打开失败';
+        try { showToast(msg); } catch (_) { }
+        return { success: false, reason: 'open-failed' };
+    }
+
+    if (closeAfterOpen) {
+        closeRecommendSearchModal();
+    }
+
+    return { success: true, updated: false };
+}
+
+function closeRecommendSearchModal() {
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    recommendSearchPreviewActive = false;
+}
+
+function initRecommendSearchModal() {
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal || modal.hasAttribute('data-bound')) return;
+    modal.setAttribute('data-bound', 'true');
+
+    const closeBtn = document.getElementById('recommendSearchModalClose');
+    const closeBtn2 = document.getElementById('recommendSearchModalCloseBtn');
+    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
+    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
+    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
+    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeRecommendSearchModal);
+    if (closeBtn2) closeBtn2.addEventListener('click', closeRecommendSearchModal);
+
+    if (laterBtn) {
+        laterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item) return;
+            closeRecommendSearchModal();
+            showLaterModal(item);
+        });
+    }
+
+    if (skipBtn) {
+        skipBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+
+            const result = await dispatchRecommendCardAction('skip', item, { source: 'recommend_search' });
+            if (result && result.success !== false) {
+                await applyRecommendActionCurrentCardsToSurfaces(result);
+            }
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (blockBtn) {
+        blockBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+            const result = await dispatchRecommendCardAction('block', item, {
+                source: 'recommend_search',
+                scope: 'sameTitle'
+            });
+            if (!result || result.success === false) return;
+            await loadBlockedLists();
+            await applyRecommendActionCurrentCardsToSurfaces(result);
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (reviewBtn) {
+        reviewBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.id) return;
+
+            const result = await dispatchRecommendCardAction('review', item, {
+                source: 'recommend_search_mark_reviewed',
+                timestamp: Date.now()
+            });
+            if (!result || result.success === false) {
+                try {
+                    showToast(currentLang === 'en'
+                        ? 'Review update failed, please retry'
+                        : '复习状态更新失败，请重试');
+                } catch (_) { }
+                return;
+            }
+            if (result.changedCurrentCards) {
+                await applyRecommendActionCurrentCardsToSurfaces(result);
+            }
+            if (currentView === 'recommend') {
+                await loadHeatmapData();
+            }
+            try {
+                if (typeof window.refreshRecommendSearchIfNeeded === 'function') {
+                    window.refreshRecommendSearchIfNeeded();
+                }
+            } catch (_) { }
+            closeRecommendSearchModal();
+        });
+    }
+
+    if (openBtn) {
+        openBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const item = recommendSearchModalItem;
+            if (!item || !item.url) return;
+            await handleRecommendSearchOpenOnly(item, { closeAfterOpen: true });
+        });
+    }
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeRecommendSearchModal();
+    });
+}
+
+async function showRecommendSearchResultCard(item) {
+    initRecommendSearchModal();
+    const modal = document.getElementById('recommendSearchModal');
+    if (!modal) return;
+
+    const faviconEl = document.getElementById('recommendSearchModalFavicon');
+    const titleEl = document.getElementById('recommendSearchModalItemTitle');
+    const urlEl = document.getElementById('recommendSearchModalItemUrl');
+    const scoreEl = document.getElementById('recommendSearchModalItemScore');
+    const debugPre = document.getElementById('recommendSearchModalDebugPre');
+    const openBtn = document.getElementById('recommendSearchModalOpenBtn');
+    const laterBtn = document.getElementById('recommendSearchModalLaterBtn');
+    const skipBtn = document.getElementById('recommendSearchModalSkipBtn');
+    const blockBtn = document.getElementById('recommendSearchModalBlockBtn');
+    const reviewBtn = document.getElementById('recommendSearchModalReviewBtn');
+
+    const bookmarkId = item && (item.id || item.bookmarkId);
+    const priority = (item && Number.isFinite(item.scoreS)) ? item.scoreS
+        : (item && Number.isFinite(item.S)) ? item.S
+            : (item && Number.isFinite(item.priority)) ? item.priority
+                : 0.5;
+
+    const bookmark = {
+        id: bookmarkId,
+        title: item?.title || item?.name || '',
+        name: item?.title || item?.name || '',
+        url: item?.url || '',
+        priority,
+        forceDue: item?.forceDue === true
+    };
+
+    // 如果搜索结果缺失 URL，尝试从书签 API 回填
+    if (bookmarkId && !bookmark.url) {
+        try {
+            const nodes = await browserAPI.bookmarks.get(bookmarkId);
+            const node = Array.isArray(nodes) ? nodes[0] : null;
+            if (node && node.url) {
+                bookmark.url = node.url;
+                if (!bookmark.title) {
+                    bookmark.title = node.title || '';
+                    bookmark.name = node.title || '';
+                }
             }
         } catch (_) { }
-    };
-} catch (_) { }
+    }
 
-document.addEventListener('browsingHistoryCacheUpdated', () => {
-
-    resetBrowsingRankingDerivedCache();
-    markWidgetsDirty(['ranking', 'related', 'historyWeek'], { delayMs: 80 });
-    refreshActiveBrowsingRankingIfVisible();
-    markBrowsingRelatedSnapshotStale('browsing-history-cache-updated');
-});
-
-function groupBookmarksByTime(bookmarks, timeFilter) {
-    const groups = {};
-
-    bookmarks.forEach(bookmark => {
-        const date = new Date(bookmark.dateAdded);
-        let groupKey;
-
-        switch (timeFilter) {
-            case 'year':
-                groupKey = date.getFullYear().toString();
-                break;
-            case 'month':
-                groupKey = currentLang === 'zh_CN'
-                    ? `${date.getFullYear()}年${date.getMonth() + 1}月`
-                    : `${date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}`;
-                break;
-            case 'day':
-            case 'all':
-            default:
-                groupKey = date.toLocaleDateString(currentLang === 'en' ? 'en-US' : 'zh-CN');
-                break;
-        }
-
-        if (!groups[groupKey]) {
-            groups[groupKey] = [];
-        }
-        groups[groupKey].push(bookmark);
-    });
-
-    return groups;
-}
-
-// 保留旧函数用于兼容
-function groupBookmarksByDate(bookmarks) {
-    return groupBookmarksByTime(bookmarks, 'day');
-}
-
-function filterBookmarks(groups) {
-    return groups;
-}
-
-let additionsGroupItemsCache = new Map();
-
-function renderBookmarkGroups(groups, timeFilter) {
-    additionsGroupItemsCache = new Map();
-
-    const sortedDates = Object.keys(groups).sort((a, b) => {
-        // 根据timeFilter决定排序方式
-        if (timeFilter === 'year') {
-            return parseInt(b) - parseInt(a);
-        }
-        return new Date(b) - new Date(a);
-    });
-
-    return sortedDates.map((date, index) => {
-        const bookmarks = groups[date];
-        const groupId = `group-${index}`;
-        // 默认折叠
-        const isExpanded = false;
-
-        additionsGroupItemsCache.set(groupId, bookmarks);
-
-        return `
-            <div class="addition-group" data-group-id="${groupId}">
-                <div class="addition-group-header" data-group-id="${groupId}">
-                    <div class="addition-group-title">
-                        <i class="fas fa-chevron-right addition-group-toggle ${isExpanded ? 'expanded' : ''}"></i>
-                        <span class="addition-group-date">${date}</span>
-                        <span class="addition-count">${bookmarks.length} ${i18n.bookmarks[currentLang]}</span>
-                    </div>
-                </div>
-                <div class="addition-items ${isExpanded ? 'expanded' : ''}" data-group-id="${groupId}" data-loaded="0"></div>
-            </div>
-        `;
-    }).join('');
-}
-
-// 绑定折叠/展开事件
-function attachAdditionGroupEvents() {
-    const container = document.getElementById('additionsList');
-    if (!container || container.dataset.groupEventsBound === '1') return;
-    container.dataset.groupEventsBound = '1';
-
-    container.addEventListener('click', (e) => {
-        const header = e.target && e.target.closest ? e.target.closest('.addition-group-header') : null;
-        if (!header || !container.contains(header)) return;
-
-        const groupId = header.getAttribute('data-group-id');
-        const items = header.parentElement ? header.parentElement.querySelector('.addition-items') : null;
-        const toggle = header.querySelector('.addition-group-toggle');
-
-        if (!items || !toggle) return;
-
-        const willExpand = !items.classList.contains('expanded');
-        if (willExpand && items.getAttribute('data-loaded') !== '1') {
-            const groupBookmarks = additionsGroupItemsCache.get(groupId) || [];
-            
-            // Batched rendering to prevent DOM thread locking on expansion
-            const BATCH_SIZE = 100;
-            let renderedCount = 0;
-            
-            items.innerHTML = ''; // clear loading state
-            
-            const renderBatch = () => {
-                const end = Math.min(renderedCount + BATCH_SIZE, groupBookmarks.length);
-                const batch = groupBookmarks.slice(renderedCount, end);
-                const html = batch.map(renderBookmarkItem).join('');
-                
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = html;
-                while (tempDiv.firstChild) {
-                    items.appendChild(tempDiv.firstChild);
-                }
-                
-                renderedCount = end;
-                return renderedCount < groupBookmarks.length;
-            };
-            
-            const hasMore = renderBatch();
-            
-            if (hasMore) {
-                const loadMoreBtn = document.createElement('div');
-                loadMoreBtn.className = 'addition-load-more-btn';
-                loadMoreBtn.style.padding = '8px 12px';
-                loadMoreBtn.style.margin = '10px auto';
-                loadMoreBtn.style.textAlign = 'center';
-                loadMoreBtn.style.background = 'var(--bg-secondary)';
-                loadMoreBtn.style.border = '1px solid var(--border-color)';
-                loadMoreBtn.style.borderRadius = '6px';
-                loadMoreBtn.style.cursor = 'pointer';
-                loadMoreBtn.style.color = 'var(--text-secondary)';
-                loadMoreBtn.style.fontSize = '12px';
-                loadMoreBtn.style.width = 'fit-content';
-                loadMoreBtn.style.transition = 'all 0.2s';
-                
-                const updateBtnText = () => {
-                    const remaining = groupBookmarks.length - renderedCount;
-                    const nextBatch = Math.min(BATCH_SIZE, remaining);
-                    loadMoreBtn.textContent = currentLang === 'zh_CN'
-                        ? `加载更多 ${nextBatch} 个（剩余 ${remaining} 个）`
-                        : `Load ${nextBatch} more (${remaining} remaining)`;
-                };
-                
-                updateBtnText();
-                
-                loadMoreBtn.addEventListener('mouseenter', () => {
-                    loadMoreBtn.style.background = 'var(--bg-tertiary)';
-                    loadMoreBtn.style.borderColor = 'var(--accent-primary)';
-                    loadMoreBtn.style.color = 'var(--accent-primary)';
-                });
-                loadMoreBtn.addEventListener('mouseleave', () => {
-                    loadMoreBtn.style.background = 'var(--bg-secondary)';
-                    loadMoreBtn.style.borderColor = 'var(--border-color)';
-                    loadMoreBtn.style.color = 'var(--text-secondary)';
-                });
-                
-                loadMoreBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const more = renderBatch();
-                    if (more) {
-                        updateBtnText();
-                        items.appendChild(loadMoreBtn); // move button to the end
-                    } else {
-                        loadMoreBtn.remove();
+    // 尝试补充 factors / S
+    if (bookmarkId) {
+        try {
+            const result = await browserAPI.storage.local.get(['recommend_scores_cache']);
+            const cached = result?.recommend_scores_cache?.[bookmarkId];
+            if (cached && Number.isFinite(cached.S)) {
+                bookmark.priority = cached.S;
+                bookmark.factors = cached;
+                try {
+                    if (typeof window.updateRecommendSearchScoreCache === 'function') {
+                        window.updateRecommendSearchScoreCache(bookmarkId, cached.S);
                     }
-                });
-                
-                items.appendChild(loadMoreBtn);
+                } catch (_) { }
             }
-            
-            items.setAttribute('data-loaded', '1');
+        } catch (_) { }
+    }
+
+    let isCurrentRecommendCard = false;
+    if (bookmarkId) {
+        try {
+            const currentCards = await getHistoryCurrentCards();
+            const currentIds = normalizeRecommendCardIdList(currentCards?.cardIds || []);
+            isCurrentRecommendCard = currentIds.includes(String(bookmarkId));
+            if (isCurrentRecommendCard) {
+                const currentVersion = normalizeRecommendActionVersionValue(getRecommendCurrentCardsVersion(currentCards));
+                if (currentVersion != null) {
+                    bookmark.currentCardsVersion = currentVersion;
+                }
+            }
+        } catch (_) { }
+    }
+
+    if (titleEl) {
+        titleEl.textContent = bookmark.title || (currentLang === 'zh_CN' ? '（无标题）' : '(Untitled)');
+    }
+    if (urlEl) {
+        urlEl.textContent = bookmark.url || '--';
+        if (bookmark.url) {
+            urlEl.setAttribute('href', bookmark.url);
+            urlEl.setAttribute('title', bookmark.url);
+            urlEl.setAttribute('data-skip-global-open-fallback', '1');
+            urlEl.onclick = async (e) => {
+                e.preventDefault();
+                await handleRecommendSearchOpenOnly(bookmark, { closeAfterOpen: false });
+            };
+        } else {
+            urlEl.setAttribute('href', '#');
+            urlEl.removeAttribute('title');
+            urlEl.removeAttribute('data-skip-global-open-fallback');
+            urlEl.onclick = null;
+        }
+    }
+    if (scoreEl) {
+        const scoreValue = Number.isFinite(bookmark.priority) ? bookmark.priority : priority;
+        scoreEl.textContent = Number.isFinite(scoreValue) ? scoreValue.toFixed(3) : '--';
+    }
+    if (faviconEl) {
+        setHighResFavicon(faviconEl, bookmark.url);
+    }
+
+    if (debugPre) {
+        const cached = getCachedRecommendScoreDebug(bookmark.id);
+        if (cached) {
+            debugPre.textContent = formatRecommendScoreDebugText(cached);
+            if (cached?.factors && typeof cached.factors.S === 'number') {
+                bookmark.priority = cached.factors.S;
+                bookmark.factors = cached.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, cached, { scoreEl });
+        } else {
+            debugPre.textContent = currentLang === 'en' ? 'Loading...' : '加载中...';
         }
 
-        items.classList.toggle('expanded');
-        toggle.classList.toggle('expanded');
+        const debug = await getFreshRecommendScoreDebug(bookmark.id);
+        if (!debug) {
+            if (!cached) {
+                debugPre.textContent = currentLang === 'en' ? 'Load failed.' : '加载失败。';
+            }
+        } else {
+            setCachedRecommendScoreDebug(bookmark.id, debug);
+            debugPre.textContent = formatRecommendScoreDebugText(debug);
+            if (debug?.factors && typeof debug.factors.S === 'number') {
+                bookmark.priority = debug.factors.S;
+                bookmark.factors = debug.factors;
+            }
+            syncRecommendScoreFromDebug(bookmark.id, debug, { scoreEl });
+        }
+    }
+
+    if (openBtn) {
+        openBtn.disabled = !bookmark.url;
+    }
+    if (laterBtn) laterBtn.disabled = !bookmark.id;
+    if (reviewBtn) reviewBtn.disabled = !bookmark.id;
+    if (skipBtn) {
+        skipBtn.disabled = !bookmark.id || !isCurrentRecommendCard;
+        skipBtn.style.display = isCurrentRecommendCard ? '' : 'none';
+    }
+    if (blockBtn) blockBtn.disabled = !bookmark.id;
+
+    recommendSearchModalItem = bookmark;
+
+    modal.classList.add('show');
+    recommendSearchPreviewActive = true;
+}
+
+try {
+    window.showRecommendSearchResultCard = showRecommendSearchResultCard;
+} catch (_) { }
+// 获取已屏蔽书签
+async function getBlockedBookmarks() {
+    try {
+        const result = await browserAPI.storage.local.get(RECOMMEND_BLOCKED_STORAGE_KEY);
+        return normalizeBlockedState(result[RECOMMEND_BLOCKED_STORAGE_KEY]);
+    } catch (e) {
+        console.error('[屏蔽] 获取屏蔽数据失败:', e);
+        return normalizeBlockedState(null);
+    }
+}
+
+async function requestRecommendScoreUpdate(action, payload) {
+    try {
+        const response = await browserAPI.runtime.sendMessage({ action, ...(payload || {}) });
+        if (response && response.success === false) {
+            console.warn('[推荐] S值增量更新失败:', response.error || response);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.warn('[推荐] S值增量更新失败:', e);
+        return false;
+    }
+}
+
+function normalizeBlockedListIds(list = []) {
+    return Array.from(new Set(
+        (Array.isArray(list) ? list : [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+    ));
+}
+
+function normalizeBlockedDomainEntry(entry, options = {}) {
+    const modeHint = String(options?.mode || '').trim().toLowerCase();
+    const toBaseEntry = (value) => {
+        const base = getRecommendBaseDomainFromHost(value);
+        return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
+    };
+    const toExactEntry = (value) => normalizeRecommendDomainHost(value);
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const mode = String(entry?.matchMode || entry?.mode || modeHint || RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT).trim().toLowerCase();
+        const raw = String(entry?.domain || entry?.host || entry?.value || '').trim();
+        if (!raw) return '';
+        return mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE
+            ? toBaseEntry(raw)
+            : toExactEntry(raw);
+    }
+
+    const raw = String(entry || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+        return toBaseEntry(raw.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+    }
+    if (modeHint === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+        return toBaseEntry(raw);
+    }
+    return toExactEntry(raw);
+}
+
+function normalizeBlockedDomains(domains = []) {
+    return Array.from(new Set(
+        (Array.isArray(domains) ? domains : [])
+            .map(domain => normalizeBlockedDomainEntry(domain))
+            .filter(Boolean)
+    ));
+}
+
+function parseBlockedDomainEntry(entry) {
+    const normalized = normalizeBlockedDomainEntry(entry);
+    if (!normalized) return null;
+
+    if (normalized.startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX)) {
+        const baseDomain = normalizeRecommendDomainHost(normalized.slice(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX.length));
+        if (!baseDomain) return null;
+        return {
+            entry: `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${baseDomain}`,
+            mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE,
+            baseDomain,
+            exactDomain: '',
+            displayDomain: baseDomain
+        };
+    }
+
+    const exactDomain = normalizeRecommendDomainHost(normalized);
+    if (!exactDomain) return null;
+    return {
+        entry: exactDomain,
+        mode: RECOMMEND_BLOCKED_DOMAIN_MODE_EXACT,
+        baseDomain: getRecommendBaseDomainFromHost(exactDomain),
+        exactDomain,
+        displayDomain: exactDomain
+    };
+}
+
+function buildBlockedDomainMatchers(domains = []) {
+    const exact = new Set();
+    const base = new Set();
+    for (const entry of Array.isArray(domains) ? domains : []) {
+        const parsed = parseBlockedDomainEntry(entry);
+        if (!parsed) continue;
+        if (parsed.mode === RECOMMEND_BLOCKED_DOMAIN_MODE_BASE) {
+            base.add(parsed.baseDomain);
+        } else if (parsed.exactDomain) {
+            exact.add(parsed.exactDomain);
+        }
+    }
+    return {
+        exact,
+        base,
+        hasRules: exact.size > 0 || base.size > 0
+    };
+}
+
+function isHostnameBlockedByDomainMatchers(hostname, matchers) {
+    if (!matchers || matchers.hasRules !== true) return false;
+    const exactHost = normalizeRecommendDomainHost(hostname);
+    if (!exactHost) return false;
+    if (matchers.exact?.has(exactHost)) return true;
+    const baseHost = getRecommendBaseDomainFromHost(exactHost);
+    return Boolean(baseHost && matchers.base?.has(baseHost));
+}
+
+function buildBlockedDomainBaseEntry(domain) {
+    const base = getRecommendBaseDomainFromHost(domain);
+    return base ? `${RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX}${base}` : '';
+}
+
+function normalizeRecommendStateVersion(value) {
+    const version = Number(value);
+    return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0;
+}
+
+function attachRecommendListStateVersion(list, version) {
+    const normalized = Array.isArray(list) ? list : [];
+    try {
+        Object.defineProperty(normalized, 'stateVersion', {
+            value: normalizeRecommendStateVersion(version),
+            enumerable: false,
+            configurable: true,
+            writable: true
+        });
+    } catch (_) {
+        normalized.stateVersion = normalizeRecommendStateVersion(version);
+    }
+    return normalized;
+}
+
+function getRecommendStateVersion(source) {
+    return normalizeRecommendStateVersion(
+        source?.version
+        ?? source?.stateVersion
+        ?? source?._version
+        ?? 0
+    );
+}
+
+function normalizeBlockedState(blocked) {
+    const source = blocked && typeof blocked === 'object' ? blocked : {};
+    return {
+        bookmarks: normalizeBlockedListIds(source.bookmarks),
+        folders: normalizeBlockedListIds(source.folders),
+        domains: normalizeBlockedDomains(source.domains),
+        version: getRecommendStateVersion(source)
+    };
+}
+
+function normalizePostponedList(postponed = []) {
+    if (!Array.isArray(postponed)) return [];
+    const byId = new Map();
+
+    for (const item of postponed) {
+        if (!item || item.bookmarkId == null) continue;
+        const bookmarkId = String(item.bookmarkId || '').trim();
+        if (!bookmarkId) continue;
+
+        const normalized = {
+            ...item,
+            bookmarkId
+        };
+
+        if (!byId.has(bookmarkId)) {
+            byId.set(bookmarkId, normalized);
+            continue;
+        }
+
+        const existing = byId.get(bookmarkId);
+        const existingUpdatedAt = Number(existing?.updatedAt || existing?.createdAt || existing?.addedAt || 0);
+        const nextUpdatedAt = Number(normalized?.updatedAt || normalized?.createdAt || normalized?.addedAt || 0);
+        if (nextUpdatedAt >= existingUpdatedAt) {
+            byId.set(bookmarkId, {
+                ...existing,
+                ...normalized,
+                bookmarkId
+            });
+        }
+    }
+
+    return attachRecommendListStateVersion(
+        Array.from(byId.values()),
+        getRecommendStateVersion(postponed)
+    );
+}
+
+async function saveBlockedBookmarks(blockedInput) {
+    const expectedVersion = getRecommendStateVersion(blockedInput);
+    const blocked = normalizeBlockedState(blockedInput);
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'setRecommendBlockedState',
+            blocked,
+            expectedVersion
+        });
+        if (response && response.success) {
+            return normalizeBlockedState(response.blocked || blocked);
+        }
+        if (response && response.stale) {
+            throw new Error(response.reason || 'stale_recommend_state');
+        }
+    } catch (error) {
+        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
+            throw error;
+        }
+    }
+
+    throw new Error('background_unavailable');
+}
+
+async function savePostponedBookmarks(postponedInput) {
+    const expectedVersion = getRecommendStateVersion(postponedInput);
+    const postponed = normalizePostponedList(postponedInput);
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'setRecommendPostponedState',
+            postponed,
+            expectedVersion
+        });
+        if (response && response.success) {
+            return attachRecommendListStateVersion(
+                normalizePostponedList(response.postponed || postponed),
+                response.version
+            );
+        }
+        if (response && response.stale) {
+            throw new Error(response.reason || 'stale_recommend_state');
+        }
+    } catch (error) {
+        if (error?.message === 'stale_recommend_state' || error?.message === 'missing_recommend_state_version') {
+            throw error;
+        }
+    }
+
+    throw new Error('background_unavailable');
+}
+
+async function clearFlippedForBookmarkIds(bookmarkIds = []) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (ids.length === 0) return;
+
+    try {
+        const result = await browserAPI.storage.local.get([FLIPPED_BOOKMARKS_STORAGE_KEY]);
+        const current = normalizeSkippedBookmarkIds(result?.[FLIPPED_BOOKMARKS_STORAGE_KEY] || []);
+        const removeSet = new Set(ids);
+        const next = current.filter(id => !removeSet.has(id));
+        if (next.length !== current.length) {
+            await browserAPI.storage.local.set({ [FLIPPED_BOOKMARKS_STORAGE_KEY]: next });
+        }
+    } catch (_) {
+    }
+}
+
+function normalizeRecommendBookmarkIds(bookmarkIds = []) {
+    return Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+}
+
+async function filterBookmarkIdsAllowedByBlockedState(bookmarkIds = [], blockedInput = null) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (ids.length === 0) return { allowedIds: [], blockedIds: [] };
+
+    const blocked = normalizeBlockedState(blockedInput);
+    const blockedBookmarkIds = new Set(blocked.bookmarks);
+    const blockedFolderIds = new Set(blocked.folders);
+    const blockedDomainMatchers = buildBlockedDomainMatchers(blocked.domains);
+
+    if (blockedBookmarkIds.size === 0 && blockedFolderIds.size === 0 && blockedDomainMatchers.hasRules !== true) {
+        return { allowedIds: ids, blockedIds: [] };
+    }
+
+    let bookmarkById = new Map();
+    if (blockedFolderIds.size > 0 || blockedDomainMatchers.hasRules === true) {
+        try {
+            const all = await getAllBookmarksFlat();
+            bookmarkById = new Map(
+                all
+                    .map(bookmark => [String(bookmark?.id || '').trim(), bookmark])
+                    .filter(([id]) => Boolean(id))
+            );
+        } catch (_) {
+            bookmarkById = new Map();
+        }
+    }
+
+    const allowedIds = [];
+    const blockedIds = [];
+
+    for (const id of ids) {
+        if (blockedBookmarkIds.has(id)) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        const bookmark = bookmarkById.get(id);
+        const parentId = String(bookmark?.parentId || '').trim();
+        const ancestors = Array.isArray(bookmark?.ancestorFolderIds) ? bookmark.ancestorFolderIds : [];
+        const folderBlocked = Boolean(
+            bookmark
+            && blockedFolderIds.size > 0
+            && (
+                (parentId && blockedFolderIds.has(parentId))
+                || ancestors.some(folderId => blockedFolderIds.has(String(folderId || '').trim()))
+            )
+        );
+        if (folderBlocked) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        let domainBlocked = false;
+        if (bookmark?.url && blockedDomainMatchers.hasRules === true) {
+            try {
+                const domainHost = new URL(bookmark.url).hostname || '';
+                domainBlocked = isHostnameBlockedByDomainMatchers(domainHost, blockedDomainMatchers);
+            } catch (_) {
+                domainBlocked = false;
+            }
+        }
+        if (domainBlocked) {
+            blockedIds.push(id);
+            continue;
+        }
+
+        allowedIds.push(id);
+    }
+
+    return { allowedIds, blockedIds };
+}
+
+function collectAddBlockTreeBookmarkIds(nodeKey, state) {
+    const result = [];
+    const visit = (key) => {
+        const node = state?.nodeMap?.get(key);
+        if (!node) return;
+        if (node.kind === 'bookmark') {
+            const id = String(node.id || '').trim();
+            if (id) result.push(id);
+            return;
+        }
+        const childKeys = Array.isArray(node.childKeys) ? node.childKeys : [];
+        childKeys.forEach(visit);
+    };
+    visit(nodeKey);
+    return Array.from(new Set(result));
+}
+
+function sortPostponedByReviewOrder(items = []) {
+    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+        const aAnchor = Number(a?.dueQueueMovedAt || a?.addedAt || a?.createdAt || 0);
+        const bAnchor = Number(b?.dueQueueMovedAt || b?.addedAt || b?.createdAt || 0);
+        if (aAnchor !== bAnchor) return aAnchor - bAnchor; // 旧 -> 新
+        const aBookmarkId = String(a?.bookmarkId || '');
+        const bBookmarkId = String(b?.bookmarkId || '');
+        return aBookmarkId.localeCompare(bBookmarkId);
     });
 }
 
-function renderBookmarkItem(bookmark) {
-    const favicon = getFaviconUrl(bookmark.url);
-
-    return `
-        <div class="addition-item" data-bookmark-url="${escapeHtml(bookmark.url)}">
-            <img class="addition-icon" data-bookmark-url="${escapeHtml(bookmark.url || '')}" src="${favicon}" alt="">
-            <div class="addition-info">
-                <a href="${escapeHtml(bookmark.url)}" target="_blank" class="addition-title" rel="noopener noreferrer">${escapeHtml(bookmark.title)}</a>
-                <div class="addition-url">${escapeHtml(bookmark.url)}</div>
-            </div>
-        </div>
-    `;
+function isPostponedArchiveItem(item, now = Date.now()) {
+    if (!item || item.bookmarkId == null || item.manuallyAdded === true) return false;
+    const postponeUntil = Number(item.postponeUntil || 0);
+    return Number.isFinite(postponeUntil) && postponeUntil > 0 && postponeUntil <= now;
 }
+
+function sortPostponedArchiveOrder(items = []) {
+    return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+        const aAnchor = Number(a?.dueQueueMovedAt || a?.postponeUntil || a?.updatedAt || a?.addedAt || a?.createdAt || 0);
+        const bAnchor = Number(b?.dueQueueMovedAt || b?.postponeUntil || b?.updatedAt || b?.addedAt || b?.createdAt || 0);
+        if (aAnchor !== bAnchor) return bAnchor - aAnchor; // 新 -> 旧
+        const aBookmarkId = String(a?.bookmarkId || '');
+        const bBookmarkId = String(b?.bookmarkId || '');
+        return aBookmarkId.localeCompare(bBookmarkId);
+    });
+}
+
+async function ensureRecommendScoresReadyForView(reason = '') {
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'ensureRecommendScoresReady',
+            reason
+        });
+        return response || { success: false, ready: false };
+    } catch (e) {
+        return {
+            success: false,
+            ready: false,
+            error: e?.message || String(e)
+        };
+    }
+}
+
+function normalizeSkippedBookmarkIds(ids = []) {
+    const list = Array.from(new Set(
+        (Array.isArray(ids) ? ids : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    if (list.length <= RECOMMEND_SKIPPED_MAX_ITEMS) {
+        return list;
+    }
+    return list.slice(list.length - RECOMMEND_SKIPPED_MAX_ITEMS);
+}
+
+async function getSkippedBookmarksPersisted() {
+    try {
+        const result = await browserAPI.storage.local.get([RECOMMEND_SKIPPED_STORAGE_KEY]);
+        const list = normalizeSkippedBookmarkIds(result?.[RECOMMEND_SKIPPED_STORAGE_KEY] || []);
+        return list;
+    } catch (e) {
+        console.warn('[跳过] 读取持久化跳过列表失败:', e);
+        return [];
+    }
+}
+
+async function removeSkippedBookmarkPersisted(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return false;
+    try {
+        const response = await browserAPI.runtime.sendMessage({
+            action: 'removeRecommendSkippedState',
+            bookmarkId: id
+        });
+        if (response && response.success) {
+            const next = normalizeSkippedBookmarkIds(response.skippedIds || []);
+            skippedBookmarks = new Set(next);
+            return true;
+        }
+    } catch (_) { }
+
+    return false;
+}
+
+async function requestRecommendScoreUpdatesByIds(bookmarkIds = [], options = {}) {
+    const ids = Array.from(new Set(
+        (Array.isArray(bookmarkIds) ? bookmarkIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+    ));
+
+    if (ids.length === 0) {
+        return { requested: 0, updated: 0 };
+    }
+
+    const chunkSize = Math.max(20, Math.min(500, Number(options.chunkSize) || 200));
+    let updated = 0;
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        const ok = await requestRecommendScoreUpdate('updateBookmarkScoresByIds', { ids: chunk });
+        if (!ok) {
+            for (const bookmarkId of chunk) {
+                await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId });
+            }
+        }
+
+        updated += chunk.length;
+        if (i + chunkSize < ids.length) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+    }
+
+    return { requested: ids.length, updated };
+}
+
+async function blockBookmark(bookmarkId) {
+    try {
+        const id = String(bookmarkId || '').trim();
+        if (!id) return false;
+        const postponed = await getPostponedBookmarks();
+        const postponedIds = new Set(postponed.map(item => String(item?.bookmarkId || '').trim()).filter(Boolean));
+        if (postponedIds.has(id)) {
+            return true;
+        }
+        const blocked = await getBlockedBookmarks();
+        if (!blocked.bookmarks.includes(id)) {
+            blocked.bookmarks.push(id);
+            await saveBlockedBookmarks(blocked);
+            await requestRecommendScoreUpdate('updateBookmarkScore', { bookmarkId: id });
+        }
+        return true;
+    } catch (e) {
+        console.error('[屏蔽] 添加书签失败:', e);
+        return false;
+    }
+}
+
+// 恢复屏蔽的书签
+async function unblockBookmark(bookmarkId) {
+    const result = await unblockBlockedEntries({ bookmarkIds: [bookmarkId] });
+    return result.success === true;
+}
+
+function collectBlockedDomainRemovalEntries(domains = [], currentDomains = []) {
+    const removeSet = new Set();
+    const normalizedCurrentDomains = normalizeBlockedDomains(currentDomains);
+
+    for (const domain of Array.isArray(domains) ? domains : []) {
+        const normalizedRaw = normalizeBlockedDomainEntry(domain);
+        if (!normalizedRaw) continue;
+
+        removeSet.add(normalizedRaw);
+        const isExplicitBase = String(domain || '').trim().toLowerCase().startsWith(RECOMMEND_BLOCKED_DOMAIN_BASE_PREFIX);
+        if (isExplicitBase) continue;
+
+        const hasExactRule = normalizedCurrentDomains.some(entry => normalizeBlockedDomainEntry(entry) === normalizedRaw);
+        if (!hasExactRule) {
+            const normalizedBase = normalizeBlockedDomainEntry(domain, { mode: RECOMMEND_BLOCKED_DOMAIN_MODE_BASE });
+            if (normalizedBase) removeSet.add(normalizedBase);
+        }
+    }
+
+    return removeSet;
+}
+
+async function unblockBlockedEntries({ bookmarkIds = [], folderIds = [], domains = [] } = {}) {
+    try {
+        const bookmarkRemoveSet = new Set(normalizeRecommendBookmarkIds(bookmarkIds));
+        const folderRemoveSet = new Set(normalizeBlockedListIds(folderIds));
+        const blocked = await getBlockedBookmarks();
+        const domainRemoveSet = collectBlockedDomainRemovalEntries(domains, blocked.domains);
+
+        const removedBookmarkIds = [];
+        const removedFolderIds = [];
+        const removedDomains = [];
+
+        blocked.bookmarks = normalizeBlockedListIds(blocked.bookmarks).filter((id) => {
+            if (bookmarkRemoveSet.has(id)) {
+                removedBookmarkIds.push(id);
+                return false;
+            }
+            return true;
+        });
+
+        blocked.folders = normalizeBlockedListIds(blocked.folders).filter((id) => {
+            if (folderRemoveSet.has(id)) {
+                removedFolderIds.push(id);
+                return false;
+            }
+            return true;
+        });
+
+        blocked.domains = normalizeBlockedDomains(blocked.domains).filter((entry) => {
+            const normalized = normalizeBlockedDomainEntry(entry);
+            if (normalized && domainRemoveSet.has(normalized)) {
+                removedDomains.push(normalized);
+                return false;
+            }
+            return true;
+        });
+
+        const changed = removedBookmarkIds.length > 0 || removedFolderIds.length > 0 || removedDomains.length > 0;
+        if (changed) {
+            await saveBlockedBookmarks(blocked);
+        }
+
+        if (removedBookmarkIds.length > 0) {
+            await requestRecommendScoreUpdatesByIds(removedBookmarkIds, { chunkSize: 200 });
+        }
+        if (removedFolderIds.length > 0) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByFolder', { folderIds: removedFolderIds });
+        }
+        if (removedDomains.length > 0) {
+            await requestRecommendScoreUpdate('updateBookmarkScoresByDomain', { domains: removedDomains });
+        }
+
+        return {
+            success: true,
+            changed,
+            removedBookmarkIds,
+            removedFolderIds,
+            removedDomains
+        };
+    } catch (e) {
+        console.error('[屏蔽] 批量恢复失败:', e);
+        return {
+            success: false,
+            changed: false,
+            removedBookmarkIds: [],
+            removedFolderIds: [],
+            removedDomains: [],
+            error: e
+        };
+    }
+}
+
+// 获取稍后复习数据
+function syncRecommendPostponedAuthoritativeIds(postponed = []) {
+    recommendPostponedAuthoritativeIds = new Set(
+        normalizePostponedList(postponed)
+            .filter(item => item && item.bookmarkId != null)
+            .map(item => String(item?.bookmarkId || '').trim())
+            .filter(Boolean)
+    );
+    clearRecommendDueBadgesOutsidePostponedState();
+}
+
+function isRecommendBookmarkInPostponedState(bookmarkId) {
+    const id = String(bookmarkId || '').trim();
+    if (!id) return false;
+    if (!recommendPostponedAuthoritativeIds) return false;
+    return recommendPostponedAuthoritativeIds.has(id);
+}
+
+function clearRecommendDueBadgesOutsidePostponedState() {
+    if (!recommendPostponedAuthoritativeIds) return;
+    document.querySelectorAll('.recommend-card.force-due').forEach((card) => {
+        const bookmarkId = String(card?.dataset?.bookmarkId || '').trim();
+        if (bookmarkId && recommendPostponedAuthoritativeIds.has(bookmarkId)) return;
+        card.classList.remove('force-due');
+        const dueBadge = card.querySelector('.card-due-badge');
+        if (dueBadge) {
+            dueBadge.textContent = '';
+            dueBadge.style.display = 'none';
+        }
+    });
+}
+
+function filterStaleForceDueRecommendCards(cards = []) {
+    return (Array.isArray(cards) ? cards : [])
+        .filter(card => !(card?.forceDue === true && !isRecommendBookmarkInPostponedState(card.id || card.bookmarkId)))
+        .slice(0, RECOMMEND_BATCH_SIZE);
+}
+
+async function getPostponedBookmarks() {
+    try {
+        const result = await browserAPI.storage.local.get([
+            RECOMMEND_POSTPONED_STORAGE_KEY,
+            RECOMMEND_POSTPONED_VERSION_STORAGE_KEY
+        ]);
+        const postponed = normalizePostponedList(result[RECOMMEND_POSTPONED_STORAGE_KEY]);
+        syncRecommendPostponedAuthoritativeIds(postponed);
+        return attachRecommendListStateVersion(
+            postponed,
+            result[RECOMMEND_POSTPONED_VERSION_STORAGE_KEY]
+        );
+    } catch (e) {
+        console.error('[稍后] 获取稍后复习数据失败:', e);
+        return [];
+    }
+}
+
+async function moveForceDueBookmarkToTail(bookmarkId) {
+    const normalizedId = String(bookmarkId || '').trim();
+    if (!normalizedId) return false;
+
+    try {
+        const postponed = await getPostponedBookmarks();
+        if (!Array.isArray(postponed) || postponed.length === 0) {
+            return false;
+        }
+
+        const now = Date.now();
+        let maxMovedAt = 0;
+        for (const item of postponed) {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) continue;
+            if (Number(item.postponeUntil || 0) > now) continue;
+            const movedAt = Number(item.dueQueueMovedAt || 0);
+            if (Number.isFinite(movedAt) && movedAt > maxMovedAt) {
+                maxMovedAt = movedAt;
+            }
+        }
+
+        const target = postponed.find((item) => {
+            if (!item || item.bookmarkId == null || item.manuallyAdded) return false;
+            if (String(item.bookmarkId) !== normalizedId) return false;
+            return Number(item.postponeUntil || 0) <= now;
+        });
+
+        if (!target) {
+            return false;
+        }
+
+        target.dueQueueMovedAt = Math.max(now, maxMovedAt + 1);
+        target.updatedAt = now;
+
+        const nextPostponed = await savePostponedBookmarks(postponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
+        await removeSkippedBookmarkPersisted(normalizedId);
+        return true;
+    } catch (e) {
+        console.warn('[稍后] 待复习队列后移失败:', e);
+        return false;
+    }
+}
+
+async function schedulePostponedExpiryRefresh(postponedInput = null) {
+    try {
+        if (postponedExpiryRefreshTimer) {
+            clearTimeout(postponedExpiryRefreshTimer);
+            postponedExpiryRefreshTimer = null;
+        }
+
+        const postponed = Array.isArray(postponedInput)
+            ? postponedInput
+            : await getPostponedBookmarks();
+
+        const now = Date.now();
+        let nextExpireAt = Number.POSITIVE_INFINITY;
+
+        for (const item of postponed) {
+            if (!item || item.manuallyAdded) continue;
+            const postponeUntil = Number(item.postponeUntil || 0);
+            if (postponeUntil > now && postponeUntil < nextExpireAt) {
+                nextExpireAt = postponeUntil;
+            }
+        }
+
+        if (!Number.isFinite(nextExpireAt)) {
+            return;
+        }
+
+        const delay = Math.max(150, Math.min(nextExpireAt - now + 80, 2147483647));
+        postponedExpiryRefreshTimer = setTimeout(async () => {
+            postponedExpiryRefreshTimer = null;
+            try {
+                await cleanExpiredPostponed();
+                await loadPostponedList();
+                const shouldForceRefresh = await shouldForceRecommendCardsRefreshFromStorageChange();
+                await refreshRecommendCards(shouldForceRefresh);
+                if (currentView === 'widgets') {
+                    await renderWidgetsRecommendCards({ force: shouldForceRefresh, allowBootstrap: false });
+                    applyWidgetsSmartSort();
+                }
+            } catch (error) {
+                console.warn('[稍后] 到期换卡刷新失败:', error);
+            }
+        }, delay);
+    } catch (error) {
+        console.warn('[稍后] 安排到期刷新失败:', error);
+    }
+}
+
+// 添加稍后复习
+async function postponeBookmark(bookmarkId, delayMs, options = {}) {
+    try {
+        const sourceBookmark = currentLaterBookmark && String(currentLaterBookmark.id || '') === String(bookmarkId || '')
+            ? currentLaterBookmark
+            : { id: bookmarkId };
+        return await dispatchRecommendCardAction('postpone', sourceBookmark, {
+            source: 'later_modal',
+            delayMs,
+            postponePresetKey: options.postponePresetKey
+        });
+    } catch (e) {
+        console.error('[稍后] 推迟书签失败:', e);
+        return { success: false, reason: 'postpone_failed', error: e?.message || String(e) };
+    }
+}
+
+// 取消稍后复习
+async function cancelPostpone(bookmarkId) {
+    const result = await cancelPostponedBookmarks([bookmarkId]);
+    return result.success === true;
+}
+
+async function cancelPostponedBookmarks(bookmarkIds = [], options = {}) {
+    const ids = normalizeRecommendBookmarkIds(bookmarkIds);
+    if (ids.length === 0) {
+        return { success: true, removedIds: [] };
+    }
+
+    try {
+        const postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
+        const hadManualPostponed = postponed.some(p => p?.manuallyAdded);
+        const removeSet = new Set(ids);
+        const shouldRemove = typeof options.shouldRemove === 'function'
+            ? options.shouldRemove
+            : () => true;
+        const removedIds = [];
+
+        const next = postponed.filter((item) => {
+            const id = String(item?.bookmarkId || '').trim();
+            if (!id || !removeSet.has(id) || !shouldRemove(item)) {
+                return true;
+            }
+            removedIds.push(id);
+            return false;
+        });
+
+        const uniqueRemovedIds = normalizeRecommendBookmarkIds(removedIds);
+        if (uniqueRemovedIds.length === 0) {
+            return { success: true, removedIds: [] };
+        }
+
+        attachRecommendListStateVersion(next, expectedVersion);
+        const nextPostponed = await savePostponedBookmarks(next);
+        syncRecommendPostponedAuthoritativeIds(nextPostponed);
+        await schedulePostponedExpiryRefresh(nextPostponed);
+
+        const hasManualPostponed = nextPostponed.some(p => p?.manuallyAdded);
+        const shouldSkipIncrementalScores = hadManualPostponed && !hasManualPostponed && currentRecommendMode === 'priority';
+        if (options.refreshScores !== false && !shouldSkipIncrementalScores) {
+            await requestRecommendScoreUpdatesByIds(uniqueRemovedIds, { chunkSize: 200 });
+        }
+
+        return { success: true, removedIds: uniqueRemovedIds };
+    } catch (e) {
+        console.error('[稍后] 批量取消推迟失败:', e);
+        return { success: false, removedIds: [], error: e };
+    }
+}
+
+// 清理过期的稍后复习记录
+async function cleanExpiredPostponed() {
+    try {
+        let postponed = await getPostponedBookmarks();
+        const expectedVersion = getRecommendStateVersion(postponed);
+        const before = postponed.length;
+        postponed = postponed.filter(p => p && p.bookmarkId != null);
+        attachRecommendListStateVersion(postponed, expectedVersion);
+        let nextPostponed = postponed;
+        if (postponed.length !== before) {
+            nextPostponed = await savePostponedBookmarks(postponed);
+
+        }
+        await schedulePostponedExpiryRefresh(nextPostponed);
+    } catch (e) {
+        console.error('[稍后] 清理过期记录失败:', e);
+    }
+}
+
+// 稍后复习弹窗相关
+let currentLaterBookmark = null;
+let laterModalActionInFlight = false;
+const LATER_CUSTOM_DEFAULT_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
+
+function getLaterModalActionButtons(modal = null) {
+    const root = modal || document.getElementById('laterModal');
+    if (!root) return [];
+    return Array.from(root.querySelectorAll('#laterModalClose, .later-option, #laterCustomSubmitBtn'));
+}
+
+function setLaterModalBusy(isBusy) {
+    laterModalActionInFlight = isBusy === true;
+    const modal = document.getElementById('laterModal');
+    if (modal) {
+        modal.classList.toggle('is-busy', laterModalActionInFlight);
+        modal.setAttribute('aria-busy', laterModalActionInFlight ? 'true' : 'false');
+    }
+    getLaterModalActionButtons(modal).forEach((button) => {
+        button.disabled = laterModalActionInFlight;
+    });
+    const customInput = document.getElementById('laterCustomDatetime');
+    if (customInput) customInput.disabled = laterModalActionInFlight;
+}
+
+function formatDateTimeLocalValue(timestamp) {
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return '';
+    const pad = (value) => String(value).padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const dateText = currentLang === 'zh_CN'
+        ? `${year}-${month}-${day}`
+        : `${month}/${day}/${year}`;
+    return `${dateText} ${time}`;
+}
+
+function parseDateTimeLocalValue(value) {
+    const safeValue = String(value || '').trim();
+    const match = /^(.+?)[ T](\d{1,2}):(\d{2})$/.exec(safeValue);
+    if (!match) return NaN;
+    const dateParts = parseSyncDatePartsByLang(match[1]);
+    if (!dateParts) return NaN;
+    const hours = Number(match[2]);
+    const minutes = Number(match[3]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        return NaN;
+    }
+    const date = new Date(dateParts.year, dateParts.month - 1, dateParts.day, hours, minutes, 0, 0);
+    if (
+        date.getFullYear() !== dateParts.year
+        || date.getMonth() + 1 !== dateParts.month
+        || date.getDate() !== dateParts.day
+        || date.getHours() !== hours
+        || date.getMinutes() !== minutes
+    ) {
+        return NaN;
+    }
+    return date.getTime();
+}
+
+function syncLaterModalTexts(options = {}) {
+    const customInput = document.getElementById('laterCustomDatetime');
+    if (customInput) {
+        customInput.type = 'text';
+        customInput.setAttribute('lang', currentLang === 'zh_CN' ? 'zh-CN' : 'en-US');
+        customInput.placeholder = currentLang === 'zh_CN' ? 'YYYY-MM-DD HH:mm' : 'MM/DD/YYYY HH:mm';
+        const currentValueTime = parseDateTimeLocalValue(customInput.value);
+        if (options.resetCustomTime === true || !Number.isFinite(currentValueTime)) {
+            customInput.value = formatDateTimeLocalValue(Date.now() + LATER_CUSTOM_DEFAULT_DELAY_MS);
+        } else {
+            customInput.value = formatDateTimeLocalValue(currentValueTime);
+        }
+    }
+}
+
+function getLaterCustomDelayMs() {
+    const input = document.getElementById('laterCustomDatetime');
+    const value = String(input?.value || '').trim();
+    if (!value) return NaN;
+    const targetTime = parseDateTimeLocalValue(value);
+    if (!Number.isFinite(targetTime)) return NaN;
+    return targetTime - Date.now();
+}
+
+async function submitLaterModalDelay(delayMs, options = {}) {
+    if (laterModalActionInFlight) return;
+
+    const bookmarkId = String(currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || '').trim();
+    if (!bookmarkId) {
+        try {
+            showToast(currentLang === 'en'
+                ? 'No bookmark selected'
+                : '未选择书签');
+        } catch (_) { }
+        return;
+    }
+
+    const safeDelay = Number(delayMs);
+    if (!Number.isFinite(safeDelay) || safeDelay <= 0) {
+        try {
+            showToast(currentLang === 'en'
+                ? 'Invalid postpone time'
+                : '稍后时间无效');
+        } catch (_) { }
+        return;
+    }
+
+    setLaterModalBusy(true);
+    try {
+        const result = await postponeBookmark(bookmarkId, safeDelay, {
+            postponePresetKey: options.postponePresetKey
+        });
+        if (!result || result.success === false) {
+            try {
+                showToast(currentLang === 'en'
+                    ? 'Unable to postpone, please retry'
+                    : '稍后复习失败，请重试');
+            } catch (_) { }
+            return;
+        }
+
+        hideLaterModal({ force: true });
+        await loadPostponedList();
+        await applyRecommendActionCurrentCardsToSurfaces(result);
+    } finally {
+        setLaterModalBusy(false);
+    }
+}
+
+function showLaterModal(bookmark) {
+    initLaterModal();
+
+    const bookmarkId = String(bookmark?.id || bookmark?.bookmarkId || '').trim();
+    currentLaterBookmark = {
+        ...(bookmark || {}),
+        id: bookmarkId
+    };
+    const modal = document.getElementById('laterModal');
+    if (!modal) return;
+
+    const bookmarkTitleEl = document.getElementById('laterModalBookmarkTitle');
+    if (bookmarkTitleEl) {
+        const title = String(bookmark?.title || bookmark?.name || bookmark?.url || '').trim();
+        bookmarkTitleEl.textContent = title || '--';
+        bookmarkTitleEl.title = title || '';
+    }
+    const bookmarkUrlEl = document.getElementById('laterModalBookmarkUrl');
+    if (bookmarkUrlEl) {
+        const url = String(bookmark?.url || '').trim();
+        bookmarkUrlEl.textContent = url;
+        bookmarkUrlEl.title = url;
+        bookmarkUrlEl.hidden = !url;
+        bookmarkUrlEl.dataset.url = url;
+    }
+
+    syncLaterModalTexts({ resetCustomTime: true });
+    setLaterModalBusy(false);
+    modal.classList.add('show');
+
+}
+
+function hideLaterModal(options = {}) {
+    const force = options?.force === true;
+    if (laterModalActionInFlight && !force) {
+        return false;
+    }
+
+    const modal = document.getElementById('laterModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.removeAttribute('aria-busy');
+    }
+    currentLaterBookmark = null;
+    if (!laterModalActionInFlight || !force) {
+        laterModalActionInFlight = false;
+    }
+    return true;
+}
+
+function initLaterModal() {
+    const modal = document.getElementById('laterModal');
+    if (!modal) return;
+    if (modal.hasAttribute('data-bound')) return;
+    modal.setAttribute('data-bound', 'true');
+
+    modal.addEventListener('click', async (e) => {
+        if (e.target === modal) {
+            if (laterModalActionInFlight) return;
+            hideLaterModal();
+            return;
+        }
+
+        if (e.target.closest('#laterModalClose')) {
+            e.preventDefault();
+            if (laterModalActionInFlight) return;
+            hideLaterModal();
+            return;
+        }
+
+        const customSubmitBtn = e.target.closest('#laterCustomSubmitBtn');
+        if (customSubmitBtn) {
+            e.preventDefault();
+            await submitLaterModalDelay(getLaterCustomDelayMs());
+            return;
+        }
+
+        const bookmarkUrlBtn = e.target.closest('#laterModalBookmarkUrl');
+        if (bookmarkUrlBtn) {
+            e.preventDefault();
+            const url = String(bookmarkUrlBtn.dataset.url || '').trim();
+            if (url && typeof window.openBookmarkNewTab === 'function') {
+                await window.openBookmarkNewTab(url, {
+                    title: currentLaterBookmark?.title || currentLaterBookmark?.name || '',
+                    bookmarkId: currentLaterBookmark?.id || currentLaterBookmark?.bookmarkId || null,
+                    source: 'later_modal_url'
+                });
+            }
+            return;
+        }
+
+        const option = e.target.closest('.later-option');
+        if (option) {
+            e.preventDefault();
+            await submitLaterModalDelay(Number(option.dataset.delay), {
+                postponePresetKey: option.dataset.presetKey || ''
+            });
+        }
+    });
+}
+
 
 // =============================================================================
 // 搜索功能（核心逻辑已移动到 search/search.js）
@@ -40939,117 +40187,6 @@ function searchAdditions(query) {
     }
 }
 
-// =============================================================================
-// 主题和语言切换
-// =============================================================================
-
-// 主题和语言切换 - 独立设置，主UI优先
-// 设置覆盖后会显示重置按钮
-
-function toggleTheme() {
-    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    if (currentTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-    else document.documentElement.removeAttribute('data-theme');
-
-    // 设置覆盖标志
-    try {
-        localStorage.setItem('historyViewerHasCustomTheme', 'true');
-        localStorage.setItem('historyViewerCustomTheme', currentTheme);
-
-    } catch (e) {
-        console.error('[History Viewer] 无法保存主题覆盖:', e);
-    }
-
-    // 更新图标
-    const icon = document.querySelector('#themeToggle i');
-    if (icon) {
-        icon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-    }
-    const settingsIcon = document.querySelector('#settingsMenu [data-action="toggle-theme"] i');
-    if (settingsIcon) {
-        settingsIcon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-    }
-}
-
-function toggleLanguage() {
-    currentLang = currentLang === 'zh_CN' ? 'en' : 'zh_CN';
-    window.currentLang = currentLang; // 同步到 window
-
-    // 设置覆盖标志
-    try {
-        localStorage.setItem('historyViewerHasCustomLang', 'true');
-        localStorage.setItem('historyViewerCustomLang', currentLang);
-
-    } catch (e) {
-        console.error('[History Viewer] 无法保存语言覆盖:', e);
-    }
-
-    applyLanguage();
-    refreshTrackingRankingAfterLanguageChange();
-
-    // 只更新界面文字，不重新渲染内容（避免图标重新加载）
-    // renderCurrentView();
-
-    // 手动更新需要多语言的UI元素（不涉及书签树内容）
-    updateLanguageDependentUI();
-
-    // [User Request] 更新搜索组件语言
-    if (typeof window.updateSearchUILanguage === 'function') {
-        window.updateSearchUILanguage();
-    }
-
-    // 复习热力图：重新加载一次以应用当前语言
-    // 只影响热力图容器，不会重新加载书签图标
-    try {
-        loadHeatmapData();
-    } catch (e) {
-        console.warn('[Heatmap] 语言切换时重载失败:', e);
-    }
-
-    // 刷新书签关联记录列表（更新badge文字）
-    refreshBrowsingRelatedHistory();
-}
-
-function refreshTrackingRankingAfterLanguageChange() {
-    if (currentView !== 'additions') return;
-    const trackingPanel = document.getElementById('additionsTrackingPanel');
-    if (!trackingPanel || !trackingPanel.classList.contains('active')) return;
-    loadActiveTimeRanking();
-}
-
-// 更新依赖语言的UI元素（不重新渲染内容，避免图标重新加载）
-function updateLanguageDependentUI() {
-    const isEn = currentLang === 'en';
-
-    // 更新加载文本（如果存在）
-    const loadingTexts = document.querySelectorAll('.loading');
-    loadingTexts.forEach(el => {
-        if (el.textContent.includes('Loading') || el.textContent.includes('加载中')) {
-            el.textContent = i18n.loading[currentLang];
-        }
-    });
-
-    // 更新空状态文本
-    const emptyStates = document.querySelectorAll('.empty-state');
-    emptyStates.forEach(el => {
-        if (el.textContent.includes('No') || el.textContent.includes('没有')) {
-            el.textContent = isEn ? 'No data' : '没有数据';
-        }
-    });
-
-    // 5. 更新书签关联记录排序按钮的tooltip
-    const relatedSortBtn = document.getElementById('browsingRelatedSortBtn');
-    if (relatedSortBtn) {
-        const tooltip = relatedSortBtn.querySelector('.btn-tooltip');
-        if (tooltip) {
-            tooltip.textContent = browsingRelatedSortAsc
-                ? (i18n.currentAscending?.[currentLang] || (isEn ? 'Current: Ascending' : '当前：正序'))
-                : (i18n.currentDescending?.[currentLang] || (isEn ? 'Current: Descending' : '当前：倒序'));
-        }
-    }
-
-
-}
 
 // =============================================================================
 // 实时更新
@@ -41352,6 +40489,7 @@ function handleStorageChange(changes, namespace) {
 }
 
 
+
 // =============================================================================
 // 书签API监听（实时更新书签数据）
 // =============================================================================
@@ -41501,6 +40639,7 @@ function setupBookmarkListener() {
     bookmarkListenerRegistered = true;
 }
 
+
 // =============================================================================
 // 消息监听
 // =============================================================================
@@ -41617,6 +40756,11 @@ function setupRealtimeMessageListener() {
         }
     });
 }
+
+// =================================================================================
+// XII. BOOKMARK ASSOCIATION & HISTORY DETAIL (书签关联记录与历史详情)
+// =================================================================================
+
 
 // =============================================================================
 // 书签关联记录功能（浏览器历史记录 + 书签标识）
@@ -43854,6 +42998,7 @@ function filterHistoryByTime(items, filter, range) {
     });
 }
 
+
 // ============================================================================
 // 跳转至书签关联记录功能（从点击记录跳转）
 // ============================================================================
@@ -44859,310 +44004,3 @@ function highlightAllRelatedHistoryItems(retryCount = 0) {
     }
 }
 
-// ============================================================================
-// 返回按钮功能
-// ============================================================================
-
-// 显示返回按钮
-function showBackButton() {
-    // 如果已存在，先移除（但不清除 jumpSourceInfo）
-    const existingBtn = document.getElementById('jumpBackBtn');
-    if (existingBtn) existingBtn.remove();
-
-
-
-    const btn = document.createElement('button');
-    btn.id = 'jumpBackBtn';
-    btn.className = 'jump-back-btn';
-    btn.innerHTML = '<i class="fas fa-arrow-left"></i>';
-    btn.title = typeof currentLang !== 'undefined' && currentLang === 'zh_CN' ? '返回' : 'Go Back';
-
-    btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        goBackToSource();
-    });
-
-    document.body.appendChild(btn);
-
-    // 显示动画
-    setTimeout(() => {
-        btn.style.opacity = '1';
-        btn.style.transform = 'translateY(0)';
-    }, 50);
-}
-
-// 隐藏返回按钮（可选是否清除来源信息）
-function hideBackButton(clearSource = true) {
-    const btn = document.getElementById('jumpBackBtn');
-    if (btn) {
-        btn.remove();
-    }
-    if (clearSource) {
-        jumpSourceInfo = null;
-    }
-}
-
-// 返回到跳转来源
-async function goBackToSource() {
-    if (!jumpSourceInfo) {
-        console.warn('[goBackToSource] jumpSourceInfo 为空');
-        return;
-    }
-
-    const { type, url, scrollTop } = jumpSourceInfo;
-
-
-    // 先隐藏返回按钮
-    const btn = document.getElementById('jumpBackBtn');
-    if (btn) btn.remove();
-
-    // 清除来源信息（在使用完之后立即清除）
-    jumpSourceInfo = null;
-
-    if (type === 'browsingHistory') {
-        // 返回点击记录 - 需要切换到「点击记录」子标签
-        const historyTab = document.getElementById('browsingTabHistory');
-        if (historyTab) {
-            historyTab.click();
-
-        }
-
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceBookmark(url);
-        }, 500);
-
-    } else if (type === 'bookmarkAdditions') {
-        // 返回书签添加记录 - 需要切换到「书签添加记录」标签
-        const reviewTab = document.getElementById('additionsTabReview');
-        if (reviewTab) {
-            reviewTab.click();
-
-        }
-
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceBookmark(url);
-        }, 500);
-
-    } else if (type === 'clickRanking') {
-        // 返回点击排行 - 需要切换到「点击排行」子标签
-        const rankingTab = document.getElementById('browsingTabRanking');
-        if (rankingTab) {
-            rankingTab.click();
-
-        }
-
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceRankingItem(url);
-        }, 500);
-    }
-}
-
-// 高亮来源书签
-function highlightSourceBookmark(url) {
-    // 在整个内容区域查找匹配的书签项
-    const contentArea = document.querySelector('.content-area');
-    if (!contentArea) {
-        console.warn('[highlightSourceBookmark] 未找到 content-area');
-        return;
-    }
-
-    // 查找所有匹配URL的书签项
-    const items = contentArea.querySelectorAll('[data-bookmark-url]');
-
-
-    let found = false;
-
-    items.forEach(item => {
-        if (item.dataset.bookmarkUrl === url && !found) {
-            found = true;
-
-            item.classList.add('highlight-source');
-            item.scrollIntoView({ behavior: 'instant', block: 'center' });
-
-            // 3秒后移除高亮
-            setTimeout(() => {
-                item.classList.remove('highlight-source');
-            }, 3000);
-        }
-    });
-
-    if (!found) {
-        console.warn('[highlightSourceBookmark] 未找到匹配的书签');
-    }
-}
-
-// 高亮点击排行中的来源书签
-function highlightSourceRankingItem(url) {
-    const listContainer = document.getElementById('browsingRankingList');
-    if (!listContainer) {
-        console.warn('[highlightSourceRankingItem] 未找到 browsingRankingList');
-        return;
-    }
-
-    // 查找所有排行项
-    const items = listContainer.querySelectorAll('.ranking-item');
-
-
-    let found = false;
-
-    items.forEach(item => {
-        // 通过跳转按钮的 data-url 来匹配
-        const jumpBtn = item.querySelector('.jump-to-related-btn');
-        if (jumpBtn && jumpBtn.dataset.url === url && !found) {
-            found = true;
-
-            item.classList.add('highlight-source');
-            item.scrollIntoView({ behavior: 'instant', block: 'center' });
-
-            // 3秒后移除高亮
-            setTimeout(() => {
-                item.classList.remove('highlight-source');
-            }, 3000);
-        }
-    });
-
-    if (!found) {
-        console.warn('[highlightSourceRankingItem] 未找到匹配的排行项');
-    }
-}
-
-// 工具函数
-// =============================================================================
-
-async function renderTreeView() {
-    // 记录/推荐版不使用书签树视图，仅用于兼容共享菜单模块
-}
-
-async function openBookmarkNewTab(url, meta = {}) {
-    try {
-        const browserAPI = (typeof chrome !== 'undefined') ? chrome : browser;
-        if (browserAPI?.tabs?.create) {
-            const tab = await browserAPI.tabs.create({ url });
-            if (tab && tab.id != null) {
-                await reportExtensionBookmarkOpen({
-                    tabId: tab.id,
-                    url,
-                    title: meta.title || '',
-                    bookmarkId: meta.bookmarkId || null,
-                    source: meta.source || 'history_ui'
-                });
-            }
-        } else {
-            window.open(url, '_blank');
-        }
-    } catch (e) {
-        console.warn('[openBookmarkNewTab] 打开失败:', e);
-        try { window.open(url, '_blank'); } catch (_) { }
-    }
-}
-async function reportExtensionBookmarkOpen({ tabId, url, title = '', bookmarkId = null, source = 'history_ui' } = {}) {
-    try {
-        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) return;
-        if (typeof tabId !== 'number') return;
-        if (!url || typeof url !== 'string') return;
-        await chrome.runtime.sendMessage({
-            action: 'extensionBookmarkOpen',
-            tabId,
-            url,
-            title,
-            bookmarkId,
-            source
-        });
-    } catch (_) { }
-}
-if (typeof window !== 'undefined') {
-    window.openBookmarkNewTab = openBookmarkNewTab;
-}
-
-function formatTime(timestamp) {
-    const date = new Date(timestamp);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-
-    return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function showLoading() {
-    document.querySelectorAll('.view.active .additions-container').forEach(el => {
-        el.innerHTML = `<div class="loading">${i18n.loading[currentLang]}</div>`;
-    });
-}
-
-function showError(message) {
-    const container = document.querySelector('.view.active > div:last-child');
-    if (container) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"><i class="fas fa-exclamation-triangle"></i></div>
-                <div class="empty-state-title">${escapeHtml(message)}</div>
-            </div>
-        `;
-    }
-}
-
-function showToast(message) {
-    // 简单的提示功能
-    const toast = document.createElement('div');
-    toast.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        padding: 12px 20px;
-        background: var(--accent-primary);
-        color: white;
-        border-radius: 8px;
-        box-shadow: var(--shadow-lg);
-        z-index: 10000;
-        animation: slideIn 0.3s ease;
-    `;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-    }, 2000);
-}
-
-
-
-// 添加动画样式
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideIn {
-        from { transform: translateX(100%); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-    }
-    @keyframes slideOut {
-        from { transform: translateX(0); opacity: 1; }
-        to { transform: translateX(100%); opacity: 0; }
-    }
-`;
-document.head.appendChild(style);
