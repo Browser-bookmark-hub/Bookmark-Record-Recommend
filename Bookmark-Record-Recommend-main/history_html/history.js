@@ -8158,6 +8158,7 @@ function initializeUI() {
     initRankingExportControls();
     updateMainSearchVisibility();
     initResponsiveRecommendLabelObservers();
+    initScrollToTopButton();
 
 
 }
@@ -10014,6 +10015,7 @@ function switchView(view) {
 
     // 渲染当前视图
     renderCurrentView();
+    scheduleScrollToTopButtonUpdate();
 }
 
 function syncViewFromUrl(reason = 'sync') {
@@ -10147,6 +10149,7 @@ function toggleLanguage() {
 
     // 刷新书签关联记录列表（更新badge文字）
     refreshBrowsingRelatedHistory();
+    scheduleScrollToTopButtonUpdate();
 }
 
 function refreshTrackingRankingAfterLanguageChange() {
@@ -10195,6 +10198,230 @@ function updateLanguageDependentUI() {
 // 返回按钮功能
 // ============================================================================
 
+const SCROLL_TO_TOP_THRESHOLD_PX = 520;
+const JUMP_BACK_RESTORE_DELAY_MS = 90;
+let scrollToTopUpdateRafId = null;
+let scrollToTopBoundScroller = null;
+let scrollToTopScrollHandler = null;
+let scrollToTopResizeBound = false;
+let jumpBackRestoreTimer = null;
+let jumpBackReturnToken = 0;
+let jumpBackInProgress = false;
+
+function getMainContentScrollContainer() {
+    return document.querySelector('.content-area') || document.scrollingElement || document.documentElement;
+}
+
+function getMainContentScrollTop(scroller = getMainContentScrollContainer()) {
+    const containerTop = scroller ? (Number(scroller.scrollTop) || 0) : 0;
+    const pageTop = window.pageYOffset
+        || document.documentElement?.scrollTop
+        || document.body?.scrollTop
+        || 0;
+    return Math.max(containerTop, Number(pageTop) || 0);
+}
+
+function getScrollToTopLabel() {
+    return typeof currentLang !== 'undefined' && currentLang === 'zh_CN'
+        ? '回到顶部'
+        : 'Back to Top';
+}
+
+function getJumpBackLabel() {
+    return typeof currentLang !== 'undefined' && currentLang === 'zh_CN'
+        ? '返回'
+        : 'Go Back';
+}
+
+function getJumpCancelLabel() {
+    return typeof currentLang !== 'undefined' && currentLang === 'zh_CN'
+        ? '取消'
+        : 'Cancel';
+}
+
+function ensureScrollToTopButton() {
+    let btn = document.getElementById('scrollToTopBtn');
+    if (btn) return btn;
+
+    btn = document.createElement('button');
+    btn.id = 'scrollToTopBtn';
+    btn.type = 'button';
+    btn.className = 'scroll-to-top-btn';
+    btn.innerHTML = '<i class="fas fa-arrow-up" aria-hidden="true"></i>';
+    btn.setAttribute('aria-hidden', 'true');
+    btn.tabIndex = -1;
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        scrollMainContentToTop();
+    });
+
+    document.body.appendChild(btn);
+    return btn;
+}
+
+function updateScrollToTopButton() {
+    const btn = ensureScrollToTopButton();
+    const label = getScrollToTopLabel();
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+
+    const scroller = getMainContentScrollContainer();
+    const scrollTop = getMainContentScrollTop(scroller);
+    const shouldShow = scrollTop > SCROLL_TO_TOP_THRESHOLD_PX;
+
+    btn.classList.toggle('is-visible', shouldShow);
+    btn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    btn.tabIndex = shouldShow ? 0 : -1;
+
+    updateJumpFloatingButtonLabels();
+}
+
+function scheduleScrollToTopButtonUpdate() {
+    if (scrollToTopUpdateRafId != null) return;
+    const raf = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 16));
+    scrollToTopUpdateRafId = raf(() => {
+        scrollToTopUpdateRafId = null;
+        updateScrollToTopButton();
+    });
+}
+
+function initScrollToTopButton() {
+    ensureScrollToTopButton();
+
+    const scroller = getMainContentScrollContainer();
+    if (scroller && scroller !== scrollToTopBoundScroller) {
+        if (scrollToTopBoundScroller && scrollToTopScrollHandler) {
+            scrollToTopBoundScroller.removeEventListener('scroll', scrollToTopScrollHandler);
+        }
+        scrollToTopScrollHandler = scheduleScrollToTopButtonUpdate;
+        scroller.addEventListener('scroll', scrollToTopScrollHandler, { passive: true });
+        scrollToTopBoundScroller = scroller;
+    }
+
+    if (!scrollToTopResizeBound) {
+        scrollToTopResizeBound = true;
+        window.addEventListener('resize', scheduleScrollToTopButtonUpdate, { passive: true });
+        window.addEventListener('orientationchange', scheduleScrollToTopButtonUpdate, { passive: true });
+    }
+
+    scheduleScrollToTopButtonUpdate();
+}
+
+function scrollMainContentToTop() {
+    const scroller = getMainContentScrollContainer();
+    if (scroller) {
+        scroller.scrollTop = 0;
+    }
+
+    if (window.pageYOffset || document.documentElement?.scrollTop || document.body?.scrollTop) {
+        window.scrollTo(0, 0);
+    }
+
+    updateScrollToTopButton();
+}
+
+function updateJumpFloatingButtonLabels() {
+    const backBtn = document.getElementById('jumpBackBtn');
+    if (backBtn) {
+        const label = getJumpBackLabel();
+        backBtn.title = label;
+        backBtn.setAttribute('aria-label', label);
+    }
+
+    const cancelBtn = document.getElementById('jumpCancelBtn');
+    if (cancelBtn) {
+        const label = getJumpCancelLabel();
+        cancelBtn.title = label;
+        cancelBtn.setAttribute('aria-label', label);
+    }
+}
+
+function setJumpBackButtonBusy(active) {
+    const btn = document.getElementById('jumpBackBtn');
+    if (!btn) return;
+    btn.classList.toggle('is-returning', active === true);
+    btn.disabled = active === true;
+    btn.setAttribute('aria-busy', active === true ? 'true' : 'false');
+}
+
+function ensureJumpCancelButton() {
+    let btn = document.getElementById('jumpCancelBtn');
+    if (btn) return btn;
+
+    btn = document.createElement('button');
+    btn.id = 'jumpCancelBtn';
+    btn.type = 'button';
+    btn.className = 'jump-cancel-btn';
+    btn.innerHTML = '<i class="fas fa-times" aria-hidden="true"></i>';
+    btn.setAttribute('aria-hidden', 'true');
+    btn.tabIndex = -1;
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelJumpNavigation();
+    });
+
+    document.body.appendChild(btn);
+    updateJumpFloatingButtonLabels();
+    return btn;
+}
+
+function showJumpCancelButton() {
+    const btn = ensureJumpCancelButton();
+    btn.classList.add('is-visible');
+    btn.setAttribute('aria-hidden', 'false');
+    btn.tabIndex = 0;
+}
+
+function hideJumpCancelButton() {
+    const btn = document.getElementById('jumpCancelBtn');
+    if (!btn) return;
+    btn.classList.remove('is-visible');
+    btn.setAttribute('aria-hidden', 'true');
+    btn.tabIndex = -1;
+}
+
+function clearJumpBackRestoreTimer() {
+    if (jumpBackRestoreTimer != null) {
+        window.clearTimeout(jumpBackRestoreTimer);
+        jumpBackRestoreTimer = null;
+    }
+}
+
+function clearJumpHighlights() {
+    const relatedList = document.getElementById('browsingRelatedList');
+    const lazyState = relatedList && relatedList.__lazyLoadState;
+    if (lazyState && typeof lazyState.setHighlightedIndices === 'function') {
+        lazyState.setHighlightedIndices([]);
+    }
+    if (relatedList) {
+        relatedList.__browsingRelatedHighlightedIndices = new Set();
+    }
+
+    document.querySelectorAll('.highlight-target, .highlight-source').forEach(el => {
+        el.classList.remove('highlight-target', 'highlight-source');
+    });
+}
+
+function cancelJumpNavigation() {
+    clearJumpBackRestoreTimer();
+    clearTimeout(window.__relatedJumpTimeout);
+    jumpBackReturnToken += 1;
+    jumpBackInProgress = false;
+    jumpSourceInfo = null;
+    pendingHighlightInfo = null;
+    clearJumpHighlights();
+    try {
+        setRelatedPanelSilent(false);
+    } catch (_) { }
+    setJumpBackButtonBusy(false);
+    hideBackButton(false);
+    hideJumpCancelButton();
+}
+
 // 显示返回按钮
 function showBackButton() {
     // 如果已存在，先移除（但不清除 jumpSourceInfo）
@@ -10205,9 +10432,9 @@ function showBackButton() {
 
     const btn = document.createElement('button');
     btn.id = 'jumpBackBtn';
+    btn.type = 'button';
     btn.className = 'jump-back-btn';
-    btn.innerHTML = '<i class="fas fa-arrow-left"></i>';
-    btn.title = typeof currentLang !== 'undefined' && currentLang === 'zh_CN' ? '返回' : 'Go Back';
+    btn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
 
     btn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -10217,20 +10444,23 @@ function showBackButton() {
     });
 
     document.body.appendChild(btn);
+    updateJumpFloatingButtonLabels();
+    showJumpCancelButton();
 
-    // 显示动画
-    setTimeout(() => {
-        btn.style.opacity = '1';
-        btn.style.transform = 'translateY(0)';
-    }, 50);
+    window.requestAnimationFrame(() => {
+        btn.classList.add('is-visible');
+    });
 }
 
 // 隐藏返回按钮（可选是否清除来源信息）
 function hideBackButton(clearSource = true) {
+    clearJumpBackRestoreTimer();
     const btn = document.getElementById('jumpBackBtn');
     if (btn) {
         btn.remove();
     }
+    hideJumpCancelButton();
+    jumpBackInProgress = false;
     if (clearSource) {
         jumpSourceInfo = null;
     }
@@ -10238,20 +10468,21 @@ function hideBackButton(clearSource = true) {
 
 // 返回到跳转来源
 async function goBackToSource() {
+    if (jumpBackInProgress) return;
     if (!jumpSourceInfo) {
         console.warn('[goBackToSource] jumpSourceInfo 为空');
         return;
     }
 
-    const { type, url, scrollTop } = jumpSourceInfo;
-
-
-    // 先隐藏返回按钮
-    const btn = document.getElementById('jumpBackBtn');
-    if (btn) btn.remove();
-
-    // 清除来源信息（在使用完之后立即清除）
+    const sourceInfo = { ...jumpSourceInfo };
+    const { type } = sourceInfo;
+    const token = jumpBackReturnToken + 1;
+    jumpBackReturnToken = token;
+    jumpBackInProgress = true;
     jumpSourceInfo = null;
+    clearJumpBackRestoreTimer();
+    setJumpBackButtonBusy(true);
+    showJumpCancelButton();
 
     if (type === 'browsingHistory') {
         // 返回点击记录 - 需要切换到「点击记录」子标签
@@ -10261,15 +10492,6 @@ async function goBackToSource() {
 
         }
 
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceBookmark(url);
-        }, 500);
-
     } else if (type === 'bookmarkAdditions') {
         // 返回书签添加记录 - 需要切换到「书签添加记录」标签
         const reviewTab = document.getElementById('additionsTabReview');
@@ -10278,15 +10500,6 @@ async function goBackToSource() {
 
         }
 
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceBookmark(url);
-        }, 500);
-
     } else if (type === 'clickRanking') {
         // 返回点击排行 - 需要切换到「点击排行」子标签
         const rankingTab = document.getElementById('browsingTabRanking');
@@ -10294,16 +10507,31 @@ async function goBackToSource() {
             rankingTab.click();
 
         }
-
-        // 恢复滚动位置并高亮
-        setTimeout(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea && scrollTop) {
-                contentArea.scrollTop = scrollTop;
-            }
-            highlightSourceRankingItem(url);
-        }, 500);
     }
+
+    jumpBackRestoreTimer = window.setTimeout(() => {
+        completeGoBackToSource(sourceInfo, token);
+    }, JUMP_BACK_RESTORE_DELAY_MS);
+}
+
+function completeGoBackToSource(sourceInfo, token) {
+    if (!jumpBackInProgress || token !== jumpBackReturnToken || !sourceInfo) return;
+
+    const { type, url, scrollTop } = sourceInfo;
+    const contentArea = document.querySelector('.content-area');
+    if (contentArea && scrollTop) {
+        contentArea.scrollTop = scrollTop;
+    }
+
+    if (type === 'clickRanking') {
+        highlightSourceRankingItem(url);
+    } else {
+        highlightSourceBookmark(url);
+    }
+
+    jumpBackRestoreTimer = null;
+    jumpBackInProgress = false;
+    hideBackButton(false);
 }
 
 // 高亮来源书签
@@ -30750,6 +30978,66 @@ function getBrowsingRankingItemCountByRange(item, range) {
     return Number(item.monthCount) || 0;
 }
 
+function createBrowsingRankingRelatedTarget(type, payload = {}) {
+    const safeType = ['bookmark', 'folder', 'domain', 'subdomain'].includes(type) ? type : 'bookmark';
+    const items = Array.isArray(payload.items)
+        ? payload.items
+            .map(item => ({
+                url: String(item?.url || '').trim(),
+                title: String(item?.title || '').trim()
+            }))
+            .filter(item => item.url || item.title)
+        : [];
+    const urls = Array.isArray(payload.urls)
+        ? payload.urls.map(url => String(url || '').trim()).filter(Boolean)
+        : items.map(item => item.url).filter(Boolean);
+
+    return {
+        type: safeType,
+        url: String(payload.url || '').trim(),
+        title: String(payload.title || payload.label || '').trim(),
+        label: String(payload.label || payload.title || payload.domain || payload.url || '').trim(),
+        domain: payload.domain ? normalizeBrowsingRankingDomainHost(payload.domain) : '',
+        subdomain: payload.subdomain ? normalizeBrowsingRankingDomainHost(payload.subdomain) : '',
+        parentDomain: payload.parentDomain ? normalizeBrowsingRankingDomainHost(payload.parentDomain) : '',
+        urls,
+        items
+    };
+}
+
+function createBrowsingRankingRelatedJumpButton({ range, url = '', title = '', target = null } = {}) {
+    const isZh = currentLang === 'zh_CN';
+    const jumpBtnContainer = document.createElement('div');
+    jumpBtnContainer.className = 'jump-to-related-btn-container';
+    jumpBtnContainer.style.display = 'flex';
+    jumpBtnContainer.style.alignItems = 'center';
+    jumpBtnContainer.style.flexShrink = '0';
+
+    const jumpBtn = document.createElement('button');
+    jumpBtn.className = 'jump-to-related-btn';
+    jumpBtn.type = 'button';
+    jumpBtn.setAttribute('aria-label', isZh ? '跳转至关联记录' : 'Jump to Related History');
+    jumpBtn.innerHTML = '<i class="fas fa-external-link-alt"></i>';
+    jumpBtn.dataset.url = url;
+    jumpBtn.dataset.title = title;
+    jumpBtn.dataset.range = range || '';
+
+    jumpBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (typeof jumpToRelatedHistoryFromRanking === 'function') {
+            jumpToRelatedHistoryFromRanking(url, title, range, { target });
+        }
+    });
+
+    jumpBtnContainer.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
+
+    jumpBtnContainer.appendChild(jumpBtn);
+    return jumpBtnContainer;
+}
+
 // 渲染文件夹模式的点击排行列表
 async function renderBrowsingFolderRankingList(container, items, range, stats, options = {}) {
     container.innerHTML = '';
@@ -30878,12 +31166,23 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
         `;
         header.appendChild(main);
 
+        const relatedTarget = createBrowsingRankingRelatedTarget('folder', {
+            label: folder.fullPath,
+            title: folder.fullPath,
+            items: folder.items
+        });
+        header.appendChild(createBrowsingRankingRelatedJumpButton({
+            range,
+            title: folder.fullPath,
+            target: relatedTarget
+        }));
+
         // 点击次数
         const counts = document.createElement('div');
         counts.className = 'ranking-counts';
         if (rankClass) counts.classList.add(rankClass);
         counts.textContent = folder.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
-        counts.dataset.tooltip = isZh ? `${rangeLabel}：${folder.count} 次` : `${rangeLabel}: ${folder.count} clicks`;
+        counts.setAttribute('aria-label', isZh ? `${rangeLabel}：${folder.count} 次` : `${rangeLabel}: ${folder.count} clicks`);
         header.appendChild(counts);
 
         folderRow.appendChild(header);
@@ -31079,11 +31378,25 @@ function renderBrowsingDomainRankingList(container, items, range, options = {}) 
         `;
         header.appendChild(main);
 
+        const relatedTarget = createBrowsingRankingRelatedTarget(mode, {
+            label: domain.name,
+            title: domain.name,
+            domain: mode === 'subdomain' ? domain.name : domain.parentDomain,
+            subdomain: mode === 'subdomain' ? domain.name : '',
+            parentDomain: domain.parentDomain,
+            items: domain.items
+        });
+        header.appendChild(createBrowsingRankingRelatedJumpButton({
+            range,
+            title: domain.name,
+            target: relatedTarget
+        }));
+
         const counts = document.createElement('div');
         counts.className = 'ranking-counts';
         if (rankClass) counts.classList.add(rankClass);
         counts.textContent = domain.count.toLocaleString(isZh ? 'zh-CN' : 'en-US');
-        counts.dataset.tooltip = isZh ? `${rangeLabel}：${domain.count} 次` : `${rangeLabel}: ${domain.count} clicks`;
+        counts.setAttribute('aria-label', isZh ? `${rangeLabel}：${domain.count} 次` : `${rangeLabel}: ${domain.count} clicks`);
         header.appendChild(counts);
 
         domainRow.appendChild(header);
@@ -31282,41 +31595,21 @@ function renderBrowsingClickRankingList(container, items, range, options = {}) {
             const accessibleLabel = isZh
                 ? `${rangeLabel}：${value} ${unitLabel}`
                 : `${rangeLabel}: ${value} ${unitLabel}`;
-            counts.dataset.tooltip = accessibleLabel;
             counts.setAttribute('aria-label', accessibleLabel);
 
             header.appendChild(main);
 
             // 跳转按钮容器（点击次数左边）
-            const jumpBtnContainer = document.createElement('div');
-            jumpBtnContainer.className = 'jump-to-related-btn-container';
-            jumpBtnContainer.style.display = 'flex';
-            jumpBtnContainer.style.alignItems = 'center';
-            jumpBtnContainer.style.flexShrink = '0';
-
-            const jumpBtn = document.createElement('button');
-            jumpBtn.className = 'jump-to-related-btn';
-            jumpBtn.dataset.tooltip = isZh ? '跳转至关联记录' : 'Jump to Related History';
-            jumpBtn.innerHTML = '<i class="fas fa-external-link-alt"></i>';
-            jumpBtn.dataset.url = entry.url;
-            jumpBtn.dataset.title = entry.title;
-            jumpBtn.dataset.range = range;
-
-            jumpBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                if (typeof jumpToRelatedHistoryFromRanking === 'function') {
-                    jumpToRelatedHistoryFromRanking(entry.url, entry.title, range);
-                }
-            });
-
-            // 容器也阻止事件冒泡
-            jumpBtnContainer.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-
-            jumpBtnContainer.appendChild(jumpBtn);
-            header.appendChild(jumpBtnContainer);
+            header.appendChild(createBrowsingRankingRelatedJumpButton({
+                range,
+                url: entry.url,
+                title: entry.title,
+                target: createBrowsingRankingRelatedTarget('bookmark', {
+                    url: entry.url,
+                    title: entry.title,
+                    items: [entry]
+                })
+            }));
 
             header.appendChild(counts);
 
@@ -42129,6 +42422,11 @@ let browsingRelatedBookmarkInfo = null; // 缓存的书签URL->标题映射（�
 let browsingRelatedRecomputePending = false; // 数据变更后，延迟到下次用户触发加载时再重算
 let browsingRelatedLoadSeq = 0;
 const BROWSING_RELATED_SNAPSHOT_CACHE_LIMIT = 6;
+const BROWSING_RELATED_LAZY_THRESHOLD = 100;
+const BROWSING_RELATED_VIRTUAL_MIN_ITEMS = 180;
+const BROWSING_RELATED_VIRTUAL_MAX_ITEMS = 480;
+const BROWSING_RELATED_VIRTUAL_OVERSCAN_ROWS = 12;
+const BROWSING_RELATED_VIRTUAL_UPDATE_MARGIN_ROWS = 8;
 const browsingRelatedSnapshotCache = new Map(); // key -> { historyItemsExpanded, bookmarkUrls, bookmarkTitles }
 let browsingRelatedLastRenderedExportState = null;
 
@@ -43317,10 +43615,381 @@ async function buildPostponedReviewExportPayload(limit) {
     return payload;
 }
 
+function destroyBrowsingRelatedLazyState(container) {
+    const state = container && container.__lazyLoadState;
+    if (!state) return;
+    try {
+        if (typeof state.destroy === 'function') {
+            state.destroy();
+        } else if (state.scrollContainer && state.onScroll) {
+            state.scrollContainer.removeEventListener('scroll', state.onScroll);
+        }
+    } catch (_) { }
+    if (container) {
+        delete container.__lazyLoadState;
+        delete container.__browsingRelatedHighlightedIndices;
+        container.classList.remove('is-virtualized');
+    }
+}
+
+function getBrowsingRelatedScrollContainer(container) {
+    return (container && container.closest('.content-area')) || container;
+}
+
+function getBrowsingRelatedGridColumnCount(container) {
+    if (!container) return 1;
+    const styles = window.getComputedStyle(container);
+    const template = styles.gridTemplateColumns || '';
+    if (template && template !== 'none') {
+        const count = template.split(' ').filter(Boolean).length;
+        if (count > 0) return count;
+    }
+    const width = container.clientWidth || 0;
+    const minColumnWidth = (typeof isSidePanelMode !== 'undefined' && isSidePanelMode) ? 180 : 240;
+    return Math.max(1, Math.floor(width / minColumnWidth));
+}
+
+function getBrowsingRelatedListTop(container, scrollContainer) {
+    if (!container || !scrollContainer) return 0;
+    if (scrollContainer === container) return 0;
+    const listRect = container.getBoundingClientRect();
+    const scrollRect = scrollContainer.getBoundingClientRect();
+    return listRect.top - scrollRect.top + scrollContainer.scrollTop;
+}
+
+function addBrowsingRelatedTargetUrl(urlSet, url) {
+    const safeUrl = String(url || '').trim();
+    if (!safeUrl) return;
+    urlSet.add(safeUrl);
+    const normalizedUrl = normalizeRelatedVisitLookupUrl(safeUrl);
+    if (normalizedUrl) urlSet.add(normalizedUrl);
+}
+
+function getBrowsingRelatedTargetUrlSet(target) {
+    if (!target || typeof target !== 'object') return null;
+    if (target.__urlSet instanceof Set) return target.__urlSet;
+
+    const urlSet = new Set();
+    addBrowsingRelatedTargetUrl(urlSet, target.url);
+    if (Array.isArray(target.urls)) {
+        target.urls.forEach(url => addBrowsingRelatedTargetUrl(urlSet, url));
+    }
+    if (Array.isArray(target.items)) {
+        target.items.forEach(item => addBrowsingRelatedTargetUrl(urlSet, item?.url));
+    }
+    target.__urlSet = urlSet;
+    return urlSet;
+}
+
+function getBrowsingRelatedTargetTitleDomainSet(target) {
+    if (!target || typeof target !== 'object') return null;
+    if (target.__titleDomainSet instanceof Set) return target.__titleDomainSet;
+
+    const titleDomainSet = new Set();
+    const addEntry = (title, url) => {
+        const safeTitle = String(title || '').trim();
+        const domain = getSyncHistoryUrlDomain(url);
+        if (safeTitle && domain) {
+            titleDomainSet.add(`${safeTitle}\u0001${domain}`);
+        }
+    };
+
+    addEntry(target.title, target.url);
+    if (Array.isArray(target.items)) {
+        target.items.forEach(item => addEntry(item?.title, item?.url));
+    }
+    target.__titleDomainSet = titleDomainSet;
+    return titleDomainSet;
+}
+
+function doesBrowsingRelatedItemMatchTarget(item, target) {
+    if (!item || !target) return false;
+
+    const itemUrl = String(item.url || '').trim();
+    const itemTitle = String(item.title || '').trim();
+    const targetMinute = Number.isFinite(Number(target.visitTime))
+        ? Math.floor(Number(target.visitTime) / 60000)
+        : null;
+
+    if (target.requireVisitMinute && targetMinute !== null) {
+        const itemVisitTime = Number(item.lastVisitTime || item.visitTime || 0);
+        if (!Number.isFinite(itemVisitTime) || Math.floor(itemVisitTime / 60000) !== targetMinute) {
+            return false;
+        }
+    }
+
+    const urlSet = getBrowsingRelatedTargetUrlSet(target);
+    if (urlSet && urlSet.size > 0) {
+        if (urlSet.has(itemUrl) || urlSet.has(normalizeRelatedVisitLookupUrl(itemUrl))) {
+            return true;
+        }
+    }
+
+    const titleDomainSet = getBrowsingRelatedTargetTitleDomainSet(target);
+    if (titleDomainSet && titleDomainSet.size > 0) {
+        const itemDomain = getSyncHistoryUrlDomain(itemUrl);
+        if (itemTitle && itemDomain && titleDomainSet.has(`${itemTitle}\u0001${itemDomain}`)) {
+            return true;
+        }
+    }
+
+    const hasExplicitTargetSet = Boolean((urlSet && urlSet.size > 0) || (titleDomainSet && titleDomainSet.size > 0));
+    const targetType = String(target.type || '').toLowerCase();
+    if (!hasExplicitTargetSet && (targetType === 'domain' || targetType === 'subdomain')) {
+        const domainParts = getBrowsingRankingDomainPartsFromUrl(itemUrl);
+        const itemDomain = getBrowsingRankingDomainValue(domainParts, targetType);
+        const targetDomain = normalizeBrowsingRankingDomainHost(
+            targetType === 'subdomain'
+                ? (target.subdomain || target.domain || target.label)
+                : (target.domain || target.parentDomain || target.label)
+        );
+        return !!itemDomain && !!targetDomain && itemDomain === targetDomain;
+    }
+
+    return !!getRelatedHistoryTargetMatchType(
+        itemUrl,
+        itemTitle,
+        target.url,
+        target.title
+    );
+}
+
+function doesBrowsingRelatedGroupMatchTarget(group, target) {
+    if (!group || !target) return false;
+    const items = Array.isArray(group.items) && group.items.length
+        ? group.items
+        : [group.representativeItem];
+    return items.some(item => doesBrowsingRelatedItemMatchTarget(item, target));
+}
+
+function findBrowsingRelatedMatchingGroupIndices(groups, target) {
+    if (!Array.isArray(groups) || !target) return [];
+    const matches = [];
+    for (let i = 0; i < groups.length; i++) {
+        if (doesBrowsingRelatedGroupMatchTarget(groups[i], target)) {
+            matches.push(i);
+        }
+    }
+    return matches;
+}
+
+function createBrowsingRelatedRenderState(container, groups, renderGroup, options = {}) {
+    const totalItems = Array.isArray(groups) ? groups.length : 0;
+    let highlightedIndices = new Set();
+
+    const applyHighlightsToRenderedItems = () => {
+        container.querySelectorAll('.related-history-item').forEach(itemEl => {
+            const index = Number(itemEl.dataset.groupIndex);
+            itemEl.classList.toggle('highlight-target', highlightedIndices.has(index));
+        });
+    };
+
+    const setHighlightedIndices = (indices) => {
+        highlightedIndices = new Set((Array.isArray(indices) ? indices : []).filter(index => Number.isInteger(index)));
+        container.__browsingRelatedHighlightedIndices = highlightedIndices;
+        applyHighlightsToRenderedItems();
+    };
+
+    const baseState = {
+        totalItems,
+        groups,
+        virtualized: options.virtualized === true,
+        getLoadedCount: () => totalItems,
+        findMatchingIndices: target => findBrowsingRelatedMatchingGroupIndices(groups, target),
+        setHighlightedIndices,
+        loadMore: () => { },
+        loadAll: () => { }
+    };
+
+    if (!options.virtualized) {
+        return {
+            ...baseState,
+            scrollToIndex(index) {
+                const safeIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(totalItems - 1, 0)));
+                const targetEl = container.querySelector(`.related-history-item[data-group-index="${safeIndex}"]`);
+                if (targetEl) {
+                    targetEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+                }
+            },
+            destroy: () => { }
+        };
+    }
+
+    const scrollContainer = getBrowsingRelatedScrollContainer(container);
+    let columns = 1;
+    let rowGap = 12;
+    let rowStride = 116;
+    let startIndex = -1;
+    let endIndex = -1;
+    let rafId = 0;
+
+    const measureMetrics = () => {
+        columns = getBrowsingRelatedGridColumnCount(container);
+        const styles = window.getComputedStyle(container);
+        rowGap = Number.parseFloat(styles.rowGap || styles.gap || '12') || 12;
+        const fixedCardHeight = Number.parseFloat(styles.getPropertyValue('--related-history-card-height') || '');
+        if (Number.isFinite(fixedCardHeight) && fixedCardHeight > 0) {
+            rowStride = Math.max(80, fixedCardHeight + rowGap);
+            return;
+        }
+        const firstItem = container.querySelector('.related-history-item');
+        if (firstItem) {
+            const rect = firstItem.getBoundingClientRect();
+            const measuredStride = rect.height > 0 ? Math.max(80, rect.height + rowGap) : rowStride;
+            if (Math.abs(measuredStride - rowStride) > 6) {
+                rowStride = measuredStride;
+            }
+        }
+    };
+
+    const getWindowItemCount = () => {
+        const visibleRows = Math.ceil((scrollContainer.clientHeight || window.innerHeight || 600) / Math.max(rowStride, 1));
+        const rows = Math.max(
+            Math.ceil(BROWSING_RELATED_VIRTUAL_MIN_ITEMS / columns),
+            visibleRows + (BROWSING_RELATED_VIRTUAL_OVERSCAN_ROWS * 2)
+        );
+        const bounded = Math.min(
+            BROWSING_RELATED_VIRTUAL_MAX_ITEMS,
+            Math.max(BROWSING_RELATED_VIRTUAL_MIN_ITEMS, rows * columns)
+        );
+        return Math.min(totalItems, Math.ceil(bounded / columns) * columns);
+    };
+
+    const getVisibleRowRange = () => {
+        const listTop = getBrowsingRelatedListTop(container, scrollContainer);
+        const relativeTop = Math.max(0, (scrollContainer.scrollTop || 0) - listTop);
+        const viewportHeight = scrollContainer.clientHeight || window.innerHeight || 600;
+        const visibleStartRow = Math.floor(relativeTop / Math.max(rowStride, 1));
+        const visibleEndRow = Math.ceil((relativeTop + viewportHeight) / Math.max(rowStride, 1));
+        return { visibleStartRow, visibleEndRow, visibleRows: Math.max(1, visibleEndRow - visibleStartRow) };
+    };
+
+    const getBufferedStartIndex = (visibleStartRow, visibleRows) => {
+        const windowRows = Math.max(1, Math.ceil(getWindowItemCount() / columns));
+        const middleBufferRows = Math.max(
+            BROWSING_RELATED_VIRTUAL_UPDATE_MARGIN_ROWS * 2,
+            Math.floor((windowRows - visibleRows) / 2)
+        );
+        return Math.max(0, (visibleStartRow - middleBufferRows) * columns);
+    };
+
+    const renderWindow = (nextStartIndex, renderOptions = {}) => {
+        if (totalItems <= 0) return;
+        measureMetrics();
+        const windowCount = getWindowItemCount();
+        const maxStart = Math.max(0, totalItems - windowCount);
+        const alignedStart = Math.max(
+            0,
+            Math.min(
+                Math.floor((Number(nextStartIndex) || 0) / columns) * columns,
+                Math.floor(maxStart / columns) * columns
+            )
+        );
+        const nextEnd = Math.min(totalItems, alignedStart + windowCount);
+        if (!renderOptions.force && alignedStart === startIndex && nextEnd === endIndex) {
+            return;
+        }
+
+        startIndex = alignedStart;
+        endIndex = nextEnd;
+
+        const topSpacer = document.createElement('div');
+        topSpacer.className = 'related-history-virtual-spacer related-history-virtual-spacer-top';
+        const topRows = Math.floor(startIndex / columns);
+        topSpacer.style.height = topRows > 0 ? `${Math.max(0, (topRows * rowStride) - rowGap)}px` : '0px';
+        topSpacer.style.display = topRows > 0 ? 'block' : 'none';
+
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i < endIndex; i++) {
+            fragment.appendChild(renderGroup(groups[i], i));
+        }
+
+        const bottomSpacer = document.createElement('div');
+        bottomSpacer.className = 'related-history-virtual-spacer related-history-virtual-spacer-bottom';
+        const bottomRows = Math.ceil(Math.max(0, totalItems - endIndex) / columns);
+        bottomSpacer.style.height = bottomRows > 0 ? `${Math.max(0, (bottomRows * rowStride) - rowGap)}px` : '0px';
+        bottomSpacer.style.display = bottomRows > 0 ? 'block' : 'none';
+
+        container.replaceChildren(topSpacer, fragment, bottomSpacer);
+        applyHighlightsToRenderedItems();
+        measureMetrics();
+    };
+
+    const renderForScroll = () => {
+        rafId = 0;
+        measureMetrics();
+        if (startIndex < 0 || endIndex < 0) {
+            renderWindow(0);
+            return;
+        }
+
+        const { visibleStartRow, visibleEndRow, visibleRows } = getVisibleRowRange();
+        const windowStartRow = Math.floor(startIndex / columns);
+        const windowEndRow = Math.ceil(endIndex / columns);
+        const marginRows = BROWSING_RELATED_VIRTUAL_UPDATE_MARGIN_ROWS;
+        const needsUpperWindow = windowStartRow > 0 && visibleStartRow < windowStartRow + marginRows;
+        const needsLowerWindow = endIndex < totalItems && visibleEndRow > windowEndRow - marginRows;
+
+        if (!needsUpperWindow && !needsLowerWindow) return;
+        renderWindow(getBufferedStartIndex(visibleStartRow, visibleRows));
+    };
+
+    const onScroll = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(renderForScroll);
+    };
+
+    const state = {
+        ...baseState,
+        scrollContainer,
+        onScroll,
+        getLoadedCount: () => Math.max(0, endIndex - startIndex),
+        getWindowRange: () => ({ startIndex, endIndex }),
+        loadMore: () => renderWindow(Math.min(totalItems - 1, endIndex), { force: true }),
+        loadAll: () => renderWindow(startIndex < 0 ? 0 : startIndex, { force: true }),
+        renderWindowAroundIndex(index) {
+            const safeIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(totalItems - 1, 0)));
+            measureMetrics();
+            const windowCount = getWindowItemCount();
+            const targetRow = Math.floor(safeIndex / columns);
+            const halfRows = Math.max(0, Math.floor((windowCount / columns) / 2));
+            const startRow = Math.max(0, targetRow - halfRows);
+            renderWindow(startRow * columns, { force: true });
+        },
+        scrollToIndex(index) {
+            const safeIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(totalItems - 1, 0)));
+            this.renderWindowAroundIndex(safeIndex);
+            measureMetrics();
+            const listTop = getBrowsingRelatedListTop(container, scrollContainer);
+            const targetRow = Math.floor(safeIndex / columns);
+            const targetTop = listTop + (targetRow * rowStride);
+            const centerOffset = Math.max(0, ((scrollContainer.clientHeight || 0) - rowStride) / 2);
+            scrollContainer.scrollTop = Math.max(0, targetTop - centerOffset);
+            if (!rafId) {
+                rafId = requestAnimationFrame(renderForScroll);
+            }
+        },
+        destroy() {
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = 0;
+            }
+            if (scrollContainer && onScroll) {
+                scrollContainer.removeEventListener('scroll', onScroll);
+            }
+        }
+    };
+
+    renderWindow(0, { force: true });
+    scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+    return state;
+}
+
 // 渲染书签关联记录列表（大列表场景支持懒加载）
 async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, bookmarkTitles, bookmarkTitleDomainMap, range) {
     if (!container) return;
 
+    destroyBrowsingRelatedLazyState(container);
     container.innerHTML = '';
 
     const isZh = currentLang === 'zh_CN';
@@ -43353,20 +44022,26 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
     } catch (_) { }
 
     // 懒加载规则：
-    // - 当分组数 > 100 时启用懒加载（所有范围都适用）
+    // - 当分组数 > 阈值时启用双向虚拟窗口（所有范围都适用）
     // - 其他情况一次性渲染全部
-    const enableLazy = mergedGroups.length > 100;
+    const enableLazy = mergedGroups.length > BROWSING_RELATED_LAZY_THRESHOLD;
+    container.classList.toggle('is-virtualized', enableLazy);
 
     // 渲染单个分组的函数
-    const renderGroup = (group) => {
+    const renderGroup = (group, groupIndex) => {
         const item = group.representativeItem;
         const isBookmark = group.isBookmark;
 
         const itemEl = document.createElement('div');
         itemEl.className = 'related-history-item' + (isBookmark ? ' is-bookmark' : '');
+        if (container.__browsingRelatedHighlightedIndices instanceof Set
+            && container.__browsingRelatedHighlightedIndices.has(groupIndex)) {
+            itemEl.classList.add('highlight-target');
+        }
 
         // 添加 dataset 属性用于跳转匹配
         const visitTimestamp = item.lastVisitTime || null;
+        itemEl.dataset.groupIndex = String(groupIndex);
         itemEl.dataset.url = item.url;
         itemEl.dataset.visitTime = visitTimestamp || Date.now();
         if (visitTimestamp) {
@@ -43429,58 +44104,18 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
     };
 
     if (!enableLazy) {
-        for (const group of mergedGroups) {
-            container.appendChild(renderGroup(group));
+        for (let i = 0; i < mergedGroups.length; i++) {
+            container.appendChild(renderGroup(mergedGroups[i], i));
         }
+        container.__lazyLoadState = createBrowsingRelatedRenderState(container, mergedGroups, renderGroup, {
+            virtualized: false
+        });
         return;
     }
 
-    // 启用懒加载：每次追加 100 个分组
-    const PAGE_SIZE = 100;
-    let offset = 0;
-
-    const appendNextPage = () => {
-        const end = Math.min(offset + PAGE_SIZE, mergedGroups.length);
-
-        for (let i = offset; i < end; i++) {
-            container.appendChild(renderGroup(mergedGroups[i]));
-        }
-
-        offset = end;
-    };
-
-    appendNextPage();
-
-    // 找到真正的滚动容器（.content-area）
-    const scrollContainer = container.closest('.content-area') || container;
-
-    const onScroll = () => {
-        if (offset >= mergedGroups.length) return;
-        // 提前加载：使用视口高度的3倍作为阈值，至少1500px
-        const threshold = Math.max(1500, scrollContainer.clientHeight * 3);
-        if (scrollContainer.scrollTop + scrollContainer.clientHeight + threshold >= scrollContainer.scrollHeight) {
-            appendNextPage();
-        }
-    };
-
-    // 清理旧的监听器
-    if (scrollContainer.__browsingRelatedScrollHandler) {
-        scrollContainer.removeEventListener('scroll', scrollContainer.__browsingRelatedScrollHandler);
-    }
-    scrollContainer.addEventListener('scroll', onScroll);
-    scrollContainer.__browsingRelatedScrollHandler = onScroll;
-
-    // 暴露懒加载状态和函数，供跳转功能使用
-    container.__lazyLoadState = {
-        totalItems: mergedGroups.length,
-        getLoadedCount: () => offset,
-        loadMore: appendNextPage,
-        loadAll: () => {
-            while (offset < mergedGroups.length) {
-                appendNextPage();
-            }
-        }
-    };
+    container.__lazyLoadState = createBrowsingRelatedRenderState(container, mergedGroups, renderGroup, {
+        virtualized: true
+    });
 }
 
 // 根据时间范围格式化时间
@@ -45046,7 +45681,6 @@ async function jumpToRelatedHistory(url, title, visitTime, sourceElement) {
         currentStrategyIndex: 0,
         showBackButton: true, // 标记需要显示返回按钮
         hasVisitTime: hasPreciseVisit,
-        forceLoadAll: true,
         silentMenu: true,
         pendingUIRange: effectiveStrategies[0]?.range || null,
         pendingUIFilter: effectiveStrategies[0]?.filter || null
@@ -45069,8 +45703,7 @@ function highlightRelatedHistoryItem(retryCount = 0) {
         currentStrategyIndex = 0,
         fromAdditions,
         showBackButton: shouldShowBackButton,
-        hasVisitTime: storedVisitFlag,
-        forceLoadAll
+        hasVisitTime: storedVisitFlag
     } = pendingHighlightInfo;
     const listContainer = document.getElementById('browsingRelatedList');
     if (!listContainer) {
@@ -45087,91 +45720,44 @@ function highlightRelatedHistoryItem(retryCount = 0) {
     const normalizedTitleValue = normalizedTitle || (title ? title.trim() : '');
     const computedHasVisitTime = typeof visitTime === 'number' && !Number.isNaN(visitTime);
     const hasVisitTime = typeof storedVisitFlag === 'boolean' ? storedVisitFlag : computedHasVisitTime;
-    const targetMinute = hasVisitTime ? Math.floor(visitTime / (60 * 1000)) : null;
-
-    const candidateSelector = hasVisitTime && targetMinute !== null
-        ? `[data-visit-minute="${targetMinute}"]`
-        : '.related-history-item';
-    let nodes = listContainer.querySelectorAll(candidateSelector);
-    if (!nodes || nodes.length === 0) {
-        nodes = listContainer.querySelectorAll('.related-history-item');
-    }
-
-    let minuteUrlMatch = null;
-    let minuteTitleMatch = null;
-    let fallbackMatch = null;
-    nodes.forEach(item => {
-        if (minuteUrlMatch && minuteTitleMatch) {
-            return;
-        }
-
-        const itemUrl = item.dataset.url;
-        const itemTitle = (item.dataset.title || '').trim();
-        const matchType = getRelatedHistoryTargetMatchType(itemUrl, itemTitle, url, normalizedTitleValue);
-
-        if (hasVisitTime) {
-            const itemMinuteAttr = item.dataset.visitMinute;
-            if (itemMinuteAttr && Number(itemMinuteAttr) === targetMinute) {
-                if (matchType === 'exact_url' && !minuteUrlMatch) {
-                    minuteUrlMatch = item;
-                    return;
-                }
-                if (matchType === 'title_domain' && !minuteTitleMatch) {
-                    minuteTitleMatch = item;
-                    return;
-                }
-            }
-        } else if (!fallbackMatch && matchType) {
-            fallbackMatch = item;
-        }
-    });
-
-    let targetItem = minuteUrlMatch || minuteTitleMatch || null;
-    if (!targetItem && !hasVisitTime) {
-        targetItem = fallbackMatch;
-    }
-
-    if (targetItem) {
-        const shouldSyncUI = pendingHighlightInfo && pendingHighlightInfo.silentMenu;
-        const finalStrategy = pendingHighlightInfo ? pendingHighlightInfo.activeStrategy : null;
-        listContainer.querySelectorAll('.related-history-item.highlight-target').forEach(el => {
-            el.classList.remove('highlight-target');
-        });
-        targetItem.classList.add('highlight-target');
-        targetItem.scrollIntoView({ behavior: 'instant', block: 'center' });
-        if (shouldShowBackButton && typeof showBackButton === 'function' && jumpSourceInfo) {
-            showBackButton();
-        }
-        if (shouldSyncUI && finalStrategy) {
-            browsingRelatedTimeFilter = finalStrategy.filter || null;
-            syncRelatedUIWithStrategy(finalStrategy);
-        }
-        showRelatedJumpSuccessToast(visitTime, title);
-        // 清除超时保护
-        clearTimeout(window.__relatedJumpTimeout);
-        if (pendingHighlightInfo && pendingHighlightInfo.silentMenu) {
-            setRelatedPanelSilent(false);
-        }
-        pendingHighlightInfo = null;
-        return;
-    }
-
     const lazyState = listContainer.__lazyLoadState;
-    if (lazyState) {
-        if (forceLoadAll && !lazyState.__forceLoaded) {
-            lazyState.__forceLoaded = true;
-            lazyState.loadAll();
-            setTimeout(() => highlightRelatedHistoryItem(retryCount + 1), 120);
+    if (!lazyState || typeof lazyState.findMatchingIndices !== 'function') {
+        if (retryCount < 5) {
+            setTimeout(() => highlightRelatedHistoryItem(retryCount + 1), 180);
             return;
         }
-        if (lazyState.getLoadedCount() < lazyState.totalItems) {
-            lazyState.loadMore();
-            if (retryCount < 20) {
-                setTimeout(() => highlightRelatedHistoryItem(retryCount + 1), 120);
-            } else {
-                lazyState.loadAll();
-                setTimeout(() => highlightRelatedHistoryItem(100), 150);
+    } else {
+        const target = {
+            type: 'bookmark',
+            url,
+            title: normalizedTitleValue,
+            visitTime,
+            requireVisitMinute: hasVisitTime
+        };
+        const matchedIndices = lazyState.findMatchingIndices(target);
+        const targetIndex = matchedIndices.length > 0 ? matchedIndices[0] : -1;
+        if (targetIndex >= 0) {
+            const shouldSyncUI = pendingHighlightInfo && pendingHighlightInfo.silentMenu;
+            const finalStrategy = pendingHighlightInfo ? pendingHighlightInfo.activeStrategy : null;
+            if (typeof lazyState.setHighlightedIndices === 'function') {
+                lazyState.setHighlightedIndices([targetIndex]);
             }
+            if (typeof lazyState.scrollToIndex === 'function') {
+                lazyState.scrollToIndex(targetIndex);
+            }
+            if (shouldShowBackButton && typeof showBackButton === 'function' && jumpSourceInfo) {
+                showBackButton();
+            }
+            if (shouldSyncUI && finalStrategy) {
+                browsingRelatedTimeFilter = finalStrategy.filter || null;
+                syncRelatedUIWithStrategy(finalStrategy);
+            }
+            showRelatedJumpSuccessToast(visitTime, title);
+            clearTimeout(window.__relatedJumpTimeout);
+            if (pendingHighlightInfo && pendingHighlightInfo.silentMenu) {
+                setRelatedPanelSilent(false);
+            }
+            pendingHighlightInfo = null;
             return;
         }
     }
@@ -45411,7 +45997,6 @@ async function jumpToRelatedHistoryFromAdditions(url, title, dateAdded) {
         fromAdditions: true,
         showBackButton: true,  // 标记需要显示返回按钮
         hasVisitTime: hasPreciseVisit,
-        forceLoadAll: true,
         silentMenu: true,
         pendingUIRange: effectiveStrategies[0]?.range || null,
         pendingUIFilter: effectiveStrategies[0]?.filter || null
@@ -45422,16 +46007,25 @@ async function jumpToRelatedHistoryFromAdditions(url, title, dateAdded) {
 }
 
 // 从「点击排行」跳转到「书签关联记录」并高亮所有匹配记录
-async function jumpToRelatedHistoryFromRanking(url, title, currentRange) {
+async function jumpToRelatedHistoryFromRanking(url, title, currentRange, options = {}) {
     // 保存当前的二级菜单筛选条件
     const currentTimeFilter = browsingRankingTimeFilter ? { ...browsingRankingTimeFilter } : null;
+    const safeRange = normalizeBrowsingRelatedRange(currentRange);
+    const rankingTarget = options && options.target
+        ? options.target
+        : createBrowsingRankingRelatedTarget('bookmark', {
+            url,
+            title,
+            items: [{ url, title }]
+        });
 
     // 记录来源信息，用于返回
     jumpSourceInfo = {
         type: 'clickRanking',  // 来自点击排行
         url: url,
         title: title,
-        range: currentRange,
+        range: safeRange,
+        target: rankingTarget,
         timeFilter: currentTimeFilter,  // 保存二级菜单筛选条件
         scrollTop: document.querySelector('.content-area')?.scrollTop || 0
     };
@@ -45462,30 +46056,32 @@ async function jumpToRelatedHistoryFromRanking(url, title, currentRange) {
     pendingHighlightInfo = {
         url: url,
         title: title,
-        currentRange: currentRange,
+        currentRange: safeRange,
         timeFilter: currentTimeFilter,  // 传递二级菜单筛选条件
         fromRanking: true,
         showBackButton: true,
-        highlightAll: true
+        highlightAll: true,
+        rankingTarget,
+        silentMenu: true
     };
 
-    // 4. 切换到对应的时间范围（这会触发 showBrowsingRelatedTimeMenu）
-    const rangeName = currentRange.charAt(0).toUpperCase() + currentRange.slice(1);
-    const filterBtn = document.getElementById(`browsingRelatedFilter${rangeName}`);
-    if (filterBtn && !filterBtn.classList.contains('active')) {
-        filterBtn.click();
-    } else {
-        // 已经在当前范围，重新加载
-        await loadBrowsingRelatedHistory(currentRange);
-    }
-
-    // 5. 延迟应用二级菜单筛选并高亮
-    setTimeout(() => {
-        if (currentTimeFilter) {
-            scheduleApplyRelatedFilter(currentTimeFilter);
-        }
+    setRelatedPanelSilent(true);
+    try {
+        // 4. 直接同步范围和二级筛选，避免按钮点击带来的重复加载与延迟竞态
+        browsingRelatedCurrentRange = safeRange;
+        setActiveRelatedRangeButton(safeRange);
+        await showBrowsingRelatedTimeMenu(safeRange);
+        browsingRelatedTimeFilter = currentTimeFilter;
+        markRelatedTimeMenuSelection(currentTimeFilter);
+        await loadBrowsingRelatedHistory(safeRange, { userInitiated: true });
         highlightAllRelatedHistoryItems();
-    }, 500);
+    } catch (error) {
+        console.warn('[BrowsingRelated] 点击排行跳转失败:', error);
+        clearTimeout(window.__relatedJumpTimeout);
+        setRelatedPanelSilent(false);
+        pendingHighlightInfo = null;
+        showNoRecordToast();
+    }
 }
 
 // 应用书签关联记录的二级菜单筛选（从点击排行跳转时使用）
@@ -45606,71 +46202,44 @@ function highlightAllClickHistoryItems(retryCount = 0) {
 function highlightAllRelatedHistoryItems(retryCount = 0) {
     if (!pendingHighlightInfo) return;
 
-    const { url, title, highlightAll, showBackButton: shouldShowBackButton } = pendingHighlightInfo;
+    const { url, title, rankingTarget, showBackButton: shouldShowBackButton } = pendingHighlightInfo;
     const listContainer = document.getElementById('browsingRelatedList');
     if (!listContainer) {
         // 确保在容器不存在时也清理状态
         clearTimeout(window.__relatedJumpTimeout);
+        setRelatedPanelSilent(false);
         pendingHighlightInfo = null;
         return;
     }
 
-    // 查找所有匹配的记录项（URL 精确匹配；必要时标题+域名兜底，与点击排行一致）
-    const items = listContainer.querySelectorAll('.related-history-item');
-    const matchedItems = [];
-    const normalizedTitle = title ? title.trim() : '';
-
-    items.forEach(item => {
-        const itemUrl = item.dataset.url;
-        const itemTitle = item.dataset.title || '';
-        if (getRelatedHistoryTargetMatchType(itemUrl, itemTitle, url, normalizedTitle)) {
-            matchedItems.push(item);
-        }
-    });
-
-    // 如果找到了匹配项，高亮显示
-    if (matchedItems.length > 0) {
-        // 移除之前的高亮
-        listContainer.querySelectorAll('.related-history-item.highlight-target').forEach(el => {
-            el.classList.remove('highlight-target');
-        });
-
-        // 为所有匹配项添加高亮
-        matchedItems.forEach(item => {
-            item.classList.add('highlight-target');
-        });
-
-        // 获取当前排序顺序（默认按时间降序，即最新的在前）
-        const sortBtn = document.querySelector('.sort-indicator-btn');
-        const isAscending = sortBtn && sortBtn.classList.contains('asc');
-
-        // 根据排序滚动到第一个或最后一个（最新/最旧的记录）
-        const targetItem = isAscending ? matchedItems[0] : matchedItems[0];
-        targetItem.scrollIntoView({ behavior: 'instant', block: 'center' });
-
-        // 显示返回按钮
-        if (shouldShowBackButton && jumpSourceInfo) {
-            showBackButton();
-        }
-
-        // 清除超时保护和待高亮信息
-        clearTimeout(window.__relatedJumpTimeout);
-        pendingHighlightInfo = null;
-        return;
-    }
-
-    // 检查是否有未加载的数据（懒加载场景）
     const lazyState = listContainer.__lazyLoadState;
-    if (lazyState && lazyState.getLoadedCount() < lazyState.totalItems) {
-        // 还有未加载的数据，加载更多后重试
-        lazyState.loadMore();
-        if (retryCount < 20) {
-            setTimeout(() => highlightAllRelatedHistoryItems(retryCount + 1), 100);
-        } else {
-            // 重试次数过多，加载全部然后最后尝试一次
-            lazyState.loadAll();
-            setTimeout(() => highlightAllRelatedHistoryItems(100), 100);
+    if (lazyState && typeof lazyState.findMatchingIndices === 'function') {
+        const target = rankingTarget || createBrowsingRankingRelatedTarget('bookmark', {
+            url,
+            title,
+            items: [{ url, title }]
+        });
+        const matchedIndices = lazyState.findMatchingIndices(target);
+        if (matchedIndices.length > 0) {
+            if (typeof lazyState.setHighlightedIndices === 'function') {
+                lazyState.setHighlightedIndices(matchedIndices);
+            }
+            if (typeof lazyState.scrollToIndex === 'function') {
+                lazyState.scrollToIndex(matchedIndices[0]);
+            }
+
+            if (shouldShowBackButton && jumpSourceInfo) {
+                showBackButton();
+            }
+
+            showRelatedJumpSuccessToast(null, target.label || title);
+            clearTimeout(window.__relatedJumpTimeout);
+            setRelatedPanelSilent(false);
+            pendingHighlightInfo = null;
+            return;
         }
+    } else if (retryCount < 5) {
+        setTimeout(() => highlightAllRelatedHistoryItems(retryCount + 1), 180);
         return;
     }
 
@@ -45680,6 +46249,7 @@ function highlightAllRelatedHistoryItems(retryCount = 0) {
     } else {
         // 清除超时保护
         clearTimeout(window.__relatedJumpTimeout);
+        setRelatedPanelSilent(false);
         pendingHighlightInfo = null;
         // 显示暂无记录提示
         showNoRecordToast();

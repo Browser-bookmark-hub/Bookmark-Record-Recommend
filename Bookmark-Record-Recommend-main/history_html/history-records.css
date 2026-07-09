@@ -4059,6 +4059,22 @@ a.tree-label.tree-bookmark-link:hover {
     padding: 4px;
 }
 
+.related-history-list.is-virtualized {
+    --related-history-card-height: 112px;
+    overflow-anchor: none;
+}
+
+html.side-panel-mode .related-history-list.is-virtualized {
+    --related-history-card-height: 104px;
+}
+
+.related-history-virtual-spacer {
+    grid-column: 1 / -1;
+    min-height: 0;
+    pointer-events: none;
+    overflow-anchor: none;
+}
+
 .related-history-item {
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
@@ -4067,6 +4083,14 @@ a.tree-label.tree-bookmark-link:hover {
     transition: all 0.2s ease;
     cursor: pointer;
     position: relative;
+}
+
+.related-history-list.is-virtualized .related-history-item {
+    box-sizing: border-box;
+    height: var(--related-history-card-height);
+    overflow: hidden;
+    contain: layout paint;
+    overflow-anchor: none;
 }
 
 .related-history-number {
@@ -4202,6 +4226,10 @@ a.tree-label.tree-bookmark-link:hover {
     align-items: center;
     gap: 4px;
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .related-history-time i {
@@ -4353,67 +4381,10 @@ a.tree-label.tree-bookmark-link:hover {
     z-index: 10;
 }
 
-/* 跳转按钮的tooltip - 从正下方出现 */
 .ranking-item .jump-to-related-btn {
     position: relative;
     cursor: pointer !important;
     z-index: 11;
-}
-
-.ranking-item .jump-to-related-btn::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-top: 4px;
-    padding: 4px 8px;
-    background: rgba(0, 0, 0, 0.8);
-    color: #fff;
-    font-size: 11px;
-    white-space: nowrap;
-    border-radius: 3px;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    z-index: 1000;
-    pointer-events: none;
-}
-
-.ranking-item .jump-to-related-btn:hover::after {
-    opacity: 1;
-    visibility: visible;
-}
-
-/* 计数的tooltip - 从正下方出现 */
-.ranking-counts {
-    position: relative;
-    cursor: pointer;
-}
-
-.ranking-counts::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-top: 4px;
-    padding: 4px 8px;
-    background: rgba(0, 0, 0, 0.8);
-    color: #fff;
-    font-size: 11px;
-    white-space: nowrap;
-    border-radius: 3px;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    z-index: 1000;
-    pointer-events: none;
-}
-
-.ranking-counts:hover::after {
-    opacity: 1;
-    visibility: visible;
 }
 
 #browsingRelatedPanel.related-silent-loading {
@@ -4449,6 +4420,8 @@ a.tree-label.tree-bookmark-link:hover {
             rgba(255, 235, 59, 0.4) 0%,
             rgba(255, 193, 7, 0.3) 100%) !important;
     border-color: #FFC107 !important;
+    outline: 3px solid rgba(255, 193, 7, 0.92);
+    outline-offset: 2px;
     box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.3), 0 4px 12px rgba(255, 193, 7, 0.2) !important;
     animation: highlightPulse 1.5s ease-out;
 }
@@ -4474,6 +4447,25 @@ a.tree-label.tree-bookmark-link:hover {
             rgba(255, 152, 0, 0.2) 100%) !important;
 }
 
+.related-history-item.is-bookmark.highlight-target {
+    background: linear-gradient(135deg,
+            rgba(76, 175, 80, 0.08) 0%,
+            rgba(76, 175, 80, 0.03) 100%) !important;
+    border-color: #4CAF50 !important;
+    outline: 3px solid rgba(255, 193, 7, 0.95);
+    outline-offset: 2px;
+    box-shadow:
+        0 0 0 1px rgba(76, 175, 80, 0.25),
+        0 0 0 5px rgba(255, 193, 7, 0.24),
+        0 4px 12px rgba(255, 193, 7, 0.18) !important;
+}
+
+[data-theme="dark"] .related-history-item.is-bookmark.highlight-target {
+    background: linear-gradient(135deg,
+            rgba(76, 175, 80, 0.14) 0%,
+            rgba(76, 175, 80, 0.06) 100%) !important;
+}
+
 /* ========== 点击记录书签项高亮 ========== */
 [data-bookmark-url].highlight-target {
     background: linear-gradient(135deg,
@@ -4490,39 +4482,122 @@ a.tree-label.tree-bookmark-link:hover {
             rgba(255, 152, 0, 0.2) 100%) !important;
 }
 
-/* ========== 返回按钮 ========== */
-.jump-back-btn {
+/* ========== 悬浮导航按钮 ========== */
+.jump-cancel-btn,
+.jump-back-btn,
+.scroll-to-top-btn {
     position: fixed;
-    bottom: 40px;
-    right: 100px;
-    /* 在回到顶部按钮左边 */
-    width: 48px;
-    height: 48px;
+    bottom: 32px;
+    width: 44px;
+    height: 44px;
     padding: 0;
-    border: none;
-    background: linear-gradient(135deg, #FF6B6B 0%, #ee5a5a 100%);
-    color: #fff;
-    border-radius: 50%;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--floating-nav-color, #334155);
+    --floating-nav-hover-bg: rgba(248, 250, 252, 0.96);
+    --floating-nav-hover-border: rgba(148, 163, 184, 0.4);
+    border-radius: 14px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    box-shadow: 0 4px 16px rgba(255, 107, 107, 0.4);
-    transition: all 0.3s ease;
+    font-size: 17px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    transition:
+        opacity 0.16s ease,
+        transform 0.16s ease,
+        background-color 0.16s ease,
+        border-color 0.16s ease,
+        box-shadow 0.16s ease;
     z-index: 9999;
     opacity: 0;
-    transform: translateY(20px);
+    pointer-events: none;
+    transform: translateY(10px);
+    will-change: opacity, transform;
 }
 
-.jump-back-btn:hover {
-    background: linear-gradient(135deg, #ee5a5a 0%, #dd4a4a 100%);
-    transform: translateY(-3px) scale(1.1);
-    box-shadow: 0 6px 24px rgba(255, 107, 107, 0.5);
+.jump-cancel-btn {
+    right: 144px;
+    --floating-nav-color: #EF4444;
+    --floating-nav-hover-bg: rgba(254, 242, 242, 0.96);
+    --floating-nav-hover-border: rgba(239, 68, 68, 0.34);
 }
 
-.jump-back-btn:active {
-    transform: translateY(0) scale(1);
+.jump-back-btn {
+    right: 88px;
+    --floating-nav-color: #F97316;
+    --floating-nav-hover-bg: rgba(255, 247, 237, 0.96);
+    --floating-nav-hover-border: rgba(249, 115, 22, 0.34);
+}
+
+.scroll-to-top-btn {
+    right: 32px;
+    --floating-nav-color: #2563EB;
+    --floating-nav-hover-bg: rgba(239, 246, 255, 0.96);
+    --floating-nav-hover-border: rgba(37, 99, 235, 0.34);
+}
+
+.jump-cancel-btn.is-visible,
+.jump-back-btn.is-visible,
+.scroll-to-top-btn.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.jump-cancel-btn:hover,
+.jump-back-btn:hover,
+.scroll-to-top-btn:hover {
+    background: var(--floating-nav-hover-bg);
+    border-color: var(--floating-nav-hover-border);
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.2);
+    transform: translateY(-2px);
+}
+
+.jump-cancel-btn:active,
+.jump-back-btn:active,
+.scroll-to-top-btn:active {
+    transform: translateY(0);
+}
+
+.jump-back-btn.is-returning {
+    opacity: 0.72;
+    cursor: default;
+}
+
+.jump-back-btn:disabled {
+    pointer-events: none;
+}
+
+[data-theme="dark"] .jump-cancel-btn,
+[data-theme="dark"] .jump-back-btn,
+[data-theme="dark"] .scroll-to-top-btn {
+    background: rgba(15, 23, 42, 0.88);
+    border-color: rgba(148, 163, 184, 0.22);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+}
+
+[data-theme="dark"] .jump-cancel-btn:hover,
+[data-theme="dark"] .jump-back-btn:hover,
+[data-theme="dark"] .scroll-to-top-btn:hover {
+    background: var(--floating-nav-hover-bg);
+}
+
+[data-theme="dark"] .jump-cancel-btn {
+    --floating-nav-hover-bg: rgba(127, 29, 29, 0.46);
+    --floating-nav-hover-border: rgba(248, 113, 113, 0.34);
+}
+
+[data-theme="dark"] .jump-back-btn {
+    --floating-nav-hover-bg: rgba(124, 45, 18, 0.46);
+    --floating-nav-hover-border: rgba(251, 146, 60, 0.34);
+}
+
+[data-theme="dark"] .scroll-to-top-btn {
+    --floating-nav-hover-bg: rgba(30, 64, 175, 0.42);
+    --floating-nav-hover-border: rgba(96, 165, 250, 0.34);
 }
 
 /* 来源书签高亮 - 仅蓝色边框 */
@@ -4634,38 +4709,6 @@ a.tree-label.tree-bookmark-link:hover {
 
 .folder-bookmark-list {
     background: var(--bg-primary);
-}
-
-/* ========== 回到顶部悬浮按钮 ========== */
-.scroll-to-top-btn {
-    position: fixed;
-    bottom: 40px;
-    right: 40px;
-    width: 48px;
-    height: 48px;
-    padding: 0;
-    border: none;
-    background: linear-gradient(135deg, #007AFF 0%, #0056b3 100%);
-    color: #fff;
-    border-radius: 50%;
-    cursor: pointer;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    box-shadow: 0 4px 16px rgba(0, 122, 255, 0.4);
-    transition: all 0.3s ease;
-    z-index: 9999;
-}
-
-.scroll-to-top-btn:hover {
-    background: linear-gradient(135deg, #0056b3 0%, #003d80 100%);
-    transform: translateY(-3px) scale(1.1);
-    box-shadow: 0 6px 24px rgba(0, 122, 255, 0.5);
-}
-
-.scroll-to-top-btn:active {
-    transform: translateY(0) scale(1);
 }
 
 /* 确保面板有相对定位 */
