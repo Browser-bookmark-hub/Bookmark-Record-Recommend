@@ -1467,6 +1467,253 @@ html.side-panel-mode .tool-buttons .open-html-btn {
     font-weight: 600;
 }
 
+.ranking-export-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.ranking-export-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--accent-primary);
+}
+
+.ranking-export-btn i {
+    font-size: 12px;
+}
+
+#browsingRelatedExportBtn {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 14px;
+    gap: 6px;
+    margin-left: 0;
+    position: relative;
+}
+
+#browsingRelatedExportBtn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+#browsingRelatedExportBtn i {
+    font-size: 14px;
+}
+
+.ranking-export-menu {
+    position: fixed;
+    z-index: 10020;
+    width: min(360px, calc(100vw - 24px));
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-lg);
+}
+
+.ranking-export-menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+
+.ranking-export-menu-title {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.ranking-export-current-scope {
+    margin: 0 0 10px;
+    padding: 7px 9px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.ranking-export-info-btn {
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.ranking-export-info-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.ranking-export-inline-tip {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 2px;
+    padding: 3px 4px 3px 6px;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+
+.ranking-export-inline-tip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ranking-export-inline-tip a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.ranking-export-inline-tip-close {
+    width: 18px;
+    height: 18px;
+    margin-left: 2px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+
+.ranking-export-inline-tip-close:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.ranking-export-info-bubble {
+    margin: 0 0 10px;
+    padding: 9px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ranking-export-info-bubble[hidden] {
+    display: none;
+}
+
+.ranking-export-info-bubble a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.ranking-export-info-main {
+    margin-bottom: 6px;
+}
+
+.ranking-export-info-bubble ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.ranking-export-info-bubble li + li {
+    margin-top: 4px;
+}
+
+.ranking-export-info-subline {
+    display: block;
+}
+
+.ranking-export-menu-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.ranking-export-menu-row label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.ranking-export-menu-row input {
+    width: 86px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+
+.ranking-export-menu-row input::-webkit-outer-spin-button,
+.ranking-export-menu-row input::-webkit-inner-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+}
+
+.ranking-export-menu-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.ranking-export-menu-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.ranking-export-menu-actions button:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: var(--bg-tertiary);
+}
+
 .settings-menu {
     position: absolute;
     top: calc(100% + 8px);

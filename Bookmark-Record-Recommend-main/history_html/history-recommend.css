@@ -3854,6 +3854,13 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
     gap: 8px;
 }
 
+.tracking-section-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
 /* 排行主要指标高亮样式 */
 .ranking-primary {
     font-weight: 600 !important;
@@ -3913,4 +3920,3 @@ html.side-panel-mode .tracking-ranking-item:hover .ranking-title {
         transform: translateX(-50%) translateY(20px);
     }
 }
-

@@ -589,6 +589,16 @@
     line-height: 1.2;
 }
 
+.add-tree-export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.add-tree-export-btn[hidden] {
+    display: none;
+}
+
 /* 选择文件夹弹窗内嵌树形结构 */
 .add-folder-tree {
     max-height: 250px;
@@ -3183,6 +3193,20 @@ html.side-panel-mode #browsingRelatedTitleActions .ranking-sort-btn {
 }
 
 html.side-panel-mode #browsingRelatedTitleActions .ranking-sort-btn i {
+    font-size: 12px;
+}
+
+html.side-panel-mode #browsingRelatedTitleActions #browsingRelatedExportBtn {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    margin-left: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+}
+
+html.side-panel-mode #browsingRelatedTitleActions #browsingRelatedExportBtn i {
     font-size: 12px;
 }
 

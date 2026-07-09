@@ -2035,6 +2035,1246 @@ function getTrackingSessionOverlapInfo(session, startTime, endTime) {
     };
 }
 
+// =============================================================================
+// 排行专项导出（点击排行 / 正在追踪 / 时间排行）
+// =============================================================================
+
+const RANKING_EXPORT_DEFAULT_LIMIT = 15;
+const RELATED_HISTORY_EXPORT_DEFAULT_LIMIT = 150;
+const RELATED_HISTORY_EXPORT_GROUP_SIZE = 50;
+const RANKING_EXPORT_FALLBACK_LABEL = '导入';
+const RANKING_EXPORT_NOTE_COLORS = ['yellow', 'gray', 'purple'];
+const RANKING_EXPORT_INLINE_TIP_DISMISSED_KEY_PREFIX = 'rankingExportInlineTipDismissed';
+
+function getRankingExportText(key) {
+    const isZh = currentLang === 'zh_CN';
+    const dict = {
+        export: isZh ? '导出' : 'Export',
+        exportRanking: isZh ? '导出排行' : 'Export ranking',
+        exportCurrentTracking: isZh ? '导出正在追踪' : 'Export current tracking',
+        exportTimeRanking: isZh ? '导出时间排行' : 'Export time ranking',
+        exportRelatedHistory: isZh ? '导出关联记录' : 'Export related history',
+        exportPostponedReview: isZh ? '导出待复习' : 'Export review queue',
+        exportBookmarkStatus: isZh ? '导出书签情况' : 'Export bookmark status',
+        limitLabel: isZh ? '导出前 N 项' : 'Export top N',
+        exportInfo: isZh ? '导出说明' : 'Export info',
+        exportInfoWysiwyg: isZh ? '所见即所得：导出下方可视的内容。' : 'WYSIWYG: exports the visible content below.',
+        exportInfoHtml: isZh ? 'HTML 是标准书签导入格式。' : 'HTML is standard bookmark-import HTML.',
+        exportInfoJsonFormat: isZh ? 'JSON 是书签画布临时栏目格式。' : 'JSON uses the Bookmark Canvas temporary section format.',
+        exportInfoJsonAppliesPrefix: isZh ? '适用于 ' : 'For the ',
+        bookmarkCanvas: isZh ? '书签画布' : 'Bookmark Canvas',
+        exportInfoJsonAppliesSuffix: isZh ? ' 项目。' : ' project.',
+        exportInlineTipPrefix: isZh ? 'JSON 适用于 ' : 'JSON works with ',
+        exportInlineTipSuffix: isZh ? ' 项目。' : '.',
+        close: isZh ? '关闭' : 'Close',
+        html: 'HTML',
+        json: 'JSON',
+        noData: isZh ? '没有可导出的内容' : 'No content to export',
+        exporting: isZh ? '正在导出...' : 'Exporting...',
+        exportDone: isZh ? '导出完成' : 'Export complete',
+        exportFailed: isZh ? '导出失败' : 'Export failed',
+        clickRanking: isZh ? '点击排行' : 'Click Ranking',
+        currentTracking: isZh ? '正在追踪' : 'Current Tracking',
+        timeRanking: isZh ? '时间排行' : 'Time Ranking',
+        relatedHistory: isZh ? '关联记录' : 'Related History',
+        postponedReview: isZh ? '待复习' : 'Review Queue',
+        bookmarkStatus: isZh ? '书签情况' : 'Bookmark Status',
+        historyRecord: isZh ? '浏览记录' : 'History Record',
+        bookmark: isZh ? '书签' : 'Bookmark',
+        folder: isZh ? '文件夹' : 'Folder',
+        domain: isZh ? '域名' : 'Domain',
+        subdomain: isZh ? '子域名' : 'Subdomain',
+        all: isZh ? '全部' : 'All',
+        scope: isZh ? '范围' : 'Range',
+        currentScope: isZh ? '当前范围' : 'Current range',
+        primaryScope: isZh ? '一级' : 'Primary',
+        secondaryScopeShort: isZh ? '二级' : 'Secondary',
+        secondaryScope: isZh ? '二级范围' : 'Secondary range',
+        mode: isZh ? '模式' : 'Mode',
+        rankingType: isZh ? '排序' : 'Sort',
+        clickCount: isZh ? '点击次数' : 'Clicks',
+        compositeDuration: isZh ? '综合时长' : 'Composite duration',
+        wakeCount: isZh ? '唤醒次数' : 'Wake count',
+        activeRatio: isZh ? '活跃率' : 'Active ratio',
+        rank: isZh ? '排名' : 'Rank',
+        sequence: isZh ? '序号' : 'No.',
+        time: isZh ? '时间' : 'Time',
+        reviewTime: isZh ? '复习时间' : 'Review time',
+        exportTime: isZh ? '导出时间' : 'Export time',
+        selected: isZh ? '已选择' : 'Selected',
+        selectBookmarkTreeBeforeExport: isZh ? '请先在树里勾选要导出的书签或文件夹' : 'Please select bookmarks or folders in the tree first',
+        timeHours: isZh ? '时间(h)' : 'Time(h)',
+        search: isZh ? '搜索' : 'Search',
+        searchResults: isZh ? '搜索结果' : 'Search results',
+        currentOrder: isZh ? '当前顺序' : 'Current Order',
+        dueArchive: isZh ? '已到期归档' : 'Due Archive',
+        ascending: isZh ? '正序' : 'Ascending',
+        descending: isZh ? '倒序' : 'Descending',
+        name: isZh ? '名称' : 'Name',
+        type: isZh ? '类型' : 'Type',
+        target: isZh ? 'URL / 路径' : 'URL / Path',
+        metrics: isZh ? '指标' : 'Metrics',
+        note: isZh ? '备注' : 'Note',
+        topPrefix: isZh ? '前' : 'Top',
+        itemUnit: isZh ? '项' : 'items'
+    };
+    return dict[key] || key;
+}
+
+function getRankingExportDefaultLimit(kind) {
+    return kind === 'related-history'
+        ? RELATED_HISTORY_EXPORT_DEFAULT_LIMIT
+        : RANKING_EXPORT_DEFAULT_LIMIT;
+}
+
+function getRankingExportSupportedFormats(kind) {
+    return kind === 'related-history' ? ['json'] : ['html', 'json'];
+}
+
+function normalizeRankingExportLimit(value, fallback = RANKING_EXPORT_DEFAULT_LIMIT) {
+    const parsed = parseInt(String(value || '').trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return Math.max(1, Number(fallback) || RANKING_EXPORT_DEFAULT_LIMIT);
+    return parsed;
+}
+
+function getRankingExportNoteColor(index) {
+    return RANKING_EXPORT_NOTE_COLORS[index] || 'gray';
+}
+
+function getRankingExportLocale() {
+    return currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+}
+
+function buildRankingExportDateKey(ts = Date.now()) {
+    const date = new Date(ts);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hour = String(date.getHours()).padStart(2, '0');
+    const minute = String(date.getMinutes()).padStart(2, '0');
+    const second = String(date.getSeconds()).padStart(2, '0');
+    return `${year}${month}${day}_${hour}${minute}${second}`;
+}
+
+function buildRankingExportCompactDateKey(ts = Date.now()) {
+    const date = new Date(ts);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+}
+
+function formatRankingExportDescriptionTime(timestamp = Date.now()) {
+    const date = new Date(Number(timestamp || Date.now()) || Date.now());
+    const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+    try {
+        return date.toLocaleString(locale, {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+    } catch (_) {
+        return date.toLocaleString(locale);
+    }
+}
+
+function sanitizeRankingExportFilenameSegment(value, fallback = 'ranking-export') {
+    const cleaned = String(value || '')
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 80);
+    return cleaned || fallback;
+}
+
+function getRankingExportInlineTipDismissedKey(kind) {
+    return `${RANKING_EXPORT_INLINE_TIP_DISMISSED_KEY_PREFIX}:${kind || 'default'}`;
+}
+
+function isRankingExportInlineTipDismissed(kind) {
+    try {
+        return localStorage.getItem(getRankingExportInlineTipDismissedKey(kind)) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
+function dismissRankingExportInlineTip(kind) {
+    try {
+        localStorage.setItem(getRankingExportInlineTipDismissedKey(kind), '1');
+    } catch (_) { }
+}
+
+function createRankingExportToken(length = 7) {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const bytes = new Uint8Array(length);
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+            crypto.getRandomValues(bytes);
+        } else {
+            for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+        }
+    } catch (_) {
+        for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, b => alphabet[b % alphabet.length]).join('');
+}
+
+function createRankingExportItemId(createdAt) {
+    return `tempId_${buildRankingExportCompactDateKey(createdAt)}_hash_${createRankingExportToken(7)}`;
+}
+
+function getBrowsingRankingRangeLabel(range) {
+    const isZh = currentLang === 'zh_CN';
+    const safe = normalizeWidgetsRankingRange(range || 'month');
+    if (safe === 'day') return isZh ? '当天' : 'Today';
+    if (safe === 'week') return isZh ? '当周' : 'This week';
+    if (safe === 'month') return isZh ? '当月' : 'This month';
+    if (safe === 'year') return isZh ? '当年' : 'This year';
+    return isZh ? '全部' : 'All';
+}
+
+function getBrowsingRankingSecondaryLabel(range, filter) {
+    const isZh = currentLang === 'zh_CN';
+    if (!filter || !filter.type) return getRankingExportText('all');
+    if (filter.type === 'hour') return `${String(filter.value).padStart(2, '0')}:00`;
+    if (filter.type === 'day') {
+        const d = new Date(filter.value);
+        const names = isZh
+            ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+            : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        return Number.isNaN(d.getTime()) ? getBrowsingRankingRangeLabel(range) : names[d.getDay()];
+    }
+    if (filter.type === 'week') return isZh ? `第${filter.value}周` : `W${filter.value}`;
+    if (filter.type === 'month') {
+        const month = parseInt(filter.value, 10);
+        if (isZh) return `${month + 1}月`;
+        const d = new Date();
+        d.setMonth(month);
+        return d.toLocaleString('en-US', { month: 'short' });
+    }
+    if (filter.type === 'year') return isZh ? `${filter.value}年` : String(filter.value);
+    return getRankingExportText('all');
+}
+
+function getBrowsingRankingViewLabel(mode) {
+    const safe = normalizeBrowsingRankingViewMode(mode);
+    if (safe === 'folder') return getRankingExportText('folder');
+    if (safe === 'domain') return getRankingExportText('domain');
+    if (safe === 'subdomain') return getRankingExportText('subdomain');
+    return getRankingExportText('bookmark');
+}
+
+function getTrackingRankingRangeLabel(range) {
+    const isZh = currentLang === 'zh_CN';
+    const safe = normalizeTrackingRankingRange(range);
+    if (safe === 'today') return isZh ? '今天' : 'Today';
+    if (safe === 'week') return isZh ? '本周' : 'This week';
+    if (safe === 'month') return isZh ? '本月' : 'This month';
+    if (safe === 'year') return isZh ? '当年' : 'This year';
+    return isZh ? '全部' : 'All';
+}
+
+function getTrackingRankingTypeLabel(type) {
+    return type === 'wakes'
+        ? getRankingExportText('wakeCount')
+        : getRankingExportText('compositeDuration');
+}
+
+function getRankingExportNoteSeparator() {
+    return currentLang === 'zh_CN' ? '，' : ', ';
+}
+
+function getRankingExportMenuScopeLabel(kind) {
+    if (kind === 'browsing-ranking') {
+        const range = getActiveBrowsingRankingRange() || browsingRankingCurrentRange || 'month';
+        const primary = getBrowsingRankingRangeLabel(range);
+        const secondary = getBrowsingRankingSecondaryLabel(range, browsingRankingTimeFilter) || getRankingExportText('all');
+        const mode = normalizeBrowsingRankingViewMode(browsingRankingViewMode);
+        return `${getRankingExportText('currentScope')}：${primary} / ${secondary} / ${getBrowsingRankingViewLabel(mode)}`;
+    }
+
+    if (kind === 'time-ranking') {
+        const rangeSelect = document.getElementById('trackingRankingRange');
+        const range = normalizeTrackingRankingRange(rangeSelect ? rangeSelect.value : 'all');
+        const rankingTypeSelect = document.getElementById('trackingRankingType');
+        const rankingType = rankingTypeSelect ? rankingTypeSelect.value : 'composite';
+        return `${getRankingExportText('currentScope')}：${getTrackingRankingRangeLabel(range)} / ${getTrackingRankingTypeLabel(rankingType)}`;
+    }
+
+    if (kind === 'current-tracking') {
+        return `${getRankingExportText('currentScope')}：${getRankingExportText('currentTracking')}`;
+    }
+
+    if (kind === 'related-history') {
+        const range = normalizeBrowsingRelatedRange(typeof browsingRelatedCurrentRange === 'string' ? browsingRelatedCurrentRange : 'day');
+        const scopeLabel = browsingRelatedCustomBounds?.label || getBrowsingRankingRangeLabel(range);
+        const secondaryLabel = browsingRelatedCustomBounds?.label
+            ? ''
+            : (getBrowsingRankingSecondaryLabel(range, browsingRelatedTimeFilter) || getRankingExportText('all'));
+        const sortLabel = getBrowsingRelatedSortLabel();
+        return `${getRankingExportText('currentScope')}：${[scopeLabel, secondaryLabel || null, sortLabel].filter(Boolean).join(' / ')}`;
+    }
+
+    if (kind === 'postponed-review') {
+        const keyword = getPostponedReviewExportSearchKeyword();
+        const parts = [getRankingExportText('postponedReview')];
+        if (keyword) {
+            parts.push(`${getRankingExportText('search')}：${keyword}`);
+        } else {
+            parts.push(
+                getPostponedReviewExportSectionLabel('current'),
+                getPostponedReviewExportSectionLabel('archive')
+            );
+        }
+        return `${getRankingExportText('currentScope')}：${parts.filter(Boolean).join(' / ')}`;
+    }
+
+    return `${getRankingExportText('currentScope')}：${getRankingExportText('all')}`;
+}
+
+function buildRankingExportMetricNote(metrics = []) {
+    return metrics
+        .filter(item => item && item.label)
+        .map(item => `${item.label}：${item.value}`)
+        .join(getRankingExportNoteSeparator());
+}
+
+function buildRankingExportLimitText(limit) {
+    const safeLimit = normalizeRankingExportLimit(limit);
+    return currentLang === 'zh_CN'
+        ? `${getRankingExportText('topPrefix')}${safeLimit}${getRankingExportText('itemUnit')}`
+        : `${getRankingExportText('topPrefix')} ${safeLimit} ${getRankingExportText('itemUnit')}`;
+}
+
+function buildRankingExportJsonNote(row, options = {}) {
+    const includeRank = options.includeRank !== false;
+    const rankText = includeRank && row?.rank ? String(row.rank) : '';
+    const metricText = row?.note || buildRankingExportMetricNote(row?.metrics || []);
+    return [rankText, metricText].filter(Boolean).join(getRankingExportNoteSeparator());
+}
+
+function getRankingExportSectionLabel(kind) {
+    if (kind === 'browsing-ranking') return getRankingExportText('clickRanking');
+    if (kind === 'current-tracking') return getRankingExportText('currentTracking');
+    if (kind === 'time-ranking') return getRankingExportText('timeRanking');
+    if (kind === 'related-history') return getRankingExportText('relatedHistory');
+    if (kind === 'postponed-review') return getRankingExportText('postponedReview');
+    if (kind === 'bookmark-status') return getRankingExportText('bookmarkStatus');
+    return getRankingExportText('exportRanking') || RANKING_EXPORT_FALLBACK_LABEL;
+}
+
+function buildRankingExportSectionId(label) {
+    const safeLabel = String(label || RANKING_EXPORT_FALLBACK_LABEL)
+        .trim()
+        .replace(/[^A-Za-z0-9一-鿿_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return `temp-section-${safeLabel || RANKING_EXPORT_FALLBACK_LABEL}`;
+}
+
+function buildBrowsingRankingBookmarkChildExportRow(item, range, extra = {}) {
+    const count = Math.max(0, Number(item?.count ?? getBrowsingRankingItemExportCount(item, range)) || 0);
+    const metrics = [
+        { label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }
+    ];
+    return {
+        itemType: 'bookmark',
+        itemTypeLabel: getRankingExportText('bookmark'),
+        title: item?.title || item?.url || '',
+        url: item?.url || '',
+        detail: item?.url || '',
+        count,
+        metrics,
+        note: buildRankingExportMetricNote(metrics),
+        ...extra
+    };
+}
+
+function updateBrowsingRankingFolderExportNodeMetrics(node) {
+    if (!node) return;
+    const count = Math.max(0, Number(node.count) || 0);
+    node.metrics = [
+        { label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }
+    ];
+    node.note = buildRankingExportMetricNote(node.metrics);
+}
+
+function addBrowsingRankingBookmarkToFolderExportTree(children, folderPath, bookmarkRow, ancestorPath = []) {
+    const safeChildren = Array.isArray(children) ? children : [];
+    const safePath = Array.isArray(folderPath) ? folderPath.filter(Boolean) : [];
+    if (safePath.length === 0) {
+        safeChildren.push(bookmarkRow);
+        return;
+    }
+
+    const folderName = String(safePath[0] || '').trim();
+    if (!folderName) {
+        addBrowsingRankingBookmarkToFolderExportTree(safeChildren, safePath.slice(1), bookmarkRow, ancestorPath);
+        return;
+    }
+
+    let folderNode = safeChildren.find(child =>
+        child
+        && child.itemType === 'folder'
+        && child.url === ''
+        && child.title === folderName
+    );
+    if (!folderNode) {
+        const fullPath = [...ancestorPath, folderName].join(' / ');
+        folderNode = {
+            itemType: 'folder',
+            itemTypeLabel: getRankingExportText('folder'),
+            title: folderName,
+            url: '',
+            detail: fullPath,
+            count: 0,
+            metrics: [],
+            note: '',
+            children: []
+        };
+        safeChildren.push(folderNode);
+    }
+
+    folderNode.count += Math.max(0, Number(bookmarkRow?.count) || 0);
+    updateBrowsingRankingFolderExportNodeMetrics(folderNode);
+    addBrowsingRankingBookmarkToFolderExportTree(folderNode.children, safePath.slice(1), bookmarkRow, [...ancestorPath, folderName]);
+}
+
+function sortRankingExportChildren(children) {
+    if (!Array.isArray(children)) return [];
+    children.sort((a, b) => {
+        const countDiff = (Number(b?.count) || 0) - (Number(a?.count) || 0);
+        if (countDiff !== 0) return countDiff;
+        return String(a?.title || '').localeCompare(String(b?.title || ''));
+    });
+    children.forEach(child => {
+        if (Array.isArray(child?.children)) sortRankingExportChildren(child.children);
+    });
+    return children;
+}
+
+function buildBrowsingFolderRankingExportChildren(items, range) {
+    const children = [];
+    const sortedItems = (Array.isArray(items) ? items.slice() : []).sort((a, b) => {
+        const countDiff = (Number(b?.count) || 0) - (Number(a?.count) || 0);
+        if (countDiff !== 0) return countDiff;
+        return String(a?.title || a?.url || '').localeCompare(String(b?.title || b?.url || ''));
+    });
+
+    sortedItems.forEach(item => {
+        const bookmarkRow = buildBrowsingRankingBookmarkChildExportRow(item, range);
+        addBrowsingRankingBookmarkToFolderExportTree(children, item?.relativeFolderPath || [], bookmarkRow);
+    });
+
+    return sortRankingExportChildren(children);
+}
+
+function buildBrowsingDomainRankingExportChildren(items, range) {
+    return sortRankingExportChildren(
+        (Array.isArray(items) ? items.slice() : []).map(item => buildBrowsingRankingBookmarkChildExportRow(item, range))
+    );
+}
+
+function finalizeRankingExportRows(rows, limit) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    return safeRows.slice(0, normalizeRankingExportLimit(limit)).map((row, index) => ({
+        ...row,
+        rank: index + 1,
+        noteColor: getRankingExportNoteColor(index)
+    }));
+}
+
+function buildRankingExportDescription(payload) {
+    const lines = [];
+    const scopeParts = [payload.scopeLabel, payload.secondaryLabel, ...(Array.isArray(payload.scopeExtraLabels) ? payload.scopeExtraLabels : [])]
+        .filter(part => part && part !== getRankingExportText('all'));
+    const limitText = buildRankingExportLimitText(payload.limit);
+    if (scopeParts.length || limitText) {
+        lines.push(`${getRankingExportText('scope')}：${[...scopeParts, limitText].filter(Boolean).join(' / ')}`);
+    }
+    if (payload.modeLabel) lines.push(`${getRankingExportText('mode')}：${payload.modeLabel}`);
+    if (payload.rankingTypeLabel) lines.push(`${getRankingExportText('rankingType')}：${payload.rankingTypeLabel}`);
+    return lines.join('\n');
+}
+
+function buildRankingExportJsonDescription(payload) {
+    const lines = String(payload?.descriptionMd || '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+    const exportTimeLabel = `${getRankingExportText('exportTime')}：`;
+    if (!lines.some(line => line.startsWith(exportTimeLabel))) {
+        lines.push(`${exportTimeLabel}${formatRankingExportDescriptionTime(payload?.createdAt || Date.now())}`);
+    }
+    return lines.join('\n');
+}
+
+function buildRankingExportDisplayTitle(payload) {
+    const title = String(payload?.title || getRankingExportText('exportRanking')).trim();
+    const limitText = buildRankingExportLimitText(payload?.limit);
+    return [title, limitText].filter(Boolean).join('-');
+}
+
+function buildRankingExportPayloadBase(options = {}) {
+    const createdAt = Date.now();
+    const requestedLimit = normalizeRankingExportLimit(options.limit);
+    const title = String(options.title || getRankingExportText('exportRanking')).trim();
+    const rows = finalizeRankingExportRows(options.rows || [], requestedLimit);
+    const exportCount = rows.length;
+    const payload = {
+        title,
+        kind: options.kind || 'ranking',
+        scopeLabel: options.scopeLabel || '',
+        secondaryLabel: options.secondaryLabel || '',
+        modeLabel: options.modeLabel || '',
+        rankingTypeLabel: options.rankingTypeLabel || '',
+        scopeExtraLabels: Array.isArray(options.scopeExtraLabels) ? options.scopeExtraLabels.filter(Boolean) : [],
+        createdAt,
+        requestedLimit,
+        exportCount,
+        limit: exportCount,
+        rows
+    };
+    payload.descriptionMd = buildRankingExportDescription(payload);
+    return payload;
+}
+
+function buildBookmarkCanvasRankingExportJson(payload) {
+    const createdAt = Number(payload?.createdAt || Date.now()) || Date.now();
+    const includeRankInNote = payload?.kind !== 'current-tracking'
+        && payload?.kind !== 'related-history'
+        && payload?.kind !== 'postponed-review'
+        && payload?.kind !== 'bookmark-status';
+    const sectionLabel = getRankingExportSectionLabel(payload?.kind);
+    const sectionId = buildRankingExportSectionId(sectionLabel);
+    const buildItem = (row) => {
+        const children = (Array.isArray(row?.children) ? row.children : []).map(buildItem).filter(Boolean);
+        const isBookmark = row?.itemType === 'bookmark' && row?.url && children.length === 0;
+        const item = {
+            id: createRankingExportItemId(createdAt),
+            sectionId,
+            title: row?.title || row?.detail || '',
+            url: isBookmark ? (row?.url || '') : '',
+            type: isBookmark ? 'bookmark' : 'folder',
+            children
+        };
+        const note = buildRankingExportJsonNote(row, { includeRank: includeRankInNote });
+        if (note) {
+            item.note = note;
+            item.noteColor = row?.noteColor || 'gray';
+        }
+        return item;
+    };
+
+    return {
+        format: 'bookmark-canvas-section',
+        schemaVersion: 2,
+        sectionType: 'temporary',
+        id: sectionId,
+        label: sectionLabel,
+        title: buildRankingExportDisplayTitle(payload),
+        tempKind: 'special',
+        source: 'file-import',
+        descriptionMd: payload?.kind === 'bookmark-status'
+            ? (payload.descriptionMd || '')
+            : buildRankingExportJsonDescription(payload),
+        items: (Array.isArray(payload.rows) ? payload.rows : []).map(buildItem).filter(Boolean)
+    };
+}
+
+function buildRankingExportHtml(payload) {
+    const escapeAttr = (value) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    const escapeText = (value) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    const toNode = (row) => {
+        const children = (Array.isArray(row?.children) ? row.children : []).map(toNode).filter(Boolean);
+        const url = row?.itemType === 'bookmark' && children.length === 0 ? String(row?.url || '').trim() : '';
+        return {
+            title: row?.title || row?.detail || (url ? url : getRankingExportText('folder')),
+            url,
+            children
+        };
+    };
+    const renderNode = (node, depth = 1) => {
+        if (!node) return '';
+        const indent = '    '.repeat(depth);
+        const title = escapeText(node.title || (node.url ? node.url : getRankingExportText('folder')));
+        const url = String(node.url || '').trim();
+        if (url) {
+            return `${indent}<DT><A HREF="${escapeAttr(url)}">${title}</A>\n`;
+        }
+        let html = `${indent}<DT><H3>${title}</H3>\n`;
+        html += `${indent}<DL><p>\n`;
+        (Array.isArray(node.children) ? node.children : []).forEach(child => {
+            html += renderNode(child, depth + 1);
+        });
+        html += `${indent}</DL><p>\n`;
+        return html;
+    };
+
+    const title = escapeText(buildRankingExportDisplayTitle(payload));
+    let html = '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n';
+    html += '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n';
+    html += `<TITLE>${title}</TITLE>\n`;
+    html += `<H1>${title}</H1>\n`;
+    html += '<DL><p>\n';
+    (Array.isArray(payload.rows) ? payload.rows : []).map(toNode).filter(Boolean).forEach(node => {
+        html += renderNode(node, 1);
+    });
+    html += '</DL><p>\n';
+    return html;
+}
+
+function buildRankingExportFilename(payload, format) {
+    const ext = format === 'json' ? 'json' : 'html';
+    const title = sanitizeRankingExportFilenameSegment(payload?.title || 'ranking-export');
+    const limitText = sanitizeRankingExportFilenameSegment(
+        buildRankingExportLimitText(payload?.limit),
+        `top${normalizeRankingExportLimit(payload?.limit)}`
+    );
+    return `${title}-${limitText}-${buildRankingExportDateKey(payload?.createdAt || Date.now())}.${ext}`;
+}
+
+function getBrowsingRankingItemExportCount(item, range) {
+    return Math.max(0, Number(getBrowsingRankingItemCountByRange(item, range)) || 0);
+}
+
+async function getBrowsingRankingExportSourceItems(range) {
+    const stats = await ensureBrowsingClickRankingStats(range);
+    if (!stats || stats.error) return { stats, items: [], customRangeLabel: null };
+
+    let items = [];
+    let customRangeLabel = null;
+    if (browsingRankingCustomRange && typeof getBrowsingRankingItemsForCustomRange === 'function') {
+        customRangeLabel = browsingRankingCustomRange.label || null;
+        items = await getBrowsingRankingItemsForCustomRange(browsingRankingCustomRange.startTime, browsingRankingCustomRange.endTime);
+    } else {
+        items = getBrowsingRankingItemsForRangeFromStats(stats, range);
+        if (browsingRankingTimeFilter && items.length > 0) {
+            items = filterRankingItemsByTime(items, browsingRankingTimeFilter, stats.boundaries, stats);
+        }
+    }
+    return { stats, items, customRangeLabel };
+}
+
+async function buildBrowsingFolderRankingExportRows(items, range, searchTokens = null) {
+    const isZh = currentLang === 'zh_CN';
+    const bookmarkData = await getBookmarkUrlsAndTitles();
+    const bookmarkInfo = bookmarkData?.info instanceof Map
+        ? bookmarkData.info
+        : (browsingRelatedBookmarkInfo instanceof Map ? browsingRelatedBookmarkInfo : new Map());
+    const folderDepthMode = normalizeBrowsingRankingFolderDepth(browsingRankingFolderDepth);
+    const folderStats = new Map();
+
+    (Array.isArray(items) ? items : []).forEach(item => {
+        let folderPath = [];
+        if (bookmarkInfo.has(item.url)) {
+            folderPath = bookmarkInfo.get(item.url).folderPath || [];
+        }
+        const fullFolderPath = Array.isArray(folderPath) ? folderPath.slice() : [];
+        let groupedFolderPath = fullFolderPath.slice();
+        if (folderDepthMode === 'level1') groupedFolderPath = groupedFolderPath.slice(0, 1);
+        else if (folderDepthMode === 'level2') groupedFolderPath = groupedFolderPath.slice(0, 2);
+
+        const folderKey = groupedFolderPath.length > 0 ? groupedFolderPath.join(' / ') : (isZh ? '未分类' : 'Uncategorized');
+        const folderName = groupedFolderPath.length > 0 ? groupedFolderPath[groupedFolderPath.length - 1] : folderKey;
+        if (!folderStats.has(folderKey)) {
+            folderStats.set(folderKey, {
+                name: folderName,
+                fullPath: folderKey,
+                count: 0,
+                lastVisitTime: 0,
+                items: []
+            });
+        }
+        const itemCount = getBrowsingRankingItemExportCount(item, range);
+        const folderData = folderStats.get(folderKey);
+        folderData.count += itemCount;
+        folderData.lastVisitTime = Math.max(folderData.lastVisitTime, Number(item.lastVisitTime) || 0);
+        folderData.items.push({
+            ...item,
+            count: itemCount,
+            fullFolderPath,
+            groupedFolderPath,
+            relativeFolderPath: fullFolderPath.slice(groupedFolderPath.length)
+        });
+    });
+
+    let sortedFolders = Array.from(folderStats.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        if (b.lastVisitTime !== a.lastVisitTime) return b.lastVisitTime - a.lastVisitTime;
+        return String(a.fullPath || '').localeCompare(String(b.fullPath || ''));
+    });
+
+    if (Array.isArray(searchTokens) && searchTokens.length > 0) {
+        sortedFolders = sortedFolders.filter(folder => {
+            if (matchesTokens(folder.fullPath, searchTokens) || matchesTokens(folder.name, searchTokens)) return true;
+            return folder.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
+        });
+    }
+
+    return sortedFolders.map(folder => {
+        const metrics = [
+            { label: getRankingExportText('clickCount'), value: folder.count.toLocaleString(getRankingExportLocale()) }
+        ];
+        const note = buildRankingExportMetricNote(metrics);
+        return {
+            itemType: 'folder',
+            itemTypeLabel: getRankingExportText('folder'),
+            title: folder.name,
+            detail: folder.fullPath,
+            count: folder.count,
+            metrics,
+            note,
+            children: buildBrowsingFolderRankingExportChildren(folder.items, range)
+        };
+    });
+}
+
+function buildBrowsingDomainRankingExportRows(items, range, mode, searchTokens = null) {
+    const safeMode = mode === 'subdomain' ? 'subdomain' : 'domain';
+    const domainStats = new Map();
+    (Array.isArray(items) ? items : []).forEach(item => {
+        const domainParts = getBrowsingRankingDomainPartsFromUrl(item.url);
+        const domainValue = getBrowsingRankingDomainValue(domainParts, safeMode);
+        if (!domainValue) return;
+        const itemCount = getBrowsingRankingItemExportCount(item, range);
+        if (itemCount <= 0) return;
+        const key = String(domainValue).toLowerCase();
+        if (!domainStats.has(key)) {
+            const parentDomain = getBrowsingRankingDomainValue(domainParts, 'domain') || domainValue;
+            domainStats.set(key, {
+                name: domainValue,
+                parentDomain,
+                count: 0,
+                lastVisitTime: 0,
+                items: []
+            });
+        }
+        const domainData = domainStats.get(key);
+        domainData.count += itemCount;
+        domainData.lastVisitTime = Math.max(domainData.lastVisitTime, Number(item.lastVisitTime) || 0);
+        domainData.items.push({ ...item, count: itemCount });
+    });
+
+    let sortedDomains = Array.from(domainStats.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        if (b.lastVisitTime !== a.lastVisitTime) return b.lastVisitTime - a.lastVisitTime;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    if (Array.isArray(searchTokens) && searchTokens.length > 0) {
+        sortedDomains = sortedDomains.filter(domain => {
+            if (matchesTokens(domain.name, searchTokens) || matchesTokens(domain.parentDomain, searchTokens)) return true;
+            return domain.items.some(it => matchesTokens(it.title, searchTokens) || matchesTokens(it.url, searchTokens));
+        });
+    }
+
+    const typeLabel = safeMode === 'subdomain'
+        ? getRankingExportText('subdomain')
+        : getRankingExportText('domain');
+    return sortedDomains.map(domain => {
+        const metrics = [
+            { label: getRankingExportText('clickCount'), value: domain.count.toLocaleString(getRankingExportLocale()) }
+        ];
+        const detail = safeMode === 'subdomain' && domain.parentDomain && domain.parentDomain !== domain.name
+            ? `${domain.name} / ${domain.parentDomain}`
+            : domain.name;
+        const note = buildRankingExportMetricNote(metrics);
+        return {
+            itemType: 'folder',
+            itemTypeLabel: typeLabel,
+            title: domain.name,
+            detail,
+            count: domain.count,
+            metrics,
+            note,
+            children: buildBrowsingDomainRankingExportChildren(domain.items, range)
+        };
+    });
+}
+
+async function buildBrowsingRankingExportPayload(limit) {
+    initBrowsingRankingViewMode();
+    const range = getActiveBrowsingRankingRange() || browsingRankingCurrentRange || 'month';
+    const mode = normalizeBrowsingRankingViewMode(browsingRankingViewMode);
+    const { items, customRangeLabel } = await getBrowsingRankingExportSourceItems(range);
+    let rows = [];
+
+    if (mode === 'folder') {
+        rows = await buildBrowsingFolderRankingExportRows(items, range, browsingRankingSearchTokens);
+    } else if (mode === 'domain' || mode === 'subdomain') {
+        rows = buildBrowsingDomainRankingExportRows(items, range, mode, browsingRankingSearchTokens);
+    } else {
+        rows = (Array.isArray(items) ? items : [])
+            .filter(item => {
+                if (!browsingRankingSearchTokens || browsingRankingSearchTokens.length === 0) return true;
+                return matchesTokens(item.title, browsingRankingSearchTokens) || matchesTokens(item.url, browsingRankingSearchTokens);
+            })
+            .map(item => {
+                const count = getBrowsingRankingItemExportCount(item, range);
+                const metrics = [
+                    { label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }
+                ];
+                const note = buildRankingExportMetricNote(metrics);
+                return {
+                    itemType: 'bookmark',
+                    itemTypeLabel: getRankingExportText('bookmark'),
+                    title: item.title || item.url || '',
+                    url: item.url || '',
+                    detail: item.url || '',
+                    count,
+                    metrics,
+                    note
+                };
+            });
+    }
+
+    const scopeLabel = customRangeLabel || getBrowsingRankingRangeLabel(range);
+    const secondaryLabel = customRangeLabel ? '' : getBrowsingRankingSecondaryLabel(range, browsingRankingTimeFilter);
+    const modeLabel = getBrowsingRankingViewLabel(mode);
+    const titleParts = [getRankingExportText('clickRanking'), scopeLabel];
+    if (secondaryLabel && secondaryLabel !== getRankingExportText('all')) {
+        titleParts.push(secondaryLabel);
+    }
+    titleParts.push(modeLabel);
+    const title = titleParts.filter(Boolean).join('-');
+    return buildRankingExportPayloadBase({
+        kind: 'browsing-ranking',
+        title,
+        scopeLabel,
+        secondaryLabel,
+        modeLabel,
+        limit,
+        rows
+    });
+}
+
+async function buildCurrentTrackingExportPayload(limit) {
+    const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
+    let sessions = response?.success && Array.isArray(response.sessions) ? response.sessions : [];
+    if (sessions.length > 0) {
+        const blockedSets = await getTrackingBlockedSets();
+        const cache = await getTrackingBookmarkCache();
+        const blockedFlags = await Promise.all(
+            sessions.map(session => isTrackingItemBlocked(session, blockedSets, cache))
+        );
+        sessions = sessions.filter((_, index) => !blockedFlags[index]);
+    }
+
+    const groupedSessions = new Map();
+    for (const session of sessions) {
+        const key = session.title || session.url;
+        if (!key) continue;
+        if (!groupedSessions.has(key)) groupedSessions.set(key, []);
+        groupedSessions.get(key).push(session);
+    }
+
+    const rows = Array.from(groupedSessions.values()).map(groupSessions => {
+        const primary = groupSessions[0] || {};
+        const totalCompositeMs = groupSessions.reduce((sum, s) => sum + (Number(s.compositeMs || s.activeMs || 0) || 0), 0);
+        const totalWakeCount = groupSessions.reduce((sum, s) => sum + (Number(s.wakeCount || 0) || 0), 0);
+        const avgActiveRatio = groupSessions.length > 0
+            ? groupSessions.reduce((sum, s) => sum + (Number(s.activeRatio || 0) || 0), 0) / groupSessions.length
+            : 0;
+        const metrics = [
+            { label: getRankingExportText('compositeDuration'), value: formatActiveTime(totalCompositeMs) },
+            { label: getRankingExportText('wakeCount'), value: Math.max(0, Math.round(totalWakeCount)).toLocaleString(getRankingExportLocale()) }
+        ];
+        return {
+            itemType: primary.url ? 'bookmark' : 'folder',
+            itemTypeLabel: primary.url ? getRankingExportText('bookmark') : getRankingExportText('folder'),
+            title: primary.title || primary.url || '',
+            url: primary.url || '',
+            detail: primary.url || '',
+            compositeMs: totalCompositeMs,
+            wakeCount: totalWakeCount,
+            activeRatio: Math.round(avgActiveRatio * 100),
+            metrics,
+            note: buildRankingExportMetricNote(metrics)
+        };
+    });
+
+    return buildRankingExportPayloadBase({
+        kind: 'current-tracking',
+        title: getRankingExportText('currentTracking'),
+        scopeLabel: getRankingExportText('currentTracking'),
+        limit,
+        rows
+    });
+}
+
+async function buildActiveTimeRankingExportPayload(limit) {
+    const rankingTypeSelect = document.getElementById('trackingRankingType');
+    const rankingType = rankingTypeSelect ? rankingTypeSelect.value : 'composite';
+    const rangeSelect = document.getElementById('trackingRankingRange');
+    const range = normalizeTrackingRankingRange(rangeSelect ? rangeSelect.value : 'all');
+    const { startTime, endTime } = getTrackingRankingRangeBounds(range);
+
+    const [statsResponse, activeSessionsResponse] = await Promise.all([
+        browserAPI.runtime.sendMessage({
+            action: 'getTrackingRankingStatsByRange',
+            range,
+            startTime,
+            endTime
+        }),
+        browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' })
+    ]);
+
+    const titleStats = new Map();
+    const upsertStat = (key, base = {}) => {
+        if (titleStats.has(key)) {
+            const stat = titleStats.get(key);
+            if (!stat.bookmarkId && base.bookmarkId) stat.bookmarkId = base.bookmarkId;
+            if (!stat.url && base.url) stat.url = base.url;
+            if (base.title && (!stat.title || stat.title === stat.url || stat.title === key)) stat.title = base.title;
+            return stat;
+        }
+        const init = {
+            bookmarkId: base.bookmarkId || null,
+            url: base.url || '',
+            title: base.title || base.url || key,
+            totalCompositeMs: 0,
+            wakeCount: 0,
+            sessionCount: 0,
+            lastUpdate: 0
+        };
+        titleStats.set(key, init);
+        return init;
+    };
+
+    const savedStats = (statsResponse?.success && statsResponse?.stats && typeof statsResponse.stats === 'object')
+        ? statsResponse.stats
+        : {};
+    for (const rawStat of Object.values(savedStats)) {
+        if (!rawStat || typeof rawStat !== 'object') continue;
+        const bookmarkId = rawStat?.bookmarkId != null ? String(rawStat.bookmarkId) : '';
+        const key = getTrackingRankingAggregateKey({
+            bookmarkId,
+            url: rawStat?.url || '',
+            title: rawStat?.title || ''
+        });
+        if (!key) continue;
+        const stat = upsertStat(key, {
+            bookmarkId: bookmarkId || null,
+            url: rawStat.url || '',
+            title: rawStat.title || rawStat.url || key
+        });
+        stat.totalCompositeMs += Math.max(0, Number(rawStat.totalCompositeMs ?? rawStat.compositeMs ?? 0) || 0);
+        stat.wakeCount += Math.max(0, Number(rawStat.totalWakeCount ?? rawStat.wakeCount ?? 0) || 0);
+        stat.sessionCount += Math.max(0, Number(rawStat.sessionCount || 0) || 0);
+        stat.lastUpdate = Math.max(stat.lastUpdate, Number(rawStat.lastUpdate || 0) || 0);
+    }
+
+    const activeSessions = activeSessionsResponse?.success && Array.isArray(activeSessionsResponse.sessions)
+        ? activeSessionsResponse.sessions
+        : [];
+    if (activeSessions.length > 0) {
+        const groupedByKey = new Map();
+        for (const session of activeSessions) {
+            const bookmarkId = session?.bookmarkId != null ? String(session.bookmarkId) : '';
+            const key = getTrackingRankingAggregateKey({
+                bookmarkId,
+                url: session?.url || '',
+                title: session?.title || ''
+            });
+            if (!key) continue;
+            if (!groupedByKey.has(key)) {
+                groupedByKey.set(key, {
+                    bookmarkId: bookmarkId || null,
+                    url: session.url || '',
+                    title: session.title || session.url || key,
+                    unsavedCompositeMs: 0,
+                    unsavedWakeCount: 0
+                });
+            }
+            const unsavedCompositeRaw = Number(session.unsavedCompositeMs);
+            const unsavedWakeRaw = Number(session.unsavedWakeCount);
+            const unsavedCompositeMs = (Number.isFinite(unsavedCompositeRaw) && unsavedCompositeRaw >= 0)
+                ? unsavedCompositeRaw
+                : getTrackingSessionCompositeMs(session);
+            const unsavedWakeCount = (Number.isFinite(unsavedWakeRaw) && unsavedWakeRaw >= 0)
+                ? unsavedWakeRaw
+                : getTrackingSessionWakeCount(session);
+            if (unsavedCompositeMs <= 0 && unsavedWakeCount <= 0) continue;
+
+            const overlapInfo = getTrackingSessionOverlapInfo({
+                startTime: session.startTime || session.originalStartTime || endTime,
+                endTime
+            }, startTime, endTime);
+            if (overlapInfo.ratio <= 0) continue;
+            const scaledUnsavedComposite = unsavedCompositeMs * overlapInfo.ratio;
+            const boundedUnsavedComposite = overlapInfo.overlapMs > 0
+                ? Math.min(scaledUnsavedComposite, overlapInfo.overlapMs)
+                : scaledUnsavedComposite;
+            const group = groupedByKey.get(key);
+            group.unsavedCompositeMs += Math.max(0, boundedUnsavedComposite);
+            group.unsavedWakeCount += Math.max(0, unsavedWakeCount * overlapInfo.ratio);
+        }
+        for (const [key, group] of groupedByKey) {
+            if (group.unsavedCompositeMs <= 0 && group.unsavedWakeCount <= 0) continue;
+            const stat = upsertStat(key, {
+                bookmarkId: group.bookmarkId || null,
+                url: group.url,
+                title: group.title
+            });
+            stat.totalCompositeMs += group.unsavedCompositeMs;
+            stat.wakeCount += group.unsavedWakeCount;
+            stat.sessionCount += 1;
+            stat.lastUpdate = Math.max(stat.lastUpdate, endTime);
+        }
+    }
+
+    if (startTime > 0 && endTime > startTime) {
+        const maxCompositePerItem = endTime - startTime;
+        for (const stat of titleStats.values()) {
+            stat.totalCompositeMs = Math.min(stat.totalCompositeMs, maxCompositePerItem);
+        }
+    }
+
+    const blockedSets = await getTrackingBlockedSets();
+    const cache = await getTrackingBookmarkCache();
+    const items = Array.from(titleStats.values());
+    const blockedFlags = await Promise.all(items.map(item => isTrackingItemBlocked(item, blockedSets, cache)));
+    const sorted = items
+        .filter((_, index) => !blockedFlags[index])
+        .sort((a, b) => {
+            if (rankingType === 'wakes') return b.wakeCount - a.wakeCount;
+            return b.totalCompositeMs - a.totalCompositeMs;
+        });
+
+    const rows = sorted.map(item => {
+        const displayWakeCount = Math.max(0, Math.round(item.wakeCount || 0));
+        const metrics = [
+            { label: getRankingExportText('compositeDuration'), value: formatActiveTime(item.totalCompositeMs) },
+            { label: getRankingExportText('wakeCount'), value: displayWakeCount.toLocaleString(getRankingExportLocale()) }
+        ];
+        return {
+            itemType: item.url ? 'bookmark' : 'folder',
+            itemTypeLabel: item.url ? getRankingExportText('bookmark') : getRankingExportText('folder'),
+            title: item.title || item.url || '',
+            url: item.url || '',
+            detail: item.url || '',
+            compositeMs: item.totalCompositeMs,
+            wakeCount: item.wakeCount,
+            metrics,
+            note: buildRankingExportMetricNote(metrics)
+        };
+    });
+
+    const scopeLabel = getTrackingRankingRangeLabel(range);
+    const rankingTypeLabel = getTrackingRankingTypeLabel(rankingType);
+    return buildRankingExportPayloadBase({
+        kind: 'time-ranking',
+        title: `${getRankingExportText('timeRanking')}-${scopeLabel}-${rankingTypeLabel}`,
+        scopeLabel,
+        rankingTypeLabel,
+        limit,
+        rows
+    });
+}
+
+async function buildRankingExportPayload(kind, limit) {
+    if (kind === 'browsing-ranking') return await buildBrowsingRankingExportPayload(limit);
+    if (kind === 'current-tracking') return await buildCurrentTrackingExportPayload(limit);
+    if (kind === 'time-ranking') return await buildActiveTimeRankingExportPayload(limit);
+    if (kind === 'related-history') return await buildBrowsingRelatedExportPayload(limit);
+    if (kind === 'postponed-review') return await buildPostponedReviewExportPayload(limit);
+    return buildRankingExportPayloadBase({ limit, rows: [] });
+}
+
+async function performRankingExport(kind, format, limitInput, menuEl = null) {
+    const limit = normalizeRankingExportLimit(limitInput, getRankingExportDefaultLimit(kind));
+    try {
+        showToast(getRankingExportText('exporting'));
+        const payload = await buildRankingExportPayload(kind, limit);
+        if (!payload.rows.length) {
+            showToast(getRankingExportText('noData'));
+            return;
+        }
+        const supportedFormats = getRankingExportSupportedFormats(kind);
+        const normalizedFormat = supportedFormats.includes(format) ? format : supportedFormats[0];
+        const text = normalizedFormat === 'json'
+            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
+            : buildRankingExportHtml(payload);
+        const type = normalizedFormat === 'json'
+            ? 'application/json;charset=utf-8'
+            : 'text/html;charset=utf-8';
+        const blob = new Blob([text], { type });
+        const filename = buildRankingExportFilename(payload, normalizedFormat);
+        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        if (result?.success) {
+            if (menuEl) menuEl.remove();
+            showToast(getRankingExportText('exportDone'));
+        } else {
+            console.warn('[RankingExport] download failed:', result);
+            showToast(getRankingExportText('exportFailed'));
+        }
+    } catch (error) {
+        console.error('[RankingExport] export failed:', error);
+        showToast(getRankingExportText('exportFailed'));
+    }
+}
+
+function showRankingExportMenu(kind, anchorEl) {
+    const existing = document.getElementById('rankingExportMenu');
+    if (existing) existing.remove();
+    if (!anchorEl) return;
+
+    const menu = document.createElement('div');
+    menu.id = 'rankingExportMenu';
+    menu.className = 'ranking-export-menu';
+    const currentScopeText = getRankingExportMenuScopeLabel(kind);
+    const defaultLimit = getRankingExportDefaultLimit(kind);
+    const supportedFormats = getRankingExportSupportedFormats(kind);
+    const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
+    const htmlInfoHtml = supportedFormats.includes('html')
+        ? `<li>${escapeHtml(getRankingExportText('exportInfoHtml'))}</li>`
+        : '';
+    const actionButtonsHtml = supportedFormats.map(format => {
+        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
+        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
+        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
+    }).join('');
+    const inlineTipHtml = isRankingExportInlineTipDismissed(kind)
+        ? ''
+        : `
+            <div class="ranking-export-inline-tip">
+                <span class="ranking-export-inline-tip-text">: ${escapeHtml(getRankingExportText('exportInlineTipPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInlineTipSuffix'))}</span>
+                <button class="ranking-export-inline-tip-close" type="button" aria-label="${escapeHtml(getRankingExportText('close'))}" title="${escapeHtml(getRankingExportText('close'))}">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+    menu.innerHTML = `
+        <div class="ranking-export-menu-header">
+            <div class="ranking-export-menu-title">${escapeHtml(getRankingExportText('export'))}</div>
+            <button class="ranking-export-info-btn" type="button" aria-label="${escapeHtml(getRankingExportText('exportInfo'))}" title="${escapeHtml(getRankingExportText('exportInfo'))}">
+                <i class="fas fa-question-circle"></i>
+            </button>
+            ${inlineTipHtml}
+        </div>
+        <div class="ranking-export-info-bubble" hidden>
+            <div class="ranking-export-info-main">${escapeHtml(getRankingExportText('exportInfoWysiwyg'))}</div>
+            <ul>
+                ${htmlInfoHtml}
+                <li>
+                    <span>${escapeHtml(getRankingExportText('exportInfoJsonFormat'))}</span>
+                    <span class="ranking-export-info-subline">${escapeHtml(getRankingExportText('exportInfoJsonAppliesPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInfoJsonAppliesSuffix'))}</span>
+                </li>
+            </ul>
+        </div>
+        <div class="ranking-export-current-scope">${escapeHtml(currentScopeText)}</div>
+        <div class="ranking-export-menu-row">
+            <label for="rankingExportLimitInput">${escapeHtml(getRankingExportText('limitLabel'))}</label>
+            <input id="rankingExportLimitInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${defaultLimit}">
+        </div>
+        <div class="ranking-export-menu-actions">
+            ${actionButtonsHtml}
+        </div>
+    `;
+    document.body.appendChild(menu);
+
+    const rect = anchorEl.getBoundingClientRect();
+    const margin = 12;
+    const menuWidth = menu.offsetWidth || 360;
+    const menuHeight = menu.offsetHeight || 140;
+    const left = Math.min(Math.max(margin, rect.right - menuWidth), Math.max(margin, window.innerWidth - menuWidth - margin));
+    let top = rect.bottom + 6;
+    if (top + menuHeight + margin > window.innerHeight) {
+        top = Math.max(margin, rect.top - menuHeight - 6);
+    }
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    const input = menu.querySelector('#rankingExportLimitInput');
+    if (input) {
+        input.focus();
+        input.select();
+    }
+    const infoBtn = menu.querySelector('.ranking-export-info-btn');
+    const infoBubble = menu.querySelector('.ranking-export-info-bubble');
+    if (infoBtn && infoBubble) {
+        infoBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            infoBubble.hidden = !infoBubble.hidden;
+        });
+    }
+    const inlineTip = menu.querySelector('.ranking-export-inline-tip');
+    const inlineTipClose = menu.querySelector('.ranking-export-inline-tip-close');
+    if (inlineTip && inlineTipClose) {
+        inlineTipClose.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dismissRankingExportInlineTip(kind);
+            inlineTip.remove();
+        });
+    }
+    menu.querySelectorAll('[data-format]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            await performRankingExport(kind, btn.dataset.format, input ? input.value : defaultLimit, menu);
+        });
+    });
+
+    const closeMenu = (event) => {
+        if (!menu.contains(event.target) && event.target !== anchorEl && !anchorEl.contains(event.target)) {
+            menu.remove();
+            document.removeEventListener('click', closeMenu, true);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+}
+
+function bindRankingExportButton(buttonId, kind) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    if (btn.dataset.rankingExportBound === 'true') return;
+    btn.dataset.rankingExportBound = 'true';
+    btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showRankingExportMenu(kind, btn);
+    });
+}
+
+function syncRankingExportButtonLabels() {
+    const mappings = [
+        ['browsingRankingExportBtn', getRankingExportText('exportRanking')],
+        ['trackingCurrentExportBtn', getRankingExportText('exportCurrentTracking')],
+        ['trackingRankingExportBtn', getRankingExportText('exportTimeRanking')],
+        ['browsingRelatedExportBtn', getRankingExportText('exportRelatedHistory')],
+        ['postponedExportBtn', getRankingExportText('exportPostponedReview')]
+    ];
+    mappings.forEach(([id, label]) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+    });
+}
+
+function initRankingExportControls() {
+    syncRankingExportButtonLabels();
+    bindRankingExportButton('browsingRankingExportBtn', 'browsing-ranking');
+    bindRankingExportButton('trackingCurrentExportBtn', 'current-tracking');
+    bindRankingExportButton('trackingRankingExportBtn', 'time-ranking');
+    bindRankingExportButton('browsingRelatedExportBtn', 'related-history');
+    bindRankingExportButton('postponedExportBtn', 'postponed-review');
+}
+
 async function loadActiveTimeRanking() {
     const container = document.getElementById('trackingRankingList');
     if (!container) return;
@@ -6341,6 +7581,7 @@ function applyLanguage() {
         trackingRankingHint.textContent = '';
         trackingRankingHint.style.display = 'none';
     }
+    syncRankingExportButtonLabels();
 
     const recommendViewTitle = document.getElementById('recommendViewTitle');
     if (recommendViewTitle) recommendViewTitle.textContent = i18n.recommendViewTitle[currentLang];
@@ -6493,6 +7734,13 @@ function applyLanguage() {
     if (addDomainSelectedLabel) addDomainSelectedLabel.textContent = i18n.addDomainSelectedLabel[currentLang];
     const addPostponedCancelBtn = document.getElementById('addPostponedCancelBtn');
     if (addPostponedCancelBtn) addPostponedCancelBtn.textContent = i18n.addPostponedCancelText[currentLang];
+    const addPostponedTreeExportBtn = document.getElementById('addPostponedTreeExportBtn');
+    const addPostponedTreeExportText = document.getElementById('addPostponedTreeExportText');
+    if (addPostponedTreeExportBtn) {
+        addPostponedTreeExportBtn.title = getRankingExportText('exportBookmarkStatus');
+        addPostponedTreeExportBtn.setAttribute('aria-label', getRankingExportText('exportBookmarkStatus'));
+    }
+    if (addPostponedTreeExportText) addPostponedTreeExportText.textContent = getRankingExportText('export');
     const addPostponedConfirmBtn = document.getElementById('addPostponedConfirmBtn');
     if (addPostponedConfirmBtn) addPostponedConfirmBtn.textContent = i18n.addPostponedConfirmText[currentLang];
 
@@ -6907,6 +8155,7 @@ function initializeUI() {
     }
 
     initBrowsingCalibrationMenu();
+    initRankingExportControls();
     updateMainSearchVisibility();
     initResponsiveRecommendLabelObservers();
 
@@ -30272,6 +31521,7 @@ async function loadBrowsingClickRanking(range) {
 }
 
 function initBrowsingClickRanking() {
+    initRankingExportControls();
     const panel = document.getElementById('browsingRankingPanel');
     if (!panel) return;
 
@@ -33494,6 +34744,7 @@ function initAddToPostponedModal() {
     const addBtn = document.getElementById('postponedAddBtn');
     const closeBtn = document.getElementById('addPostponedModalClose');
     const cancelBtn = document.getElementById('addPostponedCancelBtn');
+    const treeExportBtn = document.getElementById('addPostponedTreeExportBtn');
     const confirmBtn = document.getElementById('addPostponedConfirmBtn');
     const tabs = modal?.querySelectorAll('.add-postponed-tab');
     const panels = modal?.querySelectorAll('.add-postponed-panel');
@@ -33506,6 +34757,11 @@ function initAddToPostponedModal() {
     const hideModal = () => modal.classList.remove('show');
     closeBtn?.addEventListener('click', hideModal);
     cancelBtn?.addEventListener('click', hideModal);
+    treeExportBtn?.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await performAddPostponedTreeStatusExport();
+    });
     modal.addEventListener('click', (e) => {
         if (e.target === modal) hideModal();
     });
@@ -33855,6 +35111,8 @@ function resetAddPostponedModal() {
     if (folderName) folderName.textContent = isZh ? '点击选择文件夹' : 'Click to select folder';
     const treeSelectedName = document.getElementById('addTreeSelectedName');
     if (treeSelectedName) treeSelectedName.textContent = '-';
+    const treeExportBtn = document.getElementById('addPostponedTreeExportBtn');
+    if (treeExportBtn) treeExportBtn.hidden = false;
     const treeList = document.getElementById('addBookmarkTreeList');
     if (treeList) treeList.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树中...' : 'Loading bookmark tree...'}</div>`;
     const folderIncludeSubfolders = document.getElementById('addFolderIncludeSubfolders');
@@ -34145,11 +35403,7 @@ function buildAddPostponedTreeState(tree, metricMaps) {
     };
 }
 
-function updateAddPostponedTreeSelectionSummary(state) {
-    const selectedNameId = String(state?.selectedNameId || 'addTreeSelectedName');
-    const selectedName = document.getElementById(selectedNameId);
-    if (!selectedName) return;
-
+function getAddPostponedTreeSelectionCounts(state) {
     const bookmarkCount = state?.selectedBookmarkIds instanceof Set ? state.selectedBookmarkIds.size : 0;
     let folderCount = 0;
     if (state?.checkedKeys instanceof Set && state?.nodeMap instanceof Map) {
@@ -34160,16 +35414,27 @@ function updateAddPostponedTreeSelectionSummary(state) {
             }
         }
     }
+    return { bookmarkCount, folderCount };
+}
+
+function getAddPostponedTreeSelectionSummaryText(state) {
+    const { bookmarkCount, folderCount } = getAddPostponedTreeSelectionCounts(state);
 
     if (bookmarkCount <= 0 && folderCount <= 0) {
-        selectedName.textContent = '-';
-        return;
+        return '-';
     }
 
     const isZh = currentLang === 'zh_CN';
-    selectedName.textContent = isZh
+    return isZh
         ? `${bookmarkCount}个书签 / ${folderCount}个文件夹`
         : `${bookmarkCount} bookmarks / ${folderCount} folders`;
+}
+
+function updateAddPostponedTreeSelectionSummary(state) {
+    const selectedNameId = String(state?.selectedNameId || 'addTreeSelectedName');
+    const selectedName = document.getElementById(selectedNameId);
+    if (!selectedName) return;
+    selectedName.textContent = getAddPostponedTreeSelectionSummaryText(state);
 }
 
 function updateAddPostponedFooterSelection(panelType = null) {
@@ -34178,6 +35443,8 @@ function updateAddPostponedFooterSelection(panelType = null) {
     if (!selectedName) return;
 
     const activePanelType = panelType || modal?.querySelector('.add-postponed-panel.active')?.dataset?.panel || 'tree';
+    const exportBtn = document.getElementById('addPostponedTreeExportBtn');
+    if (exportBtn) exportBtn.hidden = activePanelType !== 'tree';
     const isZh = currentLang === 'zh_CN';
     if (activePanelType === 'search') {
         selectedName.textContent = String(addPostponedSearchSelected.size || 0);
@@ -34634,6 +35901,152 @@ async function loadAddPostponedBookmarkTree() {
     } catch (error) {
         console.warn('[添加到待复习] 加载书签树失败:', error);
         listEl.innerHTML = `<div class="add-results-empty">${isZh ? '加载书签树失败' : 'Failed to load bookmark tree'}</div>`;
+    }
+}
+
+function formatAddPostponedTreeStatusExportTime(timestamp = Date.now()) {
+    const date = new Date(Number(timestamp || Date.now()) || Date.now());
+    const locale = currentLang === 'zh_CN' ? 'zh-CN' : 'en-US';
+    try {
+        return date.toLocaleString(locale, {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+    } catch (_) {
+        return date.toLocaleString(locale);
+    }
+}
+
+function buildAddPostponedTreeStatusMetricNote(node) {
+    if (!node) return '';
+    const locale = getRankingExportLocale();
+    const clickCount = Math.max(0, Number(node.clickCount || 0) || 0);
+    const wakeCount = Math.max(0, Number(node.wakeCount || 0) || 0);
+    const timeMs = node.kind === 'folder'
+        ? Math.max(0, Number(node.totalTimeMs || 0) || 0)
+        : Math.max(0, Number(node.timeMs || 0) || 0);
+    const metrics = [
+        { label: getRankingExportText('clickCount'), value: clickCount.toLocaleString(locale) },
+        { label: getRankingExportText('wakeCount'), value: wakeCount.toLocaleString(locale) },
+        { label: getRankingExportText('timeHours'), value: formatAddPostponedTreeHours(timeMs, locale) }
+    ];
+    return buildRankingExportMetricNote(metrics);
+}
+
+function buildAddPostponedTreeStatusExportRow(nodeKey, state) {
+    const node = state?.nodeMap?.get(nodeKey);
+    if (!node) return null;
+
+    const checked = state.checkedKeys instanceof Set && state.checkedKeys.has(nodeKey);
+    const indeterminate = state.indeterminateKeys instanceof Set && state.indeterminateKeys.has(nodeKey);
+
+    if (node.kind === 'bookmark') {
+        const bookmarkSelected = node.id
+            ? state.selectedBookmarkIds?.has(node.id)
+            : checked;
+        if (!checked || !bookmarkSelected) return null;
+        return {
+            itemType: 'bookmark',
+            itemTypeLabel: getRankingExportText('bookmark'),
+            title: node.title || node.url || '',
+            url: node.url || '',
+            detail: node.url || '',
+            note: buildAddPostponedTreeStatusMetricNote(node),
+            noteColor: 'gray'
+        };
+    }
+
+    if (node.kind !== 'folder') return null;
+    const childRows = (Array.isArray(node.childKeys) ? node.childKeys : [])
+        .map(childKey => buildAddPostponedTreeStatusExportRow(childKey, state))
+        .filter(Boolean);
+    const explicitlySelected = checked && !indeterminate;
+    if (!explicitlySelected && childRows.length === 0) return null;
+
+    return {
+        itemType: 'folder',
+        itemTypeLabel: getRankingExportText('folder'),
+        title: node.title || getRankingExportText('folder'),
+        detail: node.pathText || node.title || '',
+        note: explicitlySelected ? buildAddPostponedTreeStatusMetricNote(node) : '',
+        noteColor: 'gray',
+        children: childRows
+    };
+}
+
+function buildAddPostponedTreeStatusExportRows(state) {
+    if (!state || !(state.nodeMap instanceof Map)) return [];
+    return (Array.isArray(state.rootNodeKeys) ? state.rootNodeKeys : [])
+        .map(nodeKey => buildAddPostponedTreeStatusExportRow(nodeKey, state))
+        .filter(Boolean);
+}
+
+function buildAddPostponedTreeStatusExportPayload() {
+    const state = addPostponedTreeState;
+    const createdAt = Date.now();
+    const rows = buildAddPostponedTreeStatusExportRows(state);
+    const selectedSummary = getAddPostponedTreeSelectionSummaryText(state);
+    return {
+        kind: 'bookmark-status',
+        title: getRankingExportText('bookmarkStatus'),
+        createdAt,
+        rows,
+        exportCount: state?.selectedBookmarkIds instanceof Set ? state.selectedBookmarkIds.size : rows.length,
+        limit: rows.length,
+        descriptionMd: [
+            `${getRankingExportText('selected')}：${selectedSummary}`,
+            `${getRankingExportText('exportTime')}：${formatAddPostponedTreeStatusExportTime(createdAt)}`
+        ].join('\n')
+    };
+}
+
+function buildAddPostponedTreeStatusFilename(payload) {
+    const label = sanitizeRankingExportFilenameSegment(getRankingExportText('bookmarkStatus'), 'bookmark-status');
+    const selectedSummary = String(payload?.descriptionMd || '')
+        .split('\n')[0]
+        .replace(`${getRankingExportText('selected')}：`, '');
+    const selected = sanitizeRankingExportFilenameSegment(selectedSummary, 'selected');
+    return `${label}-${selected}-${buildRankingExportDateKey(payload?.createdAt || Date.now())}.json`;
+}
+
+async function performAddPostponedTreeStatusExport() {
+    const modal = document.getElementById('addToPostponedModal');
+    const activePanelType = modal?.querySelector('.add-postponed-panel.active')?.dataset?.panel || 'tree';
+    if (activePanelType !== 'tree') return;
+
+    const counts = getAddPostponedTreeSelectionCounts(addPostponedTreeState);
+    if ((counts.bookmarkCount + counts.folderCount) <= 0) {
+        const msg = getRankingExportText('selectBookmarkTreeBeforeExport');
+        try { showToast(msg); } catch (_) { alert(msg); }
+        return;
+    }
+
+    try {
+        showToast(getRankingExportText('exporting'));
+        const payload = buildAddPostponedTreeStatusExportPayload();
+        if (!payload.rows.length) {
+            showToast(getRankingExportText('noData'));
+            return;
+        }
+        const json = buildBookmarkCanvasRankingExportJson(payload);
+        json.title = payload.title;
+        json.descriptionMd = payload.descriptionMd;
+        const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json;charset=utf-8' });
+        const result = await downloadSyncBlobAsFile(blob, buildAddPostponedTreeStatusFilename(payload), { preferSaveAs: false });
+        if (result?.success) {
+            showToast(getRankingExportText('exportDone'));
+        } else {
+            console.warn('[AddPostponedTreeExport] download failed:', result);
+            showToast(getRankingExportText('exportFailed'));
+        }
+    } catch (error) {
+        console.error('[AddPostponedTreeExport] export failed:', error);
+        showToast(getRankingExportText('exportFailed'));
     }
 }
 
@@ -37104,6 +38517,7 @@ function applyPresetMode(mode) {
 }
 
 function initTrackingToggle() {
+    initRankingExportControls();
     // 可能会在多个入口被调用（recommend view / tracking tab），避免重复绑定导致一次点击触发两次反向切换
     if (initTrackingToggle._initialized) return;
 
@@ -40708,6 +42122,7 @@ let browsingRelatedRecomputePending = false; // 数据变更后，延迟到下�
 let browsingRelatedLoadSeq = 0;
 const BROWSING_RELATED_SNAPSHOT_CACHE_LIMIT = 6;
 const browsingRelatedSnapshotCache = new Map(); // key -> { historyItemsExpanded, bookmarkUrls, bookmarkTitles }
+let browsingRelatedLastRenderedExportState = null;
 
 function normalizeBrowsingRelatedRange(range) {
     const allowed = ['day', 'week', 'month', 'year', 'all'];
@@ -41462,6 +42877,438 @@ async function loadBrowsingRelatedHistory(range = 'day', options = {}) {
     }
 }
 
+function getBrowsingRelatedSortLabel() {
+    return browsingRelatedSortAsc
+        ? getRankingExportText('ascending')
+        : getRankingExportText('descending');
+}
+
+function getBrowsingRelatedExportStateKey(range) {
+    const filter = browsingRelatedTimeFilter && browsingRelatedTimeFilter.type
+        ? `${browsingRelatedTimeFilter.type}:${browsingRelatedTimeFilter.value instanceof Date ? browsingRelatedTimeFilter.value.getTime() : browsingRelatedTimeFilter.value}`
+        : 'all';
+    const tokens = Array.isArray(browsingRelatedSearchTokens)
+        ? browsingRelatedSearchTokens.join('\u0001')
+        : '';
+    const customBounds = browsingRelatedCustomBounds
+        ? `${Number(browsingRelatedCustomBounds.startTime) || 0}:${Number(browsingRelatedCustomBounds.endTime) || 0}:${browsingRelatedCustomBounds.label || ''}`
+        : '';
+    return [
+        normalizeBrowsingRelatedRange(range),
+        browsingRelatedSortAsc ? 'asc' : 'desc',
+        filter,
+        tokens,
+        customBounds,
+        browsingRelatedExpandMode ? 'expanded' : ''
+    ].join('|');
+}
+
+function getBrowsingRelatedUrlKey(url) {
+    try {
+        const u = new URL(url);
+        return u.origin + u.pathname;
+    } catch {
+        return url;
+    }
+}
+
+function isBrowsingRelatedUrl(value) {
+    const text = String(value || '');
+    return text.startsWith('http://')
+        || text.startsWith('https://')
+        || text.startsWith('chrome-extension://')
+        || text.startsWith('file://');
+}
+
+function normalizeBrowsingRelatedTitleForMerge(title, url = '') {
+    const safeTitle = String(title || '').trim();
+    if (!safeTitle) return getBrowsingRelatedUrlKey(url);
+    if (isBrowsingRelatedUrl(safeTitle)) return getBrowsingRelatedUrlKey(safeTitle);
+    return safeTitle
+        .replace(/\s+/g, ' ')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '');
+}
+
+function buildBrowsingRelatedVisibleGroups(historyItems, bookmarkUrls, bookmarkTitleDomainMap, range) {
+    let filteredItems = Array.isArray(historyItems) ? historyItems.slice() : [];
+
+    if (browsingRelatedTimeFilter) {
+        filteredItems = filterHistoryByTime(filteredItems, browsingRelatedTimeFilter, range);
+    }
+
+    if (browsingRelatedSearchTokens && browsingRelatedSearchTokens.length > 0) {
+        filteredItems = filteredItems.filter(item =>
+            matchesTokens(item.title, browsingRelatedSearchTokens) ||
+            matchesTokens(item.url, browsingRelatedSearchTokens)
+        );
+    }
+
+    const groups = [];
+    for (let i = 0; i < filteredItems.length; i++) {
+        const item = filteredItems[i];
+        const isBookmark = isBrowsingRelatedBookmarkItem(item, bookmarkUrls, bookmarkTitleDomainMap);
+        const itemTitle = normalizeBrowsingRelatedTitleForMerge(item?.title, item?.url);
+
+        if (isBookmark) {
+            groups.push({
+                startIndex: i + 1,
+                endIndex: i + 1,
+                items: [item],
+                isBookmark: true,
+                representativeItem: item,
+                title: itemTitle
+            });
+            continue;
+        }
+
+        const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
+        if (lastGroup && !lastGroup.isBookmark && lastGroup.title === itemTitle) {
+            lastGroup.endIndex = i + 1;
+            lastGroup.items.push(item);
+        } else {
+            groups.push({
+                startIndex: i + 1,
+                endIndex: i + 1,
+                items: [item],
+                isBookmark: false,
+                representativeItem: item,
+                title: itemTitle
+            });
+        }
+    }
+
+    return { filteredItems, groups };
+}
+
+function getBrowsingRelatedGroupSequenceText(group) {
+    if (!group) return '';
+    return group.startIndex === group.endIndex
+        ? `${group.startIndex}`
+        : `${group.startIndex}~${group.endIndex}`;
+}
+
+function getBrowsingRelatedGroupTimeText(group, range) {
+    const items = Array.isArray(group?.items) ? group.items : [];
+    const item = group?.representativeItem || items[0] || {};
+    if (items.length <= 1) {
+        const visitTime = item.lastVisitTime ? new Date(item.lastVisitTime) : new Date();
+        return formatTimeByRange(visitTime, range);
+    }
+
+    const firstItem = items[0] || {};
+    const lastItem = items[items.length - 1] || {};
+    const firstTime = firstItem.lastVisitTime ? new Date(firstItem.lastVisitTime) : new Date();
+    const lastTime = lastItem.lastVisitTime ? new Date(lastItem.lastVisitTime) : new Date();
+    return `${formatTimeByRange(firstTime, range)} ~ ${formatTimeByRange(lastTime, range)}`;
+}
+
+function buildBrowsingRelatedExportItemNote(group, range) {
+    const sequenceText = getBrowsingRelatedGroupSequenceText(group);
+    const timeText = getBrowsingRelatedGroupTimeText(group, range);
+    const typePart = group?.isBookmark ? `${getRankingExportText('type')}：${getRankingExportText('bookmark')}` : '';
+    const sequencePart = sequenceText ? String(sequenceText) : '';
+    const timePart = timeText ? `${getRankingExportText('time')}：${timeText}` : '';
+    return [sequencePart, typePart, timePart].filter(Boolean).join(getRankingExportNoteSeparator());
+}
+
+function buildBrowsingRelatedExportRow(group, range) {
+    const item = group?.representativeItem || {};
+    const displayTitle = (item.title && String(item.title).trim()) ? item.title : item.url;
+    return {
+        itemType: 'bookmark',
+        itemTypeLabel: group?.isBookmark ? getRankingExportText('bookmark') : getRankingExportText('historyRecord'),
+        title: displayTitle || '',
+        url: item.url || '',
+        detail: item.url || '',
+        note: buildBrowsingRelatedExportItemNote(group, range),
+        noteColor: group?.isBookmark ? 'green' : 'gray'
+    };
+}
+
+function buildBrowsingRelatedExportFolders(rows) {
+    const folders = [];
+    const label = getRankingExportText('relatedHistory');
+    for (let i = 0; i < rows.length; i += RELATED_HISTORY_EXPORT_GROUP_SIZE) {
+        const children = rows.slice(i, i + RELATED_HISTORY_EXPORT_GROUP_SIZE);
+        const start = i + 1;
+        const end = i + children.length;
+        folders.push({
+            itemType: 'folder',
+            itemTypeLabel: getRankingExportText('folder'),
+            title: `${label} ${start}-${end}`,
+            detail: `${start}-${end}`,
+            children
+        });
+    }
+    return folders;
+}
+
+async function buildBrowsingRelatedExportPayload(limit) {
+    const createdAt = Date.now();
+    const requestedLimit = normalizeRankingExportLimit(limit, RELATED_HISTORY_EXPORT_DEFAULT_LIMIT);
+    const range = normalizeBrowsingRelatedRange(browsingRelatedCurrentRange || 'day');
+    const stateKey = getBrowsingRelatedExportStateKey(range);
+    let visibleGroups = browsingRelatedLastRenderedExportState?.key === stateKey
+        && Array.isArray(browsingRelatedLastRenderedExportState.groups)
+        ? browsingRelatedLastRenderedExportState.groups.slice()
+        : null;
+
+    if (!visibleGroups) {
+        const snapshot = await buildBrowsingRelatedSnapshotForRange(range, { silent: true });
+        const snapshotPayload = getBrowsingRelatedSnapshotPayload(snapshot);
+        const relatedGroups = buildBrowsingRelatedVisibleGroups(
+            snapshotPayload?.historyItemsExpanded || [],
+            snapshotPayload?.bookmarkUrls || new Set(),
+            snapshotPayload?.bookmarkTitleDomainMap || new Map(),
+            range
+        );
+        visibleGroups = relatedGroups.groups;
+    }
+
+    const limitedGroups = visibleGroups.slice(0, requestedLimit);
+    const itemRows = limitedGroups.map(group => buildBrowsingRelatedExportRow(group, range));
+    const rows = buildBrowsingRelatedExportFolders(itemRows);
+    const exportCount = itemRows.length;
+    const scopeLabel = browsingRelatedCustomBounds?.label || getBrowsingRankingRangeLabel(range);
+    const rawSecondaryLabel = browsingRelatedCustomBounds?.label
+        ? ''
+        : (getBrowsingRankingSecondaryLabel(range, browsingRelatedTimeFilter) || '');
+    const secondaryLabel = rawSecondaryLabel === getRankingExportText('all') ? '' : rawSecondaryLabel;
+    const sortLabel = getBrowsingRelatedSortLabel();
+    const titleParts = [getRankingExportText('relatedHistory'), scopeLabel, secondaryLabel, sortLabel]
+        .filter(Boolean);
+    const payload = {
+        title: titleParts.join('-'),
+        kind: 'related-history',
+        scopeLabel,
+        secondaryLabel,
+        modeLabel: '',
+        rankingTypeLabel: '',
+        scopeExtraLabels: [sortLabel],
+        createdAt,
+        requestedLimit,
+        exportCount,
+        limit: exportCount,
+        rows
+    };
+    payload.descriptionMd = buildRankingExportDescription(payload);
+    return payload;
+}
+
+function getPostponedReviewExportSearchKeyword() {
+    const box = document.getElementById('postponedSearchBox');
+    const input = document.getElementById('postponedSearchInput');
+    if (!input) return '';
+    if (box && box.style.display === 'none') return '';
+    return String(input.value || '').trim();
+}
+
+function getPostponedReviewExportSectionLabel(sectionKey) {
+    if (typeof getPostponedSectionTitle === 'function') {
+        return getPostponedSectionTitle(sectionKey);
+    }
+    return sectionKey === 'archive'
+        ? getRankingExportText('dueArchive')
+        : getRankingExportText('currentOrder');
+}
+
+function formatPostponedReviewExportTime(timestamp) {
+    const value = Number(timestamp);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hour = String(date.getHours()).padStart(2, '0');
+    const minute = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function buildPostponedReviewExportNote(item) {
+    if (!item || item.manuallyAdded === true) return '';
+    const reviewTime = formatPostponedReviewExportTime(item.postponeUntil);
+    return reviewTime ? `${getRankingExportText('reviewTime')}：${reviewTime}` : '';
+}
+
+async function buildPostponedReviewBookmarkMap(items = []) {
+    const ids = Array.from(new Set(
+        (Array.isArray(items) ? items : [])
+            .map(item => String(item?.bookmarkId || '').trim())
+            .filter(Boolean)
+    ));
+    const pairs = await Promise.all(ids.map(async (id) => [id, await getBookmarkByIdSafe(id)]));
+    const map = new Map();
+    pairs.forEach(([id, bookmark]) => {
+        if (bookmark) map.set(id, bookmark);
+    });
+    return map;
+}
+
+function filterPostponedReviewItemsByKeyword(items, bookmarkMap, keyword) {
+    const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+    if (!normalizedKeyword) return Array.isArray(items) ? items : [];
+    return (Array.isArray(items) ? items : []).filter(item => {
+        const bookmark = bookmarkMap?.get(String(item?.bookmarkId || '').trim());
+        if (!bookmark) return false;
+        const groupName = String(item?.groupName || '');
+        const groupMatches = groupName.toLowerCase().includes(normalizedKeyword);
+        const bookmarkMatches = getRecommendBookmarkSearchText(bookmark, groupName).includes(normalizedKeyword);
+        return groupMatches || bookmarkMatches;
+    });
+}
+
+function buildPostponedReviewBookmarkExportRow(item, bookmarkMap) {
+    const bookmark = bookmarkMap?.get(String(item?.bookmarkId || '').trim());
+    if (!bookmark || !bookmark.url) return null;
+    const note = buildPostponedReviewExportNote(item);
+    return {
+        itemType: 'bookmark',
+        itemTypeLabel: getRankingExportText('bookmark'),
+        title: bookmark.title || bookmark.url || '',
+        url: bookmark.url || '',
+        detail: bookmark.url || '',
+        note,
+        noteColor: note ? 'orange' : 'gray'
+    };
+}
+
+function getPostponedReviewGroupExportTitle(group) {
+    const title = String(group?.name || '').trim();
+    if (title) return title;
+    return group?.type === 'folder'
+        ? getRankingExportText('folder')
+        : getRankingExportText('domain');
+}
+
+function buildPostponedReviewEntryContentRow(entry, bookmarkMap) {
+    if (!entry) return null;
+    if (entry.type === 'group') {
+        const group = entry.group || {};
+        const children = (Array.isArray(group.items) ? group.items : [])
+            .map(item => buildPostponedReviewBookmarkExportRow(item, bookmarkMap))
+            .filter(Boolean);
+        if (!children.length) return null;
+        const typeLabel = group.type === 'folder'
+            ? getRankingExportText('folder')
+            : getRankingExportText('domain');
+        return {
+            itemType: 'folder',
+            itemTypeLabel: typeLabel,
+            title: getPostponedReviewGroupExportTitle(group),
+            detail: typeLabel,
+            children
+        };
+    }
+    return buildPostponedReviewBookmarkExportRow(entry.item, bookmarkMap);
+}
+
+function buildPostponedReviewExportRowsFromSections(sections, bookmarkMap, limit) {
+    const requestedLimit = normalizeRankingExportLimit(limit, RANKING_EXPORT_DEFAULT_LIMIT);
+    const sectionRows = [];
+    const sectionLabels = [];
+    let exportCount = 0;
+
+    for (const section of (Array.isArray(sections) ? sections : [])) {
+        if (exportCount >= requestedLimit) break;
+        const children = [];
+        for (const entry of (Array.isArray(section.entries) ? section.entries : [])) {
+            if (exportCount >= requestedLimit) break;
+            const contentRow = buildPostponedReviewEntryContentRow(entry, bookmarkMap);
+            if (!contentRow) continue;
+            children.push(contentRow);
+            exportCount += 1;
+        }
+        if (!children.length) continue;
+        const label = section.label || getRankingExportText('postponedReview');
+        sectionLabels.push(label);
+        sectionRows.push({
+            itemType: 'folder',
+            itemTypeLabel: getRankingExportText('folder'),
+            title: label,
+            detail: label,
+            children
+        });
+    }
+
+    return { rows: sectionRows, exportCount, sectionLabels };
+}
+
+async function buildPostponedReviewExportPayload(limit) {
+    const createdAt = Date.now();
+    const requestedLimit = normalizeRankingExportLimit(limit, RANKING_EXPORT_DEFAULT_LIMIT);
+    const postponed = await getPostponedBookmarks();
+    const now = Date.now();
+    const activePostponed = (Array.isArray(postponed) ? postponed : [])
+        .filter(item => item && item.bookmarkId != null);
+    const bookmarkMap = await buildPostponedReviewBookmarkMap(activePostponed);
+    const keyword = getPostponedReviewExportSearchKeyword();
+    let sections = [];
+
+    if (keyword) {
+        const filteredItems = filterPostponedReviewItemsByKeyword(
+            sortPostponedByReviewOrder(activePostponed),
+            bookmarkMap,
+            keyword
+        );
+        sections = [{
+            key: 'search',
+            label: getRankingExportText('searchResults'),
+            entries: buildPostponedRenderEntries(filteredItems)
+        }];
+    } else {
+        const currentItems = sortPostponedByReviewOrder(
+            activePostponed.filter(item => !isPostponedArchiveItem(item, now))
+        );
+        const archiveItems = sortPostponedArchiveOrder(
+            activePostponed.filter(item => isPostponedArchiveItem(item, now))
+        );
+        sections = [
+            {
+                key: 'current',
+                label: getPostponedReviewExportSectionLabel('current'),
+                entries: buildPostponedRenderEntries(currentItems)
+            },
+            {
+                key: 'archive',
+                label: getPostponedReviewExportSectionLabel('archive'),
+                entries: buildPostponedRenderEntries(archiveItems)
+            }
+        ];
+    }
+
+    const { rows, exportCount, sectionLabels } = buildPostponedReviewExportRowsFromSections(
+        sections,
+        bookmarkMap,
+        requestedLimit
+    );
+    const titleParts = [getRankingExportText('postponedReview')];
+    if (keyword) {
+        titleParts.push(getRankingExportText('searchResults'), keyword);
+    } else {
+        titleParts.push(...sectionLabels);
+    }
+
+    const payload = {
+        title: titleParts.filter(Boolean).join('-'),
+        kind: 'postponed-review',
+        scopeLabel: getRankingExportText('postponedReview'),
+        secondaryLabel: keyword
+            ? `${getRankingExportText('search')}：${keyword}`
+            : sectionLabels.join(' / '),
+        modeLabel: '',
+        rankingTypeLabel: '',
+        scopeExtraLabels: [],
+        createdAt,
+        requestedLimit,
+        exportCount,
+        limit: exportCount,
+        rows
+    };
+    payload.descriptionMd = buildRankingExportDescription(payload);
+    return payload;
+}
+
 // 渲染书签关联记录列表（大列表场景支持懒加载）
 async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, bookmarkTitles, bookmarkTitleDomainMap, range) {
     if (!container) return;
@@ -41471,120 +43318,23 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
     const isZh = currentLang === 'zh_CN';
     const bookmarkLabel = i18n.browsingRelatedBadgeText[currentLang];
 
-    // ✨ 应用时间筛选
-    let filteredItems = historyItems;
-    if (browsingRelatedTimeFilter) {
-        filteredItems = filterHistoryByTime(historyItems, browsingRelatedTimeFilter, range);
-        if (filteredItems.length === 0) {
-            const emptyTitle = isZh ? '没有匹配的记录' : 'No matching records';
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><i class="fas fa-filter"></i></div>
-                    <div class="empty-state-title">${emptyTitle}</div>
-                </div>
-            `;
-            return;
-        }
+    const visibleResult = buildBrowsingRelatedVisibleGroups(historyItems, bookmarkUrls, bookmarkTitleDomainMap, range);
+    const mergedGroups = visibleResult.groups;
+    browsingRelatedLastRenderedExportState = {
+        key: getBrowsingRelatedExportStateKey(range),
+        groups: mergedGroups.slice()
+    };
+
+    if (mergedGroups.length === 0) {
+        const emptyTitle = isZh ? '没有匹配的记录' : 'No matching records';
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-filter"></i></div>
+                <div class="empty-state-title">${emptyTitle}</div>
+            </div>
+        `;
+        return;
     }
-
-    // Phase 4.7: 关键词筛选（在当前时间范围内过滤关联记录）
-    if (browsingRelatedSearchTokens && browsingRelatedSearchTokens.length > 0) {
-        filteredItems = filteredItems.filter(item =>
-            matchesTokens(item.title, browsingRelatedSearchTokens) ||
-            matchesTokens(item.url, browsingRelatedSearchTokens)
-        );
-
-        if (filteredItems.length === 0) {
-            const emptyTitle = isZh ? '没有匹配的记录' : 'No matching records';
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><i class="fas fa-filter"></i></div>
-                    <div class="empty-state-title">${emptyTitle}</div>
-                </div>
-            `;
-            return;
-        }
-    }
-
-    // ✨ 辅助函数：判断记录是否为书签
-    const checkIsBookmark = (item) => {
-        return isBrowsingRelatedBookmarkItem(item, bookmarkUrls, bookmarkTitleDomainMap);
-    };
-
-    // ✨ 辅助函数：从URL提取用于比较的键（去掉查询参数和hash）
-    const getUrlKey = (url) => {
-        try {
-            const u = new URL(url);
-            return u.origin + u.pathname; // 只保留协议+域名+路径
-        } catch {
-            return url;
-        }
-    };
-
-    // ✨ 辅助函数：检测字符串是否是URL
-    const isUrl = (str) => {
-        if (!str) return false;
-        return str.startsWith('http://') || str.startsWith('https://') || str.startsWith('chrome-extension://') || str.startsWith('file://');
-    };
-
-    // ✨ 辅助函数：规范化标题用于比较
-    const normalizeTitle = (title) => {
-        if (!title) return '';
-        const trimmed = title.trim();
-        // 如果标题本身是URL，则去掉查询参数进行比较
-        if (isUrl(trimmed)) {
-            return getUrlKey(trimmed);
-        }
-        return trimmed
-            .replace(/\s+/g, ' ')  // 多个空白字符合并为一个空格
-            .replace(/[\u200B-\u200D\uFEFF]/g, ''); // 去除零宽字符
-    };
-
-    // ✨ 合并连续相同标题的非书签记录
-    // 规则：连续相同名字的浏览记录合并，书签作为分界线不合并
-    const mergeConsecutiveItems = (items) => {
-        const groups = [];
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const isBookmark = checkIsBookmark(item);
-            // 优先使用标题，如果标题为空则使用URL的路径部分（去掉查询参数）
-            const itemTitle = (item.title && item.title.trim()) ? normalizeTitle(item.title) : getUrlKey(item.url);
-
-            if (isBookmark) {
-                // 书签单独成组，不合并
-                groups.push({
-                    startIndex: i + 1,
-                    endIndex: i + 1,
-                    items: [item],
-                    isBookmark: true,
-                    representativeItem: item,
-                    title: itemTitle
-                });
-            } else {
-                // 非书签：检查是否可以和前一组合并
-                const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
-                if (lastGroup && !lastGroup.isBookmark && lastGroup.title === itemTitle) {
-                    // 合并到前一组
-                    lastGroup.endIndex = i + 1;
-                    lastGroup.items.push(item);
-                } else {
-                    // 创建新组
-                    groups.push({
-                        startIndex: i + 1,
-                        endIndex: i + 1,
-                        items: [item],
-                        isBookmark: false,
-                        representativeItem: item,
-                        title: itemTitle
-                    });
-                }
-            }
-        }
-        return groups;
-    };
-
-    // 合并后的分组
-    const mergedGroups = mergeConsecutiveItems(filteredItems);
 
     // Phase 4.7: Remember an anchor item for "show day related" button
     try {
@@ -41622,29 +43372,12 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
         const faviconUrl = getFaviconUrl(item.url);
 
         // ✨ 格式化时间：如果合并了多条，显示时间范围
-        let timeStr;
-        if (group.items.length === 1) {
-            // 单条记录：显示单个时间
-            const visitTime = item.lastVisitTime ? new Date(item.lastVisitTime) : new Date();
-            timeStr = formatTimeByRange(visitTime, range);
-        } else {
-            // 多条记录：显示时间范围（第一条 ~ 最后一条）
-            const firstItem = group.items[0];
-            const lastItem = group.items[group.items.length - 1];
-            const firstTime = firstItem.lastVisitTime ? new Date(firstItem.lastVisitTime) : new Date();
-            const lastTime = lastItem.lastVisitTime ? new Date(lastItem.lastVisitTime) : new Date();
-            const firstTimeStr = formatTimeByRange(firstTime, range);
-            const lastTimeStr = formatTimeByRange(lastTime, range);
-            // 时间顺序已经由排序决定，直接按数组顺序显示
-            timeStr = `${firstTimeStr} ~ ${lastTimeStr}`;
-        }
+        const timeStr = getBrowsingRelatedGroupTimeText(group, range);
 
         const displayTitle = (item.title && item.title.trim()) ? item.title : item.url;
 
         // ✨ 序号显示：如果合并了多条，显示为 "起始~结束" 格式
-        const numberStr = group.startIndex === group.endIndex
-            ? `${group.startIndex}`
-            : `${group.startIndex}~${group.endIndex}`;
+        const numberStr = getBrowsingRelatedGroupSequenceText(group);
 
         itemEl.innerHTML = `
             <div class="related-history-number">${numberStr}</div>
@@ -42096,29 +43829,38 @@ function mountBrowsingRankingToggleToHeader(toggleContainer) {
     if (!isSidePanelMode || !toggleContainer) return false;
     const actionContainer = document.getElementById('browsingRankingTitleActions');
     if (!actionContainer) return false;
-    actionContainer.innerHTML = '';
+    const exportBtn = actionContainer.querySelector('#browsingRankingExportBtn');
+    if (exportBtn) exportBtn.remove();
+    actionContainer.textContent = '';
+    if (exportBtn) actionContainer.appendChild(exportBtn);
     actionContainer.appendChild(toggleContainer);
+    initRankingExportControls();
     return true;
 }
 
 function syncBrowsingRelatedSortButtonPlacement() {
     const sortBtn = document.getElementById('browsingRelatedSortBtn');
-    if (!sortBtn) return;
+    const exportBtn = document.getElementById('browsingRelatedExportBtn');
+    if (!sortBtn && !exportBtn) return;
 
-    const filterContainer = sortBtn.closest('.browsing-ranking-filters')
+    const filterContainer = (sortBtn || exportBtn).closest('.browsing-ranking-filters')
         || document.querySelector('#browsingRelatedPanel .browsing-ranking-filters');
     const titleActionContainer = document.getElementById('browsingRelatedTitleActions');
 
     if (isSidePanelMode) {
-        if (titleActionContainer && sortBtn.parentElement !== titleActionContainer) {
-            titleActionContainer.appendChild(sortBtn);
+        if (titleActionContainer) {
+            if (sortBtn) titleActionContainer.appendChild(sortBtn);
+            if (exportBtn) titleActionContainer.appendChild(exportBtn);
         }
+        initRankingExportControls();
         return;
     }
 
-    if (filterContainer && sortBtn.parentElement !== filterContainer) {
-        filterContainer.appendChild(sortBtn);
+    if (filterContainer) {
+        if (sortBtn) filterContainer.appendChild(sortBtn);
+        if (exportBtn) filterContainer.appendChild(exportBtn);
     }
+    initRankingExportControls();
 }
 
 function forEachBrowsingRankingStatsRecord(stats, callback) {
