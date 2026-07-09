@@ -4,7 +4,7 @@
     "description": "插件名称"
   },
   "extensionDescription": {
-    "message": "浏览记录、排行与关联、时间捕捉、推荐列表。",
+    "message": "基于书签与浏览记录计算推荐数据，并提供推送与分析接口。",
     "description": "插件描述"
   },
   "actionTitle": {

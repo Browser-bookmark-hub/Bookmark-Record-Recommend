@@ -8,18 +8,36 @@
 ### 简介
 `书签记录与推荐` 是一款为重度用户打造的增强型扩展，通过“书签记录”、“智能推荐”与“AI 推送”三大核心引擎唤醒你的知识库。
 它基于 S 值算法实现动态推荐，并在本地完成所有复杂的关联计算。“原始数据 + 计算结果”可直接下载到本地或推送到 GitHub，让 AI 结合 `AGENTS.md` / `CLAUDE.md` 规则“开箱即用”地进行深度分析，免去了处理生数据的算力负担。
+它也是 [书签画布（Bookmark-Canvas）](https://github.com/Browser-bookmark-hub/Bookmark-Canvas) 生态的关联项目，导出的 JSON 文件兼容书签画布导入的标签与备注格式。
 
-### 特色功能
-- **双工作区**：支持 Side Panel + 独立 HTML 页面，适配不同使用习惯。
-- **推荐引擎（v6.2）**：基于 S 值与池子模型，支持三卡位轮换与优先复习队列。
-- **小组件中心**：聚合推荐、时间捕捉、排行、周统计等常用信息，快速查看当前书签状态。
-- **推荐操作语义清晰**：`待复习 / 跳过 / 屏蔽` 三种操作可直接影响后续推荐。
-- **书签记录三件套**：书签添加记录、点击排行、关联记录（含日历与筛选）。
-- **时间捕捉与排行**：按书签页面活跃时长统计，支持多时间范围查看。
-- **校准机制**：支持手动/自动校准浏览历史，降低删除历史后的数据偏差。
-- **AI 推送与分析**：支持将书签记录、推荐信号和 Markdown 文档推送到 GitHub 云端，并配合 `AGENTS.md` / `CLAUDE.md` 进行 AI 分析。
-- **上下文搜索**：同一个搜索框按场景切换，支持关键词、日期区间、S 值筛选。
-- **中英文 + 主题切换**：自动语言识别，支持明暗主题。
+### 路线图
+- [ ] **语言增加与调试**：当前主要围绕中英文实现，后续繁体中文、法语、俄语、西班牙语、阿拉伯语、日语、韩语等语言欢迎共建。限制说明见 [`docs/LIMITATIONS_AND_COMPROMISES.md#4`](docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建)。
+- [ ] **文档共建**：欢迎共建 `AGENTS.md` / `CLAUDE.md` 约束文件，让不同 AI 客户端更好理解同步包、输出格式和分析边界。模板入口见 [`AGENTS_template`](Bookmark-Record-Recommend-main/history_html/AGENTS_template/)。
+- [ ] **生态与客户端探索**：围绕书签画布、推荐数据包、AI 分析结果和可能的独立客户端继续探索，目前仍是开放问题。
+
+### 相关文档
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)：当前项目结构与模块定位
+- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md)：当前 S 值算法 v6.4、维护桶与推送结构
+- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md)：限制与实现妥协
+- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md)：历史计划归档与删除候选
+
+### 更新日志
+> [!NOTE]
+> #### v0.4.5
+> - **浏览历史持久化升级**：浏览记录链路从依赖浏览器 History API 的即时查询，迁移到本地持久缓存与维护桶，点击历史可突破原先约 90 天窗口；同步、删除、迁移和修复逻辑也随之重构。
+> - **导出生态与书签画布兼容**：扩展点击排行、关联记录、正在追踪、时间排行、待复习、添加至复习等导出；JSON 补齐标签/备注语义与临时栏目结构，服务于 [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas) 的导入与整理流程。
+> - **默认快捷键调整**：
+>   - `Ctrl/Command+Shift+6`：激活扩展。
+>   - `Ctrl/Command+Shift+7`：打开推荐视图。
+>   - `Ctrl/Command+Shift+8`：打开记录视图。
+>   - `Ctrl/Command+Shift+9`：快捷复习下一张卡片。
+> - **体验与性能修复**：关联记录改为更轻的滑动/懒加载窗口，减少大数据量下的卡顿；同时包含小组件 UI、硬件加速、favicon 删除机制、折叠队列清理等细节修复。
+
+### 主要视图
+- **小组件**：聚合推荐、时间捕捉、排行、周统计等常用信息。
+- **书签推​​荐**：推荐卡片、待复习、屏蔽管理、复习热力图。
+- **书签记录**：添加记录 / 浏览记录 / 时间捕捉。
+- **推送与分析**：GitHub 同步、数据包推送、Markdown 文档管理与 AI 分析规则。
 
 ### 预览
 
@@ -29,6 +47,8 @@
 | <img src="Screenshots%20and%20icons/v0.3/侧边栏%20zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推荐公式%20zh.png" width="400"> |
 | **书签记录** | **推送与分析** |
 | <img src="Screenshots%20and%20icons/v0.3/书签记录%20zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推送与分析%20zh.png" width="400"> |
+| **关联记录** | **添加到待复习** |
+| <img src="Screenshots%20and%20icons/v0.4.5/关联记录zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.4.5/添加到待复习zh.png" width="400"> |
 
 #### 推送与分析结构图预览
 ```text
@@ -47,11 +67,17 @@
 \-- meta/sync_state.json                  [PUSH] 同步状态元数据：最近推送时间、分支、推送文件数、文档数量。
 ```
 
-### 主要视图
-- **小组件**：聚合推荐、时间捕捉、排行、周统计等常用信息。
-- **书签推​​荐**：推荐卡片、待复习、屏蔽管理、复习热力图。
-- **书签记录**：添加记录 / 浏览记录 / 时间捕捉。
-- **推送与分析**：GitHub 同步、数据包推送、Markdown 文档管理与 AI 分析规则。
+### 特色功能
+- **双工作区**：支持 Side Panel + 独立 HTML 页面，适配不同使用习惯。
+- **推荐引擎（v6.4）**：基于 S 值与池子模型，支持三卡位轮换与优先复习队列。
+- **小组件中心**：聚合推荐、时间捕捉、排行、周统计等常用信息，快速查看当前书签状态。
+- **推荐操作语义清晰**：`待复习 / 跳过 / 屏蔽` 三种操作可直接影响后续推荐。
+- **书签记录三件套**：书签添加记录、点击排行、关联记录（含日历与筛选）。
+- **时间捕捉与排行**：按书签页面活跃时长统计，支持多时间范围查看。
+- **校准机制**：支持手动/自动校准浏览历史，降低删除历史后的数据偏差。
+- **AI 推送与分析**：支持将书签记录、推荐信号和 Markdown 文档推送到 GitHub 云端，并配合 `AGENTS.md` / `CLAUDE.md` 进行 AI 分析。
+- **上下文搜索**：同一个搜索框按场景切换，支持关键词、日期区间、S 值筛选。
+- **中英文 + 主题切换**：自动语言识别，支持明暗主题。
 
 ### 数据与隐私
 - **默认本地存储**：核心记录与推荐状态保存在浏览器本地存储（无独立后端服务）。
@@ -60,11 +86,6 @@
 - favicon 可能通过浏览器内置 favicon 服务或公共 favicon 源加载，并持久化到本地缓存。
 - 更多详情请参考：[隐私政策 (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
 
-### 相关文档
-- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)：当前项目结构与模块定位
-- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md)：当前 S 值算法 v6.4、维护桶与推送结构
-- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md)：限制与实现妥协
-- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md)：历史计划归档与删除候选
 
 
 ## English
@@ -72,18 +93,36 @@
 ### Overview
 `Bookmark Record and Recommend` is an enhanced extension for power bookmark users. It reawakens your knowledge base through three core engines: "Bookmark Records", "Smart Recommendations", and "AI Push".
 It uses an S-Score algorithm for dynamic recommendations and processes all complex data computations locally. The "raw data + computed results" can be downloaded locally or synced to GitHub, allowing AI to perform deep analysis out-of-the-box using `AGENTS.md` / `CLAUDE.md` rules, bypassing the heavy raw computation burden.
+It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas), with exported JSON files compatible with Bookmark Canvas import formats for tags and notes.
 
-### Highlights
-- **Dual workspace**: works in Side Panel and standalone page.
-- **Recommendation engine (v6.2)**: S-score + pool model with 3-card rotation and due-first queue.
-- **Widget center**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
-- **Actionable recommendation controls**: `Review Later / Skip / Block` directly shape future recommendations.
-- **Bookmark record suite**: additions, click ranking, and related history with calendar/filter views.
-- **Active-time tracking**: weighted bookmark-page activity with range-based ranking.
-- **Calibration tools**: manual + auto calibration to realign data after history deletions.
-- **AI Push & Analyze**: push bookmark records, recommendation signals, and Markdown docs to GitHub cloud sync, with `AGENTS.md` / `CLAUDE.md`rules for AI analysis.
-- **Context-aware search**: one search box, multiple modes (keywords, date ranges, S-score filters).
-- **Bilingual + themes**: auto language detection and light/dark themes.
+### Roadmap
+- [ ] **More languages**: the current UI was mainly built around Chinese and English. Traditional Chinese, French, Russian, Spanish, Arabic, Japanese, Korean, and other languages are welcome as community contributions. See [`docs/LIMITATIONS_AND_COMPROMISES.md#4`](docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建).
+- [ ] **Documentation co-building**: contributions are welcome for `AGENTS.md` / `CLAUDE.md` rule files, so different AI clients can better understand sync packages, output formats, and analysis boundaries. See [`AGENTS_template`](Bookmark-Record-Recommend-main/history_html/AGENTS_template/).
+- [ ] **Ecosystem and possible clients**: the Bookmark Canvas link, recommendation packages, AI analysis results, and possible standalone clients are still open areas.
+
+### Docs
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md): current project structure and module map
+- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md): current S-score v6.4, maintained buckets, and push structure
+- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md): limitations and implementation compromises
+- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md): historical archive index and deletion candidates
+
+### Changelog
+> [!NOTE]
+> #### v0.4.5
+> - **Persistent browsing-history upgrade**: the browsing-record path moved from direct History API reads to local persistent caches and maintenance buckets, allowing click history to go beyond the previous roughly 90-day window; sync, deletion, migration, and repair logic were rebuilt around that.
+> - **Export ecosystem and Bookmark Canvas compatibility**: exports now cover click rankings, related records, active tracking, time rankings, review queues, and add-to-review flows; JSON exports include tag/note semantics and temporary-section structures for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas).
+> - **Default shortcut changes**:
+>   - `Ctrl/Command+Shift+6`: activate the extension.
+>   - `Ctrl/Command+Shift+7`: open the recommendation view.
+>   - `Ctrl/Command+Shift+8`: open the records view.
+>   - `Ctrl/Command+Shift+9`: quick review the next card.
+> - **UX and performance fixes**: related records now use a lighter sliding/lazy window to reduce jank on large datasets; smaller fixes also cover widget UI, hardware acceleration, favicon deletion, and folded-queue cleanup.
+
+### Main Views
+- **Widgets**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
+- **Bookmark Recommend**: recommendation cards, review-later queue, block manager, review heatmap.
+- **Bookmark Records**: additions / browsing history / time tracking.
+- **Push & Analyze**: GitHub sync, data-package push, Markdown document management, and AI analysis rules.
 
 ### Preview
 
@@ -93,6 +132,8 @@ It uses an S-Score algorithm for dynamic recommendations and processes all compl
 | <img src="Screenshots%20and%20icons/v0.3/侧边栏%20en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推荐公式%20en.png" width="400"> |
 | **Bookmark Record** | **Push & Analyze** |
 | <img src="Screenshots%20and%20icons/v0.3/书签记录%20en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.3/推送与分析%20en.png" width="400"> |
+| **Related Records** | **Add to Review** |
+| <img src="Screenshots%20and%20icons/v0.4.5/关联记录en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.4.5/添加到待复习en.png" width="400"> |
 
 #### Push & Analyze Structure Preview
 ```text
@@ -111,11 +152,17 @@ Bookmark Record and Recommend/
 \-- meta/sync_state.json                  [PUSH] Sync metadata: last push time, branch, pushed file count, doc count.
 ```
 
-### Main Views
-- **Widgets**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
-- **Bookmark Recommend**: recommendation cards, review-later queue, block manager, review heatmap.
-- **Bookmark Records**: additions / browsing history / time tracking.
-- **Push & Analyze**: GitHub sync, data-package push, Markdown document management, and AI analysis rules.
+### Highlights
+- **Dual workspace**: works in Side Panel and standalone page.
+- **Recommendation engine (v6.4)**: S-score + pool model with 3-card rotation and due-first queue.
+- **Widget center**: consolidated widgets for recommendations, active-time tracking, rankings, and weekly summaries.
+- **Actionable recommendation controls**: `Review Later / Skip / Block` directly shape future recommendations.
+- **Bookmark record suite**: additions, click ranking, and related history with calendar/filter views.
+- **Active-time tracking**: weighted bookmark-page activity with range-based ranking.
+- **Calibration tools**: manual + auto calibration to realign data after history deletions.
+- **AI Push & Analyze**: push bookmark records, recommendation signals, and Markdown docs to GitHub cloud sync, with `AGENTS.md` / `CLAUDE.md` rules for AI analysis.
+- **Context-aware search**: one search box, multiple modes (keywords, date ranges, S-score filters).
+- **Bilingual + themes**: auto language detection and light/dark themes.
 
 ### Data & Privacy
 - **Local Storage by Default**: Core states are stored locally in browser storage (no dedicated backend service).
@@ -124,11 +171,7 @@ Bookmark Record and Recommend/
 - Favicons may be loaded from the browser's built-in favicon service or public favicon providers, then persisted in local cache.
 - For more details, please refer to our [Privacy Policy (`PRIVACY_POLICY.md`)](Bookmark-Record-Recommend-main/PRIVACY_POLICY.md)
 
-### Docs
-- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md): current project structure and module map
-- [`docs/S_SCORE_ALGORITHM_V6_4.md`](docs/S_SCORE_ALGORITHM_V6_4.md): current S-score v6.4, maintained buckets, and push structure
-- [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md): limitations and implementation compromises
-- [`docs/归档/00--归档索引-请先读.md`](docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md): historical archive index and deletion candidates
+
 
 ---
 

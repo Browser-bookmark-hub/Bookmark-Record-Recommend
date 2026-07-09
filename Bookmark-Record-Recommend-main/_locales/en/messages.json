@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extensionDescription": {
-    "message": "browsing history, rankings, related records, time tracking, and recommend list.",
+    "message": "Compute recommendations from bookmarks and browsing history, with interfaces for push and analysis.",
     "description": "Extension description"
   },
   "actionTitle": {
