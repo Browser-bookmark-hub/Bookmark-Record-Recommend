@@ -23221,11 +23221,29 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
     widgetList.innerHTML = '';
 
     const chartWrap = document.createElement('div');
-    chartWrap.className = 'widgets-mini-chart-wrap';
+    chartWrap.className = 'widgets-mini-chart-wrap widgets-mini-line-chart-wrap';
 
     const tooltip = document.createElement('div');
     tooltip.className = 'widgets-mini-chart-tooltip';
     chartWrap.appendChild(tooltip);
+
+    const axisLayer = document.createElement('div');
+    axisLayer.className = 'widgets-mini-chart-axis-layer';
+    const appendAxisLabel = (textContent, x, y, anchor = 'middle', axis = 'x') => {
+        const label = document.createElement('span');
+        label.className = `widgets-mini-chart-axis-label widgets-mini-chart-axis-label-${axis}`;
+        label.textContent = String(textContent ?? '');
+        label.style.left = `${(Number(x || 0) / 320) * 100}%`;
+        label.style.top = `${(Number(y || 0) / 116) * 100}%`;
+        if (anchor === 'start') {
+            label.style.transform = 'translate(0, -50%)';
+        } else if (anchor === 'end') {
+            label.style.transform = 'translate(-100%, -50%)';
+        } else {
+            label.style.transform = 'translate(-50%, -50%)';
+        }
+        axisLayer.appendChild(label);
+    };
 
     const svg = createWidgetsSvgElement('svg');
     svg.setAttribute('class', 'widgets-mini-chart-svg');
@@ -23272,12 +23290,7 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
         svg.appendChild(line);
 
         if (i === 0 || i === 3) {
-            const yLabel = createWidgetsSvgElement('text');
-            yLabel.setAttribute('class', 'widgets-mini-chart-axis-text');
-            yLabel.setAttribute('x', '2');
-            yLabel.setAttribute('y', String(y + 3));
-            yLabel.textContent = String(Math.round(i === 0 ? 0 : safeMax));
-            svg.appendChild(yLabel);
+            appendAxisLabel(String(Math.round(i === 0 ? 0 : safeMax)), 2, y + 3, 'start', 'y');
         }
     }
 
@@ -23369,17 +23382,12 @@ function renderWidgetsMiniLineChart(widgetList, payload, options = {}) {
         svg.appendChild(circle);
 
         if (xLabelIndexes.has(index)) {
-            const text = createWidgetsSvgElement('text');
-            text.setAttribute('class', 'widgets-mini-chart-axis-text');
-            text.setAttribute('x', String(point.x));
-            text.setAttribute('y', '112');
-            text.setAttribute('text-anchor', index === 0 ? 'start' : (index === chartPoints.length - 1 ? 'end' : 'middle'));
-            text.textContent = point.xLabel;
-            svg.appendChild(text);
+            appendAxisLabel(point.xLabel, point.x, 112, index === 0 ? 'start' : (index === chartPoints.length - 1 ? 'end' : 'middle'), 'x');
         }
     });
 
     chartWrap.appendChild(svg);
+    chartWrap.appendChild(axisLayer);
     widgetList.appendChild(chartWrap);
 
     const meta = document.createElement('div');
