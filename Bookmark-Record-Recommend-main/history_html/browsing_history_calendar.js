@@ -1049,17 +1049,37 @@ class BrowsingHistoryCalendar {
     }
 
     preloadFavicons() {
-        // 收集所有书签URL
-        const allUrls = [];
+        // 收集有限数量的唯一域名，避免在后台把全部书签点击记录的 favicon 都读入内存。
+        const MAX_WARMUP_DOMAINS = 150;
+        const warmUrls = [];
+        const seenDomains = new Set();
+
+        const getWarmupDomain = (url) => {
+            if (!url) return '';
+            try {
+                if (typeof FaviconCache !== 'undefined' && FaviconCache._getHostnameFromUrl) {
+                    return FaviconCache._getHostnameFromUrl(url);
+                }
+                return new URL(url).hostname.toLowerCase();
+            } catch (_) {
+                return '';
+            }
+        };
+
         for (const bookmarks of this.bookmarksByDate.values()) {
-            bookmarks.forEach(bm => {
-                if (bm.url) allUrls.push(bm.url);
-            });
+            for (const bm of bookmarks) {
+                const domain = getWarmupDomain(bm?.url);
+                if (!domain || seenDomains.has(domain)) continue;
+                seenDomains.add(domain);
+                warmUrls.push(bm.url);
+                if (seenDomains.size >= MAX_WARMUP_DOMAINS) break;
+            }
+            if (seenDomains.size >= MAX_WARMUP_DOMAINS) break;
         }
 
         // 预热favicon缓存
         if (typeof warmupFaviconCache === 'function') {
-            warmupFaviconCache(allUrls).catch(err => {
+            warmupFaviconCache(warmUrls).catch(err => {
                 console.warn('[BrowsingHistoryCalendar] Favicon预热失败:', err);
             });
         }
