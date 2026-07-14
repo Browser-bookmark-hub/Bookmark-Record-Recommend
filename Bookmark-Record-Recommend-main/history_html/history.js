@@ -2044,6 +2044,9 @@ const RELATED_HISTORY_EXPORT_DEFAULT_LIMIT = 150;
 const RELATED_HISTORY_EXPORT_GROUP_SIZE = 50;
 const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE = 10;
 const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER = 10;
+const RANKING_EXPORT_LIMIT_STORAGE_KEY_PREFIX = 'rankingExportLimit';
+const RELATED_HISTORY_CONTEXT_EXPORT_BEFORE_KEY = 'relatedHistoryContextExportBefore';
+const RELATED_HISTORY_CONTEXT_EXPORT_AFTER_KEY = 'relatedHistoryContextExportAfter';
 const BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE = 50;
 const BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT = 50;
 const BROWSING_RANKING_SINGLE_EXPORT_GROUP_SIZE_KEY = 'browsingRankingSingleExportGroupSize';
@@ -2158,6 +2161,68 @@ function normalizeRankingExportLimit(value, fallback = RANKING_EXPORT_DEFAULT_LI
     const parsed = parseInt(String(value || '').trim(), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return Math.max(1, Number(fallback) || RANKING_EXPORT_DEFAULT_LIMIT);
     return parsed;
+}
+
+function getRankingExportLimitStorageKey(kind) {
+    return `${RANKING_EXPORT_LIMIT_STORAGE_KEY_PREFIX}:${String(kind || 'default')}`;
+}
+
+function readRankingExportLimit(kind) {
+    const fallback = getRankingExportDefaultLimit(kind);
+    try {
+        return normalizeRankingExportLimit(localStorage.getItem(getRankingExportLimitStorageKey(kind)), fallback);
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function saveRankingExportLimit(kind, value) {
+    try {
+        localStorage.setItem(
+            getRankingExportLimitStorageKey(kind),
+            String(normalizeRankingExportLimit(value, getRankingExportDefaultLimit(kind)))
+        );
+    } catch (_) { }
+}
+
+function readRelatedHistoryContextBeforeCount() {
+    try {
+        return normalizeRelatedHistoryContextCount(
+            localStorage.getItem(RELATED_HISTORY_CONTEXT_EXPORT_BEFORE_KEY),
+            RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE
+        );
+    } catch (_) {
+        return RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE;
+    }
+}
+
+function readRelatedHistoryContextAfterCount() {
+    try {
+        return normalizeRelatedHistoryContextCount(
+            localStorage.getItem(RELATED_HISTORY_CONTEXT_EXPORT_AFTER_KEY),
+            RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER
+        );
+    } catch (_) {
+        return RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER;
+    }
+}
+
+function saveRelatedHistoryContextBeforeCount(value) {
+    try {
+        localStorage.setItem(
+            RELATED_HISTORY_CONTEXT_EXPORT_BEFORE_KEY,
+            String(normalizeRelatedHistoryContextCount(value, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE))
+        );
+    } catch (_) { }
+}
+
+function saveRelatedHistoryContextAfterCount(value) {
+    try {
+        localStorage.setItem(
+            RELATED_HISTORY_CONTEXT_EXPORT_AFTER_KEY,
+            String(normalizeRelatedHistoryContextCount(value, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER))
+        );
+    } catch (_) { }
 }
 
 function getRankingExportNoteColor(index) {
@@ -3866,6 +3931,7 @@ async function buildRankingExportPayload(kind, limit) {
 
 async function performRankingExport(kind, format, limitInput, menuEl = null) {
     const limit = normalizeRankingExportLimit(limitInput, getRankingExportDefaultLimit(kind));
+    saveRankingExportLimit(kind, limit);
     try {
         showToast(getRankingExportText('exporting'));
         const payload = await buildRankingExportPayload(kind, limit);
@@ -4106,7 +4172,7 @@ function showRankingExportMenu(kind, anchorEl) {
     menu.id = 'rankingExportMenu';
     menu.className = 'ranking-export-menu';
     const currentScopeText = getRankingExportMenuScopeLabel(kind);
-    const defaultLimit = getRankingExportDefaultLimit(kind);
+    const defaultLimit = readRankingExportLimit(kind);
     const supportedFormats = getRankingExportSupportedFormats(kind);
     const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
     const infoBubbleHtml = buildRankingExportInfoBubbleHtml(kind, supportedFormats, bookmarkCanvasLink);
@@ -4162,6 +4228,14 @@ function showRankingExportMenu(kind, anchorEl) {
 
     const input = menu.querySelector('#rankingExportLimitInput');
     if (input) {
+        input.addEventListener('input', () => {
+            saveRankingExportLimit(kind, input.value);
+        });
+        input.addEventListener('change', () => {
+            const normalized = normalizeRankingExportLimit(input.value, getRankingExportDefaultLimit(kind));
+            input.value = normalized;
+            saveRankingExportLimit(kind, normalized);
+        });
         input.focus();
         input.select();
     }
@@ -4230,8 +4304,8 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
     const menu = document.createElement('div');
     menu.id = 'browsingRelatedContextExportMenu';
     menu.className = 'ranking-export-menu related-context-export-menu';
-    const beforeDefault = RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE;
-    const afterDefault = RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER;
+    const beforeDefault = readRelatedHistoryContextBeforeCount();
+    const afterDefault = readRelatedHistoryContextAfterCount();
     const currentScopeText = getRankingExportMenuScopeLabel('related-history');
     const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
     const infoBubbleHtml = buildRankingExportInfoBubbleHtml('related-history', ['json'], bookmarkCanvasLink);
@@ -4282,8 +4356,26 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
     const highlightedInput = menu.querySelector('#relatedContextHighlightedInput');
     const targetText = menu.querySelector('#relatedContextTargetText');
     if (beforeInput) {
+        beforeInput.addEventListener('input', () => {
+            saveRelatedHistoryContextBeforeCount(beforeInput.value);
+        });
+        beforeInput.addEventListener('change', () => {
+            const normalized = normalizeRelatedHistoryContextCount(beforeInput.value, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE);
+            beforeInput.value = normalized;
+            saveRelatedHistoryContextBeforeCount(normalized);
+        });
         beforeInput.focus();
         beforeInput.select();
+    }
+    if (afterInput) {
+        afterInput.addEventListener('input', () => {
+            saveRelatedHistoryContextAfterCount(afterInput.value);
+        });
+        afterInput.addEventListener('change', () => {
+            const normalized = normalizeRelatedHistoryContextCount(afterInput.value, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER);
+            afterInput.value = normalized;
+            saveRelatedHistoryContextAfterCount(normalized);
+        });
     }
     bindRankingExportInfoBubble(menu);
 
@@ -44762,6 +44854,8 @@ function buildBrowsingRelatedContextExportPayload(groupIndex, beforeInput, after
 }
 
 async function performBrowsingRelatedContextExport(groupIndex, beforeInput, afterInput, options = {}, menuEl = null) {
+    saveRelatedHistoryContextBeforeCount(beforeInput);
+    saveRelatedHistoryContextAfterCount(afterInput);
     try {
         showToast(getRankingExportText('exporting'));
         const payload = buildBrowsingRelatedContextExportPayload(groupIndex, beforeInput, afterInput, options);
