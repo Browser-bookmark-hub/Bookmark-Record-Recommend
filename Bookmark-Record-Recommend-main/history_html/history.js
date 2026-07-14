@@ -147,6 +147,8 @@ const SYNC_ACTIVITY_STORAGE_KEY = 'aiSyncActivity_v1';
 const SYNC_CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'aiSyncControlPanelCollapsed_v2';
 const SYNC_MARKDOWN_VIEW_MODE_STORAGE_KEY = 'aiSyncMarkdownViewMode_v1';
 const SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY = 'aiSyncAgentTemplateHash_v1';
+const SYNC_PUSH_TIME_RANGE_STORAGE_KEY = 'aiSyncPushTimeRangeState_v1';
+const SYNC_PUSH_TIME_RANGE_LEGACY_STORAGE_KEY = 'syncPushTimeRange';
 const SYNC_REALTIME_MARKDOWN_RENDER = true;
 const SYNC_PROVIDER_GITHUB = 'github';
 const SYNC_PROVIDER_LOCAL = 'local';
@@ -173,13 +175,35 @@ const SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH = 'data/packages/bookmark-reco
 const SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH = 'data/raw-native/bookmarks-tree.json';
 const SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH = 'data/raw-native/history-visits.jsonl';
 const SYNC_GITHUB_META_STATE_PATH = 'meta/sync_state.json';
+const SYNC_GITHUB_MANUAL_EXPORT_ROOT = 'manual-export';
 const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
+const SYNC_GITHUB_FILE_WARN_SIZE_BYTES = 50 * 1024 * 1024;
+const SYNC_GITHUB_FILE_HARD_SIZE_BYTES = 100 * 1024 * 1024;
 const SYNC_HISTORY_VISITS_EXPORT_LIMIT = 50000;
 const SYNC_CLOUD_ROOT_FOLDER_ZH = '书签记录与推荐';
 const SYNC_CLOUD_ROOT_FOLDER_EN = 'Bookmark Record and Recommend';
+const SYNC_LOCAL_PUSH_FOLDER_ZH = '推送与分析';
+const SYNC_LOCAL_PUSH_FOLDER_EN = 'Push and Analysis';
+const SYNC_MANUAL_EXPORT_LOCAL_FOLDER_ZH = '手动导出';
+const SYNC_MANUAL_EXPORT_LOCAL_FOLDER_EN = 'Manual Export';
 const SYNC_OUTPUT_NAMING_LEGACY = 'legacy-v1';
 const SYNC_OUTPUT_NAMING_RANGE = 'range-v2';
 const SYNC_RANGE_NAMING_MIN_VERSION = '0.3.9';
+const MANUAL_EXPORT_DESTINATION_STORAGE_KEY = 'manualExportDestination_v1';
+const MANUAL_EXPORT_DESTINATION_LOCAL = 'local';
+const MANUAL_EXPORT_DESTINATION_GITHUB = 'github';
+const SYNC_PROVIDER_VALUES = Object.freeze([SYNC_PROVIDER_GITHUB, SYNC_PROVIDER_LOCAL]);
+const MANUAL_EXPORT_DESTINATION_VALUES = Object.freeze([MANUAL_EXPORT_DESTINATION_GITHUB, MANUAL_EXPORT_DESTINATION_LOCAL]);
+const MANUAL_EXPORT_CATEGORY_DEFS = Object.freeze({
+    'browsing-ranking': { remote: 'click-ranking', zh: '点击排行', en: 'Click Ranking' },
+    'current-tracking': { remote: 'current-tracking', zh: '正在追踪', en: 'Current Tracking' },
+    'time-ranking': { remote: 'time-ranking', zh: '时间排行', en: 'Time Ranking' },
+    'related-history': { remote: 'related-history', zh: '关联记录', en: 'Related History' },
+    'postponed-review': { remote: 'postponed-review', zh: '待复习', en: 'Review Queue' },
+    'bookmark-status': { remote: 'bookmark-status', zh: '书签情况', en: 'Bookmark Status' },
+    'bookmark-addition-records': { remote: 'bookmark-addition-records', zh: '书签添加记录', en: 'Bookmark Addition Records' },
+    'bookmark-click-records': { remote: 'bookmark-click-records', zh: '书签点击记录', en: 'Bookmark Click Records' }
+});
 const SYNC_AGENT_TEMPLATE_FALLBACKS = Object.freeze({
     zh_CN: `# Bookmark Record and Recommend AI 规则
 
@@ -207,13 +231,19 @@ let syncAgentTemplateLoadPromise = null;
 
 const SYNC_DEFAULT_CONFIG = Object.freeze({
     remoteProvider: SYNC_PROVIDER_GITHUB,
+    remoteProviders: [SYNC_PROVIDER_GITHUB],
     githubRepoToken: '',
     githubRepoOwner: '',
     githubRepoName: '',
     githubRepoBranch: 'main',
+    githubRepoBasePath: '',
     bookmarkRecommend: true,
     bookmarkRecord: true,
     rawNative: true,
+    syncPushTimeRange: 'month',
+    syncPushLastPresetRange: 'month',
+    syncPushCustomRange: null,
+    syncPushTimeRangeUpdatedAt: 0,
     syncOutputNamingVersion: SYNC_RANGE_NAMING_MIN_VERSION,
     syncOutputNamingMode: SYNC_OUTPUT_NAMING_RANGE
 });
@@ -2091,9 +2121,21 @@ function getRankingExportText(key) {
         exportInfoRelatedContext: isZh ? '右键任意条目可单独导出上下文。' : 'Right-click any item to export its context.',
         exportInfoRelatedOrangeRange: isZh ? '橙色选中：以选中项为中心向上/向下拓展。' : 'Orange selected expands above and below each selected item.',
         exportInfoRelatedOrangeSource: isZh ? '来源：「书签点击记录」、「点击排行」书签条目的跳转模式。' : 'Source: bookmark jump mode from bookmark click records and click ranking.',
+        exportInfoDestination: isZh ? '导出方向：本地会保存到“书签记录与推荐/手动导出/<分类>/<YYYY-MM-DD>”；GitHub 会使用“推送与分析”的 GitHub 配置并写入 Base Path 下的“书签记录与推荐/manual-export/<category>/<YYYY-MM-DD>”（Base Path 可不填）。' : 'Export destination: Local saves under “Bookmark Record and Recommend/Manual Export/<category>/<YYYY-MM-DD>”; GitHub uses the Push & Analysis GitHub settings and writes under “Bookmark Record and Recommend/manual-export/<category>/<YYYY-MM-DD>” inside Base Path (Base Path can be empty).',
+        exportInfoGithubConfig: isZh ? '选择 GitHub 前，请先在「推送与分析」配置 Token、Owner、Repo 和分支；Base Path 是可不填的路径前缀。' : 'Before choosing GitHub, configure token, owner, repo, and branch in Push & Analysis; Base Path is an optional path prefix.',
         exportInlineTipPrefix: isZh ? 'JSON 适用于 ' : 'JSON works with ',
         exportInlineTipSuffix: isZh ? ' 项目。' : '.',
         close: isZh ? '关闭' : 'Close',
+        exportFormat: isZh ? '导出格式' : 'Export format',
+        exportDestination: isZh ? '导出方向' : 'Export destination',
+        githubDestination: 'GitHub',
+        localDestination: isZh ? '本地' : 'Local',
+        githubNotConfigured: isZh ? '请先在「推送与分析」里配置 GitHub Token、Owner 和 Repo' : 'Configure GitHub token, owner, and repo in Push & Analysis first',
+        exportGithubDone: isZh ? '已导出到 GitHub' : 'Exported to GitHub',
+        exportLocalDone: isZh ? '已导出到本地' : 'Exported locally',
+        exportBothDone: isZh ? '已导出到 GitHub 与本地' : 'Exported to GitHub and local',
+        exportPartialDone: isZh ? '部分导出完成，请检查失败项' : 'Partially exported; check failed destination',
+        exportDestinationRequired: isZh ? '请至少选择一个导出方向' : 'Select at least one export destination',
         html: 'HTML',
         json: 'JSON',
         noData: isZh ? '没有可导出的内容' : 'No content to export',
@@ -2733,6 +2775,29 @@ function buildRankingExportFilename(payload, format) {
         `top${normalizeRankingExportLimit(payload?.limit)}`
     );
     return `${title}-${limitText}-${buildRankingExportDateKey(payload?.createdAt || Date.now())}.${ext}`;
+}
+
+function buildRankingExportFileContent(payload, format = 'json') {
+    const normalizedFormat = format === 'html' ? 'html' : 'json';
+    const text = normalizedFormat === 'json'
+        ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
+        : buildRankingExportHtml(payload);
+    const mimeType = normalizedFormat === 'json'
+        ? 'application/json;charset=utf-8'
+        : 'text/html;charset=utf-8';
+    return { text, mimeType, format: normalizedFormat };
+}
+
+async function exportRankingPayloadFile(payload, format = 'json', category = '', destination = MANUAL_EXPORT_DESTINATION_LOCAL, filenameOverride = '') {
+    const fileContent = buildRankingExportFileContent(payload, format);
+    const filename = filenameOverride || buildRankingExportFilename(payload, fileContent.format);
+    return await exportManualFile({
+        text: fileContent.text,
+        filename,
+        mimeType: fileContent.mimeType,
+        category: category || payload?.kind || 'manual-export',
+        destination
+    });
 }
 
 function getBrowsingRankingItemExportCount(item, range) {
@@ -3674,18 +3739,13 @@ async function performBrowsingRankingSingleExport(target, options = {}, format =
         }
         const supportedFormats = ['html', 'json'];
         const normalizedFormat = supportedFormats.includes(format) ? format : 'json';
-        const text = normalizedFormat === 'json'
-            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
-            : buildRankingExportHtml(payload);
-        const type = normalizedFormat === 'json'
-            ? 'application/json;charset=utf-8'
-            : 'text/html;charset=utf-8';
-        const blob = new Blob([text], { type });
-        const filename = buildRankingExportFilename(payload, normalizedFormat);
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
-        if (result?.success) {
+        const destinations = getManualExportDestinationsFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, normalizedFormat, 'browsing-ranking', destinations);
+        if (isManualExportResultCompleteEnough(result)) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(getManualExportResultToastText(result, destinations));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[BrowsingRankingSingleExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -3941,18 +4001,13 @@ async function performRankingExport(kind, format, limitInput, menuEl = null) {
         }
         const supportedFormats = getRankingExportSupportedFormats(kind);
         const normalizedFormat = supportedFormats.includes(format) ? format : supportedFormats[0];
-        const text = normalizedFormat === 'json'
-            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
-            : buildRankingExportHtml(payload);
-        const type = normalizedFormat === 'json'
-            ? 'application/json;charset=utf-8'
-            : 'text/html;charset=utf-8';
-        const blob = new Blob([text], { type });
-        const filename = buildRankingExportFilename(payload, normalizedFormat);
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
-        if (result?.success) {
+        const destinations = getManualExportDestinationsFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, normalizedFormat, kind, destinations);
+        if (isManualExportResultCompleteEnough(result)) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(getManualExportResultToastText(result, destinations));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[RankingExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -3985,6 +4040,10 @@ function buildRankingExportInfoBubbleHtml(kind, supportedFormats = [], bookmarkC
                     <span>${escapeHtml(getRankingExportText('exportInfoJsonFormat'))}</span>
                     <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoJsonAppliesPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInfoJsonAppliesSuffix'))}</span>
                 </li>
+                <li>
+                    <span>${escapeHtml(getRankingExportText('exportInfoDestination'))}</span>
+                    <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoGithubConfig'))}</span>
+                </li>
                 ${relatedInfoHtml}
             </ul>
         </div>
@@ -4009,6 +4068,15 @@ function bindRankingExportInfoBubble(menu) {
     });
 }
 
+function buildRankingExportFormatActionsHtml(formats = []) {
+    return (Array.isArray(formats) ? formats : []).map(format => {
+        const normalized = format === 'html' ? 'html' : 'json';
+        const iconClass = normalized === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
+        const label = normalized === 'html' ? getRankingExportText('html') : getRankingExportText('json');
+        return `<button type="button" data-format="${normalized}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
+    }).join('');
+}
+
 function removeBrowsingRankingItemExportMenu() {
     const menu = document.getElementById('browsingRankingItemExportMenu');
     if (menu) menu.remove();
@@ -4030,11 +4098,7 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
     const defaultGroupSize = readBrowsingRankingSingleExportGroupSize();
     const defaultOtherLimit = readBrowsingRankingSingleExportOtherLimit();
     const supportsGroupSize = target?.type === 'domain' || target?.type === 'subdomain';
-    const actionButtonsHtml = ['html', 'json'].map(format => {
-        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
-        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
-        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
-    }).join('');
+    const actionButtonsHtml = buildRankingExportFormatActionsHtml(['html', 'json']);
     const groupSizeRowHtml = supportsGroupSize
         ? `
             <div class="ranking-export-menu-row ranking-item-export-group-size-row">
@@ -4067,8 +4131,15 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
         </label>
         ${groupSizeRowHtml}
         ${otherLimitRowHtml}
-        <div class="ranking-export-menu-actions">
-            ${actionButtonsHtml}
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml('browsingRankingItemExport')}
+        </div>
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                ${actionButtonsHtml}
+            </div>
         </div>
     `;
     document.body.appendChild(menu);
@@ -4080,6 +4151,7 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
         ? { x: rect.left, y: rect.bottom + 6 }
         : { x: window.innerWidth / 2, y: window.innerHeight / 2 });
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
 
     const contextInput = menu.querySelector('#browsingRankingItemContextInput');
     const groupSizeInput = menu.querySelector('#browsingRankingItemGroupSizeInput');
@@ -4176,11 +4248,7 @@ function showRankingExportMenu(kind, anchorEl) {
     const supportedFormats = getRankingExportSupportedFormats(kind);
     const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
     const infoBubbleHtml = buildRankingExportInfoBubbleHtml(kind, supportedFormats, bookmarkCanvasLink);
-    const actionButtonsHtml = supportedFormats.map(format => {
-        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
-        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
-        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
-    }).join('');
+    const actionButtonsHtml = buildRankingExportFormatActionsHtml(supportedFormats);
     const inlineTipHtml = isRankingExportInlineTipDismissed(kind)
         ? ''
         : `
@@ -4208,8 +4276,15 @@ function showRankingExportMenu(kind, anchorEl) {
             <label for="rankingExportLimitInput">${escapeHtml(getRankingExportText('limitLabel'))}</label>
             <input id="rankingExportLimitInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${defaultLimit}">
         </div>
-        <div class="ranking-export-menu-actions">
-            ${actionButtonsHtml}
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml(`rankingExport${kind}`)}
+        </div>
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                ${actionButtonsHtml}
+            </div>
         </div>
     `;
     document.body.appendChild(menu);
@@ -4240,6 +4315,7 @@ function showRankingExportMenu(kind, anchorEl) {
         input.select();
     }
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
     const inlineTip = menu.querySelector('.ranking-export-inline-tip');
     const inlineTipClose = menu.querySelector('.ranking-export-inline-tip-close');
     if (inlineTip && inlineTipClose) {
@@ -4344,8 +4420,15 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
             <label for="relatedContextAfterInput">${escapeHtml(getRankingExportText('contextAfterLabel'))}</label>
             <input id="relatedContextAfterInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${afterDefault}">
         </div>
-        <div class="ranking-export-menu-actions">
-            <button type="button" data-format="json"><i class="fas fa-file-alt"></i>${escapeHtml(getRankingExportText('json'))}</button>
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml('browsingRelatedContextExport')}
+        </div>
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                <button type="button" data-format="json"><i class="fas fa-file-alt"></i>${escapeHtml(getRankingExportText('json'))}</button>
+            </div>
         </div>
     `;
     document.body.appendChild(menu);
@@ -4378,6 +4461,7 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
         });
     }
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
 
     if (highlightedInput && targetText) {
         highlightedInput.addEventListener('change', () => {
@@ -8291,6 +8375,12 @@ function applyLanguage() {
     if (syncGithubRepoLabel) syncGithubRepoLabel.textContent = i18n.syncGithubRepoLabel[currentLang];
     const syncGithubBranchLabel = document.getElementById('syncGithubBranchLabel');
     if (syncGithubBranchLabel) syncGithubBranchLabel.textContent = i18n.syncGithubBranchLabel[currentLang];
+    const syncGithubBasePathLabel = document.getElementById('syncGithubBasePathLabel');
+    if (syncGithubBasePathLabel) syncGithubBasePathLabel.textContent = getSyncText('syncGithubBasePathLabel', 'Base Path');
+    const syncGithubBasePathInput = document.getElementById('syncGithubBasePathInput');
+    if (syncGithubBasePathInput) {
+        syncGithubBasePathInput.placeholder = getSyncBasePathPlaceholder(currentLang);
+    }
     const syncRepoTestBtnText = document.getElementById('syncRepoTestBtnText');
     if (syncRepoTestBtnText) syncRepoTestBtnText.textContent = i18n.syncRepoTestBtnText[currentLang];
     const syncRepoOpenHtmlBtnText = document.getElementById('syncRepoOpenHtmlBtnText');
@@ -8964,6 +9054,10 @@ function applyLanguage() {
         addPostponedTreeExportBtn.setAttribute('aria-label', getRankingExportText('exportBookmarkStatus'));
     }
     if (addPostponedTreeExportText) addPostponedTreeExportText.textContent = getRankingExportText('export');
+    document.querySelectorAll('.add-tree-export-destination-label').forEach(label => {
+        label.textContent = getRankingExportText('exportDestination');
+    });
+    hydrateManualExportDestinationControls(document);
     const addPostponedConfirmBtn = document.getElementById('addPostponedConfirmBtn');
     if (addPostponedConfirmBtn) addPostponedConfirmBtn.textContent = i18n.addPostponedConfirmText[currentLang];
 
@@ -9379,6 +9473,7 @@ function initializeUI() {
 
     initBrowsingCalibrationMenu();
     initRankingExportControls();
+    hydrateManualExportDestinationControls(document);
     updateMainSearchVisibility();
     initResponsiveRecommendLabelObservers();
     initScrollToTopButton();
@@ -12041,8 +12136,11 @@ function normalizeSyncActivityState(raw) {
 }
 
 function getSyncProviderStatusLabel(provider, lang = currentLang) {
-    const normalized = String(provider || '').trim().toLowerCase();
-    if (normalized === SYNC_PROVIDER_LOCAL) {
+    const values = normalizeSyncProviderValues(provider);
+    if (values.includes(SYNC_PROVIDER_GITHUB) && values.includes(SYNC_PROVIDER_LOCAL)) {
+        return lang === 'zh_CN' ? 'GitHub + 本地快照' : 'GitHub + local snapshot';
+    }
+    if (values.includes(SYNC_PROVIDER_LOCAL)) {
         return lang === 'zh_CN' ? '本地快照' : 'Local snapshot';
     }
     return 'GitHub';
@@ -12055,8 +12153,9 @@ function joinSyncStatusParts(parts) {
 function buildSyncRepoStatusDetailParts(repoConfig, activity, prefix, lang = currentLang) {
     const provider = String(activity?.[`${prefix}Provider`] || repoConfig?.provider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
     const branch = String(activity?.[`${prefix}Branch`] || repoConfig?.branch || '').trim();
+    const providers = normalizeSyncProviderValues(provider);
     const parts = [getSyncProviderStatusLabel(provider, lang)];
-    if (provider === SYNC_PROVIDER_GITHUB && branch) {
+    if (providers.includes(SYNC_PROVIDER_GITHUB) && branch) {
         parts.push(branch);
     }
     return parts;
@@ -12066,18 +12165,22 @@ function buildSyncRepoConfiguredName(repoConfig, activity, lang = currentLang) {
     const owner = String(activity?.lastConfiguredOwner || repoConfig?.owner || '').trim();
     const repo = String(activity?.lastConfiguredRepo || repoConfig?.repo || '').trim();
     const branch = String(activity?.lastConfiguredBranch || repoConfig?.branch || '').trim();
-    if (repoConfig?.provider === SYNC_PROVIDER_LOCAL) {
+    const providerValue = activity?.lastConfiguredProvider || repoConfig?.provider || SYNC_PROVIDER_GITHUB;
+    const providers = normalizeSyncProviderValues(providerValue);
+    if (!providers.includes(SYNC_PROVIDER_GITHUB)) {
         return getSyncProviderStatusLabel(SYNC_PROVIDER_LOCAL, lang);
     }
     const fullName = owner && repo ? `${owner}/${repo}` : (repo || owner);
-    return joinSyncStatusParts([fullName, branch ? `@ ${branch}` : '']);
+    const providerLabel = providers.includes(SYNC_PROVIDER_LOCAL) ? getSyncProviderStatusLabel(providers, lang) : '';
+    return joinSyncStatusParts([providerLabel, fullName, branch ? `@ ${branch}` : '']);
 }
 
 function buildSyncRepoActivityStatus(configInput = syncConfigState, activityInput = syncActivityState) {
     const activity = normalizeSyncActivityState(activityInput || null);
     const repoConfig = buildSyncRepoConfig(configInput || syncConfigState);
+    const providers = getSyncProviderValuesFromConfig(configInput || syncConfigState);
     const missingReason = getSyncRepoMissingReason(repoConfig);
-    if (repoConfig.provider === SYNC_PROVIDER_GITHUB && missingReason.code) {
+    if (providers.includes(SYNC_PROVIDER_GITHUB) && !providers.includes(SYNC_PROVIDER_LOCAL) && missingReason.code) {
         return {
             localized: getSyncI18nPair('syncRepoStatusIdle', '等待配置', 'Waiting for configuration'),
             type: 'neutral'
@@ -12158,8 +12261,9 @@ function buildSyncRepoActivityStatus(configInput = syncConfigState, activityInpu
 function buildSyncActivityWithConfigSaved(activityInput, configInput, timestamp = Date.now()) {
     const next = normalizeSyncActivityState(activityInput || null);
     const repoConfig = buildSyncRepoConfig(configInput || syncConfigState);
+    const providerValue = buildSyncProviderActivityValue(getSyncProviderValuesFromConfig(configInput || syncConfigState));
     next.lastConfiguredAt = Number(timestamp || Date.now()) || Date.now();
-    next.lastConfiguredProvider = repoConfig.provider;
+    next.lastConfiguredProvider = providerValue;
     next.lastConfiguredOwner = repoConfig.owner;
     next.lastConfiguredRepo = repoConfig.repo;
     next.lastConfiguredBranch = repoConfig.branch;
@@ -12298,12 +12402,12 @@ function getSyncRangeTagFromSnapshot(snapshotInput = null, fallbackTimestamp = D
 
 function buildSyncLocalSnapshotFileName(timestamp = Date.now(), rangeTag = '') {
     const safeRangeTag = String(rangeTag || '').trim() || normalizeSyncRangeTagFromKeys('', '', timestamp);
-    return `bookmark_record_and_recommend_${safeRangeTag}.json`;
+    return buildSyncLocalPushDownloadPath(`bookmark_record_and_recommend_${safeRangeTag}.json`);
 }
 
 function buildSyncLocalExportArchiveName(timestamp = Date.now(), rangeTag = '') {
     const safeRangeTag = String(rangeTag || '').trim() || normalizeSyncRangeTagFromKeys('', '', timestamp);
-    return `bookmark_record_and_recommend_${safeRangeTag}.zip`;
+    return buildSyncLocalPushDownloadPath(`bookmark_record_and_recommend_${safeRangeTag}.zip`);
 }
 
 async function downloadSyncLocalSnapshot(snapshotInput) {
@@ -12751,6 +12855,482 @@ async function downloadSyncBlobAsFile(blobInput, filenameInput, options = {}) {
     }
 }
 
+function normalizeManualExportDestination(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === MANUAL_EXPORT_DESTINATION_GITHUB
+        ? MANUAL_EXPORT_DESTINATION_GITHUB
+        : MANUAL_EXPORT_DESTINATION_LOCAL;
+}
+
+function normalizeManualExportDestinations(value = '') {
+    const source = Array.isArray(value)
+        ? value
+        : String(value || '')
+            .split(/[,+|/\s]+/)
+            .filter(Boolean);
+    const destinations = [];
+    source.forEach((item) => {
+        const normalized = String(item || '').trim().toLowerCase();
+        if (!MANUAL_EXPORT_DESTINATION_VALUES.includes(normalized)) return;
+        if (!destinations.includes(normalized)) destinations.push(normalized);
+    });
+    return destinations.length ? destinations : [MANUAL_EXPORT_DESTINATION_LOCAL];
+}
+
+function getStoredManualExportDestination() {
+    return getStoredManualExportDestinations()[0] || MANUAL_EXPORT_DESTINATION_LOCAL;
+}
+
+function getStoredManualExportDestinations() {
+    try {
+        const raw = localStorage.getItem(MANUAL_EXPORT_DESTINATION_STORAGE_KEY);
+        if (!raw) return [MANUAL_EXPORT_DESTINATION_LOCAL];
+        try {
+            const parsed = JSON.parse(raw);
+            return normalizeManualExportDestinations(parsed);
+        } catch (_) {
+            return normalizeManualExportDestinations(raw);
+        }
+    } catch (_) {
+        return [MANUAL_EXPORT_DESTINATION_LOCAL];
+    }
+}
+
+function saveManualExportDestination(destination) {
+    return saveManualExportDestinations(destination)[0] || MANUAL_EXPORT_DESTINATION_LOCAL;
+}
+
+function saveManualExportDestinations(destinations) {
+    const normalized = normalizeManualExportDestinations(destinations);
+    try {
+        localStorage.setItem(MANUAL_EXPORT_DESTINATION_STORAGE_KEY, JSON.stringify(normalized));
+    } catch (_) { }
+    return normalized;
+}
+
+function getManualExportCategoryDef(categoryKey = '') {
+    const key = String(categoryKey || '').trim();
+    return MANUAL_EXPORT_CATEGORY_DEFS[key] || {
+        remote: sanitizeRankingExportFilenameSegment(key || 'manual-export', 'manual-export'),
+        zh: '手动导出',
+        en: 'Manual Export'
+    };
+}
+
+function getManualExportRemoteCategory(categoryKey = '') {
+    return normalizeSyncDownloadPathSegment(getManualExportCategoryDef(categoryKey).remote || 'manual-export')
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+}
+
+function getManualExportLocalCategory(categoryKey = '') {
+    const def = getManualExportCategoryDef(categoryKey);
+    return normalizeSyncDownloadPathSegment(currentLang === 'zh_CN' ? def.zh : def.en);
+}
+
+function getManualExportLocalRootFolderName() {
+    return getSyncCloudRootFolderName(currentLang);
+}
+
+function getManualExportLocalFolderName() {
+    return normalizeSyncDownloadPathSegment(
+        currentLang === 'zh_CN' ? SYNC_MANUAL_EXPORT_LOCAL_FOLDER_ZH : SYNC_MANUAL_EXPORT_LOCAL_FOLDER_EN
+    );
+}
+
+function sanitizeManualExportFilename(filename = '') {
+    const basename = getSyncPathBasename(filename) || String(filename || '').trim();
+    return normalizeSyncDownloadPathSegment(basename || `manual-export-${buildRankingExportDateKey(Date.now())}.txt`);
+}
+
+function buildManualExportLocalPath(filename = '', categoryKey = '', timestamp = Date.now()) {
+    return joinSyncRelativePath(
+        getManualExportLocalRootFolderName(),
+        getManualExportLocalFolderName(),
+        getManualExportLocalCategory(categoryKey),
+        buildSyncDateKey(timestamp),
+        sanitizeManualExportFilename(filename)
+    );
+}
+
+function buildManualExportGitHubRepoConfig(configInput = syncConfigState) {
+    const source = configInput && typeof configInput === 'object' ? configInput : syncConfigState;
+    return buildSyncRepoConfig({
+        ...(source || {}),
+        provider: SYNC_PROVIDER_GITHUB,
+        remoteProvider: SYNC_PROVIDER_GITHUB,
+        remoteProviders: [SYNC_PROVIDER_GITHUB]
+    });
+}
+
+function buildManualExportRemotePath(filename = '', categoryKey = '', timestamp = Date.now()) {
+    const repoConfig = buildManualExportGitHubRepoConfig(syncConfigState);
+    return joinSyncRelativePath(
+        resolveSyncCloudRootPath(repoConfig, currentLang),
+        SYNC_GITHUB_MANUAL_EXPORT_ROOT,
+        getManualExportRemoteCategory(categoryKey),
+        buildSyncDateKey(timestamp),
+        sanitizeManualExportFilename(filename)
+    );
+}
+
+function getManualExportDestinationFromContainer(container = null) {
+    return getManualExportDestinationsFromContainer(container)[0] || MANUAL_EXPORT_DESTINATION_LOCAL;
+}
+
+function getManualExportDestinationsFromContainer(container = null) {
+    const root = container && typeof container.querySelector === 'function' ? container : document;
+    const checked = Array.from(root.querySelectorAll('input[data-manual-export-destination]:checked'))
+        .map((input) => input.value);
+    return normalizeManualExportDestinations(checked.length ? checked : getStoredManualExportDestinations());
+}
+
+function buildManualExportDestinationControlHtml(idPrefix = 'manualExport', options = {}) {
+    const safePrefix = String(idPrefix || 'manualExport').replace(/[^a-zA-Z0-9_-]/g, '');
+    const selected = normalizeManualExportDestinations(options.selected || getStoredManualExportDestinations());
+    const name = `${safePrefix}Destination`;
+    const githubId = `${safePrefix}DestinationGithub`;
+    const localId = `${safePrefix}DestinationLocal`;
+    return `
+        <div class="manual-export-destination-group" role="group" aria-label="${escapeHtml(getRankingExportText('exportDestination'))}">
+            <label class="manual-export-destination-option">
+                <input id="${githubId}" type="checkbox" name="${name}" value="${MANUAL_EXPORT_DESTINATION_GITHUB}" data-manual-export-destination ${selected.includes(MANUAL_EXPORT_DESTINATION_GITHUB) ? 'checked' : ''}>
+                <span>${escapeHtml(getRankingExportText('githubDestination'))}</span>
+            </label>
+            <label class="manual-export-destination-option">
+                <input id="${localId}" type="checkbox" name="${name}" value="${MANUAL_EXPORT_DESTINATION_LOCAL}" data-manual-export-destination ${selected.includes(MANUAL_EXPORT_DESTINATION_LOCAL) ? 'checked' : ''}>
+                <span>${escapeHtml(getRankingExportText('localDestination'))}</span>
+            </label>
+        </div>
+    `;
+}
+
+function applyManualExportDestinationsToControls(destinations, root = document) {
+    const normalized = normalizeManualExportDestinations(destinations);
+    const container = root && typeof root.querySelectorAll === 'function' ? root : document;
+    container.querySelectorAll('input[data-manual-export-destination]').forEach((input) => {
+        input.checked = normalized.includes(normalizeManualExportDestination(input.value));
+    });
+    return normalized;
+}
+
+function hydrateManualExportDestinationControls(root = document) {
+    const container = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const destinationLabel = getRankingExportText('exportDestination');
+    const infoLabel = currentLang === 'zh_CN' ? '导出说明' : 'Export info';
+    const infoText = `${getRankingExportText('exportInfoDestination')} ${getRankingExportText('exportInfoGithubConfig')}`;
+    container.querySelectorAll('.manual-export-destination-heading, .add-tree-export-destination-label').forEach((label) => {
+        label.textContent = destinationLabel;
+    });
+    container.querySelectorAll('.manual-export-destination-group, .manual-export-destination-check-group').forEach((group) => {
+        group.setAttribute('aria-label', destinationLabel);
+    });
+    container.querySelectorAll('.manual-export-info-bubble').forEach((bubble) => {
+        bubble.textContent = infoText;
+    });
+    const selected = getStoredManualExportDestinations();
+    container.querySelectorAll('input[data-manual-export-destination]').forEach((input) => {
+        const labelSpan = input.nextElementSibling;
+        if (labelSpan) {
+            labelSpan.textContent = normalizeManualExportDestination(input.value) === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('githubDestination')
+                : getRankingExportText('localDestination');
+        }
+        input.checked = selected.includes(normalizeManualExportDestination(input.value));
+        if (input.dataset.manualExportDestinationBound === 'true') return;
+        input.dataset.manualExportDestinationBound = 'true';
+        input.addEventListener('change', () => {
+            const group = input.closest('.manual-export-destination-group, .manual-export-destination-check-group') || container;
+            let next = normalizeManualExportDestinations(
+                Array.from(group.querySelectorAll('input[data-manual-export-destination]:checked'))
+                    .map((item) => item.value)
+            );
+            if (!next.length) next = [MANUAL_EXPORT_DESTINATION_LOCAL];
+            if (!Array.from(group.querySelectorAll('input[data-manual-export-destination]:checked')).length) {
+                input.checked = true;
+                next = normalizeManualExportDestinations(input.value);
+            }
+            saveManualExportDestinations(next);
+            applyManualExportDestinationsToControls(next);
+            if (next.includes(MANUAL_EXPORT_DESTINATION_GITHUB)) {
+                try {
+                    if (typeof readSyncConfigFromUI === 'function') readSyncConfigFromUI();
+                    const missing = getManualExportGitHubMissingReason(buildManualExportGitHubRepoConfig(syncConfigState));
+                    if (missing.code) showToast(getRankingExportText('githubNotConfigured'));
+                } catch (_) { }
+            }
+        });
+    });
+    container.querySelectorAll('.manual-export-info-btn').forEach((btn) => {
+        btn.setAttribute('aria-label', infoLabel);
+        btn.title = infoLabel;
+        if (btn.dataset.manualExportInfoBound === 'true') return;
+        btn.dataset.manualExportInfoBound = 'true';
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const section = btn.closest('.export-section') || btn.parentElement;
+            const bubble = section?.querySelector('.manual-export-info-bubble, .ranking-export-info-bubble');
+            if (bubble) bubble.hidden = !bubble.hidden;
+        });
+    });
+}
+
+function getManualExportGitHubMissingReason(repoConfig) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    if (!config.token) {
+        return {
+            code: 'missing_token',
+            text: currentLang === 'zh_CN' ? 'GitHub Token 未配置' : 'GitHub token is not configured'
+        };
+    }
+    if (!config.owner || !config.repo) {
+        return {
+            code: 'missing_repo',
+            text: currentLang === 'zh_CN' ? 'Owner / Repo 未配置' : 'Owner / repo is not configured'
+        };
+    }
+    return { code: '', text: '' };
+}
+
+async function uploadManualExportFileToGitHub({ text = '', filename = '', category = 'manual-export', mimeType = '', timestamp = Date.now() } = {}) {
+    try {
+        if (typeof readSyncConfigFromUI === 'function') readSyncConfigFromUI();
+    } catch (_) { }
+    const repoConfig = buildManualExportGitHubRepoConfig(syncConfigState);
+    const missing = getManualExportGitHubMissingReason(repoConfig);
+    if (missing.code) {
+        const message = getRankingExportText('githubNotConfigured');
+        showToast(message);
+        return { success: false, notConfigured: true, error: missing.text || message };
+    }
+    const path = buildManualExportRemotePath(filename, category, timestamp);
+    const sizeCheck = validateSyncGitHubTextFilesSize([{ path, text }]);
+    if (!sizeCheck.success) {
+        const message = sizeCheck.error || (currentLang === 'zh_CN' ? 'GitHub 文件过大' : 'GitHub file is too large');
+        showToast(message);
+        return {
+            success: false,
+            tooLarge: true,
+            error: message,
+            path,
+            tooLargeFiles: sizeCheck.tooLargeFiles || []
+        };
+    }
+    if (Array.isArray(sizeCheck.warnings) && sizeCheck.warnings.length > 0) {
+        console.warn('[ManualExport] GitHub file size warning:', sizeCheck.warnings);
+    }
+
+    let branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    if (branchReady?.success && branchReady.branchWillBeCreated === true) {
+        branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    }
+    if (!branchReady?.success) {
+        return {
+            success: false,
+            error: branchReady?.error || (currentLang === 'zh_CN' ? 'GitHub 分支不可用' : 'GitHub branch is unavailable')
+        };
+    }
+
+    const branch = String(branchReady.branch || repoConfig.branch || 'main').trim() || 'main';
+    let headCommitSha = String(branchReady.sha || '').trim();
+    if (!headCommitSha) {
+        const branchRef = await syncGitHubGetBranchRef(repoConfig, branch);
+        if (!branchRef.success) {
+            return {
+                success: false,
+                error: branchRef.error || (currentLang === 'zh_CN' ? '读取 GitHub 分支失败' : 'Failed to read GitHub branch')
+            };
+        }
+        headCommitSha = String(branchRef.sha || '').trim();
+    }
+
+    const commitMessage = `[manual-export:${buildSyncDateKey(timestamp)}] add ${sanitizeManualExportFilename(filename)}`;
+    const file = { path, text: String(text == null ? '' : text) };
+    const graphqlResult = await syncGitHubCreateCommitOnBranch(repoConfig, {
+        branch,
+        expectedHeadOid: headCommitSha,
+        files: [file],
+        message: commitMessage
+    });
+    if (graphqlResult?.success) {
+        return {
+            success: true,
+            method: 'github_graphql',
+            branch,
+            path,
+            commitSha: String(graphqlResult.sha || ''),
+            mimeType
+        };
+    }
+
+    const headCommit = await syncGitHubGetCommit(repoConfig, headCommitSha);
+    if (!headCommit.success) {
+        return {
+            success: false,
+            error: headCommit.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '读取 GitHub commit 失败' : 'Failed to read GitHub commit')
+        };
+    }
+    const treeResult = await syncGitHubCreateTree(repoConfig, {
+        baseTreeSha: headCommit.treeSha,
+        entries: [buildSyncGitHubTreeTextEntry(path, text)]
+    });
+    if (!treeResult.success) {
+        return {
+            success: false,
+            error: treeResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '创建 GitHub tree 失败' : 'Failed to create GitHub tree')
+        };
+    }
+    const commitResult = await syncGitHubCreateCommit(repoConfig, {
+        message: commitMessage,
+        treeSha: treeResult.sha,
+        parentSha: headCommitSha
+    });
+    if (!commitResult.success) {
+        return {
+            success: false,
+            error: commitResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '创建 GitHub commit 失败' : 'Failed to create GitHub commit')
+        };
+    }
+    const updateRefResult = await syncGitHubUpdateBranchRef(repoConfig, {
+        branch,
+        commitSha: commitResult.sha
+    });
+    if (!updateRefResult.success) {
+        return {
+            success: false,
+            error: updateRefResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '更新 GitHub 分支失败' : 'Failed to update GitHub branch')
+        };
+    }
+    return {
+        success: true,
+        method: 'github_git_data',
+        branch,
+        path,
+        commitSha: String(commitResult.sha || ''),
+        mimeType
+    };
+}
+
+function getManualExportResultEntries(resultOrResults) {
+    const source = Array.isArray(resultOrResults) ? resultOrResults : [resultOrResults];
+    const entries = [];
+    source.forEach((result) => {
+        if (!result) return;
+        if (Array.isArray(result.results)) {
+            result.results.forEach((item) => {
+                if (item) entries.push(item);
+            });
+        } else {
+            entries.push(result);
+        }
+    });
+    return entries;
+}
+
+function getManualExportResultPrimaryError(resultOrResults) {
+    const entries = getManualExportResultEntries(resultOrResults);
+    const tooLargeEntry = entries.find((entry) => entry?.tooLarge && entry?.error);
+    if (tooLargeEntry) return String(tooLargeEntry.error || '');
+    return '';
+}
+
+function getManualExportResultToastText(resultOrResults, destinations = []) {
+    const requested = normalizeManualExportDestinations(destinations);
+    const entries = getManualExportResultEntries(resultOrResults);
+    const hasFailure = entries.some((entry) => entry && entry.success === false && !entry.notConfigured);
+    const hasPartial = Array.isArray(resultOrResults)
+        ? resultOrResults.some((result) => result?.partialSuccess)
+        : !!resultOrResults?.partialSuccess;
+    if (hasFailure || hasPartial) {
+        const primaryError = getManualExportResultPrimaryError(resultOrResults);
+        if (primaryError) return primaryError;
+        return getRankingExportText('exportPartialDone');
+    }
+    if (requested.includes(MANUAL_EXPORT_DESTINATION_GITHUB) && requested.includes(MANUAL_EXPORT_DESTINATION_LOCAL)) {
+        return getRankingExportText('exportBothDone');
+    }
+    return requested.includes(MANUAL_EXPORT_DESTINATION_GITHUB)
+        ? getRankingExportText('exportGithubDone')
+        : getRankingExportText('exportLocalDone');
+}
+
+function isManualExportResultCompleteEnough(result) {
+    return !!(result?.success || result?.partialSuccess);
+}
+
+async function exportManualFile({
+    text = '',
+    filename = '',
+    mimeType = 'text/plain;charset=utf-8',
+    category = 'manual-export',
+    destination = MANUAL_EXPORT_DESTINATION_LOCAL,
+    destinations = null,
+    preferSaveAs = false,
+    timestamp = Date.now()
+} = {}) {
+    const normalizedDestinations = normalizeManualExportDestinations(destinations || destination);
+    const safeFilename = sanitizeManualExportFilename(filename);
+    const content = String(text == null ? '' : text);
+    const runDestination = async (normalizedDestination) => {
+        if (normalizedDestination === MANUAL_EXPORT_DESTINATION_GITHUB) {
+            const result = await uploadManualExportFileToGitHub({
+                text: content,
+                filename: safeFilename,
+                category,
+                mimeType,
+                timestamp
+            });
+            return { ...result, destination: normalizedDestination };
+        }
+        const blob = new Blob([content], { type: mimeType || 'text/plain;charset=utf-8' });
+        const localPath = buildManualExportLocalPath(safeFilename, category, timestamp);
+        const result = await downloadSyncBlobAsFile(blob, localPath, { preferSaveAs });
+        return { ...result, destination: normalizedDestination, path: localPath };
+    };
+    if (normalizedDestinations.length === 1) {
+        const onlyDestination = normalizedDestinations[0];
+        const result = await runDestination(onlyDestination);
+        return {
+            ...result,
+            destinations: normalizedDestinations,
+            results: [result],
+            partialSuccess: false
+        };
+    }
+    const results = await Promise.all(normalizedDestinations.map(async (normalizedDestination) => {
+        try {
+            return await runDestination(normalizedDestination);
+        } catch (error) {
+            return {
+                success: false,
+                destination: normalizedDestination,
+                error: String(error?.message || error || 'export_failed')
+            };
+        }
+    }));
+    const successCount = results.filter((result) => result?.success).length;
+    return {
+        success: successCount === results.length,
+        partialSuccess: successCount > 0 && successCount < results.length,
+        notConfigured: successCount === 0 && results.some((result) => result?.notConfigured),
+        destinations: normalizedDestinations,
+        results,
+        error: results.find((result) => !result?.success)?.error || ''
+    };
+}
+
+try {
+    window.exportManualFile = exportManualFile;
+    window.getManualExportDestinationFromContainer = getManualExportDestinationFromContainer;
+    window.getManualExportDestinationsFromContainer = getManualExportDestinationsFromContainer;
+    window.getManualExportResultToastText = getManualExportResultToastText;
+    window.isManualExportResultCompleteEnough = isManualExportResultCompleteEnough;
+    window.hydrateManualExportDestinationControls = hydrateManualExportDestinationControls;
+    window.saveManualExportDestination = saveManualExportDestination;
+    window.saveManualExportDestinations = saveManualExportDestinations;
+} catch (_) { }
+
 async function buildSyncLocalExportBundle(repoConfigInput, snapshotInput) {
     const exportBundle = await buildSyncExportFiles(snapshotInput, repoConfigInput || syncConfigState, {
         provider: SYNC_PROVIDER_LOCAL,
@@ -12859,18 +13439,78 @@ function buildSyncRepoConfig(configInput = syncConfigState) {
     const config = normalizeSyncConfig(configInput || null);
     const rawProvider = String(raw.provider || '').trim().toLowerCase();
     const rawBranch = String(raw.branch || '').trim();
+    const rawBasePath = normalizeSyncConfiguredBasePath(raw.basePath || raw.githubRepoBasePath || '');
+    const basePath = rawBasePath || resolveSyncRepoBasePath(config);
+    const rootPath = resolveSyncCloudRootPath({ ...config, githubRepoBasePath: basePath }, currentLang);
     return {
         provider: rawProvider || String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        providers: getSyncProviderValuesFromConfig(config),
         token: String(raw.token || config.githubRepoToken || '').trim(),
         owner: String(raw.owner || config.githubRepoOwner || '').trim(),
         repo: String(raw.repo || config.githubRepoName || '').trim(),
-        branch: rawBranch || String(config.githubRepoBranch || 'main').trim() || 'main'
+        branch: rawBranch || String(config.githubRepoBranch || 'main').trim() || 'main',
+        basePath,
+        rootPath
     };
 }
 
-function getSyncCloudRootFolderName(lang = currentLang) {
+function getDefaultSyncCloudRootFolderName(lang = currentLang) {
     const isEnglish = String(lang || '').trim().toLowerCase() === 'en';
     return normalizeSyncDownloadPathSegment(isEnglish ? SYNC_CLOUD_ROOT_FOLDER_EN : SYNC_CLOUD_ROOT_FOLDER_ZH);
+}
+
+function getSyncLocalPushFolderName(lang = currentLang) {
+    const isEnglish = String(lang || '').trim().toLowerCase() === 'en';
+    return normalizeSyncDownloadPathSegment(isEnglish ? SYNC_LOCAL_PUSH_FOLDER_EN : SYNC_LOCAL_PUSH_FOLDER_ZH);
+}
+
+function getSyncLocalPushRootFolderName(lang = currentLang) {
+    return joinSyncRelativePath(
+        getDefaultSyncCloudRootFolderName(lang),
+        getSyncLocalPushFolderName(lang)
+    );
+}
+
+function buildSyncLocalPushDownloadPath(filename = '') {
+    const safeFilename = normalizeSyncDownloadPathSegment(filename || 'bookmark_record_and_recommend.zip');
+    return joinSyncRelativePath(getSyncLocalPushRootFolderName(currentLang), safeFilename);
+}
+
+function isValidSyncRepoFolderPath(path = '', { allowEmpty = true } = {}) {
+    const normalized = normalizeSyncRelativePath(path);
+    if (!normalized) return !!allowEmpty;
+    return normalized.split('/').every((segment) => {
+        if (!segment || segment === '.' || segment === '..') return false;
+        if (/[<>:"\\|?*\x00-\x1F]/.test(segment)) return false;
+        if (/[. ]$/.test(segment)) return false;
+        return true;
+    });
+}
+
+function getSyncBasePathPlaceholder(lang = currentLang) {
+    return String(lang || '').trim().toLowerCase() === 'en'
+        ? 'empty = path prefix'
+        : '可不填(路径前缀)';
+}
+
+function normalizeSyncConfiguredBasePath(path = '') {
+    const normalized = normalizeSyncRelativePath(path);
+    if (!normalized) return '';
+    return isValidSyncRepoFolderPath(normalized, { allowEmpty: false }) ? normalized : '';
+}
+
+function resolveSyncRepoBasePath(configInput = syncConfigState) {
+    const src = configInput && typeof configInput === 'object' ? configInput : {};
+    return normalizeSyncConfiguredBasePath(src.basePath || src.githubRepoBasePath || '');
+}
+
+function resolveSyncCloudRootPath(configInput = syncConfigState, lang = currentLang) {
+    const src = configInput && typeof configInput === 'object' ? configInput : {};
+    return joinSyncRelativePath(resolveSyncRepoBasePath(src), getDefaultSyncCloudRootFolderName(lang));
+}
+
+function getSyncCloudRootFolderName(lang = currentLang) {
+    return getDefaultSyncCloudRootFolderName(lang);
 }
 
 function normalizeSyncAgentTemplateLang(lang = currentLang) {
@@ -12903,9 +13543,9 @@ async function loadDefaultSyncAgentDocTemplates() {
     return syncAgentTemplateLoadPromise;
 }
 
-function getDefaultSyncAgentDocTemplate(lang = currentLang) {
+function getDefaultSyncAgentDocTemplate(lang = currentLang, rootPath = '') {
     const key = normalizeSyncAgentTemplateLang(lang);
-    const rootFolder = getSyncCloudRootFolderName(key);
+    const rootFolder = normalizeSyncRelativePath(rootPath) || getDefaultSyncCloudRootFolderName(key);
     const template = syncAgentTemplateCache[key]
         || SYNC_AGENT_TEMPLATE_FALLBACKS[key]
         || SYNC_AGENT_TEMPLATE_FALLBACKS.zh_CN;
@@ -12913,7 +13553,11 @@ function getDefaultSyncAgentDocTemplate(lang = currentLang) {
 }
 
 function buildSyncRepoPaths(repoConfig, timestamp = Date.now()) {
-    const rootFolder = getSyncCloudRootFolderName(currentLang);
+    const config = repoConfig && typeof repoConfig === 'object' ? repoConfig : syncConfigState;
+    const provider = normalizeSyncProviderValue(config.provider || config.remoteProvider || SYNC_PROVIDER_GITHUB);
+    const rootFolder = provider === SYNC_PROVIDER_LOCAL
+        ? getSyncLocalPushRootFolderName(currentLang)
+        : resolveSyncCloudRootPath(config, currentLang);
     return {
         rootFolder,
         resultsRootPath: joinSyncRelativePath(rootFolder, SYNC_GITHUB_RESULTS_SUBDIR),
@@ -12936,10 +13580,18 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
     const rootLabel = repoPaths.rootFolder;
     const ruleFileName = SYNC_AGENT_DOC_NAME;
     const isZh = currentLang === 'zh_CN';
+    const manualExportCategoryRows = Object.values(MANUAL_EXPORT_CATEGORY_DEFS).map((def, index, arr) => ({
+        branch: index === arr.length - 1 ? '    \\--' : '    |--',
+        path: `${def.remote}/<YYYY-MM-DD>/`,
+        op: '[MANUAL]',
+        desc: isZh
+            ? `手动导出分类：${def.zh}，按导出日期分组。`
+            : `Manual export category: ${def.en}, grouped by export date.`
+    }));
 
     const rows = isZh
         ? [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI 分析规则文档：固定写入产品文件夹，限定可读路径、结果格式、manifest 与 pushId 聚合流程。' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: '同步/AI 分析规则文档：固定写入 Base Path 下的产品文件夹，限定可读路径、结果格式、manifest 与 pushId 聚合流程。' },
             { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI 入口索引：列出本次 pushId、正文文件、hash、读取顺序；不包含正文或本地变化摘要。' },
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: '书签记录包：新增、点击、点击排行、关联记录、当前时间排行与时间屏蔽状态。' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: '书签推荐包：S 分数池、候选池、推荐模式、复习、屏蔽、跳过、翻卡事件。' },
@@ -12950,10 +13602,12 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。' },
             { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: '仓库提交时间线：查看最近改动文件与变更频率。' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。' },
-            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' }
+            { branch: '|--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' },
+            { branch: '\\--', path: 'manual-export/', op: '[MANUAL]', desc: '手动导出目录：仅在导出面板选择 GitHub 时写入；普通推送或拉取不会处理，分类见下方。' },
+            ...manualExportCategoryRows
         ]
         : [
-            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document in the product folder: manifest, pushId grouping, output format, and citation rules.' },
+            { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document in the product folder under Base Path: manifest, pushId grouping, output format, and citation rules.' },
             { branch: '|--', path: 'data/manifest.json', op: '[PUSH]', desc: 'AI entry index: pushId, package files, hashes, read order; no package body or local delta summary.' },
             { branch: '|--', path: 'data/packages/bookmark-record.json', op: '[PUSH]', desc: 'Bookmark record bundle: additions, clicks, rankings, related records, current time rankings and blocked state.' },
             { branch: '|--', path: 'data/packages/bookmark-recommend.json', op: '[PUSH]', desc: 'Bookmark recommendation bundle: S-scores, candidates, mode, review/block/skip/flip events.' },
@@ -12964,7 +13618,9 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.' },
             { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: 'Commit timeline for the repository and change frequency.' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary after grouping commits by pushId; no local delta summary is generated.' },
-            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' }
+            { branch: '|--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' },
+            { branch: '\\--', path: 'manual-export/', op: '[MANUAL]', desc: 'Manual export folder: written only when an export panel chooses GitHub; normal push or pull ignores this folder. Categories are listed below.' },
+            ...manualExportCategoryRows
         ];
 
     const pathWidth = rows.reduce((max, row) => Math.max(max, String(row.path || '').length), 0);
@@ -13425,6 +14081,68 @@ function syncBase64ToText(contentBase64) {
     const binary = atob(raw);
     const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
     return new TextDecoder().decode(bytes);
+}
+
+function getSyncTextByteSize(text) {
+    const value = String(text == null ? '' : text);
+    if (typeof Blob === 'function') {
+        return new Blob([value]).size;
+    }
+    if (typeof TextEncoder === 'function') {
+        return new TextEncoder().encode(value).length;
+    }
+    return value.length;
+}
+
+function formatSyncByteSize(bytes) {
+    const size = Math.max(0, Number(bytes) || 0);
+    const mib = size / (1024 * 1024);
+    if (mib >= 10) return `${Math.round(mib)} MiB`;
+    if (mib >= 1) return `${mib.toFixed(1)} MiB`;
+    return `${size} B`;
+}
+
+function buildSyncGitHubFileSizeLimitError(fileInfo = {}) {
+    const path = normalizeSyncRelativePath(fileInfo.path || '') || String(fileInfo.path || '').trim();
+    const label = path || (currentLang === 'zh_CN' ? '当前文件' : 'Current file');
+    const sizeText = formatSyncByteSize(fileInfo.byteSize);
+    const limitText = formatSyncByteSize(SYNC_GITHUB_FILE_HARD_SIZE_BYTES);
+    return currentLang === 'zh_CN'
+        ? `GitHub 单文件上限是 ${limitText}，${label} 当前为 ${sizeText}，已跳过 GitHub 上传。请改为本地导出或拆分文件后再上传。`
+        : `GitHub blocks files at ${limitText}; ${label} is ${sizeText}, so GitHub upload was skipped. Export locally or split the file before uploading.`;
+}
+
+function validateSyncGitHubTextFilesSize(filesInput = []) {
+    const files = Array.isArray(filesInput) ? filesInput : [filesInput];
+    const warnings = [];
+    for (const file of files) {
+        const path = normalizeSyncRelativePath(file?.path || '') || String(file?.path || '').trim();
+        const byteSize = getSyncTextByteSize(file?.text || '');
+        if (!path && byteSize <= 0) continue;
+        const checked = {
+            path,
+            byteSize,
+            warn: byteSize >= SYNC_GITHUB_FILE_WARN_SIZE_BYTES,
+            blocked: byteSize >= SYNC_GITHUB_FILE_HARD_SIZE_BYTES
+        };
+        if (checked.blocked) {
+            const tooLargeFiles = [checked];
+            return {
+                success: false,
+                tooLarge: true,
+                tooLargeFiles,
+                warnings,
+                error: buildSyncGitHubFileSizeLimitError(checked)
+            };
+        }
+        if (checked.warn) warnings.push(checked);
+    }
+    return {
+        success: true,
+        tooLarge: false,
+        tooLargeFiles: [],
+        warnings
+    };
 }
 
 function parseSyncJsonSafe(raw, fallback = null) {
@@ -14098,7 +14816,7 @@ async function syncGitHubListFiles(repoConfig, rootPath, { branch = '' } = {}) {
         visited.add(dirPath);
         const listResult = await syncGitHubListDirEntries(config, dirPath, { branch: resolvedBranch });
         if (!listResult.success) {
-            return { success: false, error: listResult.error || (currentLang === 'zh_CN' ? '读取云端目录失败' : 'Failed to read remote directory') };
+            return { success: false, error: listResult.error || (currentLang === 'zh_CN' ? '读取远端目录失败' : 'Failed to read remote directory') };
         }
         const entries = Array.isArray(listResult.entries) ? listResult.entries : [];
         entries.forEach((entry) => {
@@ -14350,6 +15068,38 @@ async function syncGitHubReadCommittedAtMap(repoConfig, pathsInput, { branch = '
     };
 }
 
+function normalizeSyncProviderValues(value) {
+    const source = Array.isArray(value)
+        ? value
+        : String(value || '')
+            .split(/[,+|/\s]+/)
+            .filter(Boolean);
+    const values = [];
+    source.forEach((item) => {
+        const normalized = String(item || '').trim().toLowerCase();
+        if (!SYNC_PROVIDER_VALUES.includes(normalized)) return;
+        if (!values.includes(normalized)) values.push(normalized);
+    });
+    return values.length ? values : [SYNC_PROVIDER_GITHUB];
+}
+
+function getPrimarySyncProviderValue(value) {
+    const values = normalizeSyncProviderValues(value);
+    return values.includes(SYNC_PROVIDER_GITHUB) ? SYNC_PROVIDER_GITHUB : SYNC_PROVIDER_LOCAL;
+}
+
+function getSyncProviderValuesFromConfig(configInput = syncConfigState) {
+    const config = configInput && typeof configInput === 'object' ? configInput : {};
+    if (Array.isArray(config.remoteProviders)) {
+        return normalizeSyncProviderValues(config.remoteProviders);
+    }
+    return normalizeSyncProviderValues(config.remoteProvider || SYNC_PROVIDER_GITHUB);
+}
+
+function buildSyncProviderActivityValue(value) {
+    return normalizeSyncProviderValues(value).join('+');
+}
+
 function normalizeSyncConfig(raw, options = {}) {
     const src = raw && typeof raw === 'object' ? raw : {};
     const readBoolean = (primaryKey, fallback = false) => {
@@ -14366,23 +15116,36 @@ function normalizeSyncConfig(raw, options = {}) {
     };
 
     const providerRaw = readString('remoteProvider', SYNC_PROVIDER_GITHUB).toLowerCase();
-    const remoteProvider = providerRaw === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
+    const remoteProviders = normalizeSyncProviderValues(
+        Object.prototype.hasOwnProperty.call(src, 'remoteProviders')
+            ? src.remoteProviders
+            : providerRaw
+    );
+    const remoteProvider = getPrimarySyncProviderValue(remoteProviders);
     const githubRepoBranch = readString('githubRepoBranch', 'main');
+    const githubRepoBasePath = normalizeSyncConfiguredBasePath(readString('githubRepoBasePath', readString('basePath', '')));
     const syncOutputNamingVersion = readString('syncOutputNamingVersion', options.defaultOutputNamingVersion || '');
     const namingRaw = readString('syncOutputNamingMode', '');
     const versionImpliesRangeNaming = isSyncVersionAtLeast(syncOutputNamingVersion, SYNC_RANGE_NAMING_MIN_VERSION);
     const syncOutputNamingMode = namingRaw === SYNC_OUTPUT_NAMING_LEGACY
         ? SYNC_OUTPUT_NAMING_LEGACY
         : (versionImpliesRangeNaming ? SYNC_OUTPUT_NAMING_RANGE : SYNC_OUTPUT_NAMING_LEGACY);
+    const pushTimeRangeState = normalizeSyncPushTimeRangeState(getSyncPushTimeRangeConfigStateInput(src));
     return {
         remoteProvider,
+        remoteProviders,
         githubRepoToken: readString('githubRepoToken', ''),
         githubRepoOwner: readString('githubRepoOwner', ''),
         githubRepoName: readString('githubRepoName', ''),
         githubRepoBranch: githubRepoBranch || 'main',
+        githubRepoBasePath,
         bookmarkRecommend: readBoolean('bookmarkRecommend', true),
         bookmarkRecord: readBoolean('bookmarkRecord', true),
         rawNative: readBoolean('rawNative', true),
+        syncPushTimeRange: pushTimeRangeState.range,
+        syncPushLastPresetRange: pushTimeRangeState.lastPresetRange,
+        syncPushCustomRange: pushTimeRangeState.customRange,
+        syncPushTimeRangeUpdatedAt: pushTimeRangeState.updatedAt,
         syncOutputNamingVersion,
         syncOutputNamingMode
     };
@@ -14426,10 +15189,11 @@ function isSyncVersionAtLeast(version = '', minVersion = '') {
 function getSyncConfigEndpointSignature(configInput = syncConfigState) {
     const config = normalizeSyncConfig(configInput || null);
     return [
-        String(config.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        buildSyncProviderActivityValue(getSyncProviderValuesFromConfig(config)),
         String(config.githubRepoOwner || '').trim().toLowerCase(),
         String(config.githubRepoName || '').trim().toLowerCase(),
-        String(config.githubRepoBranch || 'main').trim()
+        String(config.githubRepoBranch || 'main').trim(),
+        resolveSyncRepoBasePath(config).toLowerCase()
     ].join('|');
 }
 
@@ -14455,7 +15219,9 @@ function buildSanitizedSyncConfigSnapshot(configInput) {
     const hasRepo = !!String(config.githubRepoName || '').trim();
     return {
         remoteProvider: config.remoteProvider,
+        remoteProviders: getSyncProviderValuesFromConfig(config),
         githubRepoBranch: String(config.githubRepoBranch || 'main').trim() || 'main',
+        githubRepoBasePath: resolveSyncRepoBasePath(config),
         githubRepoToken: '',
         githubRepoOwner: '',
         githubRepoName: '',
@@ -14465,6 +15231,10 @@ function buildSanitizedSyncConfigSnapshot(configInput) {
         bookmarkRecord: config.bookmarkRecord !== false,
         bookmarkRecommend: config.bookmarkRecommend !== false,
         rawNative: config.rawNative !== false,
+        syncPushTimeRange: config.syncPushTimeRange,
+        syncPushLastPresetRange: config.syncPushLastPresetRange,
+        syncPushCustomRange: config.syncPushCustomRange,
+        syncPushTimeRangeUpdatedAt: config.syncPushTimeRangeUpdatedAt,
         syncOutputNamingVersion: config.syncOutputNamingVersion,
         syncOutputNamingMode: config.syncOutputNamingMode
     };
@@ -14622,6 +15392,114 @@ function clampSyncRangeToToday(range = null) {
     return normalizeSyncPushCustomRange({ startTime, endTime });
 }
 
+function getSyncPushTimeRangeConfigStateInput(configInput = null) {
+    const src = configInput && typeof configInput === 'object' ? configInput : {};
+    const hasExplicitState = [
+        'syncPushTimeRange',
+        'syncPushLastPresetRange',
+        'syncPushCustomRange',
+        'syncPushTimeRangeUpdatedAt'
+    ].some((key) => Object.prototype.hasOwnProperty.call(src, key));
+    if (!hasExplicitState) return null;
+    return {
+        range: src.syncPushTimeRange,
+        lastPresetRange: src.syncPushLastPresetRange,
+        customRange: src.syncPushCustomRange,
+        updatedAt: src.syncPushTimeRangeUpdatedAt
+    };
+}
+
+function normalizeSyncPushTimeRangeState(stateInput = null) {
+    let state = stateInput;
+    if (typeof stateInput === 'string') {
+        const raw = String(stateInput || '').trim();
+        if (raw.startsWith('{') && raw.endsWith('}')) {
+            try {
+                state = JSON.parse(raw);
+            } catch (_) {
+                state = raw;
+            }
+        } else {
+            state = raw;
+        }
+    }
+
+    if (typeof state === 'string') {
+        const range = normalizeSyncPushPresetRange(state, SYNC_PUSH_TIME_RANGE_DEFAULT);
+        return {
+            range,
+            lastPresetRange: range,
+            customRange: null,
+            updatedAt: 0
+        };
+    }
+
+    if (!state || typeof state !== 'object') {
+        return {
+            range: SYNC_PUSH_TIME_RANGE_DEFAULT,
+            lastPresetRange: SYNC_PUSH_TIME_RANGE_DEFAULT,
+            customRange: null,
+            updatedAt: 0
+        };
+    }
+
+    const customRange = normalizeSyncPushCustomRange(state.customRange || state.custom || null);
+    const lastPresetRange = normalizeSyncPushPresetRange(
+        state.lastPresetRange || state.syncPushLastPresetRange || state.lastPreset || state.presetRange || '',
+        SYNC_PUSH_TIME_RANGE_DEFAULT
+    );
+    const rawRange = String(state.range || state.syncPushTimeRange || state.timeRange || state.activeRange || '').trim();
+    const range = rawRange === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY && customRange
+        ? SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+        : normalizeSyncPushPresetRange(rawRange, lastPresetRange);
+
+    return {
+        range,
+        lastPresetRange: range === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+            ? lastPresetRange
+            : normalizeSyncPushPresetRange(range, lastPresetRange),
+        customRange,
+        updatedAt: Math.max(0, Number(state.updatedAt || state.syncPushTimeRangeUpdatedAt || 0) || 0)
+    };
+}
+
+function buildSyncPushTimeRangeStateSnapshot() {
+    const customRange = normalizeSyncPushCustomRange(syncPushCustomRange);
+    const lastPresetRange = normalizeSyncPushPresetRange(syncPushLastPresetRange, SYNC_PUSH_TIME_RANGE_DEFAULT);
+    const range = syncPushTimeRange === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY && customRange
+        ? SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+        : normalizeSyncPushPresetRange(syncPushTimeRange, lastPresetRange);
+    return {
+        schema: 'bookmark_record_and_recommend.sync_push_time_range.v1',
+        range,
+        lastPresetRange: range === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+            ? lastPresetRange
+            : normalizeSyncPushPresetRange(range, lastPresetRange),
+        customRange,
+        updatedAt: Date.now()
+    };
+}
+
+function applySyncPushTimeRangeStateToConfig(stateInput = null) {
+    const state = normalizeSyncPushTimeRangeState(stateInput || buildSyncPushTimeRangeStateSnapshot());
+    syncConfigState = normalizeSyncConfig({
+        ...(syncConfigState || SYNC_DEFAULT_CONFIG),
+        syncPushTimeRange: state.range,
+        syncPushLastPresetRange: state.lastPresetRange,
+        syncPushCustomRange: state.customRange,
+        syncPushTimeRangeUpdatedAt: state.updatedAt
+    });
+    return state;
+}
+
+function applySyncPushTimeRangeStateToGlobals(stateInput = null) {
+    const state = normalizeSyncPushTimeRangeState(stateInput);
+    syncPushTimeRange = state.range;
+    syncPushLastPresetRange = state.lastPresetRange;
+    syncPushCustomRange = state.customRange;
+    return state;
+}
+
 function getSyncPushCustomRangeFromPanelInputs() {
     const startInput = document.getElementById('syncPushCustomRangeStartInput');
     const endInput = document.getElementById('syncPushCustomRangeEndInput');
@@ -14728,6 +15606,7 @@ function commitSyncPushCustomRangeFromPanel() {
     syncPushCustomRange = nextRange;
     syncPushTimeRange = SYNC_PUSH_TIME_RANGE_CUSTOM_KEY;
     syncPushHideTimeRangeMenus();
+    saveSyncPushTimeRange();
     renderSyncPushTimeRangeButtons();
     return true;
 }
@@ -14850,21 +15729,42 @@ function renderSyncPushTimeRangeButtons() {
 }
 
 function saveSyncPushTimeRange() {
-    const persistValue = normalizeSyncPushPresetRange(
-        syncPushTimeRange,
-        normalizeSyncPushPresetRange(syncPushLastPresetRange, SYNC_PUSH_TIME_RANGE_DEFAULT)
-    );
-    try { localStorage.setItem('syncPushTimeRange', persistValue); } catch(e) {}
+    const state = buildSyncPushTimeRangeStateSnapshot();
+    applySyncPushTimeRangeStateToConfig(state);
+    try {
+        localStorage.setItem(SYNC_PUSH_TIME_RANGE_STORAGE_KEY, JSON.stringify(state));
+        localStorage.setItem(SYNC_PUSH_TIME_RANGE_LEGACY_STORAGE_KEY, state.range === SYNC_PUSH_TIME_RANGE_CUSTOM_KEY
+            ? state.lastPresetRange
+            : state.range);
+    } catch(e) {}
+    syncStorageSet({
+        [SYNC_PUSH_TIME_RANGE_STORAGE_KEY]: state,
+        [SYNC_CONFIG_STORAGE_KEY]: { ...syncConfigState }
+    }).catch(() => {});
 }
 
-function loadSyncPushTimeRange() {
+function loadSyncPushTimeRange(storedState = null, configStateInput = null) {
     syncPushCustomRange = null;
     syncPushCustomRangePanelVisible = false;
+    let localSource = null;
     try {
-        const stored = localStorage.getItem('syncPushTimeRange');
-        syncPushTimeRange = normalizeSyncPushPresetRange(stored, SYNC_PUSH_TIME_RANGE_DEFAULT);
-        syncPushLastPresetRange = syncPushTimeRange;
+        localSource = localStorage.getItem(SYNC_PUSH_TIME_RANGE_STORAGE_KEY)
+            || localStorage.getItem(SYNC_PUSH_TIME_RANGE_LEGACY_STORAGE_KEY);
     } catch(e) {}
+    const hasStoredState = storedState != null && storedState !== '';
+    const hasLocalState = localSource != null && localSource !== '';
+    const hasConfigState = configStateInput != null && configStateInput !== '';
+    const storedNormalized = hasStoredState ? normalizeSyncPushTimeRangeState(storedState) : null;
+    const localNormalized = hasLocalState ? normalizeSyncPushTimeRangeState(localSource) : null;
+    const configNormalized = hasConfigState ? normalizeSyncPushTimeRangeState(configStateInput) : null;
+    const candidates = [localNormalized, storedNormalized, configNormalized].filter(Boolean);
+    const state = candidates.reduce((best, item) => {
+        if (!best) return item;
+        return item.updatedAt > best.updatedAt ? item : best;
+    }, null) || normalizeSyncPushTimeRangeState(null);
+    applySyncPushTimeRangeStateToGlobals(state);
+    applySyncPushTimeRangeStateToConfig(state);
+    return state;
 }
 
 function buildSyncDocId(name = '', index = 0) {
@@ -15291,28 +16191,29 @@ function restoreSyncActionButton(button, token) {
 }
 
 function updateSyncRepoFormState() {
-    const provider = String(syncConfigState?.remoteProvider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
-    const isGithub = provider === SYNC_PROVIDER_GITHUB;
+    const providers = getSyncProviderValuesFromConfig(syncConfigState);
+    const isGithubPushSelected = providers.includes(SYNC_PROVIDER_GITHUB);
     const inputIds = [
         'syncGithubTokenInput',
         'syncGithubOwnerInput',
         'syncGithubRepoInput',
-        'syncGithubBranchInput'
+        'syncGithubBranchInput',
+        'syncGithubBasePathInput'
     ];
     inputIds.forEach((id) => {
         const input = document.getElementById(id);
         if (!input) return;
-        input.disabled = !isGithub;
+        input.disabled = false;
     });
     const testBtn = document.getElementById('syncRepoTestBtn');
     if (testBtn) {
-        testBtn.disabled = !isGithub;
+        testBtn.disabled = false;
     }
     const statusEl = document.getElementById('syncRepoStatusText');
     const currentStatus = String(statusEl?.dataset?.syncRepoStatusText || statusEl?.textContent || '').trim();
     const isLocalModeStatus = /本地快照模式|local snapshot mode/i.test(currentStatus);
     const isIdleStatus = /等待配置|waiting for configuration/i.test(currentStatus);
-    if (!isGithub) {
+    if (!isGithubPushSelected) {
         applySyncRepoActivityStatusToUI({ force: true });
     } else if (!currentStatus || isLocalModeStatus || isIdleStatus) {
         applySyncRepoActivityStatusToUI({ force: true });
@@ -15365,16 +16266,64 @@ function getSyncPushPayloadErrorI18n(error) {
     };
 }
 
+function normalizeSyncProviderValue(provider) {
+    const normalized = String(provider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
+    return normalized === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
+}
+
+function ensureSyncProviderCheckboxSelection(changedInput = null) {
+    const inputs = Array.from(document.querySelectorAll('input[name="syncProviderSelect"]'));
+    if (!inputs.length) return [SYNC_PROVIDER_GITHUB];
+    const checked = inputs.filter((input) => input.checked);
+    if (checked.length > 0) {
+        return normalizeSyncProviderValues(checked.map((input) => input.value));
+    }
+    const fallback = changedInput || inputs.find((input) => normalizeSyncProviderValue(input.value) === SYNC_PROVIDER_GITHUB) || inputs[0];
+    if (fallback) fallback.checked = true;
+    return normalizeSyncProviderValues(fallback?.value || SYNC_PROVIDER_GITHUB);
+}
+
+function getSyncProviderValuesFromUI() {
+    const inputs = Array.from(document.querySelectorAll('input[name="syncProviderSelect"]'));
+    if (inputs.length) {
+        return ensureSyncProviderCheckboxSelection();
+    }
+    const legacySelect = document.getElementById('syncProviderSelect');
+    return normalizeSyncProviderValues(legacySelect?.value || SYNC_PROVIDER_GITHUB);
+}
+
+function getSyncProviderValueFromUI() {
+    return getPrimarySyncProviderValue(getSyncProviderValuesFromUI());
+}
+
+function applySyncProviderValuesToUI(providers) {
+    const normalizedValues = normalizeSyncProviderValues(providers);
+    const inputs = document.querySelectorAll('input[name="syncProviderSelect"]');
+    inputs.forEach((input) => {
+        input.checked = normalizedValues.includes(normalizeSyncProviderValue(input.value));
+    });
+    const legacySelect = document.getElementById('syncProviderSelect');
+    if (legacySelect) legacySelect.value = getPrimarySyncProviderValue(normalizedValues);
+}
+
+function applySyncProviderValueToUI(provider) {
+    applySyncProviderValuesToUI(provider);
+}
+
 function applySyncConfigToUI() {
     ensureSyncPackageOptionElements();
-    const providerSelect = document.getElementById('syncProviderSelect');
-    if (providerSelect) providerSelect.value = String(syncConfigState.remoteProvider || SYNC_PROVIDER_GITHUB);
+    applySyncProviderValuesToUI(getSyncProviderValuesFromConfig(syncConfigState));
     const ownerInput = document.getElementById('syncGithubOwnerInput');
     if (ownerInput) ownerInput.value = String(syncConfigState.githubRepoOwner || '');
     const repoInput = document.getElementById('syncGithubRepoInput');
     if (repoInput) repoInput.value = String(syncConfigState.githubRepoName || '');
     const branchInput = document.getElementById('syncGithubBranchInput');
     if (branchInput) branchInput.value = String(syncConfigState.githubRepoBranch || 'main');
+    const basePathInput = document.getElementById('syncGithubBasePathInput');
+    if (basePathInput) {
+        basePathInput.value = String(syncConfigState.githubRepoBasePath || '');
+        basePathInput.placeholder = getSyncBasePathPlaceholder(currentLang);
+    }
     const tokenInput = document.getElementById('syncGithubTokenInput');
     if (tokenInput) tokenInput.value = String(syncConfigState.githubRepoToken || '');
     const selection = getSyncPackageSelection(syncConfigState);
@@ -15383,6 +16332,8 @@ function applySyncConfigToUI() {
         if (!checkbox) return;
         checkbox.checked = selection[field.key] !== false;
     });
+    applySyncPushTimeRangeStateToGlobals(getSyncPushTimeRangeConfigStateInput(syncConfigState));
+    renderSyncPushTimeRangeButtons();
     updateSyncRepoFormState();
     updateSyncPathInfoText();
     setSyncPushPackageInfoVisible(syncPushPackageInfoVisible);
@@ -15392,15 +16343,23 @@ function readSyncConfigFromUI() {
     ensureSyncPackageOptionElements();
     const previousConfig = normalizeSyncConfig(syncConfigState || null);
     const previousEndpointSignature = getSyncConfigEndpointSignature(previousConfig);
+    const remoteProviders = getSyncProviderValuesFromUI();
     const next = {
-        remoteProvider: String(document.getElementById('syncProviderSelect')?.value || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        remoteProvider: getPrimarySyncProviderValue(remoteProviders),
+        remoteProviders,
         githubRepoToken: String(document.getElementById('syncGithubTokenInput')?.value || '').trim(),
         githubRepoOwner: String(document.getElementById('syncGithubOwnerInput')?.value || '').trim(),
         githubRepoName: String(document.getElementById('syncGithubRepoInput')?.value || '').trim(),
         githubRepoBranch: String(document.getElementById('syncGithubBranchInput')?.value || '').trim(),
+        githubRepoBasePath: normalizeSyncConfiguredBasePath(document.getElementById('syncGithubBasePathInput')?.value || ''),
         syncOutputNamingVersion: previousConfig.syncOutputNamingVersion,
         syncOutputNamingMode: previousConfig.syncOutputNamingMode
     };
+    const pushTimeRangeState = buildSyncPushTimeRangeStateSnapshot();
+    next.syncPushTimeRange = pushTimeRangeState.range;
+    next.syncPushLastPresetRange = pushTimeRangeState.lastPresetRange;
+    next.syncPushCustomRange = pushTimeRangeState.customRange;
+    next.syncPushTimeRangeUpdatedAt = pushTimeRangeState.updatedAt;
     SYNC_PACKAGE_FIELDS.forEach((field) => {
         const checkbox = getSyncPackageCheckboxByKey(field.key);
         const checked = checkbox ? checkbox.checked !== false : field.defaultEnabled !== false;
@@ -15419,10 +16378,12 @@ function readSyncConfigFromUI() {
 
 async function saveSyncConfigToStorage() {
     const configSnapshot = { ...syncConfigState };
+    const pushTimeRangeState = normalizeSyncPushTimeRangeState(getSyncPushTimeRangeConfigStateInput(configSnapshot));
     const nextActivity = buildSyncActivityWithConfigSaved(syncActivityState, configSnapshot);
     const saved = await syncStorageSet({
         [SYNC_CONFIG_STORAGE_KEY]: configSnapshot,
-        [SYNC_ACTIVITY_STORAGE_KEY]: nextActivity
+        [SYNC_ACTIVITY_STORAGE_KEY]: nextActivity,
+        [SYNC_PUSH_TIME_RANGE_STORAGE_KEY]: pushTimeRangeState
     });
     if (saved) {
         syncActivityState = nextActivity;
@@ -17387,7 +18348,8 @@ async function loadSyncStateFromStorage() {
         SYNC_REMOTE_DOC_CACHE_STORAGE_KEY,
         SYNC_REMOTE_DOC_DELETE_QUEUE_STORAGE_KEY,
         SYNC_ACTIVITY_STORAGE_KEY,
-        SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY
+        SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY,
+        SYNC_PUSH_TIME_RANGE_STORAGE_KEY
     ]);
 
     const storedSyncConfig = result?.[SYNC_CONFIG_STORAGE_KEY] || null;
@@ -17418,7 +18380,10 @@ async function loadSyncStateFromStorage() {
         syncCurrentDocId = syncDocsState[0]?.id || null;
     }
     focusSyncFileListPageForEntry(syncCurrentDocId);
-    loadSyncPushTimeRange();
+    loadSyncPushTimeRange(
+        result?.[SYNC_PUSH_TIME_RANGE_STORAGE_KEY] || null,
+        getSyncPushTimeRangeConfigStateInput(storedSyncConfig)
+    );
     await maybeUpgradeSyncAgentDocTemplate(
         String(result?.[SYNC_AGENT_TEMPLATE_HASH_STORAGE_KEY] || '')
     );
@@ -19473,7 +20438,7 @@ async function buildSyncExportFiles(snapshotInput, repoConfigInput = syncConfigS
     const localAgentDoc = docs.find((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.id === SYNC_AGENT_DOC_ID);
     const agentMarkdown = String(localAgentDoc?.markdown || localAgentDoc?.content || '').trim()
         ? String(localAgentDoc.markdown || localAgentDoc.content || '')
-        : getDefaultSyncAgentDocTemplate(currentLang);
+        : getDefaultSyncAgentDocTemplate(currentLang, paths.rootFolder);
     const agentRuleFilePath = joinSyncRelativePath(paths.rootFolder, SYNC_AGENT_DOC_NAME);
     expectedRulePaths.add(normalizeSyncRelativePath(agentRuleFilePath));
     addFile({
@@ -19652,6 +20617,26 @@ async function pushSyncSnapshotToGitHub(repoConfig, snapshot, options = {}) {
     timing.mark('build_export');
     paths = exportBundle.paths || paths;
     const filesToPush = Array.isArray(exportBundle.files) ? exportBundle.files : [];
+    const sizeCheck = validateSyncGitHubTextFilesSize(filesToPush);
+    if (!sizeCheck.success) {
+        timing.mark('file_size_blocked', {
+            files: filesToPush.length,
+            blocked: Array.isArray(sizeCheck.tooLargeFiles) ? sizeCheck.tooLargeFiles.length : 0
+        });
+        return {
+            success: false,
+            tooLarge: true,
+            error: sizeCheck.error || (currentLang === 'zh_CN' ? 'GitHub 文件过大' : 'GitHub file is too large'),
+            branch,
+            paths,
+            pushedCount: 0,
+            deletedCount: 0,
+            tooLargeFiles: sizeCheck.tooLargeFiles || []
+        };
+    }
+    if (Array.isArray(sizeCheck.warnings) && sizeCheck.warnings.length > 0) {
+        console.warn('[SyncView] GitHub file size warning:', sizeCheck.warnings);
+    }
     const commitPrefix = `[sync:${exportBundle.pushId || buildSyncPushId(nowTs)}]`;
     const packageSelection = exportBundle.manifest && typeof exportBundle.manifest === 'object'
         ? getSyncPackageSelection(exportBundle.manifest.packageSelection)
@@ -20008,6 +20993,218 @@ async function pullSyncDocsFromGitHub(repoConfig) {
     };
 }
 
+async function applyGitHubPushSideEffects(remotePushResult, config, payload) {
+    markSyncRepoConnected(config);
+    const pushedDocCacheUpdates = Array.isArray(remotePushResult?.docCacheUpdates)
+        ? remotePushResult.docCacheUpdates
+        : [];
+    const deletedQueuePaths = Array.isArray(remotePushResult?.deletedQueuePaths)
+        ? remotePushResult.deletedQueuePaths
+        : [];
+    if (pushedDocCacheUpdates.length > 0) {
+        pushedDocCacheUpdates.forEach((item) => {
+            const mergeKey = buildSyncDocMergeKeyFromParts(item?.kind, item?.name);
+            if (!mergeKey) return;
+            syncRemoteDocCacheState[mergeKey] = {
+                markdown: String(item?.markdown || ''),
+                remoteSha: String(item?.remoteSha || ''),
+                remotePath: normalizeSyncRelativePath(item?.remotePath || item?.name || ''),
+                updatedAt: Number(item?.updatedAt || Date.now()) || Date.now()
+            };
+        });
+        if (markSyncDocsCleanAfterPush(pushedDocCacheUpdates)) {
+            renderSyncFileList();
+            renderSyncMarkdown();
+            await saveSyncDocsToStorage();
+        }
+        await saveSyncRemoteDocCacheToStorage();
+    }
+    if (clearSyncRemoteDocDeleteQueuePaths(deletedQueuePaths)) {
+        await saveSyncRemoteDocDeleteQueueToStorage();
+    }
+    void payload;
+}
+
+async function applyLocalPushSideEffects(localResult, payload, snapshot) {
+    const failedCount = Math.max(0, Number(localResult?.failedCount || 0));
+    if (!localResult?.success || failedCount > 0) return false;
+    const localDocCacheUpdates = (Array.isArray(payload?.docs) ? payload.docs : [])
+        .filter((doc) => doc?.kind === SYNC_DOC_KIND_AGENT || doc?.kind === SYNC_DOC_KIND_INPUT)
+        .map((doc) => ({
+            kind: doc.kind || SYNC_DOC_KIND_INPUT,
+            name: doc.kind === SYNC_DOC_KIND_AGENT ? SYNC_AGENT_DOC_NAME : doc.name,
+            markdown: String(doc.markdown || ''),
+            updatedAt: Number(snapshot?.updatedAt || Date.now()) || Date.now()
+        }));
+    if (markSyncDocsCleanAfterPush(localDocCacheUpdates)) {
+        renderSyncFileList();
+        renderSyncMarkdown();
+        await saveSyncDocsToStorage();
+    }
+    return true;
+}
+
+function buildLocalPushResultSummary(localResult) {
+    const filesTotal = Math.max(0, Number(localResult?.filesTotal || 0));
+    const downloadedCount = Math.max(0, Number(localResult?.downloadedCount || 0));
+    const failedCount = Math.max(0, Number(localResult?.failedCount || 0));
+    const exportMode = String(localResult?.exportMode || '').trim();
+    const archiveName = String(localResult?.archiveName || '').trim();
+    const archiveEntries = Math.max(0, Number(localResult?.archiveEntries || 0));
+    const rootFolder = String(localResult?.rootFolder || '').trim();
+    const fileCount = archiveEntries || downloadedCount || filesTotal;
+    const cleanSuccess = !!localResult?.success && failedCount === 0;
+    if (cleanSuccess) {
+        return {
+            success: true,
+            fileCount,
+            zh_CN: exportMode === 'zip'
+                ? `本地压缩包已导出：${archiveName || 'sync-export.zip'}（${archiveEntries} 个文件）`
+                : `本地目录已导出：${rootFolder || `${downloadedCount} 个文件`}`,
+            en: exportMode === 'zip'
+                ? `Zip exported: ${archiveName || 'sync-export.zip'} (${archiveEntries} files)`
+                : `Local export completed: ${rootFolder || `${downloadedCount} files`}`
+        };
+    }
+    if (localResult?.success) {
+        return {
+            success: false,
+            partial: true,
+            fileCount,
+            zh_CN: exportMode === 'zip'
+                ? `本地压缩包导出异常：${downloadedCount}/${filesTotal}（${failedCount} 失败）`
+                : `本地目录已部分导出：${downloadedCount}/${filesTotal}（${failedCount} 失败）`,
+            en: exportMode === 'zip'
+                ? `Zip export issue: ${downloadedCount}/${filesTotal} (${failedCount} failed)`
+                : `Local export partial: ${downloadedCount}/${filesTotal} (${failedCount} failed)`
+        };
+    }
+    return {
+        success: false,
+        fileCount,
+        zh_CN: exportMode === 'zip' ? '本地压缩包导出失败' : '本地目录导出失败',
+        en: exportMode === 'zip' ? 'Zip export failed' : 'Local export failed'
+    };
+}
+
+async function pushSyncSnapshotToSelectedDestinations({
+    config,
+    githubRepoConfig,
+    localRepoConfig,
+    snapshot,
+    payload,
+    packageCount,
+    selectedPackageCount,
+    githubBranchReadyPromise,
+    githubHeadCommitPromise,
+    missingRepoReason,
+    timing
+}) {
+    setSyncRepoStatusText({
+        zh_CN: '正在并行推送 GitHub 并导出本地...',
+        en: 'Pushing to GitHub and exporting local in parallel...'
+    }, 'neutral');
+
+    const githubTask = missingRepoReason?.code
+        ? Promise.resolve({ success: false, notConfigured: true, error: missingRepoReason.text || 'GitHub not configured' })
+        : pushSyncSnapshotToGitHub(githubRepoConfig, snapshot, {
+            branchReadyPromise: githubBranchReadyPromise,
+            headCommitPromise: githubHeadCommitPromise
+        }).catch((error) => ({ success: false, error: formatSyncGitHubError(error) }));
+    const localTask = downloadSyncLocalExportBundle(snapshot, localRepoConfig)
+        .catch((error) => ({ success: false, error: String(error?.message || error || 'local_export_failed') }));
+
+    const [remotePushResult, localSnapshotDownloadResult] = await Promise.all([githubTask, localTask]);
+    timing.mark('multi_destination_push');
+
+    const pushedCount = Math.max(0, Number(remotePushResult?.pushedCount || 0));
+    const deletedCount = Math.max(0, Number(remotePushResult?.deletedCount || 0));
+    const pushedBranch = String(remotePushResult?.branch || githubRepoConfig.branch || '').trim();
+    const commitSha = String(remotePushResult?.commitSha || '').trim();
+    const githubSuccess = !!remotePushResult?.success;
+    if (githubSuccess) {
+        await applyGitHubPushSideEffects(remotePushResult, config, payload);
+    }
+
+    const localSummary = buildLocalPushResultSummary(localSnapshotDownloadResult);
+    if (localSummary.success) {
+        await applyLocalPushSideEffects(localSnapshotDownloadResult, payload, snapshot);
+    } else {
+        console.warn('[SyncView] local snapshot export issue:', localSnapshotDownloadResult);
+    }
+
+    const githubTextZh = githubSuccess
+        ? `GitHub 已推送 ${pushedCount} 个文件${pushedBranch ? `（${pushedBranch}${commitSha ? `，commit ${commitSha.slice(0, 7)}` : ''}）` : ''}${deletedCount > 0 ? `，删除 ${deletedCount} 个云端文件` : ''}`
+        : `GitHub 推送失败：${String(remotePushResult?.error || missingRepoReason?.text || 'unknown')}`;
+    const githubTextEn = githubSuccess
+        ? `GitHub pushed ${pushedCount} files${pushedBranch ? ` (${pushedBranch}${commitSha ? `, commit ${commitSha.slice(0, 7)}` : ''})` : ''}${deletedCount > 0 ? `, deleted ${deletedCount} remote files` : ''}`
+        : `GitHub push failed: ${String(remotePushResult?.error || missingRepoReason?.text || 'unknown')}`;
+    const allSuccess = githubSuccess && localSummary.success;
+    const anySuccess = githubSuccess || localSummary.success;
+    const githubTooLargeError = !githubSuccess && remotePushResult?.tooLarge
+        ? String(remotePushResult?.error || '')
+        : '';
+    setSyncRepoStatusText({
+        zh_CN: joinSyncStatusParts([githubTextZh, localSummary.zh_CN]),
+        en: joinSyncStatusParts([githubTextEn, localSummary.en])
+    }, allSuccess ? 'success' : (anySuccess ? 'neutral' : 'error'));
+
+    if (!anySuccess) {
+        setSyncStatusText({
+            zh_CN: '状态：推送失败（GitHub 与本地均失败）',
+            en: 'Status: Push failed (GitHub and local both failed)'
+        });
+        showToast(githubTooLargeError
+            ? (currentLang === 'zh_CN' ? `推送失败：${githubTooLargeError}` : `Push failed: ${githubTooLargeError}`)
+            : (currentLang === 'zh_CN' ? '推送失败：GitHub 与本地均失败' : 'Push failed: GitHub and local both failed'));
+        return null;
+    }
+
+    const snapshotSaved = await syncStorageSet({ [SYNC_CLOUD_SNAPSHOT_STORAGE_KEY]: snapshot });
+    timing.mark('save_snapshot', { deferred: true, saved: snapshotSaved });
+    const packageLabelZh = packageCount > 0 ? `（${packageCount} 包）` : '（仅文档，0 包）';
+    const packageLabelEn = packageCount > 0 ? ` (${packageCount} packages)` : ' (docs only, 0 packages)';
+    setSyncStatusText({
+        zh_CN: allSuccess
+            ? `状态：已推送 GitHub 并导出本地快照${packageLabelZh}`
+            : `状态：推送部分完成${packageLabelZh}`,
+        en: allSuccess
+            ? `Status: Pushed to GitHub and exported local snapshot${packageLabelEn}`
+            : `Status: Push partially completed${packageLabelEn}`
+    });
+    showToast(currentLang === 'zh_CN'
+        ? (allSuccess
+            ? '已推送 GitHub 并导出本地快照'
+            : (githubTooLargeError ? `本地已导出，GitHub 未上传：${githubTooLargeError}` : '推送部分完成，请查看状态'))
+        : (allSuccess
+            ? 'Pushed to GitHub and exported local snapshot'
+            : (githubTooLargeError ? `Local export completed; GitHub skipped: ${githubTooLargeError}` : 'Push partially completed; check status')));
+    if (!snapshotSaved) {
+        showToast(currentLang === 'zh_CN'
+            ? '推送已完成，但快照写入本地存储失败'
+            : 'Push completed, but snapshot storage failed');
+    }
+    if (selectedPackageCount !== packageCount) {
+        console.warn('[SyncView] selected package count mismatch:', { selectedPackageCount, packageCount });
+    }
+    await recordSyncTransferActivity('push', {
+        at: Date.now(),
+        provider: buildSyncProviderActivityValue([SYNC_PROVIDER_GITHUB, SYNC_PROVIDER_LOCAL]),
+        branch: pushedBranch || githubRepoConfig.branch,
+        fileCount: pushedCount + Math.max(0, Number(localSummary.fileCount || 0)),
+        packageCount,
+        docCount: Array.isArray(payload.docs) ? payload.docs.length : 0
+    });
+    timing.done({
+        success: allSuccess,
+        partial: !allSuccess,
+        provider: buildSyncProviderActivityValue([SYNC_PROVIDER_GITHUB, SYNC_PROVIDER_LOCAL]),
+        packageCount,
+        docs: Array.isArray(payload.docs) ? payload.docs.length : 0
+    });
+    return snapshot;
+}
+
 async function pushSyncSnapshotToCloud() {
     const timing = createSyncTimingLogger('sync-push');
     const config = readSyncConfigFromUI();
@@ -20021,10 +21218,14 @@ async function pushSyncSnapshotToCloud() {
         return null;
     }
     timing.mark('save_config');
-    const repoConfig = buildSyncRepoConfig(config);
+    const selectedProviders = getSyncProviderValuesFromConfig(config);
+    const hasGithubProvider = selectedProviders.includes(SYNC_PROVIDER_GITHUB);
+    const hasLocalProvider = selectedProviders.includes(SYNC_PROVIDER_LOCAL);
+    const repoConfig = buildSyncRepoConfig({ ...config, provider: getPrimarySyncProviderValue(selectedProviders) });
+    const githubRepoConfig = buildSyncRepoConfig({ ...config, provider: SYNC_PROVIDER_GITHUB });
     const selectedPackageCount = countEnabledSyncPackages(config);
-    const missingRepoReason = getSyncRepoMissingReason(repoConfig);
-    if (repoConfig.provider === SYNC_PROVIDER_GITHUB && missingRepoReason.code) {
+    const missingRepoReason = hasGithubProvider ? getSyncRepoMissingReason(githubRepoConfig) : { code: '', text: '' };
+    if (hasGithubProvider && !hasLocalProvider && missingRepoReason.code) {
         setSyncStatusText({
             zh_CN: `状态：推送失败（${missingRepoReason.text}）`,
             en: `Status: Push failed (${missingRepoReason.text})`
@@ -20035,8 +21236,8 @@ async function pushSyncSnapshotToCloud() {
     }
     let githubBranchReadyPromise = null;
     let githubHeadCommitPromise = null;
-    if (repoConfig.provider === SYNC_PROVIDER_GITHUB) {
-        githubBranchReadyPromise = ensureSyncGitHubBranch(repoConfig, { createIfMissing: false })
+    if (hasGithubProvider && !missingRepoReason.code) {
+        githubBranchReadyPromise = ensureSyncGitHubBranch(githubRepoConfig, { createIfMissing: false })
             .catch((error) => ({
                 success: false,
                 error: formatSyncGitHubError(error)
@@ -20048,7 +21249,7 @@ async function pushSyncSnapshotToCloud() {
                     if (!branchReady?.success || branchReady.branchWillBeCreated === true || !headSha) {
                         return null;
                     }
-                    return syncGitHubGetCommit(repoConfig, headSha);
+                    return syncGitHubGetCommit(githubRepoConfig, headSha);
                 })
                 .catch((error) => ({
                     success: false,
@@ -20093,6 +21294,23 @@ async function pushSyncSnapshotToCloud() {
         docs: payload.docs,
         payload
     };
+
+    if (hasGithubProvider && hasLocalProvider) {
+        const localRepoConfig = buildSyncRepoConfig({ ...config, provider: SYNC_PROVIDER_LOCAL });
+        return await pushSyncSnapshotToSelectedDestinations({
+            config,
+            githubRepoConfig,
+            localRepoConfig,
+            snapshot,
+            payload,
+            packageCount,
+            selectedPackageCount,
+            githubBranchReadyPromise,
+            githubHeadCommitPromise,
+            missingRepoReason,
+            timing
+        });
+    }
 
     const isLocalProvider = repoConfig.provider === SYNC_PROVIDER_LOCAL;
     let localSnapshotDownloadResult = null;
@@ -20732,17 +21950,22 @@ function bindSyncViewEvents() {
     bindSyncEditorLifecycleAutoSave();
 
     const configIds = [
-        'syncProviderSelect',
+        'syncProviderGithubRadio',
+        'syncProviderLocalRadio',
         'syncGithubTokenInput',
         'syncGithubOwnerInput',
         'syncGithubRepoInput',
         'syncGithubBranchInput',
+        'syncGithubBasePathInput',
         ...SYNC_PACKAGE_FIELDS.map((field) => field.checkboxId)
     ];
     configIds.forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('change', async () => {
+            if (id === 'syncProviderGithubRadio' || id === 'syncProviderLocalRadio') {
+                ensureSyncProviderCheckboxSelection(el);
+            }
             await persistSyncConfigFromUI({ showErrorToast: true });
         });
         const tagName = String(el.tagName || '').toLowerCase();
@@ -20766,14 +21989,7 @@ function bindSyncViewEvents() {
                     showToast(currentLang === 'zh_CN' ? '同步配置保存失败，请重试' : 'Failed to save sync settings. Please retry.');
                     return;
                 }
-                const repoConfig = buildSyncRepoConfig(syncConfigState);
-                if (repoConfig.provider !== SYNC_PROVIDER_GITHUB) {
-                    setSyncRepoStatusText({
-                        zh_CN: '本地快照模式无需测试连接',
-                        en: 'Local snapshot mode does not require connection test'
-                    }, 'neutral');
-                    return;
-                }
+                const repoConfig = buildManualExportGitHubRepoConfig(syncConfigState);
                 setSyncRepoStatusText({
                     zh_CN: '正在测试连接...',
                     en: 'Testing connection...'
@@ -20787,13 +22003,14 @@ function bindSyncViewEvents() {
                     return;
                 }
                 const branchWillBeCreated = testResult.branchWillBeCreated === true;
+                const rootPathLabel = resolveSyncCloudRootPath(repoConfig, currentLang);
                 setSyncRepoStatusText({
                     zh_CN: branchWillBeCreated
-                        ? `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch}（首次推送将自动创建）`
-                        : `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch}`,
+                        ? `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch} · ${rootPathLabel}（首次推送将自动创建）`
+                        : `连接成功：${testResult.fullName} @ ${testResult.resolvedBranch} · ${rootPathLabel}`,
                     en: branchWillBeCreated
-                        ? `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch} (will auto-create on first push)`
-                        : `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch}`
+                        ? `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch} · ${rootPathLabel} (will auto-create on first push)`
+                        : `Connected: ${testResult.fullName} @ ${testResult.resolvedBranch} · ${rootPathLabel}`
                 }, 'success');
                 markSyncRepoConnected(syncConfigState);
                 showToast(
@@ -36330,6 +37547,7 @@ function openAddToPostponedModal(event = null) {
     if (!modal) return false;
 
     resetAddPostponedModal();
+    hydrateManualExportDestinationControls(modal);
     modal.classList.add('show');
     loadAddPostponedBookmarkTree();
     return true;
@@ -36709,6 +37927,8 @@ function resetAddPostponedModal() {
     if (folderName) folderName.textContent = isZh ? '点击选择文件夹' : 'Click to select folder';
     const treeSelectedName = document.getElementById('addTreeSelectedName');
     if (treeSelectedName) treeSelectedName.textContent = '-';
+    const treeExportControl = document.getElementById('addPostponedTreeExportControl');
+    if (treeExportControl) treeExportControl.hidden = false;
     const treeExportBtn = document.getElementById('addPostponedTreeExportBtn');
     if (treeExportBtn) treeExportBtn.hidden = false;
     const treeList = document.getElementById('addBookmarkTreeList');
@@ -37041,8 +38261,12 @@ function updateAddPostponedFooterSelection(panelType = null) {
     if (!selectedName) return;
 
     const activePanelType = panelType || modal?.querySelector('.add-postponed-panel.active')?.dataset?.panel || 'tree';
+    const exportControl = document.getElementById('addPostponedTreeExportControl');
+    if (exportControl) exportControl.hidden = activePanelType !== 'tree';
     const exportBtn = document.getElementById('addPostponedTreeExportBtn');
     if (exportBtn) exportBtn.hidden = activePanelType !== 'tree';
+    const exportDestination = document.getElementById('addPostponedTreeExportDestination');
+    if (exportDestination) exportDestination.hidden = activePanelType !== 'tree';
     const isZh = currentLang === 'zh_CN';
     if (activePanelType === 'search') {
         selectedName.textContent = String(addPostponedSearchSelected.size || 0);
@@ -37634,10 +38858,18 @@ async function performAddPostponedTreeStatusExport() {
         const json = buildBookmarkCanvasRankingExportJson(payload);
         json.title = payload.title;
         json.descriptionMd = payload.descriptionMd;
-        const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json;charset=utf-8' });
-        const result = await downloadSyncBlobAsFile(blob, buildAddPostponedTreeStatusFilename(payload), { preferSaveAs: false });
-        if (result?.success) {
-            showToast(getRankingExportText('exportDone'));
+        const destinations = getManualExportDestinationsFromContainer(modal);
+        const result = await exportManualFile({
+            text: JSON.stringify(json, null, 2),
+            filename: buildAddPostponedTreeStatusFilename(payload),
+            mimeType: 'application/json;charset=utf-8',
+            category: 'bookmark-status',
+            destinations
+        });
+        if (isManualExportResultCompleteEnough(result)) {
+            showToast(getManualExportResultToastText(result, destinations));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[AddPostponedTreeExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -44863,13 +46095,13 @@ async function performBrowsingRelatedContextExport(groupIndex, beforeInput, afte
             showToast(getRankingExportText('noData'));
             return;
         }
-        const text = JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2);
-        const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
-        const filename = buildRankingExportFilename(payload, 'json');
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
-        if (result?.success) {
+        const destinations = getManualExportDestinationsFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, 'json', 'related-history', destinations);
+        if (isManualExportResultCompleteEnough(result)) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(getManualExportResultToastText(result, destinations));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[BrowsingRelatedContextExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));

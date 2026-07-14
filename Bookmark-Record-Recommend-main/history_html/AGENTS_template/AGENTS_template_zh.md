@@ -18,12 +18,14 @@ AGENTS.md
 
 ### 最小分析流程
 1. 判断用户意图：普通问答直接回答；系统性分析、周期复盘、模糊推荐、清理建议才生成结果文件。
-2. 读取 `data/manifest.json`，确认 pushId、timeRange、文件列表、记录数、截断状态和 readOrder。
-3. 先读 `bookmark-recommend.json` 与 `bookmark-record.json` 的 `summary` 和 `data.signals`。
-4. 如果任务涉及多个包、多个候选或需要精确解释，先用工具建立临时实体索引，把 bookmarkId / URL / title 串到推荐包、记录包、原生事实源包。
-5. 只在需要补字段、核验路径、精确访问记录时，用实体索引定位后再查 `raw-native/**`。
-6. 对系统性分析、周期复盘、模糊推荐、清理建议，按第 7 节把网络搜索作为默认第二证据层：先筛掉私密/登录/高成本目标，再联网核验少量高优先级公开候选；只有普通问答、单次定向查找、纯本地事实统计或工具不可用时，才可不联网。
-7. 输出时写清本地事实、推断、网络补充和不确定性；若未联网，必须说明原因和结论边界。
+2. 读取 `data/manifest.json`，确认 pushId、timeRange、文件列表、记录数、截断状态和 readOrder。pushId 是当前推送批次的硬边界；当前事实以 manifest.files / readOrder 指向的文件为准。
+3. 涉及 Git 历史、多个提交或多个推送包时，先以 pushId 作为最高优先级批次主键聚合同一次推送；同一 pushId 的 manifest、业务文件和 commits 作为一个分析单元。
+4. 先读 `bookmark-recommend.json` 与 `bookmark-record.json` 的 `summary` 和 `data.signals`。
+5. 如果存在 `manual-export/**`，只按用户问题、主题、域名、文件夹或时间范围读取相关文件；它是可选的手动导出意图信号，普通数据包没有也正常。
+6. 如果任务涉及多个包、多个候选或需要精确解释，先用工具建立临时实体索引，把 bookmarkId / URL / title 串到推荐包、记录包、原生事实源包。
+7. 只在需要补字段、核验路径、精确访问记录时，用实体索引定位后再查 `raw-native/**`。
+8. 对系统性分析、周期复盘、模糊推荐、清理建议，按第 7 节把网络搜索作为默认第二证据层：先筛掉私密/登录/高成本目标，再联网核验少量高优先级公开候选；只有普通问答、单次定向查找、纯本地事实统计或工具不可用时，才可不联网。
+9. 输出时写清本地事实、推断、网络补充和不确定性；若未联网，必须说明原因和结论边界。
 
 ## 1. 身份与目标
 我是你的书签助理。目标：
@@ -44,6 +46,17 @@ AGENTS.md
 │   └── raw-native/
 │       ├── bookmarks-tree.json         # 当前书签树事实源
 │       └── history-visits.jsonl        # 浏览访问事实源
+├── meta/
+│   └── sync_state.json                  # 同步状态元数据
+├── manual-export/                       # 可选手动导出；普通推送包里可能不存在
+│   ├── click-ranking/<YYYY-MM-DD>/       # 点击排行
+│   ├── current-tracking/<YYYY-MM-DD>/    # 正在追踪
+│   ├── time-ranking/<YYYY-MM-DD>/        # 时间排行
+│   ├── related-history/<YYYY-MM-DD>/     # 关联记录
+│   ├── postponed-review/<YYYY-MM-DD>/    # 待复习
+│   ├── bookmark-status/<YYYY-MM-DD>/     # 书签情况
+│   ├── bookmark-addition-records/<YYYY-MM-DD>/ # 书签添加记录
+│   └── bookmark-click-records/<YYYY-MM-DD>/ # 书签点击记录
 └── ai/
     ├── input-docs/...                  # 用户本地草稿 / 补充输入
     └── results/...                     # AI 生成的分析结果
@@ -52,12 +65,14 @@ AGENTS.md
 ### 路径与用途
 | 路径 / 来源 | 用途 | 读取策略 |
 | --- | --- | --- |
-| `data/manifest.json` | AI 入口索引：pushId、timeRange、文件列表、hash、记录数、截断状态、readOrder | 必须最先读取 |
+| `data/manifest.json` | AI 入口索引：pushId、timeRange、文件列表、hash、记录数、截断状态、readOrder | 必须最先读取；它定义当前 pushId 的有效文件集合 |
 | `data/packages/bookmark-recommend.json` | 推荐评分与候选层：S 池、当前卡片、复习、延后、跳过、翻卡、屏蔽信号 | 优先读 `summary` 与 `data.signals` |
 | `data/packages/bookmark-record.json` | 行为证据层：新增、点击、点击排行、关联、时间排行、文件夹/域名聚合 | 优先读 `summary` 与 `data.signals` |
 | `data/raw-native/bookmarks-tree.json` | 当前书签树事实源：`data.tree` 与 `data.records[]`，包含 id、title、url、path、parentId | 进入临时实体索引的 identity 层；按 bookmarkId / URL / path 定向查 |
 | `data/raw-native/history-visits.jsonl` | 浏览访问事实源：逐行 JSON，bookmarkId 可能为空 | 进入临时实体索引的 visit 层；按 URL / bookmarkId / visitTime 过滤 |
-| `AGENTS.md` | 本文件：产品文件夹固定规则文件 | 只在规则维护场景修改 |
+| `AGENTS.md` | 本文件：Base Path 下产品文件夹内的固定规则文件 | 只在规则维护场景修改 |
+| `meta/sync_state.json` | 同步状态元数据：最近推送时间、分支、推送文件数、文档数量 | 只作同步背景，不作为书签事实源 |
+| `manual-export/<category>/<YYYY-MM-DD>/**` | 手动导出内容：普通推送/拉取不一定存在；若存在，通常来自用户主动选择导出，分类包括 click-ranking、current-tracking、time-ranking、related-history、postponed-review、bookmark-status、bookmark-addition-records、bookmark-click-records，代表更强主观意图 | 可作为辅助证据并适度提高相关书签、域名、文件夹、时间范围的权重；缺失不扣分，且不得替代 `data/manifest.json` 与 `data/**` 事实源 |
 | `ai/input-docs/**` | 用户本地草稿 / 补充输入 | 用户要求或任务需要时读取/写入 |
 | `ai/results/**` | AI 生成的分析结果 | 只有需要生成报告/分析时写入 |
 | GitHub Commits / Compare / Commit API | 按 pushId 聚合同步提交、判断本次变化 | 需要分析云端变化时使用 |
@@ -65,14 +80,18 @@ AGENTS.md
 
 写入边界：
 - `data/**` 是插件生成的事实源，只读；AI 不应手工修改、格式化、重写或补齐这些文件。
+- `manual-export/**` 是用户主动导出的可选材料；AI 可读取作意图证据，但不应修改、删除或整理，除非用户明确要求。
 - AI 可写位置仅限用户明确要求或任务需要的 `ai/results/**`、`ai/input-docs/**`、以及规则维护场景下的 `AGENTS.md`。
 
 ## 3. Git 优先流程（按 pushId 聚合 commits）
+硬约束：pushId 优先级高于目录路径和文件名。推送数据包以固定路径覆盖为主，不保证清理所有旧数据文件；路径存在不等于属于当前推送，必须以当前 `data/manifest.json` 的 pushId、files 与 readOrder 判断当前事实边界。
+
 1. 先读取 `data/manifest.json`，记录 `pushId` 与 `readOrder`。
 2. 读取仓库最近 commits（建议最近 30 条），按 commit message 中的 `[sync:<pushId>]` 聚合同一次用户推送。
 3. 对同一 pushId 的 commit group：compare base = 最早 commit 的 parent，head = 最晚 commit。
-4. 从 compare 结果判断哪些业务文件变化；需要正文时再按 manifest.readOrder 读取。
+4. 从 compare 结果判断哪些业务文件变化；需要正文时只按当前 pushId 的 manifest.files / readOrder 读取。
 5. 输出结论时，必须标注引用的 pushId、短 commit SHA 与对应路径。
+6. 当同时分析多个 pushId 时，先按 pushId 分组分别建立事实边界，再做跨 pushId 对比；不要把不同 pushId 的文件当成同一次推送混读。
 
 ## 4. 数据口径与边界
 - `bookmark-record.data.clickRecords` 是由当前书签树 + 浏览历史事实源派生出的书签点击记录，只包含能匹配当前书签的访问记录。匹配方式、原始来源与原始记录数看 `bookmark-record.data.clickRecords.meta` 和 manifest。
@@ -81,6 +100,7 @@ AGENTS.md
 - 推荐分数缓存状态看 `bookmark-recommend.data.recommendPool.scoreCacheMeta`：包括 `recommendScoresTime`、`staleMeta`、`ensureResult`、`templateScoreCount`、`templateScoreRatio`。template 分是临时可用分，解释优先级时要标注不确定性。
 - `recommend_reviews_similar` 可能为 null；必须查看 `recommend_reviews_similar_meta` 的 `available/source/skippedReason`，不要把“未生成相似候选”解释成“没有相似书签”。
 - 四个数据文件的分工：`bookmark-recommend.json` 是评分与候选层（S 池 / 复习 / 屏蔽 / 跳过 / 翻卡 信号）；`bookmark-record.json` 是行为证据层（点击 / 添加 / 时间捕捉排行）；`bookmarks-tree.json` 是当前书签树的事实源（文件夹路径与层级）；`history-visits.jsonl` 是访问明细的事实源。同一 bookmarkId 串起四者。系统性分析、周期复盘、模糊推荐时优先读前两个包的 signals 再按 bookmarkId 反查原生包；轻量问答、单次查找、泛谈话题时可直接用标题 / URL / 域名 / 文件夹路径 / 关键词在任一文件里匹配，不必拘泥顺序。
+- `manual-export/**` 不是自动推送/拉取的完整事实源，缺失很常见，不表示用户没有手动导出或没有相关意图；若存在，可把其中被用户主动导出的标题、URL、文件夹、时间段或导出格式当作主观意图线索，用来提高相关候选的解释权重。
 
 ## 5. 分析结果输出（路径白名单）
 同步 push/pull 本身只负责传输数据包与 Markdown 文档；AI 代理执行分析时，将结果写入以下路径。
@@ -106,6 +126,8 @@ AGENTS.md
 5. 软负向信号（`skippedTargets` / `postponedTargets` / `flippedTargets`）= 不硬性排除，但在排序与解释里降低优先级，并在“信号来源”中标注用户的负反馈历史。
 6. 上次已推荐过（`ai/results/latest.md` 或 `ai/results/runs/<近 24h>/*.md` 中出现过的 bookmarkId）= 本轮在“值得打开”列表中降权或替换，除非用户明确要求“重看”。
 
+附加意图信号：如果 `manual-export/**` 存在，里面的文件通常来自用户主动点击导出。与当前问题匹配的手动导出内容可适度提高对应书签、域名、文件夹、时间段或主题的权重；缺失时忽略，不降低任何候选；若与 `data/**` 事实源冲突，以 manifest 与数据包为准。
+
 推荐模式偏移：
 - `default`：平衡 S 分、复习、点击与新增信号，避免单一来源主导。
 - `archaeology`：偏向久未打开但历史价值高、路径/标题显示长期价值的书签；必须标注“久未打开”的不确定性。
@@ -126,8 +148,9 @@ AGENTS.md
 2. 读取 `data/manifest.json`，确认 `pushId`、可用文件、记录数、截断状态与 `readOrder`。
 3. 优先读取 `bookmark-recommend.json` 的 `summary` 与 `data.signals`，先处理 `blockedSummary`、`reviewTargets`、`postponedTargets`、`currentCards`、`scoreLeaders`、`skippedTargets`。
 4. 再读取 `bookmark-record.json` 的 `summary` 与 `data.signals`，用 `recentClicks`、`unopenedAdditions`、`recentUnopenedAdditions`、`topClickedDomains`、`topClickedFolders`、`topAddedFolders`、`timeTracking.rankings` 补充行为证据。
-5. 用 `bookmarkId` 作为跨包主键时必须先确认字段存在，不要用标题做跨文件匹配：`bookmark-recommend.signals.*.items[].id`、`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]`、`bookmarks-tree.records[].id` 都等于纯 bookmarkId；`history-visits.jsonl[].bookmarkId` 只有在原记录有真实 bookmarkId 时才存在，后台校准记录可能为 null；`bookmark-record.clickRecords.rows[].id` 可能是复合 visit id，不要把它直接当 bookmarkId。精确对位访问记录时优先用 `bookmarkId + visitTime`，bookmarkId 缺失时退回 `url + visitTime`。`bookmarks-tree.json` 与 `history-visits.jsonl` 只用于核验和补字段。
-6. 输出时说明每个建议来自哪些本地信号。凡是进入“值得打开 / 值得复习 / 建议屏蔽 / 清理建议 / 是否过时 / 是否有替代”的判断，默认按第 7 节补一层网络证据；只在普通问答、单次定向查找、纯本地事实统计、目标私密/需登录/高成本且未获授权，或网络工具不可用时跳过，并在输出中说明。
+5. 如果 `manual-export/**` 存在并与任务相关，读取相关小文件或片段，把它作为用户主动导出的意图证据；普通包没有该目录时直接跳过。
+6. 用 `bookmarkId` 作为跨包主键时必须先确认字段存在，不要用标题做跨文件匹配：`bookmark-recommend.signals.*.items[].id`、`bookmark-recommend.recommendPool.recommend_scores_cache[<key>]`、`bookmarks-tree.records[].id` 都等于纯 bookmarkId；`history-visits.jsonl[].bookmarkId` 只有在原记录有真实 bookmarkId 时才存在，后台校准记录可能为 null；`bookmark-record.clickRecords.rows[].id` 可能是复合 visit id，不要把它直接当 bookmarkId。精确对位访问记录时优先用 `bookmarkId + visitTime`，bookmarkId 缺失时退回 `url + visitTime`。`bookmarks-tree.json` 与 `history-visits.jsonl` 只用于核验和补字段。
+7. 输出时说明每个建议来自哪些本地信号。凡是进入“值得打开 / 值得复习 / 建议屏蔽 / 清理建议 / 是否过时 / 是否有替代”的判断，默认按第 7 节补一层网络证据；只在普通问答、单次定向查找、纯本地事实统计、目标私密/需登录/高成本且未获授权，或网络工具不可用时跳过，并在输出中说明。
 
 ## 7. 网络搜索作为第二证据层
 - 本地同步数据回答“用户保存过、点击过、复习过什么”；网络搜索回答“这些内容在外部世界是否仍有价值、有哪些替代或延伸”。书签是 Web 对象，系统性推荐和复盘默认应结合本地数据与网络搜索，而不是只在本地信息不足时才搜索。
@@ -146,6 +169,7 @@ AGENTS.md
 
 ## 8. 索引、工具与复杂任务核验
 - 先把 `data/manifest.json` 当作入口索引：确认 pushId、timeRange、文件列表、hash、记录数、截断状态与 readOrder；不要绕开 manifest 直接线性通读所有大文件。
+- 涉及多个同步批次或 Git 历史时，索引第一层必须按 pushId / snapshotId / timeRange 分区；实体索引在对应 pushId 内建立，跨 pushId 对比时必须标注每条证据来自哪个 pushId。不要把同路径下旧 pushId 残留文件并入当前 pushId 的事实集合。
 - 只要任务需要跨推荐包、记录包、原生事实源包解释同一批书签，就先用专业工具建立临时实体索引，而不是在对话中逐段翻文件。可用工具包括 Node.js、Python、SQLite、DuckDB、`jq`、ripgrep 预筛 + JSON parser，或环境提供的结构化检索/索引工具。
 - 如果当前 AI 环境不具备本地命令、脚本、数据库、MCP、CodeGraph、全文检索或等价索引能力，不要声称已经建立索引；改用 `manifest` + `summary/signals` + 小范围片段读取的降级流程，并在输出中说明覆盖范围、未索引部分和不确定性。
 - 临时实体索引建议至少包含这些映射：
@@ -153,7 +177,7 @@ AGENTS.md
   - `byUrl`：规范化 URL 后映射到候选 bookmarkIds、点击记录和访问记录；用于 history bookmarkId 为空、用户只给 URL、或 URL 精确匹配时。
   - `byTitle`：规范化 title 后作为候选索引；title 不唯一，只能配合 domain、URL、folder path、dateAdded 或用户上下文缩小范围，不能直接当主键。
   - `byDomain` / `byFolderPath`：用于同域名刷屏、文件夹主题分析、批量推荐与去重。
-- 临时实体索引中的单个书签实体建议合并为：`identity`（id/title/url/path/parentId/dateAdded）、`recommend`（S 分、current card、review/postponed/skipped/flipped/blocked、activeMode 相关信号）、`record`（recentClicks、clickRanking、unopenedAdditions、relatedRecords、timeTracking）、`visits`（匹配到的 history-visits 行）、`uncertainty`（缺字段、bookmarkId 缺失、截断、template 分、partial clickRecords）。
+- 临时实体索引中的单个书签实体建议合并为：`identity`（id/title/url/path/parentId/dateAdded）、`recommend`（S 分、current card、review/postponed/skipped/flipped/blocked、activeMode 相关信号）、`record`（recentClicks、clickRanking、unopenedAdditions、relatedRecords、timeTracking）、`visits`（匹配到的 history-visits 行）、`manualExport`（用户主动导出的意图层）、`uncertainty`（缺字段、bookmarkId 缺失、截断、template 分、partial clickRecords）。
 - 这个索引默认只放在内存、临时文件或临时数据库中；除非用户明确要求或产品 schema 已定义，不要把临时索引写入同步包、`data/**`、`ai/results/**` 或 `ai/input-docs/**`。
 - 用户给出关键词、URL、域名、文件夹、bookmarkId 或时间范围时，先做定向检索：在 manifest 指向的候选文件里缩小范围，再读取相关片段或记录。
 - 跨包对齐优先使用 bookmarkId；精确到访问记录时优先 `bookmarkId + visitTime`，bookmarkId 缺失时退回 `url + visitTime`。标题只能作为搜索线索，不能作为跨文件唯一主键。
@@ -204,7 +228,7 @@ AGENTS.md
 - 适合沉淀到长期规则 / Skill 的是用户偏好和工具流程；不适合沉淀的是当前同步包的数据事实、一次性分析结论、Token / Owner / Repo 等敏感配置。
 - 优先级：用户当前自然语言指令 > 用户长期个人规则 > 本文件中的行为偏好；但路径白名单、数据口径、结果输出位置、Token 隐私和同步目录安全是硬约束。
 - 外部 Skill / 长期规则只能作为辅助参考，不能覆盖本文件的数据 schema、路径白名单、Git pushId 流程、结果输出位置和隐私规则。
-- 同步目录只应包含本产品管理的路径：data/**、AGENTS.md、ai/input-docs/**、ai/results/**。不要在同步根目录随意新增个人笔记、附件、脚本或非本产品格式文件。
+- 同步目录只应包含本产品管理的路径：data/**、AGENTS.md、meta/sync_state.json、可选的 manual-export/**、ai/input-docs/**、ai/results/**。不要在同步根目录随意新增个人笔记、附件、脚本或非本产品格式文件。
 - 任务目标、写入位置、风险边界不明确且存在多个合理解释时，先向用户确认；确认前不要写 ai/results，也不要改写 AGENTS.md 或输入文档。
 - 处理 JSON / JSONL 数据时使用结构化读取；不要靠标题跨文件强行匹配 bookmarkId，也不要把 history-visits 的原始访问记录直接当作书签点击记录。
 - 只输出 Markdown；不嵌入脚本 / iframe / 内联样式。

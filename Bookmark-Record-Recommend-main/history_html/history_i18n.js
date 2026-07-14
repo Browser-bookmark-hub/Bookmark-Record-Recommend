@@ -101,14 +101,14 @@ const i18n = {pageTitle: {
         'zh_CN': '配置方式',
         'en': 'Configuration'
     },syncProviderLabel: {
-        'zh_CN': '同步方式',
-        'en': 'Sync Provider'
+        'zh_CN': '推送去向',
+        'en': 'Push Destinations'
     },syncProviderGithubOption: {
-        'zh_CN': 'GitHub Repo',
-        'en': 'GitHub Repo'
+        'zh_CN': 'GitHub',
+        'en': 'GitHub'
     },syncProviderLocalOption: {
-        'zh_CN': '本地快照（仅本机）',
-        'en': 'Local Snapshot (Local Only)'
+        'zh_CN': '本地',
+        'en': 'Local'
     },syncGithubTokenLabel: {
         'zh_CN': 'GitHub Token',
         'en': 'GitHub Token'
@@ -121,6 +121,9 @@ const i18n = {pageTitle: {
     },syncGithubBranchLabel: {
         'zh_CN': '分支',
         'en': 'Branch'
+    },syncGithubBasePathLabel: {
+        'zh_CN': 'Base Path',
+        'en': 'Base Path'
     },syncRepoTestBtnText: {
         'zh_CN': '测试连接',
         'en': 'Test Connection'
@@ -1265,4 +1268,3 @@ const i18n = {pageTitle: {
     }
 };
 window.i18n = i18n; // 暴露给其他模块使用
-

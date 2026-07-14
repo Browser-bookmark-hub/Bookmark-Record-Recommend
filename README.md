@@ -51,9 +51,10 @@
 | <img src="Screenshots%20and%20icons/v0.4.5/关联记录zh.png" width="400"> | <img src="Screenshots%20and%20icons/v0.4.5/添加到待复习zh.png" width="400"> |
 
 #### 推送与分析结构图预览
+`Base Path` 可在「推送与分析」的 GitHub 配置中设置，默认留空；设置后下面结构整体位于 `<Base Path>/书签记录与推荐/`。目录不存在时，首次推送会随文件写入自动出现在 GitHub 仓库中。
 ```text
 书签记录与推荐/
-|-- AGENTS.md                             [PUSH] 同步/AI 分析规则文档：固定写入产品文件夹，限定可读路径、结果格式、manifest 与 pushId 聚合流程。
+|-- AGENTS.md                             [PUSH] 同步/AI 分析规则文档：固定写入 Base Path 下的产品文件夹，限定可读路径、结果格式、manifest 与 pushId 聚合流程。
 |-- data/manifest.json                    [PUSH] AI 入口索引：列出本次 pushId、正文文件、hash、读取顺序；不包含正文或本地变化摘要。
 |-- data/packages/bookmark-record.json    [PUSH] 书签记录包：新增、点击、点击排行、关联记录、当前时间排行与时间屏蔽状态。
 |-- data/packages/bookmark-recommend.json [PUSH] 书签推荐包：S 分数池、候选池、推荐模式、复习、屏蔽、跳过、翻卡事件。
@@ -64,7 +65,16 @@
 |-- ai/results/**/*.md                    [PULL/PUSH] AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。
 |-- GitHub /commits?sha=<branch>          [READ] 仓库提交时间线：查看最近改动文件与变更频率。
 |-- GitHub /compare/<base>...<head>       [READ] 按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。
-\-- meta/sync_state.json                  [PUSH] 同步状态元数据：最近推送时间、分支、推送文件数、文档数量。
+|-- meta/sync_state.json                  [PUSH] 同步状态元数据：最近推送时间、分支、推送文件数、文档数量。
+\-- manual-export/                        [MANUAL] 手动导出目录：仅在导出面板选择 GitHub 时写入；普通推送或拉取不会处理，分类见下方。
+    |-- click-ranking/<YYYY-MM-DD>/       [MANUAL] 手动导出分类：点击排行，按导出日期分组。
+    |-- current-tracking/<YYYY-MM-DD>/    [MANUAL] 手动导出分类：正在追踪，按导出日期分组。
+    |-- time-ranking/<YYYY-MM-DD>/        [MANUAL] 手动导出分类：时间排行，按导出日期分组。
+    |-- related-history/<YYYY-MM-DD>/     [MANUAL] 手动导出分类：关联记录，按导出日期分组。
+    |-- postponed-review/<YYYY-MM-DD>/    [MANUAL] 手动导出分类：待复习，按导出日期分组。
+    |-- bookmark-status/<YYYY-MM-DD>/     [MANUAL] 手动导出分类：书签情况，按导出日期分组。
+    |-- bookmark-addition-records/<YYYY-MM-DD>/ [MANUAL] 手动导出分类：书签添加记录，按导出日期分组。
+    \-- bookmark-click-records/<YYYY-MM-DD>/ [MANUAL] 手动导出分类：书签点击记录，按导出日期分组。
 ```
 
 ### 特色功能
@@ -136,9 +146,10 @@ It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com
 | <img src="Screenshots%20and%20icons/v0.4.5/关联记录en.png" width="400"> | <img src="Screenshots%20and%20icons/v0.4.5/添加到待复习en.png" width="400"> |
 
 #### Push & Analyze Structure Preview
+`Base Path` can be configured in Push & Analysis GitHub settings and is empty by default; when set, the whole structure lives under `<Base Path>/Bookmark Record and Recommend/`. If the path does not exist, the first push creates it by writing files under that path.
 ```text
 Bookmark Record and Recommend/
-|-- AGENTS.md                             [PUSH] Required Sync/AI rule document in the product folder: manifest, pushId grouping, output format, and citation rules.
+|-- AGENTS.md                             [PUSH] Required Sync/AI rule document in the product folder under Base Path: manifest, pushId grouping, output format, and citation rules.
 |-- data/manifest.json                    [PUSH] AI entry index: pushId, package files, hashes, read order; no package body or local delta summary.
 |-- data/packages/bookmark-record.json    [PUSH] Bookmark record bundle: additions, clicks, rankings, related records, current time rankings and blocked state.
 |-- data/packages/bookmark-recommend.json [PUSH] Bookmark recommendation bundle: S-scores, candidates, mode, review/block/skip/flip events.
@@ -149,7 +160,16 @@ Bookmark Record and Recommend/
 |-- ai/results/**/*.md                    [PULL/PUSH] AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.
 |-- GitHub /commits?sha=<branch>          [READ] Commit timeline for the repository and change frequency.
 |-- GitHub /compare/<base>...<head>       [READ] Diff summary after grouping commits by pushId; no local delta summary is generated.
-\-- meta/sync_state.json                  [PUSH] Sync metadata: last push time, branch, pushed file count, doc count.
+|-- meta/sync_state.json                  [PUSH] Sync metadata: last push time, branch, pushed file count, doc count.
+\-- manual-export/                        [MANUAL] Manual export folder: written only when an export panel chooses GitHub; normal push or pull ignores this folder. Categories are listed below.
+    |-- click-ranking/<YYYY-MM-DD>/       [MANUAL] Manual export category: Click Ranking, grouped by export date.
+    |-- current-tracking/<YYYY-MM-DD>/    [MANUAL] Manual export category: Current Tracking, grouped by export date.
+    |-- time-ranking/<YYYY-MM-DD>/        [MANUAL] Manual export category: Time Ranking, grouped by export date.
+    |-- related-history/<YYYY-MM-DD>/     [MANUAL] Manual export category: Related History, grouped by export date.
+    |-- postponed-review/<YYYY-MM-DD>/    [MANUAL] Manual export category: Review Queue, grouped by export date.
+    |-- bookmark-status/<YYYY-MM-DD>/     [MANUAL] Manual export category: Bookmark Status, grouped by export date.
+    |-- bookmark-addition-records/<YYYY-MM-DD>/ [MANUAL] Manual export category: Bookmark Addition Records, grouped by export date.
+    \-- bookmark-click-records/<YYYY-MM-DD>/ [MANUAL] Manual export category: Bookmark Click Records, grouped by export date.
 ```
 
 ### Highlights

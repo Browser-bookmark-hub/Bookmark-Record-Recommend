@@ -3,6 +3,7 @@
 
 // Unified Export Folder Paths - 统一的导出文件夹路径（根据语言动态选择）
 const getBrowsingExportRootFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签记录与推荐' : 'Bookmark Record and Recommend';
+const getBrowsingManualExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '手动导出' : 'Manual Export';
 const getBrowsingExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签点击记录' : 'Bookmark Click Records';
 
 // 翻译辅助函数
@@ -5596,6 +5597,9 @@ class BrowsingHistoryCalendar {
     openExportModal() {
         const modal = document.getElementById('browsingExportModal');
         if (!modal) return;
+        if (typeof window.hydrateManualExportDestinationControls === 'function') {
+            window.hydrateManualExportDestinationControls(modal);
+        }
 
         // 更新范围说明 - 使用当前导出范围标题
         const scopeText = document.getElementById('browsingExportScopeText');
@@ -5764,6 +5768,12 @@ class BrowsingHistoryCalendar {
             // 获取选项
             const mode = document.querySelector('input[name="browsingExportMode"]:checked')?.value || 'records';
             const formats = Array.from(document.querySelectorAll('input[name="browsingExportFormat"]:checked')).map(cb => cb.value);
+            const destination = this.getExportDestination(modal);
+            const hasFileExport = formats.includes('html')
+                || formats.includes('json')
+                || (mode === 'history_context' && formats.includes('jsonl'));
+            const exportTimestamp = Date.now();
+            const fileExportResults = [];
 
             if (formats.length === 0) {
                 alert(i18n.exportErrorNoFormat[currentLang]);
@@ -5787,7 +5797,9 @@ class BrowsingHistoryCalendar {
                 const htmlContent = this.generateNetscapeHTML(exportData);
 
                 if (formats.includes('html')) {
-                    this.downloadFile(htmlContent, `${filenameBase}.html`, 'text/html');
+                    const result = await this.exportFile(htmlContent, `${filenameBase}.html`, 'text/html', destination, exportTimestamp);
+                    if (result?.notConfigured) return;
+                    fileExportResults.push(result);
                 }
 
                 if (formats.includes('copy')) {
@@ -5801,7 +5813,9 @@ class BrowsingHistoryCalendar {
             // 导出 JSON
             if (formats.includes('json')) {
                 const jsonContent = JSON.stringify(exportData, null, 2);
-                this.downloadFile(jsonContent, `${filenameBase}.json`, 'application/json');
+                const result = await this.exportFile(jsonContent, `${filenameBase}.json`, 'application/json', destination, exportTimestamp);
+                if (result?.notConfigured) return;
+                fileExportResults.push(result);
             }
 
             // 导出 浏览历史 (当模式为 history_context 时)
@@ -5845,12 +5859,18 @@ class BrowsingHistoryCalendar {
                             })).join('\n');
 
                             const suffix = currentLang === 'zh_CN' ? '浏览历史' : 'browsing_history';
-                            this.downloadFile(historyJsonlContent, `${filenameBase}_${suffix}.jsonl`, 'application/x-jsonlines');
+                            const result = await this.exportFile(historyJsonlContent, `${filenameBase}_${suffix}.jsonl`, 'application/x-jsonlines', destination, exportTimestamp);
+                            if (result?.notConfigured) return;
+                            fileExportResults.push(result);
                         }
                     }
                 } catch (e) {
                     console.error('[BrowsingHistoryCalendar] 导出浏览历史上下文失败:', e);
                 }
+            }
+
+            if (hasFileExport && typeof showToast === 'function') {
+                showToast(this.getExportResultToastText(fileExportResults, destination));
             }
 
             modal.classList.remove('show');
@@ -5862,6 +5882,59 @@ class BrowsingHistoryCalendar {
             doExportBtn.disabled = false;
             doExportBtn.innerHTML = originalBtnText;
         }
+    }
+
+    getExportDestination(modal) {
+        if (typeof window.getManualExportDestinationsFromContainer === 'function') {
+            return window.getManualExportDestinationsFromContainer(modal || document);
+        }
+        if (typeof window.getManualExportDestinationFromContainer === 'function') {
+            return [window.getManualExportDestinationFromContainer(modal || document)];
+        }
+        const checked = Array.from((modal || document).querySelectorAll?.('input[data-manual-export-destination]:checked') || [])
+            .map((input) => String(input?.value || '').toLowerCase())
+            .filter((value) => value === 'github' || value === 'local');
+        return checked.length ? Array.from(new Set(checked)) : ['local'];
+    }
+
+    getExportResultToastText(results, destination) {
+        if (typeof window.getManualExportResultToastText === 'function') {
+            return window.getManualExportResultToastText(results, destination);
+        }
+        const destinations = Array.isArray(destination) ? destination : [destination];
+        const hasGithub = destinations.includes('github');
+        const hasLocal = destinations.includes('local');
+        if (hasGithub && hasLocal) return currentLang === 'zh_CN' ? '已导出到 GitHub 与本地' : 'Exported to GitHub and local';
+        return hasGithub
+            ? (typeof getRankingExportText === 'function' ? getRankingExportText('exportGithubDone') : (currentLang === 'zh_CN' ? '已导出到 GitHub' : 'Exported to GitHub'))
+            : (typeof getRankingExportText === 'function' ? getRankingExportText('exportLocalDone') : (currentLang === 'zh_CN' ? '已导出到本地' : 'Exported locally'));
+    }
+
+    async exportFile(content, filename, type, destination = 'local', timestamp = Date.now()) {
+        const normalizedDestinations = (Array.isArray(destination) ? destination : [destination])
+            .map((item) => String(item || '').toLowerCase())
+            .filter((item) => item === 'github' || item === 'local');
+        const destinations = normalizedDestinations.length ? Array.from(new Set(normalizedDestinations)) : ['local'];
+        if (typeof window.exportManualFile === 'function') {
+            const result = await window.exportManualFile({
+                text: content,
+                filename,
+                mimeType: type,
+                category: 'bookmark-click-records',
+                destinations,
+                timestamp
+            });
+            if (result?.success || result?.partialSuccess) return result;
+            if (result?.notConfigured) return result;
+            throw new Error(result?.error || 'export_failed');
+        }
+        if (destinations.includes('github')) {
+            throw new Error(currentLang === 'zh_CN'
+                ? '请先在「推送与分析」里配置 GitHub 后重试'
+                : 'Configure GitHub in Push & Analysis first');
+        }
+        this.downloadFile(content, filename, type, timestamp);
+        return { success: true, method: 'legacy_download' };
     }
 
     // 辅助：判断日期是否在当前导出范围内
@@ -6530,14 +6603,16 @@ class BrowsingHistoryCalendar {
             .replace(/'/g, "&#039;");
     }
 
-    downloadFile(content, filename, type) {
+    downloadFile(content, filename, type, timestamp = Date.now()) {
         const blob = new Blob([content], { type: type });
         const url = URL.createObjectURL(blob);
 
         // 尝试使用 chrome.downloads API 以支持子目录
         if (chrome.downloads) {
             // 使用统一的导出文件夹结构（根据语言动态选择）
-            const exportPath = `${getBrowsingExportRootFolder()}/${getBrowsingExportFolder()}`;
+            const exportDate = new Date(Number(timestamp) || Date.now());
+            const exportDateKey = this.getDateKey(Number.isNaN(exportDate.getTime()) ? new Date() : exportDate);
+            const exportPath = `${getBrowsingExportRootFolder()}/${getBrowsingManualExportFolder()}/${getBrowsingExportFolder()}/${exportDateKey}`;
 
             chrome.downloads.download({
                 url: url,

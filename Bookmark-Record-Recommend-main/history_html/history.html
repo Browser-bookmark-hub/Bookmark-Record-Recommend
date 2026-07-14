@@ -1501,13 +1501,19 @@
                                 <div class="sync-settings-title" id="syncRepoSettingsTitle">配置方式</div>
                                 <div class="sync-repo-card-body" id="syncRepoCardBody">
                                 <div class="sync-form-grid">
-                                    <label class="sync-form-row" for="syncProviderSelect">
-                                        <span class="sync-field-label" id="syncProviderLabel">同步方式</span>
-                                        <select id="syncProviderSelect" class="sync-field-input">
-                                            <option value="github" id="syncProviderGithubOption">GitHub Repo</option>
-                                            <option value="local" id="syncProviderLocalOption">本地快照（仅本机）</option>
-                                        </select>
-                                    </label>
+                                    <div class="sync-form-row sync-provider-row">
+                                        <span class="sync-field-label" id="syncProviderLabel">推送去向</span>
+                                        <div class="sync-provider-segment-group" role="group" aria-labelledby="syncProviderLabel">
+                                            <label class="sync-provider-segment-label">
+                                                <input id="syncProviderGithubRadio" name="syncProviderSelect" type="checkbox" value="github" checked>
+                                                <span class="sync-provider-segment-item" id="syncProviderGithubOption">GitHub</span>
+                                            </label>
+                                            <label class="sync-provider-segment-label">
+                                                <input id="syncProviderLocalRadio" name="syncProviderSelect" type="checkbox" value="local">
+                                                <span class="sync-provider-segment-item" id="syncProviderLocalOption">本地</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                     <label class="sync-form-row" for="syncGithubOwnerInput">
                                         <span class="sync-field-label" id="syncGithubOwnerLabel">Owner</span>
                                         <input id="syncGithubOwnerInput" class="sync-field-input" type="text" placeholder="your-github-owner" autocomplete="off">
@@ -1519,6 +1525,10 @@
                                     <label class="sync-form-row" for="syncGithubBranchInput">
                                         <span class="sync-field-label" id="syncGithubBranchLabel">Branch</span>
                                         <input id="syncGithubBranchInput" class="sync-field-input" type="text" placeholder="main" autocomplete="off">
+                                    </label>
+                                    <label class="sync-form-row sync-form-row-wide" for="syncGithubBasePathInput">
+                                        <span class="sync-field-label" id="syncGithubBasePathLabel">Base Path</span>
+                                        <input id="syncGithubBasePathInput" class="sync-field-input" type="text" placeholder="可不填(路径前缀)" autocomplete="off">
                                     </label>
                                     <label class="sync-form-row sync-form-row-wide" for="syncGithubTokenInput">
                                         <span class="sync-field-label" id="syncGithubTokenLabel">GitHub Token</span>
@@ -1727,6 +1737,30 @@
                         </div>
 
                         <div class="export-section" style="margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+                                <h4 class="manual-export-destination-heading" style="margin: 0; font-size: 14px; color: var(--text-secondary);">导出方向</h4>
+                                <button class="ranking-export-info-btn manual-export-info-btn" type="button" aria-label="导出说明" title="导出说明">
+                                    <i class="fas fa-question-circle"></i>
+                                </button>
+                            </div>
+                            <div class="ranking-export-info-bubble manual-export-info-bubble" hidden>
+                                本地会保存到“书签记录与推荐/手动导出/&lt;分类&gt;/&lt;YYYY-MM-DD&gt;”；GitHub 会使用“推送与分析”的 GitHub 配置并写入 Base Path 下的“书签记录与推荐/manual-export/&lt;category&gt;/&lt;YYYY-MM-DD&gt;”（Base Path 可不填）。选择 GitHub 前，请先在“推送与分析”配置 Token、Owner、Repo 和分支。
+                            </div>
+                            <div class="checkbox-group manual-export-destination-check-group" role="group" aria-label="导出方向" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="bookmarkAdditionsExportDestination" value="github" data-manual-export-destination>
+                                    <span>GitHub</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="bookmarkAdditionsExportDestination" value="local" data-manual-export-destination checked>
+                                    <span>本地</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
                             <h4 style="margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">导出格式</h4>
                             <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 8px;">
                                 <label class="checkbox-label"
@@ -1794,6 +1828,30 @@
                                     style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="radio" name="browsingExportMode" value="history_context">
                                     <span>导出书签点击记录及浏览历史 <small style="color: var(--text-tertiary);">(按日期归档，并包含该时段的全部浏览器历史记录)</small></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="export-section" style="margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+                                <h4 class="manual-export-destination-heading" style="margin: 0; font-size: 14px; color: var(--text-secondary);">导出方向</h4>
+                                <button class="ranking-export-info-btn manual-export-info-btn" type="button" aria-label="导出说明" title="导出说明">
+                                    <i class="fas fa-question-circle"></i>
+                                </button>
+                            </div>
+                            <div class="ranking-export-info-bubble manual-export-info-bubble" hidden>
+                                本地会保存到“书签记录与推荐/手动导出/&lt;分类&gt;/&lt;YYYY-MM-DD&gt;”；GitHub 会使用“推送与分析”的 GitHub 配置并写入 Base Path 下的“书签记录与推荐/manual-export/&lt;category&gt;/&lt;YYYY-MM-DD&gt;”（Base Path 可不填）。选择 GitHub 前，请先在“推送与分析”配置 Token、Owner、Repo 和分支。
+                            </div>
+                            <div class="checkbox-group manual-export-destination-check-group" role="group" aria-label="导出方向" style="display: flex; flex-direction: column; gap: 8px;">
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="bookmarkClicksExportDestination" value="github" data-manual-export-destination>
+                                    <span>GitHub</span>
+                                </label>
+                                <label class="checkbox-label"
+                                    style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="bookmarkClicksExportDestination" value="local" data-manual-export-destination checked>
+                                    <span>本地</span>
                                 </label>
                             </div>
                         </div>
@@ -2013,11 +2071,25 @@
                     <span id="addTreeSelectedText">已选择</span>: <span id="addTreeSelectedName">-</span>
                 </div>
                 <div class="add-postponed-footer-actions">
+                    <div class="add-tree-export-control" id="addPostponedTreeExportControl">
+                        <div class="add-tree-export-destination" id="addPostponedTreeExportDestination">
+                            <div class="manual-export-destination-group" role="group" aria-label="导出方向">
+                                <label class="manual-export-destination-option">
+                                    <input type="checkbox" name="addPostponedTreeExportDestination" value="github" data-manual-export-destination>
+                                    <span>GitHub</span>
+                                </label>
+                                <label class="manual-export-destination-option">
+                                    <input type="checkbox" name="addPostponedTreeExportDestination" value="local" data-manual-export-destination checked>
+                                    <span>本地</span>
+                                </label>
+                            </div>
+                        </div>
+                        <button class="modal-btn add-tree-export-btn" id="addPostponedTreeExportBtn" type="button"
+                            title="导出书签情况" aria-label="导出书签情况">
+                            <span id="addPostponedTreeExportText">导出</span>
+                        </button>
+                    </div>
                     <button class="modal-btn" id="addPostponedCancelBtn">取消</button>
-                    <button class="modal-btn add-tree-export-btn" id="addPostponedTreeExportBtn" type="button"
-                        title="导出书签情况" aria-label="导出书签情况">
-                        <span id="addPostponedTreeExportText">导出</span>
-                    </button>
                     <button class="modal-btn primary" id="addPostponedConfirmBtn">添加</button>
                 </div>
             </div>
