@@ -2044,6 +2044,11 @@ const RELATED_HISTORY_EXPORT_DEFAULT_LIMIT = 150;
 const RELATED_HISTORY_EXPORT_GROUP_SIZE = 50;
 const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE = 10;
 const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER = 10;
+const BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE = 50;
+const BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT = 50;
+const BROWSING_RANKING_SINGLE_EXPORT_GROUP_SIZE_KEY = 'browsingRankingSingleExportGroupSize';
+const BROWSING_RANKING_SINGLE_EXPORT_OTHER_LIMIT_KEY = 'browsingRankingSingleExportOtherLimit';
+const BROWSING_RANKING_SINGLE_EXPORT_CONTEXT_KEY = 'browsingRankingSingleExportContextEnabled';
 const RANKING_EXPORT_FALLBACK_LABEL = '导入';
 const RANKING_EXPORT_NOTE_COLORS = ['yellow', 'gray', 'purple'];
 const RANKING_EXPORT_INLINE_TIP_DISMISSED_KEY_PREFIX = 'rankingExportInlineTipDismissed';
@@ -2058,7 +2063,14 @@ function getRankingExportText(key) {
         exportRelatedHistory: isZh ? '导出关联记录' : 'Export related history',
         exportPostponedReview: isZh ? '导出待复习' : 'Export review queue',
         exportBookmarkStatus: isZh ? '导出书签情况' : 'Export bookmark status',
+        exportCurrentItem: isZh ? '导出此项' : 'Export this item',
         limitLabel: isZh ? '导出前 N 项' : 'Export top N',
+        context: isZh ? '上下文' : 'Context',
+        groupSizeLabel: isZh ? '每组项数' : 'Items per group',
+        otherLimitLabel: isZh ? '其他数量' : 'Other limit',
+        recordedItems: isZh ? '有记录项' : 'Recorded',
+        otherItems: isZh ? '其他' : 'Other',
+        itemCount: isZh ? '项数' : 'Items',
         contextBeforeLabel: isZh ? '此项上方' : 'Above item',
         contextAfterLabel: isZh ? '此项下方' : 'Below item',
         contextSelectedItem: isZh ? '当前项' : 'Selected item',
@@ -2873,6 +2885,752 @@ async function buildBrowsingRankingExportPayload(limit) {
     });
 }
 
+function parseBrowsingRankingFolderPath(value) {
+    return String(value || '')
+        .split(' / ')
+        .map(part => part.trim())
+        .filter(Boolean);
+}
+
+function normalizeBrowsingRankingSingleExportGroupSize(value, fallback = BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE) {
+    const parsed = parseInt(String(value || '').trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return Math.max(1, Number(fallback) || BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE);
+    return Math.min(parsed, 999);
+}
+
+function readBrowsingRankingSingleExportGroupSize() {
+    try {
+        return normalizeBrowsingRankingSingleExportGroupSize(
+            localStorage.getItem(BROWSING_RANKING_SINGLE_EXPORT_GROUP_SIZE_KEY),
+            BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE
+        );
+    } catch (_) {
+        return BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE;
+    }
+}
+
+function saveBrowsingRankingSingleExportGroupSize(value) {
+    try {
+        localStorage.setItem(
+            BROWSING_RANKING_SINGLE_EXPORT_GROUP_SIZE_KEY,
+            String(normalizeBrowsingRankingSingleExportGroupSize(value))
+        );
+    } catch (_) { }
+}
+
+function normalizeBrowsingRankingSingleExportOtherLimit(value, fallback = BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT) {
+    const parsed = parseInt(String(value ?? '').trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return Math.max(0, Number(fallback) || BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT);
+    return Math.min(parsed, 999);
+}
+
+function readBrowsingRankingSingleExportOtherLimit() {
+    try {
+        return normalizeBrowsingRankingSingleExportOtherLimit(
+            localStorage.getItem(BROWSING_RANKING_SINGLE_EXPORT_OTHER_LIMIT_KEY),
+            BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT
+        );
+    } catch (_) {
+        return BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT;
+    }
+}
+
+function saveBrowsingRankingSingleExportOtherLimit(value) {
+    try {
+        localStorage.setItem(
+            BROWSING_RANKING_SINGLE_EXPORT_OTHER_LIMIT_KEY,
+            String(normalizeBrowsingRankingSingleExportOtherLimit(value))
+        );
+    } catch (_) { }
+}
+
+function readBrowsingRankingSingleExportContextEnabled() {
+    try {
+        return localStorage.getItem(BROWSING_RANKING_SINGLE_EXPORT_CONTEXT_KEY) !== '0';
+    } catch (_) {
+        return true;
+    }
+}
+
+function saveBrowsingRankingSingleExportContextEnabled(enabled) {
+    try {
+        localStorage.setItem(BROWSING_RANKING_SINGLE_EXPORT_CONTEXT_KEY, enabled ? '1' : '0');
+    } catch (_) { }
+}
+
+function getBrowsingRankingSingleExportTypeLabel(type) {
+    if (type === 'folder') return getRankingExportText('folder');
+    if (type === 'subdomain') return getRankingExportText('subdomain');
+    return getRankingExportText('domain');
+}
+
+function getBrowsingRankingSingleExportTargetLabel(target = {}) {
+    const typeLabel = getBrowsingRankingSingleExportTypeLabel(target.type);
+    const label = String(target.detail || target.label || target.title || '').trim();
+    return [typeLabel, label].filter(Boolean).join('：');
+}
+
+function clearRankingExportRowNotes(rows = []) {
+    return (Array.isArray(rows) ? rows : []).map(row => {
+        const next = {
+            ...row,
+            metrics: [],
+            note: '',
+            noteColor: ''
+        };
+        if (Array.isArray(row?.children) && row.children.length > 0) {
+            next.children = clearRankingExportRowNotes(row.children);
+        }
+        return next;
+    });
+}
+
+function getBrowsingRankingBookmarkEntryPathFromRecord(entry = {}) {
+    if (Array.isArray(entry?.folderPath)) {
+        return entry.folderPath.slice();
+    }
+    const rawPath = String(entry?.path || '').trim();
+    const pathParts = rawPath ? rawPath.split('/').filter(Boolean) : [];
+    return pathParts.length > 1 ? pathParts.slice(0, -1) : [];
+}
+
+function getBrowsingRankingBookmarkEntriesFromCache() {
+    if (!Array.isArray(allBookmarks) || allBookmarks.length === 0) return [];
+    return allBookmarks
+        .map(entry => {
+            const url = String(entry?.url || '').trim();
+            if (!url) return null;
+            const title = String(entry?.title || '').trim();
+            return {
+                id: entry?.id == null ? null : String(entry.id),
+                url,
+                title: title || url,
+                folderPath: getBrowsingRankingBookmarkEntryPathFromRecord(entry)
+            };
+        })
+        .filter(Boolean);
+}
+
+async function getBrowsingRankingBookmarkTreeForExport() {
+    if (cachedBookmarkTree) {
+        cachedBookmarkTree = Array.isArray(cachedBookmarkTree) ? cachedBookmarkTree[0] : cachedBookmarkTree;
+        return cachedBookmarkTree;
+    }
+    if (typeof loadBookmarkTree === 'function') {
+        try {
+            cachedBookmarkTree = await loadBookmarkTree();
+            if (cachedBookmarkTree) return cachedBookmarkTree;
+        } catch (error) {
+            console.warn('[BrowsingRankingSingleExport] 读取缓存书签树失败:', error);
+        }
+    }
+
+    const browserAPI = (typeof chrome !== 'undefined') ? chrome : (typeof browser !== 'undefined' ? browser : null);
+    if (!browserAPI?.bookmarks?.getTree) return null;
+    try {
+        const tree = await new Promise((resolve, reject) => {
+            browserAPI.bookmarks.getTree((result) => {
+                if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                    reject(browserAPI.runtime.lastError);
+                } else {
+                    resolve(result);
+                }
+            });
+        });
+        cachedBookmarkTree = Array.isArray(tree) ? tree[0] : tree;
+        return cachedBookmarkTree;
+    } catch (error) {
+        console.warn('[BrowsingRankingSingleExport] 获取书签树失败:', error);
+        return null;
+    }
+}
+
+function getBrowsingRankingFolderTargetPath(target = {}) {
+    return Array.isArray(target.folderPath) && target.folderPath.length > 0
+        ? target.folderPath.filter(Boolean)
+        : parseBrowsingRankingFolderPath(target.detail || target.label || target.title);
+}
+
+function findBrowsingRankingFolderNodeByPath(root, targetPath = []) {
+    const safePath = Array.isArray(targetPath) ? targetPath.filter(Boolean) : [];
+    if (!root || safePath.length === 0) return null;
+    let found = null;
+    const walk = (node, path = []) => {
+        if (!node || found) return;
+        const isFolder = !node.url;
+        const nextPath = isFolder && node.title ? [...path, node.title] : path;
+        if (isFolder
+            && nextPath.length === safePath.length
+            && safePath.every((part, index) => nextPath[index] === part)) {
+            found = node;
+            return;
+        }
+        if (Array.isArray(node.children)) {
+            node.children.forEach(child => walk(child, nextPath));
+        }
+    };
+    walk(root, []);
+    return found;
+}
+
+async function getBrowsingRankingAllBookmarkEntries() {
+    const cachedEntries = getBrowsingRankingBookmarkEntriesFromCache();
+    if (cachedEntries.length > 0) return cachedEntries;
+
+    const browserAPI = (typeof chrome !== 'undefined') ? chrome : (typeof browser !== 'undefined' ? browser : null);
+    if (browserAPI?.bookmarks?.getTree) {
+        try {
+            const tree = await new Promise((resolve, reject) => {
+                browserAPI.bookmarks.getTree((result) => {
+                    if (browserAPI.runtime && browserAPI.runtime.lastError) {
+                        reject(browserAPI.runtime.lastError);
+                    } else {
+                        resolve(result);
+                    }
+                });
+            });
+            const entries = [];
+            const walk = (nodes, parentPath = []) => {
+                if (!Array.isArray(nodes)) return;
+                nodes.forEach(node => {
+                    if (node?.url) {
+                        const url = String(node.url || '').trim();
+                        if (url) {
+                            const title = String(node.title || '').trim();
+                            entries.push({
+                                id: node.id == null ? null : String(node.id),
+                                url,
+                                title: title || url,
+                                folderPath: parentPath.slice()
+                            });
+                        }
+                    }
+                    if (Array.isArray(node?.children)) {
+                        const nextPath = node.title ? [...parentPath, node.title] : parentPath;
+                        walk(node.children, nextPath);
+                    }
+                });
+            };
+            walk(tree);
+            if (entries.length > 0) return entries;
+        } catch (error) {
+            console.warn('[BrowsingRankingSingleExport] 获取完整书签树失败:', error);
+        }
+    }
+
+    const bookmarkData = await getBookmarkUrlsAndTitles();
+    const info = bookmarkData?.info instanceof Map
+        ? bookmarkData.info
+        : (browsingRelatedBookmarkInfo instanceof Map ? browsingRelatedBookmarkInfo : new Map());
+    return Array.from(info.values()).map(item => ({
+        id: item?.id == null ? null : String(item.id),
+        url: String(item?.url || '').trim(),
+        title: String(item?.title || item?.url || '').trim(),
+        folderPath: Array.isArray(item?.folderPath) ? item.folderPath.slice() : []
+    })).filter(item => item.url);
+}
+
+function buildBrowsingRankingRecordedItemMap(items = [], range) {
+    const map = new Map();
+    (Array.isArray(items) ? items : []).forEach(item => {
+        const url = String(item?.url || '').trim();
+        if (!url) return;
+        const count = Math.max(0, Number(item?.count ?? getBrowsingRankingItemExportCount(item, range)) || 0);
+        const previous = map.get(url);
+        if (!previous || count > previous.count) {
+            map.set(url, {
+                ...item,
+                url,
+                title: item?.title || url,
+                count,
+                lastVisitTime: Number(item?.lastVisitTime || 0) || 0
+            });
+        }
+    });
+    return map;
+}
+
+function isBrowsingRankingFolderEntryInTarget(entry = {}, target = {}) {
+    const entryPath = Array.isArray(entry.folderPath) ? entry.folderPath : [];
+    const rootPath = Array.isArray(target.folderPath) && target.folderPath.length > 0
+        ? target.folderPath.filter(Boolean)
+        : parseBrowsingRankingFolderPath(target.detail || target.label || target.title);
+    if (target.isUncategorized === true || rootPath.length === 0) {
+        return entryPath.length === 0;
+    }
+    if (entryPath.length < rootPath.length) return false;
+    return rootPath.every((part, index) => entryPath[index] === part);
+}
+
+function isBrowsingRankingDomainEntryInTarget(entry = {}, target = {}) {
+    const parts = getBrowsingRankingDomainPartsFromUrl(entry.url);
+    if (!parts) return false;
+    const type = target.type === 'subdomain' ? 'subdomain' : 'domain';
+    const value = getBrowsingRankingDomainValue(parts, type);
+    const targetValue = normalizeBrowsingRankingDomainHost(
+        type === 'subdomain'
+            ? (target.subdomain || target.label || target.title)
+            : (target.domain || target.parentDomain || target.label || target.title)
+    );
+    return !!value && !!targetValue && value === targetValue;
+}
+
+function partitionBrowsingRankingContextEntries(entries = [], recordedMap, target = {}, range) {
+    const recorded = [];
+    const other = [];
+    const rootPath = Array.isArray(target.folderPath) && target.folderPath.length > 0
+        ? target.folderPath.filter(Boolean)
+        : parseBrowsingRankingFolderPath(target.detail || target.label || target.title);
+    const type = target.type === 'folder' ? 'folder' : (target.type === 'subdomain' ? 'subdomain' : 'domain');
+
+    (Array.isArray(entries) ? entries : []).forEach(entry => {
+        if (!entry?.url) return;
+        const matches = type === 'folder'
+            ? isBrowsingRankingFolderEntryInTarget(entry, target)
+            : isBrowsingRankingDomainEntryInTarget(entry, target);
+        if (!matches) return;
+
+        const recordedItem = recordedMap.get(entry.url);
+        const fullFolderPath = Array.isArray(entry.folderPath) ? entry.folderPath.slice() : [];
+        const item = {
+            ...entry,
+            title: entry.title || recordedItem?.title || entry.url,
+            count: recordedItem ? Math.max(0, Number(recordedItem.count) || 0) : 0,
+            lastVisitTime: recordedItem ? (Number(recordedItem.lastVisitTime || 0) || 0) : 0,
+            fullFolderPath,
+            groupedFolderPath: type === 'folder' ? rootPath.slice() : [],
+            relativeFolderPath: type === 'folder' && rootPath.length > 0 ? fullFolderPath.slice(rootPath.length) : fullFolderPath.slice()
+        };
+
+        if (recordedItem && item.count > 0) {
+            recorded.push(item);
+        } else {
+            other.push(item);
+        }
+    });
+
+    recorded.sort((a, b) => {
+        const countDiff = (Number(b.count) || 0) - (Number(a.count) || 0);
+        if (countDiff !== 0) return countDiff;
+        const timeDiff = (Number(b.lastVisitTime) || 0) - (Number(a.lastVisitTime) || 0);
+        if (timeDiff !== 0) return timeDiff;
+        return String(a.title || a.url || '').localeCompare(String(b.title || b.url || ''));
+    });
+    other.sort((a, b) => String(a.title || a.url || '').localeCompare(String(b.title || b.url || '')));
+
+    return { recorded, other };
+}
+
+function createBrowsingRankingExportFolderRow(title, children = [], extra = {}) {
+    return {
+        itemType: 'folder',
+        itemTypeLabel: getRankingExportText('folder'),
+        title,
+        detail: extra.detail || title,
+        count: Math.max(0, Number(extra.count) || 0),
+        metrics: Array.isArray(extra.metrics) ? extra.metrics : [],
+        note: extra.note || '',
+        noteColor: extra.noteColor || '',
+        children: Array.isArray(children) ? children : []
+    };
+}
+
+function getBrowsingRankingGroupFolderTitle(startIndex, endIndex) {
+    return `${startIndex + 1}-${endIndex}`;
+}
+
+function buildBrowsingRankingContextFolder(title, items, options = {}) {
+    const safeItems = Array.isArray(items) ? items : [];
+    const groupSize = normalizeBrowsingRankingSingleExportGroupSize(options.groupSize);
+    const buildRows = typeof options.buildRows === 'function' ? options.buildRows : (() => []);
+    const shouldClearNotes = options.clearNotes === true;
+    const makeRows = (chunk) => {
+        const rows = buildRows(chunk);
+        return shouldClearNotes ? clearRankingExportRowNotes(rows) : rows;
+    };
+    let children;
+    if (safeItems.length > groupSize) {
+        children = [];
+        for (let start = 0; start < safeItems.length; start += groupSize) {
+            const end = Math.min(start + groupSize, safeItems.length);
+            children.push(createBrowsingRankingExportFolderRow(
+                getBrowsingRankingGroupFolderTitle(start, end),
+                makeRows(safeItems.slice(start, end)),
+                { detail: `${title} ${getBrowsingRankingGroupFolderTitle(start, end)}` }
+            ));
+        }
+    } else {
+        children = makeRows(safeItems);
+    }
+    return createBrowsingRankingExportFolderRow(title, children, {
+        count: safeItems.reduce((sum, item) => sum + (Number(item?.count) || 0), 0)
+    });
+}
+
+function buildBrowsingRankingBookmarkContextExportRow(item, range) {
+    const count = Math.max(0, Number(item?.count ?? getBrowsingRankingItemExportCount(item, range)) || 0);
+    const metrics = count > 0
+        ? [{ label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }]
+        : [];
+    return {
+        itemType: 'bookmark',
+        itemTypeLabel: getRankingExportText('bookmark'),
+        title: item?.title || item?.url || '',
+        url: item?.url || '',
+        detail: item?.url || '',
+        count,
+        metrics,
+        note: count > 0 ? buildRankingExportMetricNote(metrics) : ''
+    };
+}
+
+function updateBrowsingRankingContextFolderNodeMetrics(node) {
+    if (!node) return;
+    const count = Math.max(0, Number(node.count) || 0);
+    if (count > 0) {
+        node.metrics = [
+            { label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }
+        ];
+        node.note = buildRankingExportMetricNote(node.metrics);
+    } else {
+        node.metrics = [];
+        node.note = '';
+        node.noteColor = '';
+    }
+}
+
+function addBrowsingRankingContextBookmarkToFolderTree(children, folderPath, bookmarkRow, ancestorPath = []) {
+    const safeChildren = Array.isArray(children) ? children : [];
+    const safePath = Array.isArray(folderPath) ? folderPath.filter(Boolean) : [];
+    if (safePath.length === 0) {
+        safeChildren.push(bookmarkRow);
+        return;
+    }
+
+    const folderName = String(safePath[0] || '').trim();
+    if (!folderName) {
+        addBrowsingRankingContextBookmarkToFolderTree(safeChildren, safePath.slice(1), bookmarkRow, ancestorPath);
+        return;
+    }
+
+    let folderNode = safeChildren.find(child =>
+        child
+        && child.itemType === 'folder'
+        && child.url === ''
+        && child.title === folderName
+    );
+    if (!folderNode) {
+        const fullPath = [...ancestorPath, folderName].join(' / ');
+        folderNode = createBrowsingRankingExportFolderRow(folderName, [], { detail: fullPath });
+        safeChildren.push(folderNode);
+    }
+
+    folderNode.count += Math.max(0, Number(bookmarkRow?.count) || 0);
+    updateBrowsingRankingContextFolderNodeMetrics(folderNode);
+    addBrowsingRankingContextBookmarkToFolderTree(folderNode.children, safePath.slice(1), bookmarkRow, [...ancestorPath, folderName]);
+}
+
+function buildBrowsingFolderSingleContextChildren(items, range) {
+    const children = [];
+    const sortedItems = (Array.isArray(items) ? items.slice() : []).sort((a, b) => {
+        const pathDiff = String((a.relativeFolderPath || []).join(' / ')).localeCompare(String((b.relativeFolderPath || []).join(' / ')));
+        if (pathDiff !== 0) return pathDiff;
+        const countDiff = (Number(b?.count) || 0) - (Number(a?.count) || 0);
+        if (countDiff !== 0) return countDiff;
+        return String(a?.title || a?.url || '').localeCompare(String(b?.title || b?.url || ''));
+    });
+
+    sortedItems.forEach(item => {
+        const bookmarkRow = buildBrowsingRankingBookmarkContextExportRow(item, range);
+        addBrowsingRankingContextBookmarkToFolderTree(children, item?.relativeFolderPath || [], bookmarkRow);
+    });
+
+    return sortRankingExportChildren(children);
+}
+
+function buildBrowsingRankingBookmarkTreeItemRow(node, recordedMap, range) {
+    const url = String(node?.url || '').trim();
+    const recordedItem = recordedMap.get(url);
+    const count = recordedItem ? Math.max(0, Number(recordedItem.count) || 0) : 0;
+    const title = String(node?.title || recordedItem?.title || url || '').trim();
+    const metrics = count > 0
+        ? [{ label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }]
+        : [];
+    return {
+        itemType: 'bookmark',
+        itemTypeLabel: getRankingExportText('bookmark'),
+        title: title || url,
+        url,
+        detail: url,
+        count,
+        metrics,
+        note: count > 0 ? buildRankingExportMetricNote(metrics) : ''
+    };
+}
+
+function buildBrowsingRankingBookmarkTreeFolderRows(node, recordedMap, range, parentPath = []) {
+    if (!node || !Array.isArray(node.children)) return [];
+    return node.children.map(child => {
+        if (child?.url) {
+            return buildBrowsingRankingBookmarkTreeItemRow(child, recordedMap, range);
+        }
+        const title = String(child?.title || getRankingExportText('folder')).trim();
+        const childPath = [...parentPath, title].filter(Boolean);
+        const children = buildBrowsingRankingBookmarkTreeFolderRows(child, recordedMap, range, childPath);
+        const count = children.reduce((sum, item) => sum + (Number(item?.count) || 0), 0);
+        const row = createBrowsingRankingExportFolderRow(title || getRankingExportText('folder'), children, {
+            detail: childPath.join(' / '),
+            count
+        });
+        updateBrowsingRankingContextFolderNodeMetrics(row);
+        return row;
+    }).filter(Boolean);
+}
+
+function countBrowsingRankingTreeExportBookmarks(rows = []) {
+    return (Array.isArray(rows) ? rows : []).reduce((sum, row) => {
+        if (row?.itemType === 'bookmark') return sum + 1;
+        return sum + countBrowsingRankingTreeExportBookmarks(row?.children || []);
+    }, 0);
+}
+
+async function buildBrowsingFolderBookmarkTreeContext(target = {}, range, recordedMap) {
+    const root = await getBrowsingRankingBookmarkTreeForExport();
+    const targetPath = getBrowsingRankingFolderTargetPath(target);
+    const targetNode = findBrowsingRankingFolderNodeByPath(root, targetPath);
+    if (!targetNode) {
+        const allEntries = await getBrowsingRankingAllBookmarkEntries();
+        const { recorded, other } = partitionBrowsingRankingContextEntries(allEntries, recordedMap, target, range);
+        const rows = buildBrowsingFolderSingleContextChildren([...recorded, ...other], range);
+        return {
+            rows,
+            totalCount: recorded.length + other.length,
+            recordedCount: recorded.length
+        };
+    }
+    const rows = buildBrowsingRankingBookmarkTreeFolderRows(targetNode, recordedMap, range, targetPath);
+    const totalCount = countBrowsingRankingTreeExportBookmarks(rows);
+    const recordedCount = countBrowsingRankingTreeRecordedBookmarks(rows);
+    return { rows, totalCount, recordedCount };
+}
+
+function countBrowsingRankingTreeRecordedBookmarks(rows = []) {
+    return (Array.isArray(rows) ? rows : []).reduce((sum, row) => {
+        if (row?.itemType === 'bookmark') return sum + ((Number(row?.count) || 0) > 0 ? 1 : 0);
+        return sum + countBrowsingRankingTreeRecordedBookmarks(row?.children || []);
+    }, 0);
+}
+
+function buildBrowsingRankingSingleSelectedNote(context = {}) {
+    const metrics = [
+        getRankingExportText('contextExportSelectedItem'),
+        `${getRankingExportText('type')}：${context.typeLabel || ''}`,
+        `${getRankingExportText('target')}：${context.detail || ''}`,
+        `${getRankingExportText('clickCount')}：${Math.max(0, Number(context.count) || 0).toLocaleString(getRankingExportLocale())}`
+    ];
+    if (context.includeContext) {
+        if (context.usesGroupSize) {
+            metrics.push(`${getRankingExportText('context')}：${getRankingExportText('recordedItems')} ${context.recordedCount || 0} / ${getRankingExportText('otherItems')} ${context.otherCount || 0}`);
+            metrics.push(`${getRankingExportText('groupSizeLabel')}：${context.groupSize}`);
+            metrics.push(`${getRankingExportText('otherLimitLabel')}：${context.otherLimit}`);
+        } else {
+            const total = (Number(context.recordedCount) || 0) + (Number(context.otherCount) || 0);
+            metrics.push(`${getRankingExportText('context')}：${getRankingExportText('itemCount')} ${total}`);
+        }
+    }
+    return metrics.filter(Boolean).join(getRankingExportNoteSeparator());
+}
+
+async function buildBrowsingRankingSingleContextFolders(target = {}, range, groupSize, otherLimit = BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT) {
+    const recordedMap = buildBrowsingRankingRecordedItemMap(target.items, range);
+    const type = target.type === 'folder' ? 'folder' : (target.type === 'subdomain' ? 'subdomain' : 'domain');
+    if (type === 'folder') {
+        const context = await buildBrowsingFolderBookmarkTreeContext(target, range, recordedMap);
+        return {
+            recorded: Array.from({ length: context.recordedCount }),
+            other: Array.from({ length: Math.max(0, context.totalCount - context.recordedCount) }),
+            usesGroupSize: false,
+            folders: context.rows
+        };
+    }
+
+    const allEntries = await getBrowsingRankingAllBookmarkEntries();
+    const { recorded, other } = partitionBrowsingRankingContextEntries(allEntries, recordedMap, target, range);
+    const limitedOther = other.slice(0, normalizeBrowsingRankingSingleExportOtherLimit(otherLimit));
+    const buildRecordedRows = (items) => buildBrowsingDomainRankingExportChildren(items, range);
+    const buildOtherRows = (items) => buildBrowsingDomainRankingExportChildren(items, range);
+
+    return {
+        recorded,
+        other: limitedOther,
+        usesGroupSize: true,
+        folders: [
+            buildBrowsingRankingContextFolder(getRankingExportText('recordedItems'), recorded, {
+                groupSize,
+                buildRows: buildRecordedRows
+            }),
+            buildBrowsingRankingContextFolder(getRankingExportText('otherItems'), limitedOther, {
+                groupSize,
+                buildRows: buildOtherRows,
+                clearNotes: true
+            })
+        ]
+    };
+}
+
+function normalizeBrowsingRankingSingleVisibleItems(target = {}, range) {
+    const rootPath = Array.isArray(target.folderPath) && target.folderPath.length > 0
+        ? target.folderPath.filter(Boolean)
+        : parseBrowsingRankingFolderPath(target.detail || target.label || target.title);
+
+    return (Array.isArray(target.items) ? target.items : [])
+        .map(item => {
+            const count = Math.max(0, Number(item?.count ?? getBrowsingRankingItemExportCount(item, range)) || 0);
+            const fullFolderPath = Array.isArray(item?.fullFolderPath)
+                ? item.fullFolderPath.filter(Boolean)
+                : (Array.isArray(item?.folderPath) ? item.folderPath.filter(Boolean) : []);
+            let relativeFolderPath = Array.isArray(item?.relativeFolderPath)
+                ? item.relativeFolderPath.filter(Boolean)
+                : [];
+
+            if (!relativeFolderPath.length && fullFolderPath.length && rootPath.length) {
+                const isInsideRoot = rootPath.every((part, index) => fullFolderPath[index] === part);
+                relativeFolderPath = isInsideRoot ? fullFolderPath.slice(rootPath.length) : fullFolderPath.slice();
+            }
+
+            return {
+                ...item,
+                count,
+                fullFolderPath,
+                groupedFolderPath: rootPath.slice(),
+                relativeFolderPath
+            };
+        })
+        .filter(item => item?.url && item.count > 0);
+}
+
+function buildBrowsingRankingSingleVisibleChildren(target = {}, range, type) {
+    const visibleItems = normalizeBrowsingRankingSingleVisibleItems(target, range);
+    const children = type === 'folder'
+        ? buildBrowsingFolderRankingExportChildren(visibleItems, range)
+        : buildBrowsingDomainRankingExportChildren(visibleItems, range);
+    return {
+        children,
+        itemCount: visibleItems.length
+    };
+}
+
+async function buildBrowsingRankingSingleExportPayload(target = {}, options = {}) {
+    const includeContext = options.includeContext !== false;
+    const groupSize = normalizeBrowsingRankingSingleExportGroupSize(options.groupSize);
+    const otherLimit = normalizeBrowsingRankingSingleExportOtherLimit(options.otherLimit);
+    const type = ['folder', 'domain', 'subdomain'].includes(target.type) ? target.type : 'folder';
+    const range = normalizeWidgetsRankingRange(target.range || getActiveBrowsingRankingRange() || browsingRankingCurrentRange || 'month');
+    const typeLabel = getBrowsingRankingSingleExportTypeLabel(type);
+    const title = String(target.title || target.label || target.detail || typeLabel).trim();
+    const detail = String(target.detail || target.label || title).trim();
+    const count = Math.max(0, Number(target.count) || 0);
+    const metrics = [
+        { label: getRankingExportText('clickCount'), value: count.toLocaleString(getRankingExportLocale()) }
+    ];
+    const rootRow = {
+        itemType: 'folder',
+        itemTypeLabel: typeLabel,
+        title,
+        detail,
+        count,
+        metrics,
+        note: '',
+        noteColor: 'orange',
+        rank: 1,
+        children: []
+    };
+    let recordedCount = 0;
+    let otherCount = 0;
+    let usesGroupSize = type !== 'folder';
+
+    if (includeContext) {
+        const context = await buildBrowsingRankingSingleContextFolders({ ...target, type, detail, title }, range, groupSize, otherLimit);
+        recordedCount = context.recorded.length;
+        otherCount = context.other.length;
+        usesGroupSize = context.usesGroupSize === true;
+        rootRow.children = context.folders;
+    } else {
+        const visible = buildBrowsingRankingSingleVisibleChildren({ ...target, type, detail, title }, range, type);
+        recordedCount = visible.itemCount;
+        rootRow.children = visible.children;
+    }
+    rootRow.note = buildBrowsingRankingSingleSelectedNote({
+        typeLabel,
+        detail,
+        count,
+        includeContext,
+        groupSize,
+        otherLimit,
+        recordedCount,
+        otherCount,
+        usesGroupSize
+    });
+
+    const scopeLabel = target.customRangeLabel || getBrowsingRankingRangeLabel(range);
+    const secondaryLabel = target.customRangeLabel ? '' : getBrowsingRankingSecondaryLabel(range, browsingRankingTimeFilter);
+    const modeLabel = getBrowsingRankingSingleExportTargetLabel({ ...target, type, detail, title });
+    const titleParts = [
+        getRankingExportText('clickRanking'),
+        typeLabel,
+        title,
+        includeContext ? getRankingExportText('context') : ''
+    ].filter(Boolean);
+    const payload = {
+        title: titleParts.join('-'),
+        kind: 'browsing-ranking',
+        scopeLabel,
+        secondaryLabel,
+        modeLabel,
+        rankingTypeLabel: '',
+        scopeExtraLabels: includeContext ? [getRankingExportText('context')] : [],
+        createdAt: Date.now(),
+        requestedLimit: 1 + recordedCount + otherCount,
+        exportCount: 1 + recordedCount + otherCount,
+        limit: 1 + recordedCount + otherCount,
+        rows: [rootRow]
+    };
+    payload.descriptionMd = buildRankingExportDescription(payload);
+    return payload;
+}
+
+async function performBrowsingRankingSingleExport(target, options = {}, format = 'json', menuEl = null) {
+    try {
+        showToast(getRankingExportText('exporting'));
+        const payload = await buildBrowsingRankingSingleExportPayload(target, options);
+        if (!payload.rows.length) {
+            showToast(getRankingExportText('noData'));
+            return;
+        }
+        const supportedFormats = ['html', 'json'];
+        const normalizedFormat = supportedFormats.includes(format) ? format : 'json';
+        const text = normalizedFormat === 'json'
+            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
+            : buildRankingExportHtml(payload);
+        const type = normalizedFormat === 'json'
+            ? 'application/json;charset=utf-8'
+            : 'text/html;charset=utf-8';
+        const blob = new Blob([text], { type });
+        const filename = buildRankingExportFilename(payload, normalizedFormat);
+        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        if (result?.success) {
+            if (menuEl) menuEl.remove();
+            showToast(getRankingExportText('exportDone'));
+        } else {
+            console.warn('[BrowsingRankingSingleExport] download failed:', result);
+            showToast(getRankingExportText('exportFailed'));
+        }
+    } catch (error) {
+        console.error('[BrowsingRankingSingleExport] export failed:', error);
+        showToast(getRankingExportText('exportFailed'));
+    }
+}
+
 async function buildCurrentTrackingExportPayload(limit) {
     const response = await browserAPI.runtime.sendMessage({ action: 'getCurrentActiveSessions' });
     let sessions = response?.success && Array.isArray(response.sessions) ? response.sessions : [];
@@ -3185,9 +3943,163 @@ function bindRankingExportInfoBubble(menu) {
     });
 }
 
+function removeBrowsingRankingItemExportMenu() {
+    const menu = document.getElementById('browsingRankingItemExportMenu');
+    if (menu) menu.remove();
+}
+
+function showBrowsingRankingItemExportMenu(target, anchorEl) {
+    removeBrowsingRankingItemExportMenu();
+    const existingGlobal = document.getElementById('rankingExportMenu');
+    if (existingGlobal) existingGlobal.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'browsingRankingItemExportMenu';
+    menu.className = 'ranking-export-menu browsing-ranking-item-export-menu';
+    const currentScopeText = getRankingExportMenuScopeLabel('browsing-ranking');
+    const itemText = `${getRankingExportText('contextExportSelectedItem')}：${getBrowsingRankingSingleExportTargetLabel(target)}`;
+    const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
+    const infoBubbleHtml = buildRankingExportInfoBubbleHtml('browsing-ranking', ['html', 'json'], bookmarkCanvasLink);
+    const defaultContextEnabled = readBrowsingRankingSingleExportContextEnabled();
+    const defaultGroupSize = readBrowsingRankingSingleExportGroupSize();
+    const defaultOtherLimit = readBrowsingRankingSingleExportOtherLimit();
+    const supportsGroupSize = target?.type === 'domain' || target?.type === 'subdomain';
+    const actionButtonsHtml = ['html', 'json'].map(format => {
+        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
+        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
+        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
+    }).join('');
+    const groupSizeRowHtml = supportsGroupSize
+        ? `
+            <div class="ranking-export-menu-row ranking-item-export-group-size-row">
+                <label for="browsingRankingItemGroupSizeInput">${escapeHtml(getRankingExportText('groupSizeLabel'))}</label>
+                <input id="browsingRankingItemGroupSizeInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${defaultGroupSize}">
+            </div>
+        `
+        : '';
+    const otherLimitRowHtml = supportsGroupSize
+        ? `
+            <div class="ranking-export-menu-row ranking-item-export-other-limit-row">
+                <label for="browsingRankingItemOtherLimitInput">${escapeHtml(getRankingExportText('otherLimitLabel'))}</label>
+                <input id="browsingRankingItemOtherLimitInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${defaultOtherLimit}">
+            </div>
+        `
+        : '';
+    menu.innerHTML = `
+        <div class="ranking-export-menu-header">
+            <div class="ranking-export-menu-title">${escapeHtml(getRankingExportText('export'))}</div>
+            <button class="ranking-export-info-btn" type="button" aria-label="${escapeHtml(getRankingExportText('exportInfo'))}" title="${escapeHtml(getRankingExportText('exportInfo'))}">
+                <i class="fas fa-question-circle"></i>
+            </button>
+            <span class="ranking-export-context-inline-tip">: ${escapeHtml(getRankingExportText('exportInlineTipPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInlineTipSuffix'))}</span>
+        </div>
+        ${infoBubbleHtml}
+        <div class="ranking-export-current-scope">${escapeHtml(currentScopeText)}<br><span>${escapeHtml(itemText)}</span></div>
+        <label class="ranking-item-export-check">
+            <input id="browsingRankingItemContextInput" type="checkbox" ${defaultContextEnabled ? 'checked' : ''}>
+            <span>${escapeHtml(getRankingExportText('context'))}</span>
+        </label>
+        ${groupSizeRowHtml}
+        ${otherLimitRowHtml}
+        <div class="ranking-export-menu-actions">
+            ${actionButtonsHtml}
+        </div>
+    `;
+    document.body.appendChild(menu);
+
+    const rect = anchorEl && typeof anchorEl.getBoundingClientRect === 'function'
+        ? anchorEl.getBoundingClientRect()
+        : null;
+    positionFloatingMenuAtPoint(menu, rect
+        ? { x: rect.left, y: rect.bottom + 6 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    bindRankingExportInfoBubble(menu);
+
+    const contextInput = menu.querySelector('#browsingRankingItemContextInput');
+    const groupSizeInput = menu.querySelector('#browsingRankingItemGroupSizeInput');
+    const otherLimitInput = menu.querySelector('#browsingRankingItemOtherLimitInput');
+    const groupSizeRow = menu.querySelector('.ranking-item-export-group-size-row');
+    const otherLimitRow = menu.querySelector('.ranking-item-export-other-limit-row');
+    const syncContextOptionVisibility = () => {
+        const enabled = supportsGroupSize && (contextInput ? contextInput.checked : true);
+        if (groupSizeRow) groupSizeRow.hidden = !enabled;
+        if (groupSizeInput) groupSizeInput.disabled = !enabled;
+        if (otherLimitRow) otherLimitRow.hidden = !enabled;
+        if (otherLimitInput) otherLimitInput.disabled = !enabled;
+    };
+    if (contextInput) {
+        contextInput.addEventListener('change', () => {
+            saveBrowsingRankingSingleExportContextEnabled(contextInput.checked);
+            syncContextOptionVisibility();
+        });
+        syncContextOptionVisibility();
+    }
+    if (groupSizeInput) {
+        const saveGroupSize = () => saveBrowsingRankingSingleExportGroupSize(groupSizeInput.value);
+        groupSizeInput.addEventListener('input', saveGroupSize);
+        groupSizeInput.addEventListener('change', () => {
+            const normalized = normalizeBrowsingRankingSingleExportGroupSize(groupSizeInput.value, defaultGroupSize);
+            groupSizeInput.value = normalized;
+            saveBrowsingRankingSingleExportGroupSize(normalized);
+        });
+    }
+    if (otherLimitInput) {
+        const saveOtherLimit = () => saveBrowsingRankingSingleExportOtherLimit(otherLimitInput.value);
+        otherLimitInput.addEventListener('input', saveOtherLimit);
+        otherLimitInput.addEventListener('change', () => {
+            const normalized = normalizeBrowsingRankingSingleExportOtherLimit(otherLimitInput.value, defaultOtherLimit);
+            otherLimitInput.value = normalized;
+            saveBrowsingRankingSingleExportOtherLimit(normalized);
+        });
+    }
+    menu.querySelectorAll('[data-format]').forEach(button => {
+        button.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const includeContext = contextInput ? contextInput.checked : true;
+            const groupSize = normalizeBrowsingRankingSingleExportGroupSize(
+                groupSizeInput ? groupSizeInput.value : defaultGroupSize,
+                defaultGroupSize
+            );
+            const otherLimit = normalizeBrowsingRankingSingleExportOtherLimit(
+                otherLimitInput ? otherLimitInput.value : defaultOtherLimit,
+                defaultOtherLimit
+            );
+            saveBrowsingRankingSingleExportContextEnabled(includeContext);
+            if (supportsGroupSize) {
+                saveBrowsingRankingSingleExportGroupSize(groupSize);
+                saveBrowsingRankingSingleExportOtherLimit(otherLimit);
+            }
+            await performBrowsingRankingSingleExport(
+                target,
+                {
+                    includeContext,
+                    groupSize: supportsGroupSize ? groupSize : BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_GROUP_SIZE,
+                    otherLimit: supportsGroupSize ? otherLimit : BROWSING_RANKING_SINGLE_EXPORT_DEFAULT_OTHER_LIMIT
+                },
+                button.dataset.format || 'json',
+                menu
+            );
+        });
+    });
+
+    const closeMenu = (event) => {
+        if (!menu.contains(event.target)) {
+            removeBrowsingRankingItemExportMenu();
+            document.removeEventListener('click', closeMenu, true);
+            document.removeEventListener('contextmenu', closeMenu, true);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu, true);
+        document.addEventListener('contextmenu', closeMenu, true);
+    }, 0);
+}
+
 function showRankingExportMenu(kind, anchorEl) {
     const existing = document.getElementById('rankingExportMenu');
     if (existing) existing.remove();
+    removeBrowsingRankingItemExportMenu();
     if (!anchorEl) return;
 
     const menu = document.createElement('div');
@@ -31257,6 +32169,40 @@ function createBrowsingRankingRelatedJumpButton({ range, url = '', title = '', t
     return jumpBtnContainer;
 }
 
+function createBrowsingRankingItemExportButton(target = {}) {
+    const btn = document.createElement('button');
+    btn.className = 'ranking-item-export-btn';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', getRankingExportText('exportCurrentItem'));
+    btn.title = getRankingExportText('exportCurrentItem');
+    btn.innerHTML = '<i class="fas fa-file-export"></i>';
+    btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showBrowsingRankingItemExportMenu(target, btn);
+    });
+    return btn;
+}
+
+function createBrowsingRankingItemActionGroup({ exportTarget = null, jumpOptions = {} } = {}) {
+    const actions = document.createElement('div');
+    actions.className = 'ranking-item-actions';
+    if (exportTarget) {
+        actions.appendChild(createBrowsingRankingItemExportButton(exportTarget));
+    }
+
+    const jumpContainer = createBrowsingRankingRelatedJumpButton(jumpOptions);
+    const jumpBtn = jumpContainer.querySelector('.jump-to-related-btn');
+    if (jumpBtn) {
+        actions.appendChild(jumpBtn);
+    }
+
+    actions.addEventListener('click', (event) => {
+        event.stopPropagation();
+    });
+    return actions;
+}
+
 // 渲染文件夹模式的点击排行列表
 async function renderBrowsingFolderRankingList(container, items, range, stats, options = {}) {
     container.innerHTML = '';
@@ -31316,7 +32262,14 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
         const itemCount = getBrowsingRankingItemCountByRange(item, range);
         folderData.count += itemCount;
 
-        folderData.items.push({ ...item, count: itemCount, folderPath: groupedFolderPath });
+        folderData.items.push({
+            ...item,
+            count: itemCount,
+            folderPath: groupedFolderPath,
+            fullFolderPath: Array.isArray(folderPath) ? folderPath.slice() : [],
+            groupedFolderPath,
+            relativeFolderPath: Array.isArray(folderPath) ? folderPath.slice(groupedFolderPath.length) : []
+        });
     });
 
     // 按点击次数排序文件夹
@@ -31390,10 +32343,25 @@ async function renderBrowsingFolderRankingList(container, items, range, stats, o
             title: folder.fullPath,
             items: folder.items
         });
-        header.appendChild(createBrowsingRankingRelatedJumpButton({
+        const exportTarget = {
+            type: 'folder',
+            title: folder.name,
+            label: folder.fullPath,
+            detail: folder.fullPath,
+            folderPath: folder.folderPath,
+            isUncategorized: folder.folderPath.length === 0,
+            count: folder.count,
+            items: folder.items,
             range,
-            title: folder.fullPath,
-            target: relatedTarget
+            customRangeLabel: options.customRangeLabel || ''
+        };
+        header.appendChild(createBrowsingRankingItemActionGroup({
+            exportTarget,
+            jumpOptions: {
+                range,
+                title: folder.fullPath,
+                target: relatedTarget
+            }
         }));
 
         // 点击次数
@@ -31605,10 +32573,28 @@ function renderBrowsingDomainRankingList(container, items, range, options = {}) 
             parentDomain: domain.parentDomain,
             items: domain.items
         });
-        header.appendChild(createBrowsingRankingRelatedJumpButton({
-            range,
+        const exportTarget = {
+            type: mode,
             title: domain.name,
-            target: relatedTarget
+            label: domain.name,
+            detail: mode === 'subdomain' && domain.parentDomain && domain.parentDomain !== domain.name
+                ? `${domain.name} / ${domain.parentDomain}`
+                : domain.name,
+            domain: mode === 'subdomain' ? domain.name : domain.parentDomain,
+            subdomain: mode === 'subdomain' ? domain.name : '',
+            parentDomain: domain.parentDomain,
+            count: domain.count,
+            items: domain.items,
+            range,
+            customRangeLabel: options.customRangeLabel || ''
+        };
+        header.appendChild(createBrowsingRankingItemActionGroup({
+            exportTarget,
+            jumpOptions: {
+                range,
+                title: domain.name,
+                target: relatedTarget
+            }
         }));
 
         const counts = document.createElement('div');

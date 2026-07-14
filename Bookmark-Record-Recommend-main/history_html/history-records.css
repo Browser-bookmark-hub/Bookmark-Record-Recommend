@@ -4169,6 +4169,25 @@ html.side-panel-mode .related-history-list.is-virtualized {
     font-size: 11px;
 }
 
+.ranking-item-export-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 10px;
+    padding: 6px 8px;
+    border: 1px solid rgba(249, 115, 22, 0.38);
+    border-radius: 7px;
+    background: rgba(249, 115, 22, 0.10);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.ranking-item-export-check input {
+    margin: 0;
+    accent-color: #f97316;
+}
+
 /* 书签相关的记录 - 绿色细边框凸显 */
 .related-history-item.is-bookmark {
     border: 1px solid #4CAF50;
@@ -4383,14 +4402,30 @@ html.side-panel-mode .related-history-list.is-virtualized {
     transition: opacity 0.2s ease;
 }
 
+.ranking-item-actions {
+    opacity: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-right: -30px;
+    position: relative;
+    z-index: 10;
+    transition: opacity 0.2s ease;
+}
+
 /* 悬停时显示跳转按钮 */
 *:hover>.jump-to-related-btn-container,
 .jump-to-related-btn-container:hover,
-.ranking-item:hover .jump-to-related-btn-container {
+.ranking-item:hover .jump-to-related-btn-container,
+*:hover>.ranking-item-actions,
+.ranking-item-actions:hover,
+.ranking-item:hover .ranking-item-actions {
     opacity: 1;
 }
 
-.jump-to-related-btn {
+.jump-to-related-btn,
+.ranking-item-export-btn {
     width: 24px;
     height: 24px;
     padding: 0;
@@ -4407,6 +4442,12 @@ html.side-panel-mode .related-history-list.is-virtualized {
     opacity: 0.85;
 }
 
+.ranking-item-export-btn {
+    border-color: rgba(249, 115, 22, 0.30);
+    background: rgba(249, 115, 22, 0.10);
+    color: rgba(249, 115, 22, 0.95);
+}
+
 .jump-to-related-btn:hover {
     background: rgba(33, 150, 243, 0.16);
     border-color: rgba(33, 150, 243, 0.42);
@@ -4415,7 +4456,16 @@ html.side-panel-mode .related-history-list.is-virtualized {
     opacity: 0.9;
 }
 
-.jump-to-related-btn i {
+.ranking-item-export-btn:hover {
+    background: rgba(249, 115, 22, 0.16);
+    border-color: rgba(249, 115, 22, 0.44);
+    color: rgba(249, 115, 22, 1);
+    transform: scale(1.1);
+    opacity: 0.9;
+}
+
+.jump-to-related-btn i,
+.ranking-item-export-btn i {
     font-size: 12px;
 }
 
@@ -4427,6 +4477,12 @@ html.side-panel-mode .related-history-list.is-virtualized {
 }
 
 .ranking-item .jump-to-related-btn {
+    position: relative;
+    cursor: pointer !important;
+    z-index: 11;
+}
+
+.ranking-item .ranking-item-export-btn {
     position: relative;
     cursor: pointer !important;
     z-index: 11;
