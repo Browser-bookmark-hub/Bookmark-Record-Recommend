@@ -2042,6 +2042,8 @@ function getTrackingSessionOverlapInfo(session, startTime, endTime) {
 const RANKING_EXPORT_DEFAULT_LIMIT = 15;
 const RELATED_HISTORY_EXPORT_DEFAULT_LIMIT = 150;
 const RELATED_HISTORY_EXPORT_GROUP_SIZE = 50;
+const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE = 10;
+const RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER = 10;
 const RANKING_EXPORT_FALLBACK_LABEL = '导入';
 const RANKING_EXPORT_NOTE_COLORS = ['yellow', 'gray', 'purple'];
 const RANKING_EXPORT_INLINE_TIP_DISMISSED_KEY_PREFIX = 'rankingExportInlineTipDismissed';
@@ -2057,6 +2059,13 @@ function getRankingExportText(key) {
         exportPostponedReview: isZh ? '导出待复习' : 'Export review queue',
         exportBookmarkStatus: isZh ? '导出书签情况' : 'Export bookmark status',
         limitLabel: isZh ? '导出前 N 项' : 'Export top N',
+        contextBeforeLabel: isZh ? '此项上方' : 'Above item',
+        contextAfterLabel: isZh ? '此项下方' : 'Below item',
+        contextSelectedItem: isZh ? '当前项' : 'Selected item',
+        contextExportSelectedItem: isZh ? '选中项' : 'Selected item',
+        contextHighlightedSelected: isZh ? '橙色选中' : 'Orange selected',
+        contextScope: isZh ? '当前项上下文' : 'Selected item context',
+        sequence: isZh ? '序号' : 'No.',
         exportInfo: isZh ? '导出说明' : 'Export info',
         exportInfoWysiwyg: isZh ? '所见即所得：导出下方可视的内容。' : 'WYSIWYG: exports the visible content below.',
         exportInfoHtml: isZh ? 'HTML 是标准书签导入格式。' : 'HTML is standard bookmark-import HTML.',
@@ -2064,6 +2073,9 @@ function getRankingExportText(key) {
         exportInfoJsonAppliesPrefix: isZh ? '适用于 ' : 'For the ',
         bookmarkCanvas: isZh ? '书签画布' : 'Bookmark Canvas',
         exportInfoJsonAppliesSuffix: isZh ? ' 项目。' : ' project.',
+        exportInfoRelatedContext: isZh ? '右键任意条目可单独导出上下文。' : 'Right-click any item to export its context.',
+        exportInfoRelatedOrangeRange: isZh ? '橙色选中：以选中项为中心向上/向下拓展。' : 'Orange selected expands above and below each selected item.',
+        exportInfoRelatedOrangeSource: isZh ? '来源：「书签点击记录」、「点击排行」书签条目的跳转模式。' : 'Source: bookmark jump mode from bookmark click records and click ranking.',
         exportInlineTipPrefix: isZh ? 'JSON 适用于 ' : 'JSON works with ',
         exportInlineTipSuffix: isZh ? ' 项目。' : '.',
         close: isZh ? '关闭' : 'Close',
@@ -2097,7 +2109,6 @@ function getRankingExportText(key) {
         wakeCount: isZh ? '唤醒次数' : 'Wake count',
         activeRatio: isZh ? '活跃率' : 'Active ratio',
         rank: isZh ? '排名' : 'Rank',
-        sequence: isZh ? '序号' : 'No.',
         time: isZh ? '时间' : 'Time',
         reviewTime: isZh ? '复习时间' : 'Review time',
         exportTime: isZh ? '导出时间' : 'Export time',
@@ -3128,6 +3139,52 @@ async function performRankingExport(kind, format, limitInput, menuEl = null) {
     }
 }
 
+function buildRankingExportInfoBubbleHtml(kind, supportedFormats = [], bookmarkCanvasLink = '') {
+    const htmlInfoHtml = supportedFormats.includes('html')
+        ? `<li>${escapeHtml(getRankingExportText('exportInfoHtml'))}</li>`
+        : '';
+    const relatedInfoHtml = kind === 'related-history'
+        ? `
+            <li>${buildRelatedContextExportInfoHtml()}</li>
+            <li>
+                <span>${escapeHtml(getRankingExportText('exportInfoRelatedOrangeRange'))}</span>
+                <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoRelatedOrangeSource'))}</span>
+            </li>
+        `
+        : '';
+    return `
+        <div class="ranking-export-info-bubble" hidden>
+            <div class="ranking-export-info-main">${escapeHtml(getRankingExportText('exportInfoWysiwyg'))}</div>
+            <ul>
+                ${htmlInfoHtml}
+                <li>
+                    <span>${escapeHtml(getRankingExportText('exportInfoJsonFormat'))}</span>
+                    <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoJsonAppliesPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInfoJsonAppliesSuffix'))}</span>
+                </li>
+                ${relatedInfoHtml}
+            </ul>
+        </div>
+    `;
+}
+
+function buildRelatedContextExportInfoHtml() {
+    const text = getRankingExportText('exportInfoRelatedContext');
+    const keyword = currentLang === 'zh_CN' ? '右键' : 'Right-click';
+    if (!text.includes(keyword)) return escapeHtml(text);
+    return escapeHtml(text).replace(keyword, `<span class="ranking-export-keyword-orange">${escapeHtml(keyword)}</span>`);
+}
+
+function bindRankingExportInfoBubble(menu) {
+    const infoBtn = menu?.querySelector('.ranking-export-info-btn');
+    const infoBubble = menu?.querySelector('.ranking-export-info-bubble');
+    if (!infoBtn || !infoBubble) return;
+    infoBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        infoBubble.hidden = !infoBubble.hidden;
+    });
+}
+
 function showRankingExportMenu(kind, anchorEl) {
     const existing = document.getElementById('rankingExportMenu');
     if (existing) existing.remove();
@@ -3140,9 +3197,7 @@ function showRankingExportMenu(kind, anchorEl) {
     const defaultLimit = getRankingExportDefaultLimit(kind);
     const supportedFormats = getRankingExportSupportedFormats(kind);
     const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
-    const htmlInfoHtml = supportedFormats.includes('html')
-        ? `<li>${escapeHtml(getRankingExportText('exportInfoHtml'))}</li>`
-        : '';
+    const infoBubbleHtml = buildRankingExportInfoBubbleHtml(kind, supportedFormats, bookmarkCanvasLink);
     const actionButtonsHtml = supportedFormats.map(format => {
         const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
         const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
@@ -3151,8 +3206,11 @@ function showRankingExportMenu(kind, anchorEl) {
     const inlineTipHtml = isRankingExportInlineTipDismissed(kind)
         ? ''
         : `
-            <div class="ranking-export-inline-tip">
-                <span class="ranking-export-inline-tip-text">: ${escapeHtml(getRankingExportText('exportInlineTipPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInlineTipSuffix'))}</span>
+            <div class="ranking-export-inline-tip${kind === 'related-history' ? ' is-related-history' : ''}">
+                <span class="ranking-export-inline-tip-text">
+                    <span class="ranking-export-inline-tip-line">: ${escapeHtml(getRankingExportText('exportInlineTipPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInlineTipSuffix'))}</span>
+                    ${kind === 'related-history' ? `<span class="ranking-export-inline-tip-line ranking-export-inline-tip-subline">${buildRelatedContextExportInfoHtml()}</span>` : ''}
+                </span>
                 <button class="ranking-export-inline-tip-close" type="button" aria-label="${escapeHtml(getRankingExportText('close'))}" title="${escapeHtml(getRankingExportText('close'))}">
                     <i class="fas fa-times"></i>
                 </button>
@@ -3166,16 +3224,7 @@ function showRankingExportMenu(kind, anchorEl) {
             </button>
             ${inlineTipHtml}
         </div>
-        <div class="ranking-export-info-bubble" hidden>
-            <div class="ranking-export-info-main">${escapeHtml(getRankingExportText('exportInfoWysiwyg'))}</div>
-            <ul>
-                ${htmlInfoHtml}
-                <li>
-                    <span>${escapeHtml(getRankingExportText('exportInfoJsonFormat'))}</span>
-                    <span class="ranking-export-info-subline">${escapeHtml(getRankingExportText('exportInfoJsonAppliesPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInfoJsonAppliesSuffix'))}</span>
-                </li>
-            </ul>
-        </div>
+        ${infoBubbleHtml}
         <div class="ranking-export-current-scope">${escapeHtml(currentScopeText)}</div>
         <div class="ranking-export-menu-row">
             <label for="rankingExportLimitInput">${escapeHtml(getRankingExportText('limitLabel'))}</label>
@@ -3204,15 +3253,7 @@ function showRankingExportMenu(kind, anchorEl) {
         input.focus();
         input.select();
     }
-    const infoBtn = menu.querySelector('.ranking-export-info-btn');
-    const infoBubble = menu.querySelector('.ranking-export-info-bubble');
-    if (infoBtn && infoBubble) {
-        infoBtn.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            infoBubble.hidden = !infoBubble.hidden;
-        });
-    }
+    bindRankingExportInfoBubble(menu);
     const inlineTip = menu.querySelector('.ranking-export-inline-tip');
     const inlineTipClose = menu.querySelector('.ranking-export-inline-tip-close');
     if (inlineTip && inlineTipClose) {
@@ -3236,6 +3277,184 @@ function showRankingExportMenu(kind, anchorEl) {
         }
     };
     setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+}
+
+function clearBrowsingRelatedContextExportTarget() {
+    document.querySelectorAll('.related-history-item.is-context-export-target').forEach(el => {
+        el.classList.remove('is-context-export-target');
+    });
+}
+
+function removeBrowsingRelatedContextMenus() {
+    const contextMenu = document.getElementById('browsingRelatedContextMenu');
+    if (contextMenu) contextMenu.remove();
+    const exportMenu = document.getElementById('browsingRelatedContextExportMenu');
+    if (exportMenu) exportMenu.remove();
+    clearBrowsingRelatedContextExportTarget();
+}
+
+function positionFloatingMenuAtPoint(menu, point = {}) {
+    if (!menu) return;
+    const margin = 12;
+    const menuWidth = menu.offsetWidth || 260;
+    const menuHeight = menu.offsetHeight || 120;
+    const rawLeft = Number(point.x || 0);
+    const rawTop = Number(point.y || 0);
+    const left = Math.min(
+        Math.max(margin, rawLeft),
+        Math.max(margin, window.innerWidth - menuWidth - margin)
+    );
+    const top = Math.min(
+        Math.max(margin, rawTop),
+        Math.max(margin, window.innerHeight - menuHeight - margin)
+    );
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+}
+
+function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
+    removeBrowsingRelatedContextMenus();
+
+    const menu = document.createElement('div');
+    menu.id = 'browsingRelatedContextExportMenu';
+    menu.className = 'ranking-export-menu related-context-export-menu';
+    const beforeDefault = RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE;
+    const afterDefault = RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER;
+    const currentScopeText = getRankingExportMenuScopeLabel('related-history');
+    const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
+    const infoBubbleHtml = buildRankingExportInfoBubbleHtml('related-history', ['json'], bookmarkCanvasLink);
+    const groups = getBrowsingRelatedRenderedGroups();
+    const safeIndex = Math.max(0, Math.min(Number(groupIndex) || 0, Math.max(groups.length - 1, 0)));
+    const highlightedIndices = getBrowsingRelatedHighlightedGroupIndices();
+    const hasHighlightedContext = highlightedIndices.length > 0 && highlightedIndices.includes(safeIndex);
+    const normalItemText = `${getRankingExportText('contextSelectedItem')}：${getBrowsingRelatedContextItemLabel(groups[safeIndex])}`;
+    const highlightedItemText = `${getRankingExportText('contextHighlightedSelected')}：${getBrowsingRelatedHighlightedSummaryLabel(highlightedIndices, groups)}`;
+    const itemText = hasHighlightedContext ? highlightedItemText : normalItemText;
+    const highlightedOptionHtml = hasHighlightedContext
+        ? `
+            <label class="related-context-export-check">
+                <input id="relatedContextHighlightedInput" type="checkbox" checked>
+                <span>${escapeHtml(getRankingExportText('contextHighlightedSelected'))}</span>
+                <small>${escapeHtml(String(highlightedIndices.length))}</small>
+            </label>
+        `
+        : '';
+    menu.innerHTML = `
+        <div class="ranking-export-menu-header">
+            <div class="ranking-export-menu-title">${escapeHtml(getRankingExportText('export'))}</div>
+            <button class="ranking-export-info-btn" type="button" aria-label="${escapeHtml(getRankingExportText('exportInfo'))}" title="${escapeHtml(getRankingExportText('exportInfo'))}">
+                <i class="fas fa-question-circle"></i>
+            </button>
+            <span class="ranking-export-context-inline-tip">: ${escapeHtml(getRankingExportText('exportInlineTipPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInlineTipSuffix'))}</span>
+        </div>
+        ${infoBubbleHtml}
+        <div class="ranking-export-current-scope">${escapeHtml(currentScopeText)}<br><span id="relatedContextTargetText">${escapeHtml(itemText)}</span></div>
+        ${highlightedOptionHtml}
+        <div class="ranking-export-menu-row">
+            <label for="relatedContextBeforeInput">${escapeHtml(getRankingExportText('contextBeforeLabel'))}</label>
+            <input id="relatedContextBeforeInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${beforeDefault}">
+        </div>
+        <div class="ranking-export-menu-row">
+            <label for="relatedContextAfterInput">${escapeHtml(getRankingExportText('contextAfterLabel'))}</label>
+            <input id="relatedContextAfterInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${afterDefault}">
+        </div>
+        <div class="ranking-export-menu-actions">
+            <button type="button" data-format="json"><i class="fas fa-file-alt"></i>${escapeHtml(getRankingExportText('json'))}</button>
+        </div>
+    `;
+    document.body.appendChild(menu);
+    positionFloatingMenuAtPoint(menu, point);
+
+    const beforeInput = menu.querySelector('#relatedContextBeforeInput');
+    const afterInput = menu.querySelector('#relatedContextAfterInput');
+    const highlightedInput = menu.querySelector('#relatedContextHighlightedInput');
+    const targetText = menu.querySelector('#relatedContextTargetText');
+    if (beforeInput) {
+        beforeInput.focus();
+        beforeInput.select();
+    }
+    bindRankingExportInfoBubble(menu);
+
+    if (highlightedInput && targetText) {
+        highlightedInput.addEventListener('change', () => {
+            targetText.textContent = highlightedInput.checked ? highlightedItemText : normalItemText;
+        });
+    }
+
+    menu.querySelector('[data-format="json"]')?.addEventListener('click', async () => {
+        await performBrowsingRelatedContextExport(
+            groupIndex,
+            beforeInput ? beforeInput.value : beforeDefault,
+            afterInput ? afterInput.value : afterDefault,
+            { useHighlighted: !!highlightedInput?.checked },
+            menu
+        );
+    });
+
+    const closeMenu = (event) => {
+        if (!menu.contains(event.target)) {
+            removeBrowsingRelatedContextMenus();
+            document.removeEventListener('click', closeMenu, true);
+            document.removeEventListener('contextmenu', closeMenu, true);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu, true);
+        document.addEventListener('contextmenu', closeMenu, true);
+    }, 0);
+}
+
+function showBrowsingRelatedItemContextMenu(event, itemEl) {
+    if (!event || !itemEl) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    removeBrowsingRelatedContextMenus();
+    clearBrowsingRelatedContextExportTarget();
+    itemEl.classList.add('is-context-export-target');
+
+    const groupIndex = Math.max(0, Number(itemEl.dataset.groupIndex || 0) || 0);
+    const menu = document.createElement('div');
+    menu.id = 'browsingRelatedContextMenu';
+    menu.className = 'bookmark-context-menu related-history-context-menu';
+    menu.style.position = 'fixed';
+    menu.innerHTML = `
+        <div class="context-menu-item" data-action="export">
+            <i class="fas fa-file-export"></i>
+            <span>${escapeHtml(getRankingExportText('export'))}</span>
+        </div>
+    `;
+    document.body.appendChild(menu);
+    positionFloatingMenuAtPoint(menu, { x: event.clientX, y: event.clientY });
+
+    const exportItem = menu.querySelector('[data-action="export"]');
+    if (exportItem) {
+        exportItem.addEventListener('click', (clickEvent) => {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            const rect = menu.getBoundingClientRect();
+            const point = {
+                x: rect.left,
+                y: rect.bottom + 6
+            };
+            document.removeEventListener('click', closeMenu, true);
+            document.removeEventListener('contextmenu', closeMenu, true);
+            menu.remove();
+            showBrowsingRelatedContextExportMenu(groupIndex, point);
+        });
+    }
+
+    const closeMenu = (clickEvent) => {
+        if (!menu.contains(clickEvent.target)) {
+            removeBrowsingRelatedContextMenus();
+            document.removeEventListener('click', closeMenu, true);
+            document.removeEventListener('contextmenu', closeMenu, true);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu, true);
+        document.addEventListener('contextmenu', closeMenu, true);
+    }, 0);
 }
 
 function bindRankingExportButton(buttonId, kind) {
@@ -43308,16 +43527,17 @@ function getBrowsingRelatedGroupTimeText(group, range) {
     return `${formatTimeByRange(firstTime, range)} ~ ${formatTimeByRange(lastTime, range)}`;
 }
 
-function buildBrowsingRelatedExportItemNote(group, range) {
+function buildBrowsingRelatedExportItemNote(group, range, options = {}) {
     const sequenceText = getBrowsingRelatedGroupSequenceText(group);
     const timeText = getBrowsingRelatedGroupTimeText(group, range);
     const typePart = group?.isBookmark ? `${getRankingExportText('type')}：${getRankingExportText('bookmark')}` : '';
     const sequencePart = sequenceText ? String(sequenceText) : '';
     const timePart = timeText ? `${getRankingExportText('time')}：${timeText}` : '';
-    return [sequencePart, typePart, timePart].filter(Boolean).join(getRankingExportNoteSeparator());
+    const contextPart = options.selected === true ? getRankingExportText('contextExportSelectedItem') : '';
+    return [sequencePart, contextPart, typePart, timePart].filter(Boolean).join(getRankingExportNoteSeparator());
 }
 
-function buildBrowsingRelatedExportRow(group, range) {
+function buildBrowsingRelatedExportRow(group, range, options = {}) {
     const item = group?.representativeItem || {};
     const displayTitle = (item.title && String(item.title).trim()) ? item.title : item.url;
     return {
@@ -43326,8 +43546,8 @@ function buildBrowsingRelatedExportRow(group, range) {
         title: displayTitle || '',
         url: item.url || '',
         detail: item.url || '',
-        note: buildBrowsingRelatedExportItemNote(group, range),
-        noteColor: group?.isBookmark ? 'green' : 'gray'
+        note: buildBrowsingRelatedExportItemNote(group, range, options),
+        noteColor: options.selected === true ? 'orange' : (group?.isBookmark ? 'green' : 'gray')
     };
 }
 
@@ -43399,6 +43619,185 @@ async function buildBrowsingRelatedExportPayload(limit) {
     };
     payload.descriptionMd = buildRankingExportDescription(payload);
     return payload;
+}
+
+function normalizeRelatedHistoryContextCount(value, fallback) {
+    const parsed = parseInt(String(value || '').trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return Math.max(0, Number(fallback) || 0);
+    return Math.min(parsed, 999);
+}
+
+function getBrowsingRelatedRenderedGroups() {
+    const container = document.getElementById('browsingRelatedList');
+    const state = container && container.__lazyLoadState;
+    if (state && Array.isArray(state.groups)) return state.groups.slice();
+
+    const range = normalizeBrowsingRelatedRange(browsingRelatedCurrentRange || 'day');
+    const stateKey = getBrowsingRelatedExportStateKey(range);
+    if (browsingRelatedLastRenderedExportState?.key === stateKey
+        && Array.isArray(browsingRelatedLastRenderedExportState.groups)) {
+        return browsingRelatedLastRenderedExportState.groups.slice();
+    }
+    return [];
+}
+
+function getBrowsingRelatedHighlightedGroupIndices() {
+    const container = document.getElementById('browsingRelatedList');
+    const highlighted = container && container.__browsingRelatedHighlightedIndices instanceof Set
+        ? container.__browsingRelatedHighlightedIndices
+        : null;
+    if (!highlighted || highlighted.size === 0) return [];
+    const groups = getBrowsingRelatedRenderedGroups();
+    const maxIndex = Math.max(0, groups.length - 1);
+    return Array.from(highlighted)
+        .map(index => Number(index))
+        .filter(index => Number.isInteger(index) && index >= 0 && index <= maxIndex)
+        .sort((a, b) => a - b);
+}
+
+function getBrowsingRelatedGroupDisplayTitle(group) {
+    const item = group?.representativeItem || {};
+    return String((item.title && String(item.title).trim()) ? item.title : item.url || '').trim();
+}
+
+function getBrowsingRelatedContextItemLabel(group) {
+    if (!group) return getRankingExportText('contextSelectedItem');
+    const sequenceText = getBrowsingRelatedGroupSequenceText(group);
+    const title = getBrowsingRelatedGroupDisplayTitle(group);
+    const typeLabel = group.isBookmark ? getRankingExportText('bookmark') : getRankingExportText('historyRecord');
+    const sequencePart = sequenceText ? `${getRankingExportText('sequence')} ${sequenceText}` : '';
+    const mainParts = [sequencePart, typeLabel].filter(Boolean).join(' · ');
+    return [mainParts, title].filter(Boolean).join('：');
+}
+
+function getBrowsingRelatedHighlightedSubjectLabel(indices = [], groups = []) {
+    const items = (Array.isArray(indices) ? indices : [])
+        .map(index => groups[index])
+        .filter(Boolean)
+        .map(group => ({
+            title: getBrowsingRelatedGroupDisplayTitle(group),
+            typeLabel: group.isBookmark ? getRankingExportText('bookmark') : getRankingExportText('historyRecord')
+        }))
+        .filter(item => item.title || item.typeLabel);
+    if (!items.length) return '';
+
+    const first = items[0];
+    const suffix = currentLang === 'zh_CN' ? '等' : ' etc.';
+    const hasMixedTitle = items.some(item => item.title !== first.title);
+    const hasMixedType = items.some(item => item.typeLabel !== first.typeLabel);
+    const typeLabel = hasMixedType ? `${first.typeLabel}${suffix}` : first.typeLabel;
+    const title = hasMixedTitle && first.title ? `${first.title}${suffix}` : first.title;
+    return [typeLabel, title].filter(Boolean).join('：');
+}
+
+function getBrowsingRelatedHighlightedSummaryLabel(indices = [], groups = []) {
+    const safeIndices = (Array.isArray(indices) ? indices : [])
+        .map(index => Number(index))
+        .filter(index => Number.isInteger(index) && index >= 0 && index < groups.length)
+        .sort((a, b) => a - b);
+    const count = safeIndices.length;
+    const countText = currentLang === 'zh_CN' ? `${count}项` : `${count} ${getRankingExportText('itemUnit')}`;
+    const sequenceItems = safeIndices.slice(0, 5).map(index => {
+        return getBrowsingRelatedGroupSequenceText(groups[index]) || String(index + 1);
+    });
+    const sequenceText = `${sequenceItems.join(', ')}${safeIndices.length > 5 ? ', ...' : ''}`;
+    const subjectText = getBrowsingRelatedHighlightedSubjectLabel(safeIndices, groups);
+    return [
+        countText,
+        sequenceText ? `${getRankingExportText('sequence')} ${sequenceText}` : '',
+        subjectText
+    ].filter(Boolean).join(' · ');
+}
+
+function buildBrowsingRelatedContextExportPayload(groupIndex, beforeInput, afterInput, options = {}) {
+    const groups = getBrowsingRelatedRenderedGroups();
+    const safeIndex = Math.max(0, Math.min(Number(groupIndex) || 0, Math.max(groups.length - 1, 0)));
+    const targetGroup = groups[safeIndex] || null;
+    const targetLabel = getBrowsingRelatedContextItemLabel(targetGroup);
+    const beforeCount = normalizeRelatedHistoryContextCount(beforeInput, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_BEFORE);
+    const afterCount = normalizeRelatedHistoryContextCount(afterInput, RELATED_HISTORY_CONTEXT_EXPORT_DEFAULT_AFTER);
+    const highlightedIndices = options.useHighlighted === true ? getBrowsingRelatedHighlightedGroupIndices() : [];
+    const centerIndices = highlightedIndices.length ? highlightedIndices : [safeIndex];
+    const centerSet = new Set(centerIndices);
+    const exportIndexSet = new Set();
+    centerIndices.forEach((centerIndex) => {
+        const startIndex = Math.max(0, centerIndex - beforeCount);
+        const endIndex = Math.min(groups.length - 1, centerIndex + afterCount);
+        for (let i = startIndex; i <= endIndex; i++) {
+            exportIndexSet.add(i);
+        }
+    });
+    const range = normalizeBrowsingRelatedRange(browsingRelatedCurrentRange || 'day');
+    const exportIndices = Array.from(exportIndexSet).sort((a, b) => a - b);
+    const itemRows = exportIndices.map((index) => {
+        return buildBrowsingRelatedExportRow(groups[index], range, { selected: centerSet.has(index) });
+    });
+    const rows = buildBrowsingRelatedExportFolders(itemRows);
+    const exportCount = itemRows.length;
+    const scopeLabel = browsingRelatedCustomBounds?.label || getBrowsingRankingRangeLabel(range);
+    const rawSecondaryLabel = browsingRelatedCustomBounds?.label
+        ? ''
+        : (getBrowsingRankingSecondaryLabel(range, browsingRelatedTimeFilter) || '');
+    const secondaryLabel = rawSecondaryLabel === getRankingExportText('all') ? '' : rawSecondaryLabel;
+    const sortLabel = getBrowsingRelatedSortLabel();
+    const highlightedSummary = highlightedIndices.length
+        ? getBrowsingRelatedHighlightedSummaryLabel(highlightedIndices, groups)
+        : '';
+    const contextLabel = highlightedIndices.length
+        ? `${getRankingExportText('contextHighlightedSelected')}：${highlightedSummary}`
+        : `${getRankingExportText('contextScope')}：${targetLabel}`;
+    const titleParts = [
+        getRankingExportText('relatedHistory'),
+        highlightedIndices.length ? getRankingExportText('contextHighlightedSelected') : getRankingExportText('contextScope'),
+        highlightedIndices.length
+            ? highlightedSummary
+            : (getBrowsingRelatedGroupSequenceText(targetGroup) || String(safeIndex + 1))
+    ].filter(Boolean);
+    const payload = {
+        title: titleParts.join('-'),
+        kind: 'related-history',
+        scopeLabel,
+        secondaryLabel,
+        modeLabel: contextLabel,
+        rankingTypeLabel: '',
+        scopeExtraLabels: [
+            sortLabel,
+            `${getRankingExportText('contextBeforeLabel')} ${beforeCount}`,
+            `${getRankingExportText('contextAfterLabel')} ${afterCount}`
+        ].filter(Boolean),
+        createdAt: Date.now(),
+        requestedLimit: exportCount,
+        exportCount,
+        limit: exportCount,
+        rows
+    };
+    payload.descriptionMd = buildRankingExportDescription(payload);
+    return payload;
+}
+
+async function performBrowsingRelatedContextExport(groupIndex, beforeInput, afterInput, options = {}, menuEl = null) {
+    try {
+        showToast(getRankingExportText('exporting'));
+        const payload = buildBrowsingRelatedContextExportPayload(groupIndex, beforeInput, afterInput, options);
+        if (!payload.rows.length) {
+            showToast(getRankingExportText('noData'));
+            return;
+        }
+        const text = JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2);
+        const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+        const filename = buildRankingExportFilename(payload, 'json');
+        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        if (result?.success) {
+            if (menuEl) menuEl.remove();
+            showToast(getRankingExportText('exportDone'));
+        } else {
+            console.warn('[BrowsingRelatedContextExport] download failed:', result);
+            showToast(getRankingExportText('exportFailed'));
+        }
+    } catch (error) {
+        console.error('[BrowsingRelatedContextExport] export failed:', error);
+        showToast(getRankingExportText('exportFailed'));
+    }
 }
 
 function getPostponedReviewExportSearchKeyword() {
@@ -44091,6 +44490,10 @@ async function renderBrowsingRelatedList(container, historyItems, bookmarkUrls, 
             } else {
                 window.open(item.url, '_blank');
             }
+        });
+
+        itemEl.addEventListener('contextmenu', (event) => {
+            showBrowsingRelatedItemContextMenu(event, itemEl);
         });
 
         // Hover to set focus for "show day related" button

@@ -1593,6 +1593,44 @@ html.side-panel-mode .tool-buttons .open-html-btn {
     white-space: nowrap;
 }
 
+.ranking-export-inline-tip.is-related-history .ranking-export-inline-tip-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    white-space: normal;
+}
+
+.ranking-export-inline-tip-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ranking-export-inline-tip-subline {
+    color: var(--text-tertiary);
+}
+
+.ranking-export-keyword-orange {
+    color: #f97316;
+    font-weight: 600;
+}
+
+.ranking-export-context-inline-tip {
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ranking-export-context-inline-tip a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
 .ranking-export-inline-tip a {
     color: #2563eb;
     text-decoration: underline;
@@ -1655,6 +1693,10 @@ html.side-panel-mode .tool-buttons .open-html-btn {
 
 .ranking-export-info-subline {
     display: block;
+}
+
+.ranking-export-info-subline-indent {
+    padding-left: 1.5em;
 }
 
 .ranking-export-menu-row {

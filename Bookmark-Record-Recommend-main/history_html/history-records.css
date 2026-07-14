@@ -4124,6 +4124,51 @@ html.side-panel-mode .related-history-list.is-virtualized {
     transform: translateY(-1px);
 }
 
+.related-history-item.is-context-export-target {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 22%, transparent 78%), var(--shadow-sm);
+}
+
+.related-history-context-menu {
+    position: fixed;
+    margin: 0;
+    min-width: 118px;
+    max-width: 180px;
+    z-index: 10030;
+}
+
+.related-context-export-menu {
+    z-index: 10031;
+}
+
+.related-context-export-menu .ranking-export-current-scope {
+    overflow-wrap: anywhere;
+}
+
+.related-context-export-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 10px;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 193, 7, 0.45);
+    border-radius: 7px;
+    background: rgba(255, 193, 7, 0.12);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.related-context-export-check input {
+    margin: 0;
+    accent-color: #FFC107;
+}
+
+.related-context-export-check small {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
 /* 书签相关的记录 - 绿色细边框凸显 */
 .related-history-item.is-bookmark {
     border: 1px solid #4CAF50;
