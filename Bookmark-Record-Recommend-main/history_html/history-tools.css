@@ -27,6 +27,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 9px 14px;
     border-top: 1px solid var(--border-color);
@@ -35,7 +36,10 @@
 .add-postponed-footer-actions {
     display: inline-flex;
     align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
+    min-width: 0;
 }
 
 .add-postponed-tabs {
@@ -587,6 +591,12 @@
 .add-postponed-modal .modal-btn {
     padding: 6px 16px;
     line-height: 1.2;
+}
+
+.add-postponed-modal .add-tree-export-control .add-tree-export-btn {
+    height: 26px;
+    min-height: 26px;
+    padding: 0 10px;
 }
 
 .add-tree-export-btn {

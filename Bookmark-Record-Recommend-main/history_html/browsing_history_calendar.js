@@ -3,6 +3,7 @@
 
 // Unified Export Folder Paths - 统一的导出文件夹路径（根据语言动态选择）
 const getBrowsingExportRootFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签记录与推荐' : 'Bookmark Record and Recommend';
+const getBrowsingManualExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '手动导出' : 'Manual Export';
 const getBrowsingExportFolder = () => (typeof currentLang !== 'undefined' && currentLang === 'zh_CN') ? '书签点击记录' : 'Bookmark Click Records';
 
 // 翻译辅助函数
@@ -5596,6 +5597,9 @@ class BrowsingHistoryCalendar {
     openExportModal() {
         const modal = document.getElementById('browsingExportModal');
         if (!modal) return;
+        if (typeof window.hydrateManualExportDestinationControls === 'function') {
+            window.hydrateManualExportDestinationControls(modal);
+        }
 
         // 更新范围说明 - 使用当前导出范围标题
         const scopeText = document.getElementById('browsingExportScopeText');
@@ -5764,6 +5768,11 @@ class BrowsingHistoryCalendar {
             // 获取选项
             const mode = document.querySelector('input[name="browsingExportMode"]:checked')?.value || 'records';
             const formats = Array.from(document.querySelectorAll('input[name="browsingExportFormat"]:checked')).map(cb => cb.value);
+            const destination = this.getExportDestination(modal);
+            const hasFileExport = formats.includes('html')
+                || formats.includes('json')
+                || (mode === 'history_context' && formats.includes('jsonl'));
+            const exportTimestamp = Date.now();
 
             if (formats.length === 0) {
                 alert(i18n.exportErrorNoFormat[currentLang]);
@@ -5787,7 +5796,8 @@ class BrowsingHistoryCalendar {
                 const htmlContent = this.generateNetscapeHTML(exportData);
 
                 if (formats.includes('html')) {
-                    this.downloadFile(htmlContent, `${filenameBase}.html`, 'text/html');
+                    const result = await this.exportFile(htmlContent, `${filenameBase}.html`, 'text/html', destination, exportTimestamp);
+                    if (result?.notConfigured) return;
                 }
 
                 if (formats.includes('copy')) {
@@ -5801,7 +5811,8 @@ class BrowsingHistoryCalendar {
             // 导出 JSON
             if (formats.includes('json')) {
                 const jsonContent = JSON.stringify(exportData, null, 2);
-                this.downloadFile(jsonContent, `${filenameBase}.json`, 'application/json');
+                const result = await this.exportFile(jsonContent, `${filenameBase}.json`, 'application/json', destination, exportTimestamp);
+                if (result?.notConfigured) return;
             }
 
             // 导出 浏览历史 (当模式为 history_context 时)
@@ -5845,12 +5856,19 @@ class BrowsingHistoryCalendar {
                             })).join('\n');
 
                             const suffix = currentLang === 'zh_CN' ? '浏览历史' : 'browsing_history';
-                            this.downloadFile(historyJsonlContent, `${filenameBase}_${suffix}.jsonl`, 'application/x-jsonlines');
+                            const result = await this.exportFile(historyJsonlContent, `${filenameBase}_${suffix}.jsonl`, 'application/x-jsonlines', destination, exportTimestamp);
+                            if (result?.notConfigured) return;
                         }
                     }
                 } catch (e) {
                     console.error('[BrowsingHistoryCalendar] 导出浏览历史上下文失败:', e);
                 }
+            }
+
+            if (hasFileExport && typeof showToast === 'function') {
+                showToast(destination === 'github'
+                    ? (typeof getRankingExportText === 'function' ? getRankingExportText('exportGithubDone') : (currentLang === 'zh_CN' ? '已导出到 GitHub' : 'Exported to GitHub'))
+                    : (typeof getRankingExportText === 'function' ? getRankingExportText('exportLocalDone') : (currentLang === 'zh_CN' ? '已导出到本地' : 'Exported locally')));
             }
 
             modal.classList.remove('show');
@@ -5862,6 +5880,38 @@ class BrowsingHistoryCalendar {
             doExportBtn.disabled = false;
             doExportBtn.innerHTML = originalBtnText;
         }
+    }
+
+    getExportDestination(modal) {
+        if (typeof window.getManualExportDestinationFromContainer === 'function') {
+            return window.getManualExportDestinationFromContainer(modal || document);
+        }
+        const checked = (modal || document).querySelector?.('input[data-manual-export-destination]:checked');
+        return String(checked?.value || 'local').toLowerCase() === 'github' ? 'github' : 'local';
+    }
+
+    async exportFile(content, filename, type, destination = 'local', timestamp = Date.now()) {
+        const normalizedDestination = String(destination || 'local').toLowerCase() === 'github' ? 'github' : 'local';
+        if (typeof window.exportManualFile === 'function') {
+            const result = await window.exportManualFile({
+                text: content,
+                filename,
+                mimeType: type,
+                category: 'bookmark-click-records',
+                destination: normalizedDestination,
+                timestamp
+            });
+            if (result?.success) return result;
+            if (result?.notConfigured) return result;
+            throw new Error(result?.error || 'export_failed');
+        }
+        if (normalizedDestination === 'github') {
+            throw new Error(currentLang === 'zh_CN'
+                ? '请先在「推送与分析」里配置 GitHub 后重试'
+                : 'Configure GitHub in Push & Analysis first');
+        }
+        this.downloadFile(content, filename, type);
+        return { success: true, method: 'legacy_download' };
     }
 
     // 辅助：判断日期是否在当前导出范围内
@@ -6537,7 +6587,7 @@ class BrowsingHistoryCalendar {
         // 尝试使用 chrome.downloads API 以支持子目录
         if (chrome.downloads) {
             // 使用统一的导出文件夹结构（根据语言动态选择）
-            const exportPath = `${getBrowsingExportRootFolder()}/${getBrowsingExportFolder()}`;
+            const exportPath = `${getBrowsingExportRootFolder()}/${getBrowsingManualExportFolder()}/${getBrowsingExportFolder()}`;
 
             chrome.downloads.download({
                 url: url,

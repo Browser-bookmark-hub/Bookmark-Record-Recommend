@@ -104,11 +104,11 @@ const i18n = {pageTitle: {
         'zh_CN': '同步方式',
         'en': 'Sync Provider'
     },syncProviderGithubOption: {
-        'zh_CN': 'GitHub Repo',
-        'en': 'GitHub Repo'
+        'zh_CN': 'GitHub',
+        'en': 'GitHub'
     },syncProviderLocalOption: {
-        'zh_CN': '本地快照（仅本机）',
-        'en': 'Local Snapshot (Local Only)'
+        'zh_CN': '本地',
+        'en': 'Local'
     },syncGithubTokenLabel: {
         'zh_CN': 'GitHub Token',
         'en': 'GitHub Token'
@@ -1265,4 +1265,3 @@ const i18n = {pageTitle: {
     }
 };
 window.i18n = i18n; // 暴露给其他模块使用
-

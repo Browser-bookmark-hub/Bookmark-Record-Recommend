@@ -173,13 +173,29 @@ const SYNC_GITHUB_PACKAGE_BOOKMARK_RECOMMEND_PATH = 'data/packages/bookmark-reco
 const SYNC_GITHUB_RAW_NATIVE_BOOKMARKS_TREE_PATH = 'data/raw-native/bookmarks-tree.json';
 const SYNC_GITHUB_RAW_NATIVE_HISTORY_VISITS_PATH = 'data/raw-native/history-visits.jsonl';
 const SYNC_GITHUB_META_STATE_PATH = 'meta/sync_state.json';
+const SYNC_GITHUB_MANUAL_EXPORT_ROOT = 'manual-export';
 const SYNC_GITHUB_REQUEST_TIMEOUT_MS = 60 * 1000;
 const SYNC_HISTORY_VISITS_EXPORT_LIMIT = 50000;
 const SYNC_CLOUD_ROOT_FOLDER_ZH = '书签记录与推荐';
 const SYNC_CLOUD_ROOT_FOLDER_EN = 'Bookmark Record and Recommend';
+const SYNC_MANUAL_EXPORT_LOCAL_FOLDER_ZH = '手动导出';
+const SYNC_MANUAL_EXPORT_LOCAL_FOLDER_EN = 'Manual Export';
 const SYNC_OUTPUT_NAMING_LEGACY = 'legacy-v1';
 const SYNC_OUTPUT_NAMING_RANGE = 'range-v2';
 const SYNC_RANGE_NAMING_MIN_VERSION = '0.3.9';
+const MANUAL_EXPORT_DESTINATION_STORAGE_KEY = 'manualExportDestination_v1';
+const MANUAL_EXPORT_DESTINATION_LOCAL = 'local';
+const MANUAL_EXPORT_DESTINATION_GITHUB = 'github';
+const MANUAL_EXPORT_CATEGORY_DEFS = Object.freeze({
+    'browsing-ranking': { remote: 'click-ranking', zh: '点击排行', en: 'Click Ranking' },
+    'current-tracking': { remote: 'current-tracking', zh: '正在追踪', en: 'Current Tracking' },
+    'time-ranking': { remote: 'time-ranking', zh: '时间排行', en: 'Time Ranking' },
+    'related-history': { remote: 'related-history', zh: '关联记录', en: 'Related History' },
+    'postponed-review': { remote: 'postponed-review', zh: '待复习', en: 'Review Queue' },
+    'bookmark-status': { remote: 'bookmark-status', zh: '书签情况', en: 'Bookmark Status' },
+    'bookmark-addition-records': { remote: 'bookmark-addition-records', zh: '书签添加记录', en: 'Bookmark Addition Records' },
+    'bookmark-click-records': { remote: 'bookmark-click-records', zh: '书签点击记录', en: 'Bookmark Click Records' }
+});
 const SYNC_AGENT_TEMPLATE_FALLBACKS = Object.freeze({
     zh_CN: `# Bookmark Record and Recommend AI 规则
 
@@ -2091,9 +2107,18 @@ function getRankingExportText(key) {
         exportInfoRelatedContext: isZh ? '右键任意条目可单独导出上下文。' : 'Right-click any item to export its context.',
         exportInfoRelatedOrangeRange: isZh ? '橙色选中：以选中项为中心向上/向下拓展。' : 'Orange selected expands above and below each selected item.',
         exportInfoRelatedOrangeSource: isZh ? '来源：「书签点击记录」、「点击排行」书签条目的跳转模式。' : 'Source: bookmark jump mode from bookmark click records and click ranking.',
+        exportInfoDestination: isZh ? '导出方向：本地会保存到“书签记录与推荐/手动导出”；GitHub 会使用“推送与分析”的 GitHub 配置并写入产品文件夹下的 manual-export。' : 'Export destination: Local saves under “Bookmark Record and Recommend/Manual Export”; GitHub uses the Push & Analysis GitHub settings and writes under manual-export in the product folder.',
+        exportInfoGithubConfig: isZh ? '选择 GitHub 前，请先在「推送与分析」配置 Token、Owner、Repo 和分支。' : 'Before choosing GitHub, configure token, owner, repo, and branch in Push & Analysis.',
         exportInlineTipPrefix: isZh ? 'JSON 适用于 ' : 'JSON works with ',
         exportInlineTipSuffix: isZh ? ' 项目。' : '.',
         close: isZh ? '关闭' : 'Close',
+        exportFormat: isZh ? '导出格式' : 'Export format',
+        exportDestination: isZh ? '导出方向' : 'Export destination',
+        githubDestination: 'GitHub',
+        localDestination: isZh ? '本地' : 'Local',
+        githubNotConfigured: isZh ? '请先在「推送与分析」里配置 GitHub Token、Owner 和 Repo' : 'Configure GitHub token, owner, and repo in Push & Analysis first',
+        exportGithubDone: isZh ? '已导出到 GitHub' : 'Exported to GitHub',
+        exportLocalDone: isZh ? '已导出到本地' : 'Exported locally',
         html: 'HTML',
         json: 'JSON',
         noData: isZh ? '没有可导出的内容' : 'No content to export',
@@ -2733,6 +2758,29 @@ function buildRankingExportFilename(payload, format) {
         `top${normalizeRankingExportLimit(payload?.limit)}`
     );
     return `${title}-${limitText}-${buildRankingExportDateKey(payload?.createdAt || Date.now())}.${ext}`;
+}
+
+function buildRankingExportFileContent(payload, format = 'json') {
+    const normalizedFormat = format === 'html' ? 'html' : 'json';
+    const text = normalizedFormat === 'json'
+        ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
+        : buildRankingExportHtml(payload);
+    const mimeType = normalizedFormat === 'json'
+        ? 'application/json;charset=utf-8'
+        : 'text/html;charset=utf-8';
+    return { text, mimeType, format: normalizedFormat };
+}
+
+async function exportRankingPayloadFile(payload, format = 'json', category = '', destination = MANUAL_EXPORT_DESTINATION_LOCAL, filenameOverride = '') {
+    const fileContent = buildRankingExportFileContent(payload, format);
+    const filename = filenameOverride || buildRankingExportFilename(payload, fileContent.format);
+    return await exportManualFile({
+        text: fileContent.text,
+        filename,
+        mimeType: fileContent.mimeType,
+        category: category || payload?.kind || 'manual-export',
+        destination
+    });
 }
 
 function getBrowsingRankingItemExportCount(item, range) {
@@ -3674,18 +3722,15 @@ async function performBrowsingRankingSingleExport(target, options = {}, format =
         }
         const supportedFormats = ['html', 'json'];
         const normalizedFormat = supportedFormats.includes(format) ? format : 'json';
-        const text = normalizedFormat === 'json'
-            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
-            : buildRankingExportHtml(payload);
-        const type = normalizedFormat === 'json'
-            ? 'application/json;charset=utf-8'
-            : 'text/html;charset=utf-8';
-        const blob = new Blob([text], { type });
-        const filename = buildRankingExportFilename(payload, normalizedFormat);
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        const destination = getManualExportDestinationFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, normalizedFormat, 'browsing-ranking', destination);
         if (result?.success) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(destination === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('exportGithubDone')
+                : getRankingExportText('exportLocalDone'));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[BrowsingRankingSingleExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -3941,18 +3986,15 @@ async function performRankingExport(kind, format, limitInput, menuEl = null) {
         }
         const supportedFormats = getRankingExportSupportedFormats(kind);
         const normalizedFormat = supportedFormats.includes(format) ? format : supportedFormats[0];
-        const text = normalizedFormat === 'json'
-            ? JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2)
-            : buildRankingExportHtml(payload);
-        const type = normalizedFormat === 'json'
-            ? 'application/json;charset=utf-8'
-            : 'text/html;charset=utf-8';
-        const blob = new Blob([text], { type });
-        const filename = buildRankingExportFilename(payload, normalizedFormat);
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        const destination = getManualExportDestinationFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, normalizedFormat, kind, destination);
         if (result?.success) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(destination === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('exportGithubDone')
+                : getRankingExportText('exportLocalDone'));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[RankingExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -3985,6 +4027,10 @@ function buildRankingExportInfoBubbleHtml(kind, supportedFormats = [], bookmarkC
                     <span>${escapeHtml(getRankingExportText('exportInfoJsonFormat'))}</span>
                     <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoJsonAppliesPrefix'))}${bookmarkCanvasLink}${escapeHtml(getRankingExportText('exportInfoJsonAppliesSuffix'))}</span>
                 </li>
+                <li>
+                    <span>${escapeHtml(getRankingExportText('exportInfoDestination'))}</span>
+                    <span class="ranking-export-info-subline ranking-export-info-subline-indent">${escapeHtml(getRankingExportText('exportInfoGithubConfig'))}</span>
+                </li>
                 ${relatedInfoHtml}
             </ul>
         </div>
@@ -4009,6 +4055,15 @@ function bindRankingExportInfoBubble(menu) {
     });
 }
 
+function buildRankingExportFormatActionsHtml(formats = []) {
+    return (Array.isArray(formats) ? formats : []).map(format => {
+        const normalized = format === 'html' ? 'html' : 'json';
+        const iconClass = normalized === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
+        const label = normalized === 'html' ? getRankingExportText('html') : getRankingExportText('json');
+        return `<button type="button" data-format="${normalized}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
+    }).join('');
+}
+
 function removeBrowsingRankingItemExportMenu() {
     const menu = document.getElementById('browsingRankingItemExportMenu');
     if (menu) menu.remove();
@@ -4030,11 +4085,7 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
     const defaultGroupSize = readBrowsingRankingSingleExportGroupSize();
     const defaultOtherLimit = readBrowsingRankingSingleExportOtherLimit();
     const supportsGroupSize = target?.type === 'domain' || target?.type === 'subdomain';
-    const actionButtonsHtml = ['html', 'json'].map(format => {
-        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
-        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
-        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
-    }).join('');
+    const actionButtonsHtml = buildRankingExportFormatActionsHtml(['html', 'json']);
     const groupSizeRowHtml = supportsGroupSize
         ? `
             <div class="ranking-export-menu-row ranking-item-export-group-size-row">
@@ -4067,8 +4118,15 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
         </label>
         ${groupSizeRowHtml}
         ${otherLimitRowHtml}
-        <div class="ranking-export-menu-actions">
-            ${actionButtonsHtml}
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                ${actionButtonsHtml}
+            </div>
+        </div>
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml('browsingRankingItemExport')}
         </div>
     `;
     document.body.appendChild(menu);
@@ -4080,6 +4138,7 @@ function showBrowsingRankingItemExportMenu(target, anchorEl) {
         ? { x: rect.left, y: rect.bottom + 6 }
         : { x: window.innerWidth / 2, y: window.innerHeight / 2 });
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
 
     const contextInput = menu.querySelector('#browsingRankingItemContextInput');
     const groupSizeInput = menu.querySelector('#browsingRankingItemGroupSizeInput');
@@ -4176,11 +4235,7 @@ function showRankingExportMenu(kind, anchorEl) {
     const supportedFormats = getRankingExportSupportedFormats(kind);
     const bookmarkCanvasLink = `<a href="https://github.com/Browser-bookmark-hub/Bookmark-Canvas" target="_blank" rel="noopener noreferrer">${escapeHtml(getRankingExportText('bookmarkCanvas'))}</a>`;
     const infoBubbleHtml = buildRankingExportInfoBubbleHtml(kind, supportedFormats, bookmarkCanvasLink);
-    const actionButtonsHtml = supportedFormats.map(format => {
-        const iconClass = format === 'html' ? 'fas fa-file-code' : 'fas fa-file-alt';
-        const label = format === 'html' ? getRankingExportText('html') : getRankingExportText('json');
-        return `<button type="button" data-format="${format}"><i class="${iconClass}"></i>${escapeHtml(label)}</button>`;
-    }).join('');
+    const actionButtonsHtml = buildRankingExportFormatActionsHtml(supportedFormats);
     const inlineTipHtml = isRankingExportInlineTipDismissed(kind)
         ? ''
         : `
@@ -4208,8 +4263,15 @@ function showRankingExportMenu(kind, anchorEl) {
             <label for="rankingExportLimitInput">${escapeHtml(getRankingExportText('limitLabel'))}</label>
             <input id="rankingExportLimitInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${defaultLimit}">
         </div>
-        <div class="ranking-export-menu-actions">
-            ${actionButtonsHtml}
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                ${actionButtonsHtml}
+            </div>
+        </div>
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml(`rankingExport${kind}`)}
         </div>
     `;
     document.body.appendChild(menu);
@@ -4240,6 +4302,7 @@ function showRankingExportMenu(kind, anchorEl) {
         input.select();
     }
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
     const inlineTip = menu.querySelector('.ranking-export-inline-tip');
     const inlineTipClose = menu.querySelector('.ranking-export-inline-tip-close');
     if (inlineTip && inlineTipClose) {
@@ -4344,8 +4407,15 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
             <label for="relatedContextAfterInput">${escapeHtml(getRankingExportText('contextAfterLabel'))}</label>
             <input id="relatedContextAfterInput" type="text" inputmode="numeric" pattern="[0-9]*" value="${afterDefault}">
         </div>
-        <div class="ranking-export-menu-actions">
-            <button type="button" data-format="json"><i class="fas fa-file-alt"></i>${escapeHtml(getRankingExportText('json'))}</button>
+        <div class="ranking-export-menu-row ranking-export-format-row">
+            <label>${escapeHtml(getRankingExportText('exportFormat'))}</label>
+            <div class="ranking-export-menu-actions">
+                <button type="button" data-format="json"><i class="fas fa-file-alt"></i>${escapeHtml(getRankingExportText('json'))}</button>
+            </div>
+        </div>
+        <div class="ranking-export-menu-row ranking-export-destination-row">
+            <label>${escapeHtml(getRankingExportText('exportDestination'))}</label>
+            ${buildManualExportDestinationControlHtml('browsingRelatedContextExport')}
         </div>
     `;
     document.body.appendChild(menu);
@@ -4378,6 +4448,7 @@ function showBrowsingRelatedContextExportMenu(groupIndex, point = {}) {
         });
     }
     bindRankingExportInfoBubble(menu);
+    hydrateManualExportDestinationControls(menu);
 
     if (highlightedInput && targetText) {
         highlightedInput.addEventListener('change', () => {
@@ -8964,6 +9035,10 @@ function applyLanguage() {
         addPostponedTreeExportBtn.setAttribute('aria-label', getRankingExportText('exportBookmarkStatus'));
     }
     if (addPostponedTreeExportText) addPostponedTreeExportText.textContent = getRankingExportText('export');
+    document.querySelectorAll('.add-tree-export-destination-label').forEach(label => {
+        label.textContent = getRankingExportText('exportDestination');
+    });
+    hydrateManualExportDestinationControls(document);
     const addPostponedConfirmBtn = document.getElementById('addPostponedConfirmBtn');
     if (addPostponedConfirmBtn) addPostponedConfirmBtn.textContent = i18n.addPostponedConfirmText[currentLang];
 
@@ -9379,6 +9454,7 @@ function initializeUI() {
 
     initBrowsingCalibrationMenu();
     initRankingExportControls();
+    hydrateManualExportDestinationControls(document);
     updateMainSearchVisibility();
     initResponsiveRecommendLabelObservers();
     initScrollToTopButton();
@@ -12751,6 +12827,318 @@ async function downloadSyncBlobAsFile(blobInput, filenameInput, options = {}) {
     }
 }
 
+function normalizeManualExportDestination(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === MANUAL_EXPORT_DESTINATION_GITHUB
+        ? MANUAL_EXPORT_DESTINATION_GITHUB
+        : MANUAL_EXPORT_DESTINATION_LOCAL;
+}
+
+function getStoredManualExportDestination() {
+    try {
+        return normalizeManualExportDestination(localStorage.getItem(MANUAL_EXPORT_DESTINATION_STORAGE_KEY));
+    } catch (_) {
+        return MANUAL_EXPORT_DESTINATION_LOCAL;
+    }
+}
+
+function saveManualExportDestination(destination) {
+    const normalized = normalizeManualExportDestination(destination);
+    try {
+        localStorage.setItem(MANUAL_EXPORT_DESTINATION_STORAGE_KEY, normalized);
+    } catch (_) { }
+    return normalized;
+}
+
+function getManualExportCategoryDef(categoryKey = '') {
+    const key = String(categoryKey || '').trim();
+    return MANUAL_EXPORT_CATEGORY_DEFS[key] || {
+        remote: sanitizeRankingExportFilenameSegment(key || 'manual-export', 'manual-export'),
+        zh: '手动导出',
+        en: 'Manual Export'
+    };
+}
+
+function getManualExportRemoteCategory(categoryKey = '') {
+    return normalizeSyncDownloadPathSegment(getManualExportCategoryDef(categoryKey).remote || 'manual-export')
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+}
+
+function getManualExportLocalCategory(categoryKey = '') {
+    const def = getManualExportCategoryDef(categoryKey);
+    return normalizeSyncDownloadPathSegment(currentLang === 'zh_CN' ? def.zh : def.en);
+}
+
+function getManualExportLocalRootFolderName() {
+    return getSyncCloudRootFolderName(currentLang);
+}
+
+function getManualExportLocalFolderName() {
+    return normalizeSyncDownloadPathSegment(
+        currentLang === 'zh_CN' ? SYNC_MANUAL_EXPORT_LOCAL_FOLDER_ZH : SYNC_MANUAL_EXPORT_LOCAL_FOLDER_EN
+    );
+}
+
+function sanitizeManualExportFilename(filename = '') {
+    const basename = getSyncPathBasename(filename) || String(filename || '').trim();
+    return normalizeSyncDownloadPathSegment(basename || `manual-export-${buildRankingExportDateKey(Date.now())}.txt`);
+}
+
+function buildManualExportLocalPath(filename = '', categoryKey = '') {
+    return joinSyncRelativePath(
+        getManualExportLocalRootFolderName(),
+        getManualExportLocalFolderName(),
+        getManualExportLocalCategory(categoryKey),
+        sanitizeManualExportFilename(filename)
+    );
+}
+
+function buildManualExportRemotePath(filename = '', categoryKey = '', timestamp = Date.now()) {
+    return joinSyncRelativePath(
+        getSyncCloudRootFolderName(currentLang),
+        SYNC_GITHUB_MANUAL_EXPORT_ROOT,
+        getManualExportRemoteCategory(categoryKey),
+        buildSyncDateKey(timestamp),
+        `${buildSyncTimeKey(timestamp)}-${sanitizeManualExportFilename(filename)}`
+    );
+}
+
+function getManualExportDestinationFromContainer(container = null) {
+    const root = container && typeof container.querySelector === 'function' ? container : document;
+    const checked = root.querySelector('input[data-manual-export-destination]:checked');
+    return normalizeManualExportDestination(checked?.value || getStoredManualExportDestination());
+}
+
+function buildManualExportDestinationControlHtml(idPrefix = 'manualExport', options = {}) {
+    const safePrefix = String(idPrefix || 'manualExport').replace(/[^a-zA-Z0-9_-]/g, '');
+    const selected = normalizeManualExportDestination(options.selected || getStoredManualExportDestination());
+    const name = `${safePrefix}Destination`;
+    const githubId = `${safePrefix}DestinationGithub`;
+    const localId = `${safePrefix}DestinationLocal`;
+    return `
+        <div class="manual-export-destination-group" role="radiogroup" aria-label="${escapeHtml(getRankingExportText('exportDestination'))}">
+            <label class="manual-export-destination-option">
+                <input id="${githubId}" type="radio" name="${name}" value="${MANUAL_EXPORT_DESTINATION_GITHUB}" data-manual-export-destination ${selected === MANUAL_EXPORT_DESTINATION_GITHUB ? 'checked' : ''}>
+                <span>${escapeHtml(getRankingExportText('githubDestination'))}</span>
+            </label>
+            <label class="manual-export-destination-option">
+                <input id="${localId}" type="radio" name="${name}" value="${MANUAL_EXPORT_DESTINATION_LOCAL}" data-manual-export-destination ${selected === MANUAL_EXPORT_DESTINATION_LOCAL ? 'checked' : ''}>
+                <span>${escapeHtml(getRankingExportText('localDestination'))}</span>
+            </label>
+        </div>
+    `;
+}
+
+function hydrateManualExportDestinationControls(root = document) {
+    const container = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const destinationLabel = getRankingExportText('exportDestination');
+    const infoLabel = currentLang === 'zh_CN' ? '导出说明' : 'Export info';
+    const infoText = `${getRankingExportText('exportInfoDestination')} ${getRankingExportText('exportInfoGithubConfig')}`;
+    container.querySelectorAll('.manual-export-destination-heading, .add-tree-export-destination-label').forEach((label) => {
+        label.textContent = destinationLabel;
+    });
+    container.querySelectorAll('.manual-export-destination-group').forEach((group) => {
+        group.setAttribute('aria-label', destinationLabel);
+    });
+    container.querySelectorAll('.manual-export-info-bubble').forEach((bubble) => {
+        bubble.textContent = infoText;
+    });
+    const selected = getStoredManualExportDestination();
+    container.querySelectorAll('input[data-manual-export-destination]').forEach((input) => {
+        const labelSpan = input.nextElementSibling;
+        if (labelSpan) {
+            labelSpan.textContent = normalizeManualExportDestination(input.value) === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('githubDestination')
+                : getRankingExportText('localDestination');
+        }
+        input.checked = normalizeManualExportDestination(input.value) === selected;
+        if (input.dataset.manualExportDestinationBound === 'true') return;
+        input.dataset.manualExportDestinationBound = 'true';
+        input.addEventListener('change', () => {
+            if (!input.checked) return;
+            const next = saveManualExportDestination(input.value);
+            document.querySelectorAll('input[data-manual-export-destination]').forEach((other) => {
+                other.checked = normalizeManualExportDestination(other.value) === next;
+            });
+            if (next === MANUAL_EXPORT_DESTINATION_GITHUB) {
+                try {
+                    if (typeof readSyncConfigFromUI === 'function') readSyncConfigFromUI();
+                    const missing = getManualExportGitHubMissingReason(buildSyncRepoConfig(syncConfigState));
+                    if (missing.code) showToast(getRankingExportText('githubNotConfigured'));
+                } catch (_) { }
+            }
+        });
+    });
+    container.querySelectorAll('.manual-export-info-btn').forEach((btn) => {
+        btn.setAttribute('aria-label', infoLabel);
+        btn.title = infoLabel;
+        if (btn.dataset.manualExportInfoBound === 'true') return;
+        btn.dataset.manualExportInfoBound = 'true';
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const section = btn.closest('.export-section') || btn.parentElement;
+            const bubble = section?.querySelector('.manual-export-info-bubble, .ranking-export-info-bubble');
+            if (bubble) bubble.hidden = !bubble.hidden;
+        });
+    });
+}
+
+function getManualExportGitHubMissingReason(repoConfig) {
+    const config = repoConfig || buildSyncRepoConfig(syncConfigState);
+    if (!config.token) {
+        return {
+            code: 'missing_token',
+            text: currentLang === 'zh_CN' ? 'GitHub Token 未配置' : 'GitHub token is not configured'
+        };
+    }
+    if (!config.owner || !config.repo) {
+        return {
+            code: 'missing_repo',
+            text: currentLang === 'zh_CN' ? 'Owner / Repo 未配置' : 'Owner / repo is not configured'
+        };
+    }
+    return { code: '', text: '' };
+}
+
+async function uploadManualExportFileToGitHub({ text = '', filename = '', category = 'manual-export', mimeType = '', timestamp = Date.now() } = {}) {
+    try {
+        if (typeof readSyncConfigFromUI === 'function') readSyncConfigFromUI();
+    } catch (_) { }
+    const repoConfig = buildSyncRepoConfig(syncConfigState);
+    const missing = getManualExportGitHubMissingReason(repoConfig);
+    if (missing.code) {
+        const message = getRankingExportText('githubNotConfigured');
+        showToast(message);
+        return { success: false, notConfigured: true, error: missing.text || message };
+    }
+
+    let branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    if (branchReady?.success && branchReady.branchWillBeCreated === true) {
+        branchReady = await ensureSyncGitHubBranch(repoConfig, { createIfMissing: true });
+    }
+    if (!branchReady?.success) {
+        return {
+            success: false,
+            error: branchReady?.error || (currentLang === 'zh_CN' ? 'GitHub 分支不可用' : 'GitHub branch is unavailable')
+        };
+    }
+
+    const branch = String(branchReady.branch || repoConfig.branch || 'main').trim() || 'main';
+    let headCommitSha = String(branchReady.sha || '').trim();
+    if (!headCommitSha) {
+        const branchRef = await syncGitHubGetBranchRef(repoConfig, branch);
+        if (!branchRef.success) {
+            return {
+                success: false,
+                error: branchRef.error || (currentLang === 'zh_CN' ? '读取 GitHub 分支失败' : 'Failed to read GitHub branch')
+            };
+        }
+        headCommitSha = String(branchRef.sha || '').trim();
+    }
+
+    const path = buildManualExportRemotePath(filename, category, timestamp);
+    const commitMessage = `[manual-export:${buildSyncDateKey(timestamp)}] add ${sanitizeManualExportFilename(filename)}`;
+    const file = { path, text: String(text == null ? '' : text) };
+    const graphqlResult = await syncGitHubCreateCommitOnBranch(repoConfig, {
+        branch,
+        expectedHeadOid: headCommitSha,
+        files: [file],
+        message: commitMessage
+    });
+    if (graphqlResult?.success) {
+        return {
+            success: true,
+            method: 'github_graphql',
+            branch,
+            path,
+            commitSha: String(graphqlResult.sha || ''),
+            mimeType
+        };
+    }
+
+    const headCommit = await syncGitHubGetCommit(repoConfig, headCommitSha);
+    if (!headCommit.success) {
+        return {
+            success: false,
+            error: headCommit.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '读取 GitHub commit 失败' : 'Failed to read GitHub commit')
+        };
+    }
+    const treeResult = await syncGitHubCreateTree(repoConfig, {
+        baseTreeSha: headCommit.treeSha,
+        entries: [buildSyncGitHubTreeTextEntry(path, text)]
+    });
+    if (!treeResult.success) {
+        return {
+            success: false,
+            error: treeResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '创建 GitHub tree 失败' : 'Failed to create GitHub tree')
+        };
+    }
+    const commitResult = await syncGitHubCreateCommit(repoConfig, {
+        message: commitMessage,
+        treeSha: treeResult.sha,
+        parentSha: headCommitSha
+    });
+    if (!commitResult.success) {
+        return {
+            success: false,
+            error: commitResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '创建 GitHub commit 失败' : 'Failed to create GitHub commit')
+        };
+    }
+    const updateRefResult = await syncGitHubUpdateBranchRef(repoConfig, {
+        branch,
+        commitSha: commitResult.sha
+    });
+    if (!updateRefResult.success) {
+        return {
+            success: false,
+            error: updateRefResult.error || graphqlResult?.error || (currentLang === 'zh_CN' ? '更新 GitHub 分支失败' : 'Failed to update GitHub branch')
+        };
+    }
+    return {
+        success: true,
+        method: 'github_git_data',
+        branch,
+        path,
+        commitSha: String(commitResult.sha || ''),
+        mimeType
+    };
+}
+
+async function exportManualFile({
+    text = '',
+    filename = '',
+    mimeType = 'text/plain;charset=utf-8',
+    category = 'manual-export',
+    destination = MANUAL_EXPORT_DESTINATION_LOCAL,
+    preferSaveAs = false,
+    timestamp = Date.now()
+} = {}) {
+    const normalizedDestination = normalizeManualExportDestination(destination);
+    const safeFilename = sanitizeManualExportFilename(filename);
+    const content = String(text == null ? '' : text);
+    if (normalizedDestination === MANUAL_EXPORT_DESTINATION_GITHUB) {
+        return await uploadManualExportFileToGitHub({
+            text: content,
+            filename: safeFilename,
+            category,
+            mimeType,
+            timestamp
+        });
+    }
+    const blob = new Blob([content], { type: mimeType || 'text/plain;charset=utf-8' });
+    const localPath = buildManualExportLocalPath(safeFilename, category);
+    return await downloadSyncBlobAsFile(blob, localPath, { preferSaveAs });
+}
+
+try {
+    window.exportManualFile = exportManualFile;
+    window.getManualExportDestinationFromContainer = getManualExportDestinationFromContainer;
+    window.hydrateManualExportDestinationControls = hydrateManualExportDestinationControls;
+    window.saveManualExportDestination = saveManualExportDestination;
+} catch (_) { }
+
 async function buildSyncLocalExportBundle(repoConfigInput, snapshotInput) {
     const exportBundle = await buildSyncExportFiles(snapshotInput, repoConfigInput || syncConfigState, {
         provider: SYNC_PROVIDER_LOCAL,
@@ -12950,7 +13338,8 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。' },
             { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: '仓库提交时间线：查看最近改动文件与变更频率。' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: '按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。' },
-            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' }
+            { branch: '|--', path: 'meta/sync_state.json', op: '[PUSH]', desc: '同步状态元数据：最近推送时间、分支、推送文件数、文档数量。' },
+            { branch: '\\--', path: 'manual-export/', op: '[MANUAL]', desc: '手动导出目录：仅在导出面板选择 GitHub 时写入；普通推送或拉取不会处理。' }
         ]
         : [
             { branch: '|--', path: ruleFileName, op: '[PUSH]', desc: 'Required Sync/AI rule document in the product folder: manifest, pushId grouping, output format, and citation rules.' },
@@ -12964,7 +13353,8 @@ function buildSyncCloudPathDiagram(configInput = syncConfigState) {
             { branch: '|--', path: 'ai/results/**/*.md', op: '[PULL/PUSH]', desc: 'AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.' },
             { branch: '|--', path: 'GitHub /commits?sha=<branch>', op: '[READ]', desc: 'Commit timeline for the repository and change frequency.' },
             { branch: '|--', path: 'GitHub /compare/<base>...<head>', op: '[READ]', desc: 'Diff summary after grouping commits by pushId; no local delta summary is generated.' },
-            { branch: '\\--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' }
+            { branch: '|--', path: 'meta/sync_state.json', op: '[PUSH]', desc: 'Sync metadata: last push time, branch, pushed file count, doc count.' },
+            { branch: '\\--', path: 'manual-export/', op: '[MANUAL]', desc: 'Manual export folder: written only when an export panel chooses GitHub; normal push or pull ignores this folder.' }
         ];
 
     const pathWidth = rows.reduce((max, row) => Math.max(max, String(row.path || '').length), 0);
@@ -15365,10 +15755,31 @@ function getSyncPushPayloadErrorI18n(error) {
     };
 }
 
+function normalizeSyncProviderValue(provider) {
+    const normalized = String(provider || SYNC_PROVIDER_GITHUB).trim().toLowerCase();
+    return normalized === SYNC_PROVIDER_LOCAL ? SYNC_PROVIDER_LOCAL : SYNC_PROVIDER_GITHUB;
+}
+
+function getSyncProviderValueFromUI() {
+    const checkedRadio = document.querySelector('input[name="syncProviderSelect"]:checked');
+    if (checkedRadio) return normalizeSyncProviderValue(checkedRadio.value);
+    const legacySelect = document.getElementById('syncProviderSelect');
+    return normalizeSyncProviderValue(legacySelect?.value || SYNC_PROVIDER_GITHUB);
+}
+
+function applySyncProviderValueToUI(provider) {
+    const normalized = normalizeSyncProviderValue(provider);
+    const radios = document.querySelectorAll('input[name="syncProviderSelect"]');
+    radios.forEach((radio) => {
+        radio.checked = normalizeSyncProviderValue(radio.value) === normalized;
+    });
+    const legacySelect = document.getElementById('syncProviderSelect');
+    if (legacySelect) legacySelect.value = normalized;
+}
+
 function applySyncConfigToUI() {
     ensureSyncPackageOptionElements();
-    const providerSelect = document.getElementById('syncProviderSelect');
-    if (providerSelect) providerSelect.value = String(syncConfigState.remoteProvider || SYNC_PROVIDER_GITHUB);
+    applySyncProviderValueToUI(syncConfigState.remoteProvider || SYNC_PROVIDER_GITHUB);
     const ownerInput = document.getElementById('syncGithubOwnerInput');
     if (ownerInput) ownerInput.value = String(syncConfigState.githubRepoOwner || '');
     const repoInput = document.getElementById('syncGithubRepoInput');
@@ -15393,7 +15804,7 @@ function readSyncConfigFromUI() {
     const previousConfig = normalizeSyncConfig(syncConfigState || null);
     const previousEndpointSignature = getSyncConfigEndpointSignature(previousConfig);
     const next = {
-        remoteProvider: String(document.getElementById('syncProviderSelect')?.value || SYNC_PROVIDER_GITHUB).trim().toLowerCase(),
+        remoteProvider: getSyncProviderValueFromUI(),
         githubRepoToken: String(document.getElementById('syncGithubTokenInput')?.value || '').trim(),
         githubRepoOwner: String(document.getElementById('syncGithubOwnerInput')?.value || '').trim(),
         githubRepoName: String(document.getElementById('syncGithubRepoInput')?.value || '').trim(),
@@ -20732,7 +21143,8 @@ function bindSyncViewEvents() {
     bindSyncEditorLifecycleAutoSave();
 
     const configIds = [
-        'syncProviderSelect',
+        'syncProviderGithubRadio',
+        'syncProviderLocalRadio',
         'syncGithubTokenInput',
         'syncGithubOwnerInput',
         'syncGithubRepoInput',
@@ -36330,6 +36742,7 @@ function openAddToPostponedModal(event = null) {
     if (!modal) return false;
 
     resetAddPostponedModal();
+    hydrateManualExportDestinationControls(modal);
     modal.classList.add('show');
     loadAddPostponedBookmarkTree();
     return true;
@@ -36709,6 +37122,8 @@ function resetAddPostponedModal() {
     if (folderName) folderName.textContent = isZh ? '点击选择文件夹' : 'Click to select folder';
     const treeSelectedName = document.getElementById('addTreeSelectedName');
     if (treeSelectedName) treeSelectedName.textContent = '-';
+    const treeExportControl = document.getElementById('addPostponedTreeExportControl');
+    if (treeExportControl) treeExportControl.hidden = false;
     const treeExportBtn = document.getElementById('addPostponedTreeExportBtn');
     if (treeExportBtn) treeExportBtn.hidden = false;
     const treeList = document.getElementById('addBookmarkTreeList');
@@ -37041,8 +37456,12 @@ function updateAddPostponedFooterSelection(panelType = null) {
     if (!selectedName) return;
 
     const activePanelType = panelType || modal?.querySelector('.add-postponed-panel.active')?.dataset?.panel || 'tree';
+    const exportControl = document.getElementById('addPostponedTreeExportControl');
+    if (exportControl) exportControl.hidden = activePanelType !== 'tree';
     const exportBtn = document.getElementById('addPostponedTreeExportBtn');
     if (exportBtn) exportBtn.hidden = activePanelType !== 'tree';
+    const exportDestination = document.getElementById('addPostponedTreeExportDestination');
+    if (exportDestination) exportDestination.hidden = activePanelType !== 'tree';
     const isZh = currentLang === 'zh_CN';
     if (activePanelType === 'search') {
         selectedName.textContent = String(addPostponedSearchSelected.size || 0);
@@ -37634,10 +38053,20 @@ async function performAddPostponedTreeStatusExport() {
         const json = buildBookmarkCanvasRankingExportJson(payload);
         json.title = payload.title;
         json.descriptionMd = payload.descriptionMd;
-        const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json;charset=utf-8' });
-        const result = await downloadSyncBlobAsFile(blob, buildAddPostponedTreeStatusFilename(payload), { preferSaveAs: false });
+        const destination = getManualExportDestinationFromContainer(modal);
+        const result = await exportManualFile({
+            text: JSON.stringify(json, null, 2),
+            filename: buildAddPostponedTreeStatusFilename(payload),
+            mimeType: 'application/json;charset=utf-8',
+            category: 'bookmark-status',
+            destination
+        });
         if (result?.success) {
-            showToast(getRankingExportText('exportDone'));
+            showToast(destination === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('exportGithubDone')
+                : getRankingExportText('exportLocalDone'));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[AddPostponedTreeExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));
@@ -44863,13 +45292,15 @@ async function performBrowsingRelatedContextExport(groupIndex, beforeInput, afte
             showToast(getRankingExportText('noData'));
             return;
         }
-        const text = JSON.stringify(buildBookmarkCanvasRankingExportJson(payload), null, 2);
-        const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
-        const filename = buildRankingExportFilename(payload, 'json');
-        const result = await downloadSyncBlobAsFile(blob, filename, { preferSaveAs: false });
+        const destination = getManualExportDestinationFromContainer(menuEl);
+        const result = await exportRankingPayloadFile(payload, 'json', 'related-history', destination);
         if (result?.success) {
             if (menuEl) menuEl.remove();
-            showToast(getRankingExportText('exportDone'));
+            showToast(destination === MANUAL_EXPORT_DESTINATION_GITHUB
+                ? getRankingExportText('exportGithubDone')
+                : getRankingExportText('exportLocalDone'));
+        } else if (result?.notConfigured) {
+            return;
         } else {
             console.warn('[BrowsingRelatedContextExport] download failed:', result);
             showToast(getRankingExportText('exportFailed'));

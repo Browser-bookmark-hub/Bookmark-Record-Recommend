@@ -64,7 +64,8 @@
 |-- ai/results/**/*.md                    [PULL/PUSH] AI 输出结果文档：拉取查看；本地编辑、重命名、删除后随下次推送同步。
 |-- GitHub /commits?sha=<branch>          [READ] 仓库提交时间线：查看最近改动文件与变更频率。
 |-- GitHub /compare/<base>...<head>       [READ] 按 pushId 聚合后的差异摘要：查看业务文件变化；不生成本地变化摘要。
-\-- meta/sync_state.json                  [PUSH] 同步状态元数据：最近推送时间、分支、推送文件数、文档数量。
+|-- meta/sync_state.json                  [PUSH] 同步状态元数据：最近推送时间、分支、推送文件数、文档数量。
+\-- manual-export/                        [MANUAL] 手动导出目录：仅在导出面板选择 GitHub 时写入；普通推送或拉取不会处理。
 ```
 
 ### 特色功能
@@ -149,7 +150,8 @@ Bookmark Record and Recommend/
 |-- ai/results/**/*.md                    [PULL/PUSH] AI result docs: pulled for viewing; local edits, renames, and deletes sync on the next push.
 |-- GitHub /commits?sha=<branch>          [READ] Commit timeline for the repository and change frequency.
 |-- GitHub /compare/<base>...<head>       [READ] Diff summary after grouping commits by pushId; no local delta summary is generated.
-\-- meta/sync_state.json                  [PUSH] Sync metadata: last push time, branch, pushed file count, doc count.
+|-- meta/sync_state.json                  [PUSH] Sync metadata: last push time, branch, pushed file count, doc count.
+\-- manual-export/                        [MANUAL] Manual export folder: written only when an export panel chooses GitHub; normal push or pull ignores this folder.
 ```
 
 ### Highlights
