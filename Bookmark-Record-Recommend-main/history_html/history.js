@@ -8955,6 +8955,16 @@ function applyLanguage() {
 
     const resetFormulaText = document.getElementById('resetFormulaText');
     if (resetFormulaText) resetFormulaText.textContent = i18n.resetFormulaText[currentLang];
+    const recommendModeLabel = document.getElementById('recommendModeLabel');
+    if (recommendModeLabel) recommendModeLabel.textContent = i18n.recommendModeLabel[currentLang];
+    const recommendModeInfoBtn = document.getElementById('recommendModeInfoBtn');
+    if (recommendModeInfoBtn) {
+        recommendModeInfoBtn.title = i18n.recommendModeInfoTooltip[currentLang];
+        recommendModeInfoBtn.setAttribute('aria-label', i18n.recommendModeInfoTooltip[currentLang]);
+    }
+    updateRecommendModeInfoI18n();
+    const recommendModeColon = document.getElementById('recommendModeColon');
+    if (recommendModeColon) recommendModeColon.textContent = i18n.recommendModeColon[currentLang];
     const cardQuickReviewText = document.getElementById('cardQuickReviewText');
     if (cardQuickReviewText) cardQuickReviewText.textContent = i18n.cardQuickReviewText[currentLang];
     const cardQuickReviewBtn = document.getElementById('cardQuickReviewBtn');
@@ -41479,6 +41489,58 @@ function initTrackingToggle() {
             }
         });
     }
+
+    const modeInfoBtn = document.getElementById('recommendModeInfoBtn');
+    const modeInfoModal = document.getElementById('recommendModeInfoModal');
+    const closeModeInfoBtn = document.getElementById('closeRecommendModeInfoModal');
+    if (modeInfoBtn && modeInfoModal && modeInfoBtn.dataset.bound !== 'true') {
+        modeInfoBtn.dataset.bound = 'true';
+        modeInfoBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            updateRecommendModeInfoI18n();
+            setRecommendModeInfoModalOpen(true);
+        });
+        if (closeModeInfoBtn) {
+            closeModeInfoBtn.addEventListener('click', () => {
+                setRecommendModeInfoModalOpen(false);
+            });
+        }
+        modeInfoModal.addEventListener('click', (e) => {
+            if (e.target === modeInfoModal) {
+                setRecommendModeInfoModalOpen(false);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                setRecommendModeInfoModalOpen(false);
+            }
+        });
+    }
+}
+
+function setRecommendModeInfoModalOpen(isOpen) {
+    const modeInfoBtn = document.getElementById('recommendModeInfoBtn');
+    const modeInfoModal = document.getElementById('recommendModeInfoModal');
+    if (!modeInfoBtn || !modeInfoModal) return;
+
+    modeInfoModal.classList.toggle('show', !!isOpen);
+    modeInfoBtn.classList.toggle('is-open', !!isOpen);
+    modeInfoBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+
+function updateRecommendModeInfoI18n() {
+    const setText = (id, key) => {
+        const el = document.getElementById(id);
+        if (el && i18n[key] && i18n[key][currentLang]) {
+            el.textContent = i18n[key][currentLang];
+        }
+    };
+
+    setText('recommendModeInfoModalTitle', 'recommendModeInfoTooltip');
+    setText('recommendModeInfoBackupTitle', 'recommendModeInfoBackupTitle');
+    setText('recommendModeInfoBackupText', 'recommendModeInfoBackupText');
+    setText('recommendModeInfoScoreTitle', 'recommendModeInfoScoreTitle');
+    setText('recommendModeInfoScoreText', 'recommendModeInfoScoreText');
 }
 
 // 更新状态说明弹窗的国际化文本
@@ -41589,12 +41651,6 @@ function updateFormulaHelpModalI18n() {
     document.getElementById('formulaHelpNote3').innerHTML = isEn
         ? '<strong>L</strong> is boolean: manually added = 1, otherwise = 0'
         : '<strong>L</strong> 是布尔值：手动添加=1，否则=0';
-    const note4 = document.getElementById('formulaHelpNote4');
-    if (note4) {
-        note4.innerHTML = isEn
-            ? '<strong>Backup restore</strong>: Restoring bookmarks via other tools may reassign bookmark IDs, so history and recommendation state can be lost'
-            : '<strong>备份恢复</strong>：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失';
-    }
 }
 
 // 推荐卡片数据

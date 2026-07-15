@@ -277,6 +277,10 @@
     color: var(--text-primary);
 }
 
+.formula-help-list li strong.formula-help-warning {
+    color: #f97316;
+}
+
 .formula-help-table {
     width: 100%;
     border-collapse: collapse;
@@ -333,13 +337,76 @@
 
 .formula-footer {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     margin-top: 12px;
 }
 
-.formula-actions {
+.preset-mode-block {
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    width: 100%;
+}
+
+.preset-mode-heading {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.formula-mode-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    line-height: 1;
+}
+
+.formula-mode-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.formula-mode-info-btn:hover,
+.formula-mode-info-btn.is-open {
+    color: #f97316;
+    border-color: rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.1);
+}
+
+.formula-mode-info-btn i {
+    font-size: 12px;
+}
+
+.formula-mode-colon {
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    margin-left: -2px;
+}
+
+.formula-mode-info-modal {
+    width: 480px;
+}
+
+.formula-mode-info-modal-content {
+    padding-top: 18px;
+}
+
+.formula-mode-info-list strong.formula-help-warning {
+    color: #f97316;
 }
 
 .formula-btn {
@@ -1882,10 +1949,13 @@ body.dark-theme .refresh-setting-item input[type="time"] {
 
 .preset-modes {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
 }
 
-.preset-btn {
+.preset-btn,
+.preset-reset-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -1899,7 +1969,8 @@ body.dark-theme .refresh-setting-item input[type="time"] {
     transition: all 0.2s;
 }
 
-.preset-btn:hover {
+.preset-btn:hover,
+.preset-reset-btn:hover {
     color: var(--text-primary);
     border-color: var(--accent-primary);
     background: var(--bg-tertiary);
@@ -1928,6 +1999,22 @@ body.dark-theme .refresh-setting-item input[type="time"] {
 }
 
 .preset-btn i {
+    font-size: 11px;
+}
+
+.preset-reset-btn {
+    color: #ea580c;
+    border-color: rgba(249, 115, 22, 0.35);
+    background: rgba(249, 115, 22, 0.06);
+}
+
+.preset-reset-btn:hover {
+    color: #c2410c;
+    border-color: rgba(249, 115, 22, 0.65);
+    background: rgba(249, 115, 22, 0.12);
+}
+
+.preset-reset-btn i {
     font-size: 11px;
 }
 

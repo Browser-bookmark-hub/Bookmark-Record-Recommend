@@ -1043,6 +1043,7 @@ a.tree-label.tree-bookmark-link:hover {
 
 /* 推荐相关二级 UI 的遮罩需要覆盖整个页面，避免侧边目录栏露出。 */
 #formulaHelpModal.modal.content-center,
+#recommendModeInfoModal.modal.content-center,
 #recommendSearchModal.modal.content-center,
 #refreshSettingsModal.modal.content-center,
 #addToPostponedModal.modal.content-center,

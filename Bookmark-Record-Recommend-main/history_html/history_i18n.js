@@ -976,6 +976,27 @@ const i18n = {pageTitle: {
     },resetFormulaText: {
         'zh_CN': '恢复默认',
         'en': 'Reset'
+    },recommendModeLabel: {
+        'zh_CN': '模式',
+        'en': 'Mode'
+    },recommendModeColon: {
+        'zh_CN': '：',
+        'en': ':'
+    },recommendModeInfoTooltip: {
+        'zh_CN': '模式说明',
+        'en': 'Mode notes'
+    },recommendModeInfoBackupTitle: {
+        'zh_CN': '备份恢复',
+        'en': 'Backup restore'
+    },recommendModeInfoBackupText: {
+        'zh_CN': '：若通过其他软件备份/恢复书签，浏览器会重新分配 bookmark ID，历史记录与推荐状态会丢失',
+        'en': ': Restoring bookmarks through other tools may reassign bookmark IDs, so history and recommendation state can be lost'
+    },recommendModeInfoScoreTitle: {
+        'zh_CN': 'S 值重算',
+        'en': 'S-score recalculation'
+    },recommendModeInfoScoreText: {
+        'zh_CN': '：切换推荐模式或修改公式参数会重算 S 值存储池，已经复习的书签 S 值也会按新公式重新计算',
+        'en': ': Switching recommendation modes or changing formula parameters recalculates the S-score storage pool, including S scores for bookmarks that have already been reviewed'
     },cardRefreshText: {
         'zh_CN': '刷新推荐',
         'en': 'Refresh'
