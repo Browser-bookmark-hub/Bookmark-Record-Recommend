@@ -14,6 +14,7 @@
 - [ ] **语言增加与调试**：当前主要围绕中英文实现，后续繁体中文、法语、俄语、西班牙语、阿拉伯语、日语、韩语等语言欢迎共建。限制说明见 [`docs/LIMITATIONS_AND_COMPROMISES.md#4`](docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建)。
 - [ ] **文档共建**：欢迎共建 `AGENTS.md` / `CLAUDE.md` 约束文件，让不同 AI 客户端更好理解同步包、输出格式和分析边界。模板入口见 [`AGENTS_template`](Bookmark-Record-Recommend-main/history_html/AGENTS_template/)。
 - [ ] **生态与客户端探索**：围绕书签画布、推荐数据包、AI 分析结果和可能的独立客户端继续探索，目前仍是开放问题。
+- [ ] **浏览器平台限制持续关注**：持续跟进浏览器 API 变化、平台能力边界与浏览器自身 bug 修复，相关约束和取舍见 [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md)。
 
 ### 相关文档
 - [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)：当前项目结构与模块定位
@@ -109,6 +110,7 @@ It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com
 - [ ] **More languages**: the current UI was mainly built around Chinese and English. Traditional Chinese, French, Russian, Spanish, Arabic, Japanese, Korean, and other languages are welcome as community contributions. See [`docs/LIMITATIONS_AND_COMPROMISES.md#4`](docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建).
 - [ ] **Documentation co-building**: contributions are welcome for `AGENTS.md` / `CLAUDE.md` rule files, so different AI clients can better understand sync packages, output formats, and analysis boundaries. See [`AGENTS_template`](Bookmark-Record-Recommend-main/history_html/AGENTS_template/).
 - [ ] **Ecosystem and possible clients**: the Bookmark Canvas link, recommendation packages, AI analysis results, and possible standalone clients are still open areas.
+- [ ] **Browser platform limitations tracking**: continue tracking browser API changes, platform capability boundaries, and browser bug fixes. See [`docs/LIMITATIONS_AND_COMPROMISES.md`](docs/LIMITATIONS_AND_COMPROMISES.md).
 
 ### Docs
 - [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md): current project structure and module map
