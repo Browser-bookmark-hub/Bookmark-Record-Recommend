@@ -31,15 +31,9 @@ Please open the GitHub repository page and refer to the screenshots in [`Screens
 
 ### Changelog
 > [!NOTE]
-> #### v0.4.5
-> - **Persistent browsing-history upgrade**: the browsing-record path moved from direct History API reads to local persistent caches and maintenance buckets, allowing click history to go beyond the previous roughly 90-day window; sync, deletion, migration, and repair logic were rebuilt around that.
-> - **Export ecosystem and Bookmark Canvas compatibility**: exports now cover click rankings, related records, active tracking, time rankings, review queues, and add-to-review flows; JSON exports include note semantics and temporary-section structures for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas).
-> - **Default shortcut changes**:
->   - `Ctrl/Command+Shift+6`: activate the extension.
->   - `Ctrl/Command+Shift+7`: open the recommendation view.
->   - `Ctrl/Command+Shift+8`: open the records view.
->   - `Ctrl/Command+Shift+9`: quick review the next card.
-> - **UX and performance fixes**: related records now use a lighter sliding/lazy window to reduce jank on large datasets; smaller fixes also cover widget UI, hardware acceleration, favicon deletion, and folded-queue cleanup.
+> #### v0.4.8
+> - **Export ecosystem expansion**: Push & Analyze and manual exports can target GitHub, local files, or both. GitHub manual exports are organized under `manual-export/<category>/<date>/` and remain separate from normal sync and pull flows. Related Records now supports right-click context exports for any item, configurable before/after ranges, and preserved orange-selection semantics; Click Ranking adds single-item exports.
+> - **UX and documentation polish**: recommendation modes now include notes on backup/restore and S-score recalculation; favicon warm-up is capped at 150 unique domains; bookmark-event API audit and multilingual documentation groundwork were added.
 
 ### Core Algorithms
 Most views, filters, and exports can be rebuilt from the raw bookmark tree, browsing history, plus data processing or AI analysis. The three sections below are the plugin's real core: Bookmark Recommendation S-Score, Active-Time Tracking, and the Local Browsing-History Library. Replacing them would still require substantial state maintenance and algorithm code. The code blocks are core examples extracted from the current implementation; full logic lives in the linked modules.
