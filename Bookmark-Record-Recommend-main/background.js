@@ -1929,7 +1929,10 @@ function setupAutoBookmarkOpenMonitoring() {
           source: 'browser_auto_bookmark'
         });
 
-        syncBrowsingHistoryCacheForUrls([url], { reason: 'auto-bookmark-navigation' }).catch((error) => {
+        syncBrowsingHistoryCacheForUrls([url], {
+          reason: 'auto-bookmark-navigation',
+          repairRecommendScores: false
+        }).catch((error) => {
           console.warn('[Background][HistoryCache] auto-bookmark url sync failed:', error);
         });
 
@@ -1981,9 +1984,15 @@ const BROWSING_HISTORY_MAX_VISITS_PER_URL = 400;
 const BROWSING_HISTORY_LOOKBACK_DAYS = 0;
 const BROWSING_HISTORY_PARTIAL_DELETE_PROTECT_DAYS = 90;
 const BROWSING_HISTORY_REBUILD_FLUSH_DAYS = 10;
+// 自动对账只回看上次成功整段校准的边界附近，避免每次打开都重扫固定天数。
+// 首次建库、手动校准及无法定位范围的删除仍沿用 90 天热区。
+const BROWSING_HISTORY_SYNC_BOUNDARY_BUFFER_MS = 5 * 60 * 1000;
+const BROWSING_HISTORY_MAX_AUTO_CALIBRATION_LOOKBACK_DAYS = 90;
+const BROWSING_HISTORY_BOOKMARK_VISIT_DIRTY_REASON = 'history-bookmark-visited';
 
 const BROWSING_CALIBRATION_SETTINGS_KEY = 'browsingCalibrationSettings';
 const BROWSING_CALIBRATION_STATE_KEY = 'browsingCalibrationState';
+const BROWSING_HISTORY_OPEN_REFRESH_DIRTY_KEY = 'browsingHistoryOpenRefreshDirty';
 const DEFAULT_BROWSING_CALIBRATION_SETTINGS = {
   autoEnabled: true,
   deleteThreshold: 50,
@@ -2007,6 +2016,7 @@ let browsingHistoryCacheDbPromise = null;
 let browsingHistoryLegacyDiscardPromise = null;
 let browsingHistoryLegacyDiscardFinished = false;
 let browsingHistoryLibrarySeedPromise = null;
+let browsingHistoryOpenRefreshDirtyState = null;
 
 const HISTORY_BACKGROUND_SYNC_ALARM = 'bb_history_background_sync_v1';
 const HISTORY_BACKGROUND_SYNC_RETRY_ALARM = 'bb_history_background_sync_retry_v1';
@@ -2053,6 +2063,7 @@ function isAdaptiveBrowsingHistoryCalibrationReason(reason = '') {
   const safeReason = String(reason || '');
   return safeReason === 'background-alarm-sync'
     || safeReason === 'background-alarm-retry'
+    || safeReason === 'ui-open-dirty-history-refresh'
     || safeReason === 'sync-push-before-collect'
     || safeReason.endsWith('-threshold')
     || safeReason === 'history-delete-without-url-list';
@@ -3236,6 +3247,51 @@ async function saveBrowsingCalibrationState(state) {
   }
 }
 
+async function getBrowsingHistoryOpenRefreshDirtyState() {
+  if (browsingHistoryOpenRefreshDirtyState) return browsingHistoryOpenRefreshDirtyState;
+  try {
+    const result = await browserAPI.storage.local.get([BROWSING_HISTORY_OPEN_REFRESH_DIRTY_KEY]);
+    const stored = result?.[BROWSING_HISTORY_OPEN_REFRESH_DIRTY_KEY];
+    browsingHistoryOpenRefreshDirtyState = stored && typeof stored === 'object'
+      ? { dirty: stored.dirty === true, reason: String(stored.reason || ''), changedAt: Number(stored.changedAt || 0) || 0 }
+      // 兼容已有安装：第一次打开先校准一次，随后只在真实变化后再校准。
+      : { dirty: true, reason: 'initial-open-refresh', changedAt: 0 };
+  } catch (_) {
+    browsingHistoryOpenRefreshDirtyState = { dirty: true, reason: 'dirty-state-unavailable', changedAt: 0 };
+  }
+  return browsingHistoryOpenRefreshDirtyState;
+}
+
+async function setBrowsingHistoryOpenRefreshDirty(dirty, reason = '') {
+  const next = {
+    dirty: dirty === true,
+    reason: String(reason || ''),
+    changedAt: Date.now()
+  };
+  browsingHistoryOpenRefreshDirtyState = next;
+  try {
+    await browserAPI.storage.local.set({ [BROWSING_HISTORY_OPEN_REFRESH_DIRTY_KEY]: next });
+  } catch (error) {
+    console.warn('[Background][HistoryCache] save open-refresh dirty state failed:', error);
+  }
+  return next;
+}
+
+async function markBrowsingHistoryOpenRefreshDirty(reason = 'history-changed') {
+  const current = await getBrowsingHistoryOpenRefreshDirtyState();
+  // 校准进行中仍须记录新的访问/删除，避免旧校准完成后误把新变更清为 clean。
+  if (current.dirty && !browsingCalibrationInProgress) return current;
+  return setBrowsingHistoryOpenRefreshDirty(true, reason);
+}
+
+async function clearBrowsingHistoryOpenRefreshDirtyIfUnchanged(calibrationStartedAt, reason = '') {
+  const current = await getBrowsingHistoryOpenRefreshDirtyState();
+  if (current.dirty && Number(current.changedAt || 0) > Number(calibrationStartedAt || 0)) {
+    return current;
+  }
+  return setBrowsingHistoryOpenRefreshDirty(false, reason);
+}
+
 async function resetBrowsingCalibrationState(reason = 'manual') {
   const state = await getBrowsingCalibrationState();
   const nextState = {
@@ -3267,6 +3323,13 @@ async function runScheduledBrowsingHistoryCalibration({ settings, reason = 'back
   const now = Date.now();
   const state = await getBrowsingCalibrationState();
   const todayKey = getHistoryDateKey(now);
+
+  // 定时任务是兜底，不应在历史库没有变化时每天重新扫描普通网页浏览记录。
+  // 首次安装、书签访问的增量同步失败、删除等情况会保留 dirty，仍会进入下面的校准。
+  const dirtyState = await getBrowsingHistoryOpenRefreshDirtyState();
+  if (dirtyState.dirty !== true) {
+    return { success: true, skipped: 'history-library-clean' };
+  }
 
   if (dedupeToday && state.lastScheduledCalibrationDate === todayKey) {
     return { success: true, skipped: 'already-scheduled-today' };
@@ -3415,7 +3478,10 @@ function normalizeBrowsingHistoryRecordsMap(recordsMap) {
   return normalized;
 }
 
-async function syncBrowsingHistoryCacheForUrls(urls = [], { reason = 'history-url-sync' } = {}) {
+async function syncBrowsingHistoryCacheForUrls(urls = [], {
+  reason = 'history-url-sync',
+  repairRecommendScores = true
+} = {}) {
   if (!browserAPI?.history || typeof browserAPI.history.getVisits !== 'function') {
     return { success: false, skipped: 'history-getVisits-unavailable' };
   }
@@ -3520,7 +3586,7 @@ async function syncBrowsingHistoryCacheForUrls(urls = [], { reason = 'history-ur
 
   const ok = await mergeBrowsingHistoryCacheRecordsMap(recordsByDate, now);
   if (ok) {
-    notifyBrowsingHistoryCacheChanged(reason, false);
+    notifyBrowsingHistoryCacheChanged(reason, false, { repairRecommendScores });
   }
   return { success: ok, addedCount, urlCount: urlList.length };
 }
@@ -3581,7 +3647,10 @@ function scheduleBrowsingHistoryUrlSyncForInteraction(urls = [], reason = 'inter
     const syncStartedAt = Date.now();
     pendingUrls.forEach(url => browsingHistoryInteractionLastSyncAt.set(url, syncStartedAt));
     browsingHistoryInteractionUrlSyncInFlight = true;
-    syncBrowsingHistoryCacheForUrls(pendingUrls, { reason: browsingHistoryInteractionPendingReason })
+    syncBrowsingHistoryCacheForUrls(pendingUrls, {
+      reason: browsingHistoryInteractionPendingReason,
+      repairRecommendScores: false
+    })
       .catch((error) => {
         console.warn('[Background][HistoryCache] interaction url sync failed:', error);
       })
@@ -3610,18 +3679,19 @@ async function rebuildBrowsingHistoryCache(reason = 'auto') {
   // 1. 读取上次同步时间
   const lastSyncTime = await readBrowsingHistoryLastSyncTime();
 
-  // 2. 智能、自适应拉取范围：
-  // 自动触发的校准根据上次同步至今流逝的时间动态调整拉取范围
-  // (最少 3 天，最多 90 天，额外加上 2 天作为网络/时区缓冲)。
-  // 手动校准仍保留 90 天热区对齐，用于用户明确要求的一次性完整校准。
-  let scanDays = 90;
-  if (isAdaptiveBrowsingHistoryCalibrationReason(reason) && lastSyncTime > 0) {
-    const timePassedMs = now - lastSyncTime;
-    const timePassedDays = Math.ceil(timePassedMs / (24 * 60 * 60 * 1000));
-    scanDays = Math.min(90, Math.max(3, timePassedDays + 2));
+  // 2. 自动校准从上次成功整段校准的边界继续读取，只给边界预留很小缓冲。
+  // 这样一小时前的书签访问不会在下次打开时重复重建 3 天历史。
+  // 首次建库、手动校准和无法定位删除范围的场景仍使用 90 天热区。
+  const maxAutoLookbackMs = BROWSING_HISTORY_MAX_AUTO_CALIBRATION_LOOKBACK_DAYS * BROWSING_HISTORY_DAY_MS;
+  let apiCutoffTime = now - maxAutoLookbackMs;
+  const canUseLastSyncBoundary = isAdaptiveBrowsingHistoryCalibrationReason(reason)
+    && reason !== 'history-delete-without-url-list';
+  if (canUseLastSyncBoundary && lastSyncTime > 0) {
+    apiCutoffTime = Math.max(
+      now - maxAutoLookbackMs,
+      lastSyncTime - BROWSING_HISTORY_SYNC_BOUNDARY_BUFFER_MS
+    );
   }
-  const scanLimitMs = scanDays * 24 * 60 * 60 * 1000;
-  const apiCutoffTime = now - scanLimitMs;
 
   const lookbackMs = (typeof BROWSING_HISTORY_LOOKBACK_DAYS === 'number' && BROWSING_HISTORY_LOOKBACK_DAYS > 0)
     ? BROWSING_HISTORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
@@ -3864,10 +3934,13 @@ async function runBrowsingHistoryCalibration({ reason = 'auto', clearOnly = fals
     }
   }
 
+  const calibrationStartedAt = Date.now();
   browsingCalibrationInProgress = true;
   try {
     if (clearOnly) {
       await resetBrowsingHistoryCache(Date.now());
+      await clearBrowsingHistoryOpenRefreshDirtyIfUnchanged(calibrationStartedAt, `cleared:${reason}`);
+      queueRecommendScoresCacheRepair(`history-calibration:${reason}`);
       try {
         browserAPI.runtime.sendMessage({
           action: 'browsingCalibrationCompleted',
@@ -3878,6 +3951,8 @@ async function runBrowsingHistoryCalibration({ reason = 'auto', clearOnly = fals
     }
     const ok = await rebuildBrowsingHistoryCache(reason);
     if (ok) {
+      await clearBrowsingHistoryOpenRefreshDirtyIfUnchanged(calibrationStartedAt, `calibrated:${reason}`);
+      queueRecommendScoresCacheRepair(`history-calibration:${reason}`);
       try {
         browserAPI.runtime.sendMessage({
           action: 'browsingCalibrationCompleted',
@@ -3971,9 +4046,10 @@ async function recordInteractionForCalibration(payload = {}) {
   await saveBrowsingCalibrationState(nextState);
 }
 
-function notifyBrowsingHistoryCacheChanged(reason = 'history-cache-updated', clearOnly = false) {
+function notifyBrowsingHistoryCacheChanged(reason = 'history-cache-updated', clearOnly = false, options = {}) {
+  const repairRecommendScores = options?.repairRecommendScores !== false;
   try {
-    if (!clearOnly) {
+    if (!clearOnly && repairRecommendScores) {
       queueRecommendScoresCacheRepair(`history-cache:${reason || 'updated'}`);
     }
   } catch (_) { }
@@ -3981,7 +4057,7 @@ function notifyBrowsingHistoryCacheChanged(reason = 'history-cache-updated', cle
   try {
     const maybePromise = browserAPI.runtime.sendMessage({
       action: 'browsingCalibrationCompleted',
-      payload: { reason, clearOnly }
+      payload: { reason, clearOnly, repairRecommendScores }
     });
     if (maybePromise && typeof maybePromise.catch === 'function') {
       maybePromise.catch(() => {});
@@ -3993,6 +4069,8 @@ async function handleBrowsingHistoryVisitRemoved(details = {}) {
   const urls = Array.isArray(details?.urls) ? details.urls.filter(Boolean) : [];
   const allHistory = !!details?.allHistory;
   let immediateCalibrationSucceeded = false;
+
+  await markBrowsingHistoryOpenRefreshDirty('history-visit-removed');
 
   if (!allHistory && urls.length > 0) {
     const partialDeleteCutoff = getBrowsingHistoryPartialDeleteCutoff();
@@ -5954,7 +6032,13 @@ async function recordRecommendReviewState(bookmarkId, options = {}) {
     ? task()
     : runSerializedRecommendStateMutation(RECOMMEND_STATE_MUTATION_CHANNEL, task));
 
+  const scoreRecomputeWasRunning = isComputingScores;
   await updateSingleBookmarkScore(id);
+  // 全量重算可能已在复习前读取了旧 reviewData；等它结束后再补一次，
+  // 避免旧批次最后写入时覆盖刚完成复习的 S 值。
+  if (scoreRecomputeWasRunning || isComputingScores) {
+    scheduleRecomputeAllScoresSoon('review-during-score-recompute', { forceFull: true });
+  }
 
   return state;
 }
@@ -7704,7 +7788,7 @@ async function backfillScoreHistoryForBookmarks(bookmarks = [], reason = 'score-
     return { success: true, skipped: 'too-many-urls', urlCount: urls.length };
   }
   try {
-    return await syncBrowsingHistoryCacheForUrls(urls, { reason });
+    return await syncBrowsingHistoryCacheForUrls(urls, { reason, repairRecommendScores: false });
   } catch (error) {
     console.warn('[S-score] score history batch backfill failed:', error);
     return { success: false, error: error?.message || String(error), urlCount: urls.length };
@@ -8355,41 +8439,89 @@ async function updateBookmarkScoresByIds(ids) {
 }
 
 let pendingUrlUpdates = new Set();
+let pendingBookmarkVisitScoreUrls = new Set();
 let urlUpdateTimer = null;
+let urlUpdateInFlight = false;
 
-async function scheduleScoreUpdateByUrl(url) {
+async function clearBookmarkVisitHistoryDirtyIfSettled() {
+  if (pendingBookmarkVisitScoreUrls.size > 0 || urlUpdateTimer || urlUpdateInFlight) return;
+  const state = await getBrowsingHistoryOpenRefreshDirtyState();
+  if (!state?.dirty || state.reason !== BROWSING_HISTORY_BOOKMARK_VISIT_DIRTY_REASON) return;
+  if (browsingCalibrationInProgress) return;
+  await setBrowsingHistoryOpenRefreshDirty(false, 'incremental-bookmark-history-synced');
+}
+
+async function scheduleScoreUpdateByUrl(url, options = {}) {
   if (isBookmarkImporting || isBookmarkBulkChanging) return;
   if (!url) return;
   pendingUrlUpdates.add(url);
+  if (options?.historyBookmarkVisit === true) {
+    pendingBookmarkVisitScoreUrls.add(url);
+  }
 
   if (urlUpdateTimer) clearTimeout(urlUpdateTimer);
 
   urlUpdateTimer = setTimeout(async () => {
     const urls = [...pendingUrlUpdates];
     pendingUrlUpdates.clear();
+    const bookmarkVisitUrls = new Set(pendingBookmarkVisitScoreUrls);
+    pendingBookmarkVisitScoreUrls.clear();
     urlUpdateTimer = null;
+    urlUpdateInFlight = true;
+    let bookmarkVisitBatchCanClearDirty = bookmarkVisitUrls.size === 0;
 
     try {
       const urlKeySet = new Set(urls.map(normalizeScoreUrlKey).filter(Boolean));
-      if (urlKeySet.size === 0) return;
+      if (urlKeySet.size === 0) {
+        bookmarkVisitBatchCanClearDirty = true;
+        if (bookmarkVisitUrls.size > 0) await clearBookmarkVisitHistoryDirtyIfSettled();
+        return;
+      }
 
       const indexReady = await ensureBookmarkUrlIndex();
       if (indexReady) {
         const idSet = new Set();
+        const matchedUrls = [];
         for (const key of urlKeySet) {
           const ids = bookmarkUrlIndex.get(key);
           if (ids) {
             ids.forEach(id => idSet.add(id));
+            for (const url of urls) {
+              if (normalizeScoreUrlKey(url) === key) matchedUrls.push(url);
+            }
           }
         }
-        if (idSet.size === 0) return;
+        if (idSet.size === 0) {
+          // 事件到达后书签已被删除时，已不再有任何书签派生数据需要同步。
+          bookmarkVisitBatchCanClearDirty = true;
+          if (bookmarkVisitUrls.size > 0) await clearBookmarkVisitHistoryDirtyIfSettled();
+          return;
+        }
+        let historySynced = false;
         try {
-          await syncBrowsingHistoryCacheForUrls(urls, { reason: 'score-url-visited-history-backfill' });
+          const result = await syncBrowsingHistoryCacheForUrls(matchedUrls, {
+            reason: 'score-url-visited-history-backfill',
+            // 这里随后会按命中的书签做单条更新，不能再把一次普通访问升级成全量 S 修复。
+            repairRecommendScores: false
+          });
+          historySynced = result?.success === true && result?.addedCount > 0;
         } catch (error) {
           console.warn('[S-score] visited url history backfill failed:', error);
         }
+        // 对浏览器 onVisited 而言，原始访问明细未写入时不能用旧库覆盖 S 值；
+        // 保留 dirty，由下次打开/定时兜底校准后再修复。
+        if (bookmarkVisitUrls.size > 0 && !historySynced) return;
+        let scoreUpdateFailed = false;
         for (const bookmarkId of idSet) {
-          await updateSingleBookmarkScore(bookmarkId, { skipHistoryBackfill: true });
+          const updated = await updateSingleBookmarkScore(bookmarkId, { skipHistoryBackfill: true });
+          if (updated !== true) scoreUpdateFailed = true;
+        }
+        if (scoreUpdateFailed) {
+          queueRecommendScoresCacheRepair('incremental-bookmark-score-update-failed');
+        }
+        if (bookmarkVisitUrls.size > 0 && historySynced) {
+          bookmarkVisitBatchCanClearDirty = true;
+          await clearBookmarkVisitHistoryDirtyIfSettled();
         }
         return;
       }
@@ -8407,15 +8539,45 @@ async function scheduleScoreUpdateByUrl(url) {
       }
       traverse(tree);
 
+      let scoreUpdateFailed = false;
+      let historySynced = false;
+      const bookmarkVisitUrlKeys = new Set(
+        Array.from(bookmarkVisitUrls).map(normalizeScoreUrlKey).filter(Boolean)
+      );
+      let bookmarkVisitSyncFailed = false;
       for (const bookmark of bookmarks) {
+        let bookmarkHistorySynced = false;
         try {
-          await syncBrowsingHistoryCacheForUrls([bookmark.url], { reason: 'score-url-visited-history-backfill' });
+          const result = await syncBrowsingHistoryCacheForUrls([bookmark.url], {
+            reason: 'score-url-visited-history-backfill',
+            repairRecommendScores: false
+          });
+          bookmarkHistorySynced = result?.success === true && result?.addedCount > 0;
+          historySynced = historySynced || bookmarkHistorySynced;
         } catch (error) {
           console.warn('[S-score] visited bookmark history backfill failed:', error);
         }
-        await updateSingleBookmarkScore(bookmark.id, { skipHistoryBackfill: true });
+        const isPendingBookmarkVisit = bookmarkVisitUrlKeys.has(normalizeScoreUrlKey(bookmark.url));
+        if (isPendingBookmarkVisit && !bookmarkHistorySynced) {
+          bookmarkVisitSyncFailed = true;
+          continue;
+        }
+        const updated = await updateSingleBookmarkScore(bookmark.id, { skipHistoryBackfill: true });
+        if (updated !== true) scoreUpdateFailed = true;
+      }
+      if (scoreUpdateFailed) {
+        queueRecommendScoresCacheRepair('incremental-bookmark-score-update-failed');
+      }
+      if (bookmarkVisitUrls.size > 0 && historySynced && !bookmarkVisitSyncFailed) {
+        bookmarkVisitBatchCanClearDirty = true;
+        await clearBookmarkVisitHistoryDirtyIfSettled();
       }
     } catch (e) {
+    } finally {
+      urlUpdateInFlight = false;
+      if (bookmarkVisitUrls.size > 0 && bookmarkVisitBatchCanClearDirty) {
+        await clearBookmarkVisitHistoryDirtyIfSettled();
+      }
     }
   }, 1000);
 }
@@ -9027,11 +9189,40 @@ ensureBookmarkUrlIndex().catch(() => {});
 ensureBrowsingHistoryLibrarySeeded({ reason: 'background-init' }).catch(() => {});
 ensureHistoryBackgroundSyncAlarm().catch(() => {});
 
+async function handleVisitedBookmarkHistory(url) {
+  const safeUrl = String(url || '').trim();
+  const urlKey = normalizeScoreUrlKey(safeUrl);
+  if (!urlKey) return;
+
+  let matched = false;
+  let indexAvailable = false;
+  try {
+    const indexReady = await ensureBookmarkUrlIndex();
+    indexAvailable = indexReady === true;
+    matched = indexAvailable && (bookmarkUrlIndex.get(urlKey)?.size || 0) > 0;
+  } catch (_) { }
+
+  // 只有索引冷启动失败时才用书签 API 做一次精确兜底；
+  // 索引已就绪但未命中时绝不能为每个普通网页额外查询书签树。
+  if (!matched && !indexAvailable) {
+    try {
+      const matches = await browserAPI.bookmarks.search({ url: safeUrl });
+      matched = Array.isArray(matches) && matches.some(item => !!item?.url);
+    } catch (_) { }
+  }
+  if (!matched) return;
+
+  // 只有命中书签的访问才会进入自动书签历史链路。
+  // 该标记是 URL 增量同步失败/后台被挂起时的持久化兜底。
+  await markBrowsingHistoryOpenRefreshDirty(BROWSING_HISTORY_BOOKMARK_VISIT_DIRTY_REASON);
+  scheduleScoreUpdateByUrl(safeUrl, { historyBookmarkVisit: true });
+  invalidateScoreDebugHistoryStatsCache();
+}
+
   if (browserAPI.history && browserAPI.history.onVisited) {
     browserAPI.history.onVisited.addListener((result) => {
       if (result && result.url) {
-        scheduleScoreUpdateByUrl(result.url);
-        invalidateScoreDebugHistoryStatsCache();
+        handleVisitedBookmarkHistory(result.url).catch(() => {});
       }
     });
   }
@@ -9044,7 +9235,10 @@ browserAPI.bookmarks.onCreated.addListener((id, bookmark) => {
   if (bookmark.url) {
     addBookmarkToUrlIndex(bookmark);
     queueBookmarkScoreMutation(id, 'created');
-    syncBrowsingHistoryCacheForUrls([bookmark.url], { reason: 'bookmark-created-history-backfill' }).catch((error) => {
+    syncBrowsingHistoryCacheForUrls([bookmark.url], {
+      reason: 'bookmark-created-history-backfill',
+      repairRecommendScores: false
+    }).catch((error) => {
       console.warn('[Background][HistoryCache] bookmark created history sync failed:', error);
     });
   }
@@ -9095,7 +9289,10 @@ browserAPI.bookmarks.onChanged.addListener((id, changeInfo) => {
       // or the user explicitly purges local records.
       (async () => {
         if (syncUrls.length) {
-          await syncBrowsingHistoryCacheForUrls(syncUrls, { reason: 'bookmark-url-changed-history-backfill' });
+          await syncBrowsingHistoryCacheForUrls(syncUrls, {
+            reason: 'bookmark-url-changed-history-backfill',
+            repairRecommendScores: false
+          });
         }
       })().catch((error) => {
         console.warn('[Background][HistoryCache] bookmark url change sync failed:', error);
@@ -9805,6 +10002,43 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (action === 'ensureBrowsingHistoryCalibrationOnUiOpen') {
+    (async () => {
+      try {
+        const dirtyState = await getBrowsingHistoryOpenRefreshDirtyState();
+        if (dirtyState.dirty !== true) {
+          sendResponse({ success: true, calibrated: false, skipped: 'history-library-clean' });
+          return;
+        }
+
+        // 书签访问正在走 1 秒合并的 URL 增量同步时，不抢跑一轮整段校准。
+        // 同步完成会主动通知前端刷新；失败则保留 dirty，供下次打开或手动校准兜底。
+        if (
+          dirtyState.reason === BROWSING_HISTORY_BOOKMARK_VISIT_DIRTY_REASON
+          && (urlUpdateTimer || urlUpdateInFlight || pendingBookmarkVisitScoreUrls.size > 0)
+        ) {
+          sendResponse({ success: true, calibrated: false, skipped: 'bookmark-url-sync-pending' });
+          return;
+        }
+
+        const reason = dirtyState.reason === 'initial-open-refresh'
+          ? 'ui-open-initial-history-refresh'
+          : 'ui-open-dirty-history-refresh';
+        const ok = await runBrowsingHistoryCalibration({
+          reason,
+          requireIdle: false
+        });
+        if (ok) {
+          await resetBrowsingCalibrationState(reason);
+        }
+        sendResponse({ success: ok === true, calibrated: ok === true });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (action === 'ensureBrowsingHistoryBackgroundSyncAlarm') {
     (async () => {
       try {
@@ -9866,7 +10100,10 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        await syncBrowsingHistoryCacheForUrls([url], { reason: 'attributed-bookmark-open-history-backfill' });
+        await syncBrowsingHistoryCacheForUrls([url], {
+          reason: 'attributed-bookmark-open-history-backfill',
+          repairRecommendScores: false
+        });
         sendResponse({ success: true });
       } catch (e) {
         sendResponse({ success: false, error: e?.message || String(e) });

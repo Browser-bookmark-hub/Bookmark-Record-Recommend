@@ -463,6 +463,8 @@ let saveAdditionsWidgetsSnapshotTimer = null;
 let browsingHistoryRefreshPromise = null;
 let browsingHistoryCacheRefreshPromise = null;
 let browsingHistoryCacheRefreshTimer = null;
+let browsingHistoryOpenRefreshPromise = null;
+let browsingHistoryOpenRefreshTimer = null;
 let browsingHistorySearchCalibrationPromise = null;
 let browsingHistorySearchCalibrationLastRequestedAt = 0;
 let browsingHistorySearchCalibrationTimer = null;
@@ -1202,7 +1204,11 @@ async function reloadBrowsingHistoryInstanceFromCache(inst) {
 }
 
 async function refreshBrowsingHistoryData(options = {}) {
-    const { forceFull = false, silent = false } = options;
+    const {
+        forceFull = false,
+        silent = false,
+        reason = 'manual-foreground-refresh'
+    } = options;
     const inst = window.browsingHistoryCalendarInstance;
     if (!inst) {
         return;
@@ -1220,7 +1226,7 @@ async function refreshBrowsingHistoryData(options = {}) {
         try {
             if (forceFull) {
                 const result = await requestBrowsingHistoryBackgroundCalibration({
-                    reason: 'manual-foreground-refresh',
+                    reason,
                     requireIdle: false
                 });
                 if (!result?.success) {
@@ -1304,6 +1310,33 @@ function cancelScheduledBrowsingHistoryCacheRefresh() {
     if (!browsingHistoryCacheRefreshTimer) return;
     clearTimeout(browsingHistoryCacheRefreshTimer);
     browsingHistoryCacheRefreshTimer = null;
+}
+
+// 每次打开侧边栏或 history 页面时，让后台检查浏览历史是否已变脏。
+// 只有浏览器历史发生过真实变化才会校准；首屏不等待，完成后统一刷新派生数据。
+function scheduleBrowsingHistoryOpenRefresh() {
+    if (browsingHistoryOpenRefreshPromise || browsingHistoryOpenRefreshTimer) return;
+
+    browsingHistoryOpenRefreshTimer = setTimeout(() => {
+        browsingHistoryOpenRefreshTimer = null;
+        browsingHistoryOpenRefreshPromise = (async () => {
+            try {
+                const result = await sendRuntimeMessage({
+                    action: 'ensureBrowsingHistoryCalibrationOnUiOpen'
+                });
+                if (!result?.success || result.calibrated !== true) return;
+
+                if (!window.browsingHistoryCalendarInstance && typeof initBrowsingHistoryCalendar === 'function') {
+                    initBrowsingHistoryCalendar();
+                }
+                await refreshBrowsingHistoryFromCache({ silent: true });
+            } catch (error) {
+                console.warn('[BrowsingHistory] 打开页面时校准失败:', error);
+            } finally {
+                browsingHistoryOpenRefreshPromise = null;
+            }
+        })();
+    }, 0);
 }
 
 // =================================================================================
@@ -8086,6 +8119,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (isViewAllowed('additions') || isViewAllowed('recommend') || isViewAllowed('widgets')) {
         setupBrowsingHistoryRealtimeListeners();
     }
+
+    // 不阻塞首屏：页面已经完成初始渲染后，再检查并按需校准浏览器历史库。
+    // 校准完成会走现有的缓存失效与小组件刷新链路。
+    scheduleBrowsingHistoryOpenRefresh();
 
 
 });
