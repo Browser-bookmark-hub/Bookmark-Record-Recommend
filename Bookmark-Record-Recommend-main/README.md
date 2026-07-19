@@ -1,4 +1,4 @@
-## Switch to [中文文档](../docs/README/README.zh.md)...
+## Switch to [中文文档](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/README/README.zh.md)...
 
 [![Linux.do](https://img.shields.io/badge/Linux.do-Portfolio-FFD700?logo=discourse&logoColor=white)](https://linux.do/u/kk1/activity/portfolio)
 [![GitHub Releases](https://img.shields.io/github/v/release/Browser-bookmark-hub/Bookmark-Record-Recommend?logo=github&logoColor=white&label=GitHub+Releases)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
@@ -9,7 +9,7 @@
 `Bookmark Record and Recommend` is an enhanced extension for power bookmark users. It reawakens your knowledge base through three core engines: "Bookmark Records", "Smart Recommendations", and "AI Push".
 It uses an S-Score algorithm for dynamic recommendations and processes all complex data computations locally. The "raw data + computed results" can be downloaded locally or synced to GitHub, allowing AI to perform deep analysis out-of-the-box using `AGENTS.md` / `CLAUDE.md` rules, bypassing the heavy raw computation burden.
 
-It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas), with [exported JSON files](../docs/PUSH_AND_ANALYZE_STRUCTURE.md) compatible with Bookmark Canvas import formats for temporary sections and notes.
+It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas), with [exported JSON files](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/PUSH_AND_ANALYZE_STRUCTURE.md) compatible with Bookmark Canvas import formats for temporary sections and notes.
 
 ### Preview
 
@@ -17,17 +17,17 @@ It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com
 Please open the GitHub repository page and refer to the screenshots in [`Screenshots and icons`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/tree/main/Screenshots%20and%20icons).
 
 ### Roadmap
-- [ ] **More languages**: the current UI was mainly built around Chinese and English. Traditional Chinese, French, Russian, Spanish, Arabic, Japanese, Korean, and other languages are welcome as community contributions. README translations can be added under [`../docs/README/`](../docs/README/). See [`../docs/LIMITATIONS_AND_COMPROMISES.md#4`](../docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建).
-- [ ] **Documentation co-building**: contributions are welcome for `AGENTS.md` / `CLAUDE.md` rule files, so different AI clients can better understand sync packages, output formats, and analysis boundaries. See [`AGENTS_template`](history_html/AGENTS_template/).
+- [ ] **More languages**: the current UI was mainly built around Chinese and English. Traditional Chinese, French, Russian, Spanish, Arabic, Japanese, Korean, and other languages are welcome as community contributions. README translations can be added under [`docs/README/`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/tree/main/docs/README). See [`docs/LIMITATIONS_AND_COMPROMISES.md#4`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/LIMITATIONS_AND_COMPROMISES.md#4-语言切换与新增语言需要重构或共建).
+- [ ] **Documentation co-building**: contributions are welcome for `AGENTS.md` / `CLAUDE.md` rule files, so different AI clients can better understand sync packages, output formats, and analysis boundaries. See [`AGENTS_template`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/tree/main/Bookmark-Record-Recommend-main/history_html/AGENTS_template).
 - [ ] **Ecosystem and data processing**: continue exploring Bookmark Canvas integration, recommendation packages, AI analysis results, CLI tools for data processing, and local knowledge-base / RAG directions; this is still exploratory.
-- [ ] **Browser platform limitations tracking**: continue tracking browser API changes, platform capability boundaries, and browser bug fixes. See [`../docs/LIMITATIONS_AND_COMPROMISES.md`](../docs/LIMITATIONS_AND_COMPROMISES.md).
+- [ ] **Browser platform limitations tracking**: continue tracking browser API changes, platform capability boundaries, and browser bug fixes. See [`docs/LIMITATIONS_AND_COMPROMISES.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/LIMITATIONS_AND_COMPROMISES.md).
 
 ### Docs
-- [`../docs/PROJECT_STRUCTURE.md`](../docs/PROJECT_STRUCTURE.md): current project structure and module map
-- [`../docs/S_SCORE_ALGORITHM_V6_4.md`](../docs/S_SCORE_ALGORITHM_V6_4.md): current S-score v6.4, maintained buckets, and push structure
-- [`../docs/PUSH_AND_ANALYZE_STRUCTURE.md`](../docs/PUSH_AND_ANALYZE_STRUCTURE.md): Push & Analyze structure preview
-- [`../docs/LIMITATIONS_AND_COMPROMISES.md`](../docs/LIMITATIONS_AND_COMPROMISES.md): limitations and implementation compromises
-- [`../docs/归档/00--归档索引-请先读.md`](../docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md): historical archive index and deletion candidates
+- [`docs/PROJECT_STRUCTURE.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/PROJECT_STRUCTURE.md): current project structure and module map
+- [`docs/S_SCORE_ALGORITHM_V6_4.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/S_SCORE_ALGORITHM_V6_4.md): current S-score v6.4, maintained buckets, and push structure
+- [`docs/PUSH_AND_ANALYZE_STRUCTURE.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/PUSH_AND_ANALYZE_STRUCTURE.md): Push & Analyze structure preview
+- [`docs/LIMITATIONS_AND_COMPROMISES.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/LIMITATIONS_AND_COMPROMISES.md): limitations and implementation compromises
+- [`docs/归档/00--归档索引-请先读.md`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/%E5%BD%92%E6%A1%A3/00--%E5%BD%92%E6%A1%A3%E7%B4%A2%E5%BC%95-%E8%AF%B7%E5%85%88%E8%AF%BB.md): historical archive index and deletion candidates
 
 ### Changelog
 > [!NOTE]
@@ -39,7 +39,7 @@ Please open the GitHub repository page and refer to the screenshots in [`Screens
 Most views, filters, and exports can be rebuilt from the raw bookmark tree, browsing history, plus data processing or AI analysis. The three sections below are the plugin's real core: Bookmark Recommendation S-Score, Active-Time Tracking, and the Local Browsing-History Library. Replacing them would still require substantial state maintenance and algorithm code. The code blocks are core examples extracted from the current implementation; full logic lives in the linked modules.
 
 #### Bookmark Recommendation S-Score
-Full implementation: [`background.js`](background.js).
+Full implementation: [`background.js`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/Bookmark-Record-Recommend-main/background.js).
 
 ```js
 function calculateFactorValue(value, threshold, inverse = false) {
@@ -78,7 +78,7 @@ const S = Math.max(0, Math.min(1, basePriority * R));
 ```
 
 #### Active-Time Tracking
-Full implementation: [`active_time_tracker/index.js`](active_time_tracker/index.js).
+Full implementation: [`active_time_tracker/index.js`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/Bookmark-Record-Recommend-main/active_time_tracker/index.js).
 
 The core is not the stored record shape. Browser API events maintain four time buckets, and saving the session folds those buckets into `compositeMs`.
 
@@ -114,7 +114,7 @@ if (tid !== tabId && session.state === SessionState.ACTIVE) {
 ```
 
 #### Local Browsing-History Library: Hot-Bucket Replace and Cold-Bucket Retention
-Full implementation: [`background.js`](background.js) and [`browsing_history_calendar.js`](history_html/browsing_history_calendar.js).
+Full implementation: [`background.js`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/Bookmark-Record-Recommend-main/background.js) and [`browsing_history_calendar.js`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/Bookmark-Record-Recommend-main/history_html/browsing_history_calendar.js).
 
 The browser History API is only used as the calibration source for the recent roughly 90-day hot window. Automatic sync expands from the last sync time to 3-90 days, manual calibration can align the full 90-day window, and the local IndexedDB library keeps cold data outside that window so browsing history can go beyond the API hot window.
 
@@ -185,6 +185,6 @@ for (const [dateKey, items] of recordsMap.entries()) {
 
 ## License
 
-GPL-3.0
+[GPL-3.0](LICENSE)
 
 ## [Back to top](#switch-to-中文文档)
