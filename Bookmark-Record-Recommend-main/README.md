@@ -4,9 +4,10 @@
 [![GitHub Releases](https://img.shields.io/github/v/release/Browser-bookmark-hub/Bookmark-Record-Recommend?logo=github&logoColor=white&label=GitHub+Releases)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
 [![Microsoft Edge Add-ons](https://img.shields.io/badge/Edge_Add--ons-Available-0078D7?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/hdoajmdijappigkbiiefbhkfifbfoleb)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ehodmhbidnoegdodnceiepdekgeoggck?color=0F9D58&logo=googlechrome&logoColor=white&label=Chrome+Web+Store)](https://chromewebstore.google.com/detail/ehodmhbidnoegdodnceiepdekgeoggck)
+[![GitHub Bookmark-Canvas](https://img.shields.io/badge/GitHub-Bookmark--Canvas-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Canvas) [![GitHub Bookmark-Backup](https://img.shields.io/badge/GitHub-Bookmark--Backup-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Backup)
 
 ### Overview
-`Bookmark Record and Recommend` is an enhanced extension for power bookmark users. It reawakens your knowledge base through three core engines: "Bookmark Records", "Smart Recommendations", and "AI Push".
+`Bookmark-Record-Recommend` is an enhanced extension for power bookmark users. It reawakens your knowledge base through three core engines: "Bookmark Records", "Smart Recommendations", and "AI Push".
 It uses an S-Score algorithm for dynamic recommendations and processes all complex data computations locally. The "raw data + computed results" can be downloaded locally or synced to GitHub, allowing AI to perform deep analysis out-of-the-box using `AGENTS.md` / `CLAUDE.md` rules, bypassing the heavy raw computation burden.
 
 It is also an ecosystem-related project for [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas), with [exported JSON files](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/docs/PUSH_AND_ANALYZE_STRUCTURE.md) compatible with Bookmark Canvas import formats for temporary sections and notes.
@@ -35,8 +36,16 @@ Please open the GitHub repository page and refer to the screenshots in [`Screens
 > - **Export ecosystem expansion**: Push & Analyze and manual exports can target GitHub, local files, or both. GitHub manual exports are organized under `manual-export/<category>/<date>/` and remain separate from normal sync and pull flows. Related Records now supports right-click context exports for any item, configurable before/after ranges, and preserved orange-selection semantics; Click Ranking adds single-item exports.
 > - **UX and documentation polish**: recommendation modes now include notes on backup/restore and S-score recalculation; favicon warm-up is capped at 150 unique domains; bookmark-event API audit and multilingual documentation groundwork were added.
 
+### References
+
+**Bookmark ecosystem**
+
+- [Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas)
+- [Bookmark-Record-Recommend](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend)
+- [Bookmark-Backup](https://github.com/Browser-bookmark-hub/Bookmark-Backup)
+
 ### Core Algorithms
-Most views, filters, and exports can be rebuilt from the raw bookmark tree, browsing history, plus data processing or AI analysis. The three sections below are the plugin's real core: Bookmark Recommendation S-Score, Active-Time Tracking, and the Local Browsing-History Library. Replacing them would still require substantial state maintenance and algorithm code. The code blocks are core examples extracted from the current implementation; full logic lives in the linked modules.
+Most views, filters, and exports can be rebuilt from the raw bookmark tree, browsing history, plus data processing or AI analysis. The three sections below are the plugin's real core: <ins>Bookmark Recommendation S-Score, Active-Time Tracking, and the Local Browsing-History Library</ins>. Replacing them would still require substantial state maintenance and algorithm code. The code blocks are core examples extracted from the current implementation; full logic lives in the linked modules.
 
 #### Bookmark Recommendation S-Score
 Full implementation: [`background.js`](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/blob/main/Bookmark-Record-Recommend-main/background.js).

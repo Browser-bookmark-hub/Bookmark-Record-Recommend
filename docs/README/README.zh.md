@@ -4,9 +4,10 @@
 [![GitHub Releases](https://img.shields.io/github/v/release/Browser-bookmark-hub/Bookmark-Record-Recommend?logo=github&logoColor=white&label=GitHub+Releases)](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend/releases)
 [![Microsoft Edge Add-ons](https://img.shields.io/badge/Edge_Add--ons-Available-0078D7?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/hdoajmdijappigkbiiefbhkfifbfoleb)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ehodmhbidnoegdodnceiepdekgeoggck?color=0F9D58&logo=googlechrome&logoColor=white&label=Chrome+Web+Store)](https://chromewebstore.google.com/detail/ehodmhbidnoegdodnceiepdekgeoggck)
+[![GitHub Bookmark-Canvas](https://img.shields.io/badge/GitHub-Bookmark--Canvas-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Canvas) [![GitHub Bookmark-Backup](https://img.shields.io/badge/GitHub-Bookmark--Backup-181717?logo=github&logoColor=white)](https://github.com/Browser-bookmark-hub/Bookmark-Backup)
 
 ### 简介
-`书签记录与推荐` 是一款为重度用户打造的增强型扩展，通过“书签记录”、“智能推荐”与“AI 推送”三大核心引擎唤醒你的知识库。
+`书签记录与推荐（Bookmark-Record-Recommend）` 是一款为重度用户打造的增强型扩展，通过“书签记录”、“智能推荐”与“AI 推送”三大核心引擎唤醒你的知识库。
 它基于 S 值算法实现动态推荐，并在本地完成所有复杂的关联计算。“原始数据 + 计算结果”可直接下载到本地或推送到 GitHub，让 AI 结合 `AGENTS.md` / `CLAUDE.md` 规则“开箱即用”地进行深度分析，免去了处理生数据的算力负担。
 
 它也是 [书签画布（Bookmark-Canvas）](https://github.com/Browser-bookmark-hub/Bookmark-Canvas) 生态的关联项目，[导出的 JSON 文件](../PUSH_AND_ANALYZE_STRUCTURE.md)兼容书签画布导入的临时栏目与备注格式。
@@ -41,8 +42,16 @@
 > - **导出生态增强**：推送与分析、手动导出均可选择 GitHub、本地或两者；GitHub 手动导出按 `manual-export/<类别>/<日期>/` 规范存放，且不参与常规同步或拉取。关联记录支持右键任意条目导出上下文、设置前后范围并保留橙色选中语义；点击排行新增单项导出。
 > - **体验与文档整理**：推荐模式新增备份恢复与 S 值重算说明；favicon 预热限制为 150 个去重域名；补充书签事件 API 审计与多语言文档准备。
 
+### 参考
+
+**生态项目**
+
+- 书签画布（[Bookmark-Canvas](https://github.com/Browser-bookmark-hub/Bookmark-Canvas)）
+- 书签记录与推荐（[Bookmark-Record-Recommend](https://github.com/Browser-bookmark-hub/Bookmark-Record-Recommend)）
+- 书签备份（[Bookmark-Backup](https://github.com/Browser-bookmark-hub/Bookmark-Backup)）
+
 ### 核心算法
-大部分视图、筛选和导出都可以基于原始书签树、浏览记录，再加上数据处理或 AI 分析重建；下面三块才是插件真正的核心能力：书签推荐 S 值计算公式、时间追踪、浏览历史本地库。它们即使被替代，也需要重新实现大量状态维护和算法代码。代码块是从当前实现抽出的核心示例，完整逻辑见对应模块。
+大部分视图、筛选和导出都可以基于原始书签树、浏览记录，再加上数据处理或 AI 分析重建；下面三块才是插件真正的核心能力：<ins>书签推荐 S 值计算公式、时间追踪、浏览历史本地库</ins>。它们即使被替代，也需要重新实现大量状态维护和算法代码。代码块是从当前实现抽出的核心示例，完整逻辑见对应模块。
 
 #### 书签推荐 S 值计算公式
 完整实现见 [`background.js`](../../Bookmark-Record-Recommend-main/background.js)。
